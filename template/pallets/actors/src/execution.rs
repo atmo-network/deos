@@ -429,6 +429,17 @@ impl<T: Config> Pallet<T> {
         CycleState::Running
       }
     });
+    if !ActorControlLocators::<T>::contains_key(actor_id) {
+      // A canonically published Actor owns no legacy primary, so stage the successor through the
+      // semantic/run owner instead of the pre-cutover physical control cell.
+      return Self::stage_canonical_run_state(
+        actor_id,
+        &identity,
+        expected_cycle_nonce,
+        next_cycle_state,
+        state,
+      );
+    }
     ensure!(
       identity.actor_class.actor_type() == ActorType::System
         || ActorControlLocators::<T>::contains_key(actor_id),
@@ -530,6 +541,68 @@ impl<T: Config> Pallet<T> {
       if identity.actor_class.actor_type() == ActorType::User
         && let Err(error) = Self::reconcile_actor_state_hold_with_authority(actor_id)
       {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      }
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+    })
+  }
+
+  /// Stages a persisted Run successor for a canonically published Actor that owns no legacy
+  /// primary control cell. Identity and Hot state mutate through the one semantic owner, the Run
+  /// store receives the successor, and the state-hold reconciliation runs exactly as the legacy
+  /// placement path would perform it.
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
+  fn stage_canonical_run_state(
+    actor_id: ActorId,
+    identity: &ActorIdentityOf<T>,
+    expected_cycle_nonce: u64,
+    next_cycle_state: Option<CycleState>,
+    state: Option<ActorRunStateOf<T>>,
+  ) -> DispatchResult {
+    ensure!(
+      !ActorUnsignaledControlCells::<T>::contains_key(actor_id),
+      Error::<T>::ActorRunInvariant
+    );
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      let Some(current) = ActorSemanticStates::<T>::get(actor_id) else {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          Error::<T>::ActorRunInvariant.into(),
+        ));
+      };
+      let ActorSemanticState::Active(mut record) = current.clone() else {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          Error::<T>::ActorRunInvariant.into(),
+        ));
+      };
+      if state.is_none() {
+        if identity.cycle_nonce.checked_add(1) != Some(expected_cycle_nonce) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::ActorRunInvariant.into(),
+          ));
+        }
+        record.identity.cycle_nonce = expected_cycle_nonce;
+      }
+      record.hot.cycle_state = next_cycle_state.unwrap_or(CycleState::Idle);
+      record.hot.queue_ticket = None;
+      if Self::mutate_actor_semantic_state(
+        actor_id,
+        crate::ActorSemanticMutation::Replace {
+          expected: current,
+          replacement: ActorSemanticState::Active(record),
+        },
+      )
+      .is_err()
+      {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          Error::<T>::ActorRunInvariant.into(),
+        ));
+      }
+      if let Some(run_state) = state {
+        ActorRunStateStore::<T>::insert(actor_id, run_state);
+      } else {
+        ActorRunStateStore::<T>::remove(actor_id);
+      }
+      if let Err(error) = Self::reconcile_actor_state_hold_with_authority(actor_id) {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
       }
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))

@@ -6250,9 +6250,10 @@ fn simulation_rejects_contract_and_mode_mismatch_without_execution() {
 #[test]
 fn canonical_loader_requires_run_state_exactly_for_suspended_state() {
   new_test_ext().execute_with(|| {
+    // Canonical publication owns no legacy primary, so the corruption partitions exercise the
+    // semantic owner, the Run store, and the admitted Contract geometry.
     let actor_id = create_suspended_system_retry(1);
     let run_state = Actors::actor_run_state(actor_id).expect("suspended run exists");
-    let (location, cell) = Actors::actor_control_cell(actor_id).expect("primary exists");
     assert!(matches!(
       Actors::load_actor_state(actor_id),
       LoadedActorStateOf::Active(_)
@@ -6263,77 +6264,33 @@ fn canonical_loader_requires_run_state_exactly_for_suspended_state() {
       LoadedActorStateOf::Corrupt
     ));
     ActorRunStateStore::<Test>::insert(actor_id, run_state);
-    mutate_primary_control_cell(actor_id, |stored| stored.hot.cycle_state = CycleState::Idle);
+    mutate_actor_hot_coherent(actor_id, |hot| hot.cycle_state = CycleState::Idle);
     assert!(matches!(
       Actors::load_actor_state(actor_id),
       LoadedActorStateOf::Corrupt
     ));
-    mutate_primary_control_cell(actor_id, |stored| *stored = cell.clone());
+    mutate_actor_hot_coherent(actor_id, |hot| hot.cycle_state = CycleState::Suspended);
     assert!(matches!(
       Actors::load_actor_state(actor_id),
       LoadedActorStateOf::Active(_)
     ));
 
     let contract = Actors::load_actor_contract(actor_id).expect("Contract exists");
-    let admission = cell.admission.clone();
-    for remove_partition in 0u8..3 {
-      match remove_partition {
-        0 => {
-          crate::ActorControlLocators::<Test>::remove(actor_id);
-          assert!(matches!(
-            Actors::load_actor_state(actor_id),
-            LoadedActorStateOf::Corrupt
-          ));
-          crate::ActorControlLocators::<Test>::insert(actor_id, location);
-        }
-        1 => {
-          mutate_primary_control_cell(actor_id, |stored| stored.actor_id = u64::MAX);
-          assert!(matches!(
-            Actors::load_actor_state(actor_id),
-            LoadedActorStateOf::Corrupt
-          ));
-          match location {
-            crate::ActorControlLocation::Unsignaled => {
-              crate::ActorUnsignaledControlCells::<Test>::insert(actor_id, cell.clone());
-            }
-            crate::ActorControlLocation::Ready { ticket } => {
-              crate::ActorReadyFrameChunks::<Test>::mutate(ticket / 32, |stored| {
-                *stored
-                  .as_mut()
-                  .expect("Ready page")
-                  .get_mut((ticket % 32) as usize)
-                  .expect("Ready slot") = Some(cell.clone());
-              });
-            }
-            crate::ActorControlLocation::Waiting { key, page, slot } => {
-              crate::ActorWaitingFrameChunks::<Test>::mutate((key, page), |stored| {
-                *stored
-                  .as_mut()
-                  .expect("Waiting page")
-                  .entries
-                  .get_mut(usize::from(slot))
-                  .expect("Waiting slot") = Some(crate::ActorWaitingEntry::Primary(cell.clone()));
-              });
-            }
-          }
-        }
-        2 => {
-          assert!(Actors::remove_admitted_contract_geometry(actor_id).is_some());
-          assert!(matches!(
-            Actors::load_actor_state(actor_id),
-            LoadedActorStateOf::Corrupt
-          ));
-          assert!(Actors::insert_admitted_contract_geometry(
-            actor_id, &contract, &admission
-          ));
-        }
-        _ => unreachable!(),
-      }
-      assert!(matches!(
-        Actors::load_actor_state(actor_id),
-        LoadedActorStateOf::Active(_)
-      ));
-    }
+    let admission = Actors::load_control_authority_with_authority(actor_id)
+      .map(|(_, _, admission)| admission)
+      .expect("canonical admission exists");
+    assert!(Actors::remove_admitted_contract_geometry(actor_id).is_some());
+    assert!(matches!(
+      Actors::load_actor_state(actor_id),
+      LoadedActorStateOf::Corrupt
+    ));
+    assert!(Actors::insert_admitted_contract_geometry(
+      actor_id, &contract, &admission
+    ));
+    assert!(matches!(
+      Actors::load_actor_state(actor_id),
+      LoadedActorStateOf::Active(_)
+    ));
   });
 }
 
