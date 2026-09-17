@@ -1996,7 +1996,10 @@ impl<T: Config> Pallet<T> {
           {
             None
           }
-          (AttemptDisposition::Failed, None, None)
+          // A terminal permanent failure or an abort removes the Run, so the retry deadline
+          // precomputed for the possible temporary case is irrelevant even when the round probed
+          // and retained it; match any deadline instead of requiring its absence.
+          (AttemptDisposition::Failed, None, _)
             if matches!(step.on_error, StepErrorPolicy::AbortCycle)
               || matches!(step.on_error, StepErrorPolicy::RetryLater { .. })
                 && attempt.step.as_ref().is_some_and(|record| {

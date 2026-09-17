@@ -45,6 +45,11 @@ fn control_invocation_receipts_are_independent_of_actor_fee_exemption() {
             RuntimeOrigin::signed(ALICE),
             actor_id
           ));
+          // Canonical publication serves the Trigger occurrence at B+1, so every attempt round is
+          // driven at block 2 or at the persisted retry `eligible_at` rather than in the trigger
+          // block, and a block-deadline retry is returned to Service through the canonical
+          // deadline frontier instead of the retired legacy waiting drain.
+          frame_system::Pallet::<Test>::set_block_number(2);
           if phase != crate::StepControlPhase::Opening {
             Actors::execute_cycle(Weight::MAX);
             let run =
@@ -53,9 +58,8 @@ fn control_invocation_receipts_are_independent_of_actor_fee_exemption() {
               run.cursor,
               u32::from(phase == crate::StepControlPhase::Running)
             );
-            System::set_block_number(run.eligible_at);
-            let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-            Actors::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter);
+            frame_system::Pallet::<Test>::set_block_number(run.eligible_at);
+            service_canonical_temporal_frontiers(run.eligible_at);
           }
           if result != 0 {
             set_asset_balance(&sovereign, TestAsset::Local(1), 100);
@@ -3992,8 +3996,9 @@ fn maximal_current_amount_contract_needs_no_opening_snapshot() {
     assert!(continuation.opening_snapshot.is_empty());
 
     set_temporary_add_liquidity_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    // The failed opening was served at B+1 (block 2); canonical execution commits one Step per
+    // round, so continue explicit rounds until the maximal Contract finishes.
+    run_next_idle_to_completion(actor_id);
     assert!(Actors::actor_run_state(actor_id).is_none());
   });
 }
@@ -4032,9 +4037,9 @@ fn run_attempts_have_unique_chain_coordinates_without_the_stored_ordinal() {
     assert!(matches!(opening[cycle_started + 1], Event::StepFailed { actor_id: id, cycle_nonce: 1, step_index: 0, .. } if id == actor_id));
     assert!(matches!(opening[cycle_started + 2], Event::CycleSuspended { actor_id: id, cycle_nonce: 1, cursor: 0, reason: SuspensionReason::Temporary, .. } if id == actor_id));
 
-    frame_system::Pallet::<Test>::set_block_number(2);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    // The opening attempt was served at B+1 (block 2), so the retry becomes eligible at block 3.
+    run_next_idle(Weight::MAX);
     let retry_event_index = frame_system::Pallet::<Test>::events()
       .iter()
       .position(|record| matches!(record.event, RuntimeEvent::Actors(Event::CycleContinued { actor_id: id, cycle_nonce: 1, cursor: 0, .. }) if id == actor_id))
@@ -4051,9 +4056,13 @@ fn run_attempts_have_unique_chain_coordinates_without_the_stored_ordinal() {
     assert!(matches!(retry[2], Event::CycleSuspended { actor_id: id, cycle_nonce: 1, cursor: 0, .. } if id == actor_id));
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(4);
+    // The second retry was served at block 3 with a two-block backoff, so the completion attempt is
+    // eligible at the persisted eligible_at (block 5) rather than the legacy block 4.
+    let completion_block = Actors::actor_run_state(actor_id)
+      .expect("second retry persists its successor")
+      .eligible_at;
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    run_canonical_round_at(completion_block, Weight::MAX);
     let completion_event_index = frame_system::Pallet::<Test>::events()
       .iter()
       .position(|record| matches!(record.event, RuntimeEvent::Actors(Event::CycleContinued { actor_id: id, cycle_nonce: 1, cursor: 0, .. }) if id == actor_id))
@@ -4070,9 +4079,9 @@ fn run_attempts_have_unique_chain_coordinates_without_the_stored_ordinal() {
     assert!(matches!(completion[2], Event::CycleSummary { actor_id: id, cycle_nonce: 1, outcomes: OutcomeTotals { failed_steps: 2, .. }, .. } if id == actor_id));
 
     let attempt_coordinates = [
-      (1u64, 1u64, opening_event_index),
-      (1u64, 2u64, retry_event_index),
-      (1u64, 4u64, completion_event_index),
+      (1u64, 2u64, opening_event_index),
+      (1u64, 3u64, retry_event_index),
+      (1u64, u64::from(completion_block), completion_event_index),
     ];
     assert_eq!(
       attempt_coordinates.into_iter().collect::<BTreeSet<_>>().len(),
@@ -5916,6 +5925,9 @@ fn running_simulation_obeys_q1_and_returns_only_the_current_step() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // Canonical publication serves the Trigger occurrence at B+1, so the opening round must run at
+    // block 2 rather than in the trigger block.
+    frame_system::Pallet::<Test>::set_block_number(2);
     Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
     let run = Actors::actor_run_state(actor_id).expect("Opening commits only the prefix");
     assert_eq!(run.cursor, 1);
@@ -6258,12 +6270,14 @@ fn canonical_loader_requires_run_state_exactly_for_suspended_state() {
 fn eligibility_projection_reports_suspended_retry_then_ready_at_attempt_block() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
+    // Canonical publication serves the Trigger occurrence at B+1, so the opening attempt lands at
+    // block 2 and the one-block retry cooldown places eligibility at block 3 rather than 2.
     assert_eq!(
       active_eligibility(actor_id).execution_phase,
-      ActorExecutionPhase::WaitingRetry(2)
+      ActorExecutionPhase::WaitingRetry(3)
     );
 
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
     assert_eq!(
       active_eligibility(actor_id).execution_phase,
       ActorExecutionPhase::Ready
