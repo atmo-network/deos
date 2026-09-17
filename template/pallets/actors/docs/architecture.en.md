@@ -291,6 +291,10 @@ Under `runtime-benchmarks`, the opaque `MaximumContextInherent` helper fixture i
   - consumes and requires the current block's one-pass `Finalizable` marker, zero outstanding reservations, and matching telemetry block tag
   - makes any incomplete resource protocol consensus-invalid rather than silently carrying state into the next block
 
+### Ordinary Drain Authority
+
+The canonical persistent Service ring is the sole ordinary block drain. The mandatory base pass and the `on_idle` drain service eligible `Service` residents only; when the ring has no cursor they stop, and the pre-cutover paged Ready-FIFO head probe (`live_queue_head`, `classify_current_queue`, `head_blocked_by_weight`) no longer participates in the loop. `ActorReadyHead`/`ActorReadyTail`/`ActorReadyOccupancy` and their append/consume/tombstone helpers remain only as pre-cutover carriers that fresh-genesis canonical publication never creates, so no supported ordinary path can place work that an `Empty` Service round would strand.
+
 ### Admission Gates
 
 A cycle is admitted only when all checks pass:

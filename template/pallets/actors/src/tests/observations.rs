@@ -194,10 +194,7 @@ fn observation_change_execution_preserves_absent_scalar_control() {
         steps,
       );
 
-      assert_eq!(
-        Actors::request_observation_activation_compact(actor_id, 55),
-        Ok(ActivationOutcome::Latched)
-      );
+      latch_canonical_observation_change(55);
       run_idle(Weight::MAX);
 
       assert!(has_actor_event(|event| matches!(

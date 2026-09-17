@@ -69,17 +69,6 @@ struct QueueTopology {
   occupancy: u32,
 }
 
-enum ReadyHeadOwner<T: Config> {
-  #[cfg(any(test, feature = "runtime-benchmarks"))]
-  DiscoverCanonical,
-  Loaded {
-    actor_id: ActorId,
-    ticket: QueueTicket,
-    hot: ActorHotStateOf<T>,
-  },
-  ClosedTombstone,
-}
-
 pub(crate) struct QueueAppendPlan<T: Config> {
   publications: Vec<PreparedReadyPublication<T>>,
   next_tail: QueueTicket,
@@ -379,7 +368,6 @@ impl CyclePass {
 enum FifoStepResult {
   NoWork,
   Progress {
-    executed: bool,
     attempt: Option<ActorAttemptEvidence>,
   },
   Blocked(BlockKind),
@@ -387,7 +375,6 @@ enum FifoStepResult {
 
 #[derive(Clone, Copy)]
 enum ActorServiceSource {
-  FifoHead,
   SelectedReady,
 }
 
@@ -438,19 +425,6 @@ impl ProvisionalEntryAccounting {
   }
 }
 
-enum HeadDiscovery<BlockNumber> {
-  Empty,
-  Head(
-    QueueTicket,
-    QueueEntry<BlockNumber>,
-    ProvisionalEntryAccounting,
-  ),
-  WeightStall,
-  PassExhausted,
-  InvariantStall,
-}
-
-#[derive(Clone, Copy)]
 enum ServiceHeadDiscovery {
   Empty,
   Eligible(ActorRef, ServiceResidenceKind),
@@ -482,14 +456,14 @@ impl<T: Config> Pallet<T> {
 
   pub(crate) fn execute_cycle_to_cutoff(
     remaining_weight: Weight,
-    cutoff: QueueTicket,
+    _cutoff: QueueTicket,
   ) -> CyclePass {
-    Self::execute_cycle_to_cutoff_inner(remaining_weight, cutoff, None)
+    Self::execute_cycle_to_cutoff_inner(remaining_weight, None)
   }
 
   pub(crate) fn execute_cycle_to_cutoff_with_resources(
     remaining_weight: Weight,
-    cutoff: QueueTicket,
+    _cutoff: QueueTicket,
     state: &mut BlockResourceState<BlockNumberFor<T>>,
     limits: BlockResourceLimits,
     effect_domain: BlockResourceDomain,
@@ -497,14 +471,12 @@ impl<T: Config> Pallet<T> {
   ) -> CyclePass {
     Self::execute_cycle_to_cutoff_inner(
       remaining_weight,
-      cutoff,
       Some((state, limits, effect_domain, control_maximum)),
     )
   }
 
   fn execute_cycle_to_cutoff_inner(
     remaining_weight: Weight,
-    cutoff: QueueTicket,
     mut resources: Option<(
       &mut BlockResourceState<BlockNumberFor<T>>,
       BlockResourceLimits,
@@ -538,25 +510,23 @@ impl<T: Config> Pallet<T> {
       None => None,
     };
     let mut cycle_meter = WeightMeter::with_limit(remaining_weight);
-    let mut control_meter = resources
-      .as_ref()
-      .map(|(_, _, _, control_maximum)| WeightMeter::with_limit(*control_maximum));
     let now = frame_system::Pallet::<T>::block_number();
-    // Only tickets below the caller-owned stage cutoff may execute in this actor-service pass.
     let max_executions = T::MaxExecutionsPerBlock::get();
     let max_scanned = T::MaxQueueEntriesScannedPerBlock::get();
     let mut executed = 0u32;
     let mut scanned = 0u32;
     let mut effect_consumed = Weight::zero();
-    let mut effect_reconciliation_uncertain = false;
+    let effect_reconciliation_uncertain = false;
     let mut starved = false;
     while executed < max_executions && scanned < max_scanned {
       match Self::current_service_head(now) {
-        ServiceHeadDiscovery::Empty => {}
+        // The canonical persistent Service ring is the sole ordinary drain. A system with no
+        // canonical resident carries no live work to service; the pre-cutover paged Ready FIFO
+        // is unreachable from fresh-genesis publication and is no longer consulted here.
+        ServiceHeadDiscovery::Empty => break,
         ServiceHeadDiscovery::Eligible(_actor, _kind) => {
           let result = match resources.as_mut() {
             Some((state, limits, domain, _)) => {
-              let control_before = state.usage().actor_control_used();
               let effect_before = state.usage().actor_effect_used();
               let result = Self::service_canonical_round_head_with_reserved_control(
                 &mut cycle_meter,
@@ -566,17 +536,10 @@ impl<T: Config> Pallet<T> {
                 *domain,
               );
               if result.is_ok() {
-                let control = state
-                  .usage()
-                  .actor_control_used()
-                  .saturating_sub(control_before);
                 let effect = state
                   .usage()
                   .actor_effect_used()
                   .saturating_sub(effect_before);
-                if let Some(meter) = control_meter.as_mut() {
-                  meter.consume(control);
-                }
                 effect_consumed.saturating_accrue(effect);
               }
               result
@@ -607,46 +570,6 @@ impl<T: Config> Pallet<T> {
         ServiceHeadDiscovery::InvariantStall => {
           starved = executed == 0;
           break;
-        }
-      }
-      let head = Self::live_queue_head(
-        cutoff,
-        &mut cycle_meter,
-        control_meter.as_mut(),
-        &mut scanned,
-        max_scanned,
-      );
-      match head {
-        HeadDiscovery::Empty => break,
-        HeadDiscovery::WeightStall | HeadDiscovery::InvariantStall => {
-          starved = executed == 0;
-          break;
-        }
-        HeadDiscovery::PassExhausted => break,
-        HeadDiscovery::Head(position, entry, accounting) => {
-          match Self::service_live_queue_entry(
-            (position, entry),
-            now,
-            &mut cycle_meter,
-            control_meter.as_mut(),
-            &mut effect_consumed,
-            &mut effect_reconciliation_uncertain,
-            resources
-              .as_mut()
-              .map(|(state, limits, domain, _)| (&mut **state, *limits, *domain)),
-            ActorServiceSource::FifoHead,
-            accounting,
-          ) {
-            FifoStepResult::Progress {
-              executed: did_execute,
-              ..
-            } => executed = executed.saturating_add(u32::from(did_execute)),
-            FifoStepResult::NoWork => continue,
-            FifoStepResult::Blocked(_kind) => {
-              starved = executed == 0;
-              break;
-            }
-          }
         }
       }
     }
@@ -718,85 +641,10 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  /// Sole cheap readiness-presence seam for block hooks and FIFO classification. frame replaces the
-  /// backing counters; callers must not inspect scalar head/tail independently.
+  /// Sole cheap readiness-presence seam for block hooks. frame replaces the backing counters;
+  /// callers must not inspect scalar head/tail independently.
   pub(crate) fn ready_work_exists() -> bool {
     ActorReadyHead::<T>::get() < ActorReadyTail::<T>::get()
-  }
-
-  fn classify_current_queue(cutoff: QueueTicket) -> HeadDiscovery<BlockNumberFor<T>> {
-    if Self::queue_topology_preflight(QueueMutation::Head).is_err() {
-      return HeadDiscovery::InvariantStall;
-    }
-    if !Self::ready_work_exists() {
-      return HeadDiscovery::Empty;
-    }
-    match Self::paged_head_entry() {
-      Some((_, entry)) if entry.ticket >= cutoff => HeadDiscovery::Empty,
-      _ => HeadDiscovery::InvariantStall,
-    }
-  }
-
-  /// Conservatively reports physical pre-cutoff work when the complete loaded-state probe cannot
-  /// be admitted. This path performs no unmetered actor-partition reads; the next funded pass
-  /// decides whether the entry is live, stale, or corrupt.
-  fn head_blocked_by_weight(cutoff: QueueTicket) -> bool {
-    Self::ready_work_exists()
-      && Self::paged_head_entry().is_some_and(|(_, entry)| entry.ticket < cutoff)
-  }
-
-  fn live_queue_head(
-    cutoff: QueueTicket,
-    cycle_meter: &mut WeightMeter,
-    mut scan_control_meter: Option<&mut WeightMeter>,
-    scanned: &mut u32,
-    max_scanned: u32,
-  ) -> HeadDiscovery<BlockNumberFor<T>> {
-    let scan_weight = T::WeightInfo::scheduler_paged_tombstone_drain(1);
-    while *scanned < max_scanned {
-      if Self::queue_topology_preflight(QueueMutation::Head).is_err() {
-        return HeadDiscovery::InvariantStall;
-      }
-      if !cycle_meter.can_consume(scan_weight)
-        || scan_control_meter
-          .as_ref()
-          .is_some_and(|meter| !meter.can_consume(scan_weight))
-      {
-        return if Self::head_blocked_by_weight(cutoff) {
-          HeadDiscovery::WeightStall
-        } else {
-          HeadDiscovery::Empty
-        };
-      }
-      let accounting = ProvisionalEntryAccounting {
-        cycle_before_entry: cycle_meter.consumed(),
-        control_before_entry: scan_control_meter.as_ref().map(|meter| meter.consumed()),
-      };
-      cycle_meter.consume(scan_weight);
-      if let Some(meter) = scan_control_meter.as_deref_mut() {
-        meter.consume(scan_weight);
-      }
-      let before = ActorReadyHead::<T>::get();
-      let stats = match Self::paged_drain_tombstones(cutoff, 1) {
-        Ok(stats) => stats,
-        Err(_) => return HeadDiscovery::InvariantStall,
-      };
-      if stats.entries_scanned == 0 {
-        return Self::classify_current_queue(cutoff);
-      }
-      *scanned = scanned.saturating_add(stats.entries_scanned);
-      if ActorReadyHead::<T>::get() != before {
-        continue;
-      }
-      return match Self::paged_head_entry() {
-        Some((position, entry)) if entry.ticket < cutoff => {
-          HeadDiscovery::Head(position, entry, accounting)
-        }
-        Some(_) => HeadDiscovery::Empty,
-        None => Self::classify_current_queue(cutoff),
-      };
-    }
-    HeadDiscovery::PassExhausted
   }
 
   pub(crate) fn charge_pipeline_opening(
@@ -3160,15 +3008,11 @@ impl<T: Config> Pallet<T> {
 
   fn consume_actor_service_source(
     source: ActorServiceSource,
-    position: QueueTicket,
     actor_id: ActorId,
     ticket: QueueTicket,
     hot: ActorHotStateOf<T>,
   ) -> Result<(), EnqueueOutcome> {
     match source {
-      ActorServiceSource::FifoHead => {
-        Self::paged_consume_loaded_head_at(position, actor_id, ticket, hot)
-      }
       ActorServiceSource::SelectedReady => {
         if hot.queue_ticket != Some(ticket) {
           return Err(EnqueueOutcome::CorruptedTopology);
@@ -3214,9 +3058,6 @@ impl<T: Config> Pallet<T> {
             Ok(())
           }
         }
-        Some((ActorServiceSource::FifoHead, position, _)) => {
-          Self::paged_consume_closed_head_at(position)
-        }
         Some((ActorServiceSource::SelectedReady, _, ticket)) => {
           if Self::queue_topology_preflight(QueueMutation::Head).is_err()
             || ActorControlLocators::<T>::contains_key(actor_id)
@@ -3240,7 +3081,6 @@ impl<T: Config> Pallet<T> {
     accounting.settle_complete(cycle_meter, control_meter.as_deref_mut(), weight);
     match outcome {
       Ok(()) => FifoStepResult::Progress {
-        executed: false,
         attempt: Some(Self::step_simulation_evidence(
           state
             .run_state
@@ -3530,7 +3370,6 @@ impl<T: Config> Pallet<T> {
           let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
             if Self::consume_actor_service_source(
               source,
-              position,
               entry.actor_id,
               entry.ticket,
               queue_owner_hot,
@@ -3563,7 +3402,6 @@ impl<T: Config> Pallet<T> {
           }
           return match outcome {
             Ok(attempt) => FifoStepResult::Progress {
-              executed: true,
               attempt: Some(attempt),
             },
             Err(AttemptTransactionError::FeeCollection) => {
@@ -3613,7 +3451,6 @@ impl<T: Config> Pallet<T> {
         let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
           if Self::consume_actor_service_source(
             source,
-            position,
             entry.actor_id,
             entry.ticket,
             queue_owner_hot,
@@ -3691,7 +3528,6 @@ impl<T: Config> Pallet<T> {
               }
             }
             FifoStepResult::Progress {
-              executed: true,
               attempt: Some(attempt),
             }
           }
@@ -5175,75 +5011,26 @@ impl<T: Config> Pallet<T> {
 
   #[cfg(any(test, feature = "runtime-benchmarks"))]
   pub(crate) fn paged_consume_head_at(position: QueueTicket) -> Result<(), EnqueueOutcome> {
-    Self::paged_consume_head_at_inner(position, ReadyHeadOwner::DiscoverCanonical)
+    Self::paged_consume_head_at_inner(position)
   }
 
-  pub(crate) fn paged_consume_loaded_head_at(
-    position: QueueTicket,
-    actor_id: ActorId,
-    ticket: QueueTicket,
-    hot: ActorHotStateOf<T>,
-  ) -> Result<(), EnqueueOutcome> {
-    Self::paged_consume_head_at_inner(
-      position,
-      ReadyHeadOwner::Loaded {
-        actor_id,
-        ticket,
-        hot,
-      },
-    )
-  }
-
-  fn paged_consume_closed_head_at(position: QueueTicket) -> Result<(), EnqueueOutcome> {
-    Self::paged_consume_head_at_inner(position, ReadyHeadOwner::ClosedTombstone)
-  }
-
-  fn paged_consume_head_at_inner(
-    position: QueueTicket,
-    owner: ReadyHeadOwner<T>,
-  ) -> Result<(), EnqueueOutcome> {
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
+  fn paged_consume_head_at_inner(position: QueueTicket) -> Result<(), EnqueueOutcome> {
     with_transaction_opaque_err(|| {
       let transition = || -> Result<(), EnqueueOutcome> {
         let topology = Self::queue_topology_preflight(QueueMutation::Head)?;
         if position != topology.head || position >= topology.tail {
           return Err(EnqueueOutcome::CorruptedTopology);
         }
-        let entry = Self::paged_head_entry().map(|(_, entry)| entry);
-        let loaded = match owner {
-          ReadyHeadOwner::Loaded {
-            actor_id,
-            ticket,
-            hot,
-          } => {
-            let entry = entry.ok_or(EnqueueOutcome::CorruptedTopology)?;
-            if entry.actor_id != actor_id
-              || entry.ticket != ticket
-              || hot.queue_ticket != Some(ticket)
-            {
-              return Err(EnqueueOutcome::CorruptedTopology);
-            }
-            Some(entry)
-          }
-          ReadyHeadOwner::ClosedTombstone => {
-            if entry.is_some() {
-              return Err(EnqueueOutcome::CorruptedTopology);
-            }
-            None
-          }
-          #[cfg(any(test, feature = "runtime-benchmarks"))]
-          ReadyHeadOwner::DiscoverCanonical => {
-            let entry = entry.ok_or(EnqueueOutcome::CorruptedTopology)?;
-            let (state, _, _) = Self::load_frame_actor_service_state(entry.actor_id)
-              .ok_or(EnqueueOutcome::CorruptedTopology)?;
-            if state.hot.queue_ticket != Some(entry.ticket) {
-              return Err(EnqueueOutcome::CorruptedTopology);
-            }
-            Some(entry)
-          }
-        };
-        if let Some(entry) = loaded {
-          Self::consume_ready_primary(entry.actor_id, entry.ticket)?;
+        let entry = Self::paged_head_entry()
+          .map(|(_, entry)| entry)
+          .ok_or(EnqueueOutcome::CorruptedTopology)?;
+        let (state, _, _) = Self::load_frame_actor_service_state(entry.actor_id)
+          .ok_or(EnqueueOutcome::CorruptedTopology)?;
+        if state.hot.queue_ticket != Some(entry.ticket) {
+          return Err(EnqueueOutcome::CorruptedTopology);
         }
+        Self::consume_ready_primary(entry.actor_id, entry.ticket)?;
         let next_head = position
           .checked_add(1)
           .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;

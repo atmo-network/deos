@@ -798,16 +798,6 @@ mod benches {
   }
 
   #[inline(always)]
-  fn benchmark_fixture_ready_consume_loaded_head<T: Config>(
-    position: QueueTicket,
-    actor_id: ActorId,
-    ticket: QueueTicket,
-    hot: ActorHotStateOf<T>,
-  ) -> bool {
-    Pallet::<T>::paged_consume_loaded_head_at(position, actor_id, ticket, hot).is_ok()
-  }
-
-  #[inline(always)]
   fn benchmark_fixture_ready_drain_tombstones<T: Config>(
     cutoff: QueueTicket,
     scan_limit: u32,
@@ -8797,12 +8787,9 @@ mod benches {
     let second = bench_create_system_manual::<T>(35_000_001);
     assert!(benchmark_fixture_ready_enqueue::<T>(first));
     assert!(benchmark_fixture_ready_enqueue::<T>(second));
-    let hot = benchmark_fixture_hot::<T>(first).expect("benchmark loaded source exists");
     #[block]
     {
-      assert!(benchmark_fixture_ready_consume_loaded_head::<T>(
-        0, first, 0, hot,
-      ));
+      assert!(benchmark_fixture_ready_consume_head::<T>(0));
     }
     assert_eq!(benchmark_fixture_ready_head::<T>(), 1);
     assert!(benchmark_fixture_contains_ready_page::<T>(0));
@@ -8813,12 +8800,9 @@ mod benches {
   fn scheduler_paged_consume_delete_page() {
     let actor_id = bench_create_system_manual::<T>(36_000_000);
     assert!(benchmark_fixture_ready_enqueue::<T>(actor_id));
-    let hot = benchmark_fixture_hot::<T>(actor_id).expect("benchmark loaded source exists");
     #[block]
     {
-      assert!(benchmark_fixture_ready_consume_loaded_head::<T>(
-        0, actor_id, 0, hot,
-      ));
+      assert!(benchmark_fixture_ready_consume_head::<T>(0));
     }
     assert_eq!(benchmark_fixture_ready_head::<T>(), 1);
     assert_eq!(benchmark_fixture_ready_tail::<T>(), 1);
