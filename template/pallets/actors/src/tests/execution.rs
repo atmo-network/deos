@@ -1078,9 +1078,9 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
       trigger: Trigger::cadenced(3),
       cooldown_blocks: 0,
     };
-    frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id));
     frame_system::Pallet::<Test>::set_block_number(3);
+    assert_ok!(Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id));
+    frame_system::Pallet::<Test>::set_block_number(4);
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
@@ -1093,6 +1093,59 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
       after_update.trigger,
       Trigger::Cadenced { every_ticks: 3 }
     ));
+  });
+}
+
+#[test]
+fn canonical_idle_contract_update_republishes_generation_bound_residence() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 10),
+    );
+    let record_before = match crate::ActorSemanticStates::<Test>::get(actor_id) {
+      Some(crate::ActorSemanticState::Active(record)) => record,
+      _ => panic!("canonical semantic record"),
+    };
+    let process_before =
+      crate::ActorProcesses::<Test>::get(actor_id).expect("canonical process published");
+    let timer_schedule = Schedule {
+      trigger: Trigger::cadenced(3),
+      cooldown_blocks: 0,
+    };
+    frame_system::Pallet::<Test>::set_block_number(2);
+    assert_ok!(update_contract_partial!(
+      RuntimeOrigin::signed(ALICE),
+      actor_id,
+      timer_schedule,
+      None,
+    ));
+    let record_after = match crate::ActorSemanticStates::<Test>::get(actor_id) {
+      Some(crate::ActorSemanticState::Active(record)) => record,
+      _ => panic!("canonical semantic record after update"),
+    };
+    let process_after =
+      crate::ActorProcesses::<Test>::get(actor_id).expect("process republished after update");
+    assert_eq!(
+      record_after.generation,
+      record_before.generation + 1,
+      "an authorized Contract replacement rotates the semantic generation"
+    );
+    assert_eq!(process_after.generation, record_after.generation);
+    assert_ne!(process_after.generation, process_before.generation);
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(actor_id));
+    let after = Actors::active_actor_view(actor_id).expect("canonical active Actor after update");
+    assert_eq!(after.cooldown_blocks, 0);
+    assert!(matches!(after.trigger, Trigger::Cadenced { every_ticks: 3 }));
+    assert!(
+      crate::TriggerDeadlineHandles::<Test>::contains_key(actor_id),
+      "the replaced Cadenced Contract owns exactly one canonical temporal deadline"
+    );
   });
 }
 

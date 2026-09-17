@@ -1406,8 +1406,19 @@ pub mod pallet {
     ) -> DispatchResult {
       let certificate =
         Self::build_admission_certificate(&contract).ok_or(Error::<T>::AdmissionBoundOverflow)?;
-      let stored = if ActorContractHeads::<T>::contains_key(actor_id) {
-        Self::replace_admitted_contract_geometry(actor_id, &contract, &certificate)
+      let replacing = ActorContractHeads::<T>::contains_key(actor_id);
+      // A canonically published Actor owns no legacy primary or unsignaled cell. Its Contract
+      // replacement must rotate the generation-bound process/residence carriers together with
+      // the geometry instead of mirroring a physical primary.
+      let canonical_replace = replacing
+        && !ActorControlLocators::<T>::contains_key(actor_id)
+        && !ActorUnsignaledControlCells::<T>::contains_key(actor_id);
+      let stored = if replacing {
+        if canonical_replace {
+          Self::replace_canonical_contract_geometry(actor_id, &contract, &certificate)
+        } else {
+          Self::replace_admitted_contract_geometry(actor_id, &contract, &certificate)
+        }
       } else {
         let actor_type = Self::load_frame_control_authority(actor_id)
           .map(|(_, identity, _, _)| identity.actor_class.actor_type())
@@ -1447,6 +1458,10 @@ pub mod pallet {
         )?;
       }
       Self::sync_activation_authority(actor_id, &contract, &certificate);
+      if canonical_replace {
+        Self::republish_canonical_contract(actor_id, &contract, &certificate)
+          .map_err(Self::placement_error)?;
+      }
       Ok(())
     }
 
@@ -1674,6 +1689,133 @@ pub mod pallet {
         ActorContractTailChunks::<T>::remove(actor_id, chunk_index);
       }
       true
+    }
+
+    /// Replaces Contract geometry and admission for a canonically published Actor, rotating the
+    /// generation-bound carriers instead of mirroring a legacy primary. The current process
+    /// residence and any independent temporal Trigger deadline are released before the new
+    /// geometry commits; the caller republishes one complete canonical successor afterwards.
+    fn replace_canonical_contract_geometry(
+      actor_id: ActorId,
+      contract: &ActorContractOf<T>,
+      certificate: &ActorAdmissionCertificateOf<T>,
+    ) -> bool {
+      let Some(ActorSemanticState::Active(record)) = ActorSemanticStates::<T>::get(actor_id) else {
+        return false;
+      };
+      let Some(process) = ActorProcesses::<T>::get(actor_id)
+        .filter(|process| process.generation == record.generation)
+      else {
+        return false;
+      };
+      let actor = ActorRef {
+        actor_id,
+        generation: record.generation,
+      };
+      let Some(current_contract) =
+        Self::load_contract_geometry_with_admission(actor_id, &record.admission)
+      else {
+        return false;
+      };
+      let actor_type = record.identity.actor_class.actor_type();
+      let Some((head, chunks)) =
+        Self::decompose_admitted_contract_geometry(actor_id, actor_type, contract, certificate)
+      else {
+        return false;
+      };
+      let Ok(old_step_count) = u32::try_from(current_contract.steps.len()) else {
+        return false;
+      };
+      let old_chunk_count = old_step_count
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK);
+      let Ok(new_chunk_count) = u32::try_from(chunks.len()) else {
+        return false;
+      };
+      if TriggerDeadlineHandles::<T>::contains_key(actor_id)
+        && Self::remove_trigger_deadline_member(actor).is_err()
+      {
+        return false;
+      }
+      match process.residence {
+        Some(ProcessResidence::Service(_)) => {
+          if Self::remove_service_member(actor).is_err() {
+            return false;
+          }
+        }
+        Some(ProcessResidence::Deadline { .. }) => {
+          if Self::remove_deadline_member(actor).is_err() {
+            return false;
+          }
+        }
+        None if matches!(process.status, ProcessStatus::Disabled(_)) => {}
+        _ => return false,
+      }
+      ActorProcesses::<T>::remove(actor_id);
+      ActorContractHeads::<T>::insert(actor_id, head);
+      for (chunk_index, chunk) in chunks {
+        ActorContractTailChunks::<T>::insert(actor_id, chunk_index, chunk);
+      }
+      for chunk_index in new_chunk_count..old_chunk_count {
+        ActorContractTailChunks::<T>::remove(actor_id, chunk_index);
+      }
+      let Some(next_generation) = next_actor_generation(record.generation) else {
+        return false;
+      };
+      let mut updated = record.clone();
+      updated.admission = certificate.clone();
+      updated.generation = next_generation;
+      Self::mutate_actor_semantic_state(
+        actor_id,
+        ActorSemanticMutation::Replace {
+          expected: ActorSemanticState::Active(record),
+          replacement: ActorSemanticState::Active(updated),
+        },
+      )
+      .is_ok()
+    }
+
+    /// Republishes one complete canonical process/residence carrier for a freshly replaced
+    /// Contract. The replacement already released every old carrier and rotated the semantic
+    /// generation, so this seam plans and commits the successor under the new `ActorRef`.
+    fn republish_canonical_contract(
+      actor_id: ActorId,
+      contract: &ActorContractOf<T>,
+      certificate: &ActorAdmissionCertificateOf<T>,
+    ) -> Result<(), crate::scheduler::EnqueueOutcome> {
+      let Some(ActorSemanticState::Active(record)) = ActorSemanticStates::<T>::get(actor_id) else {
+        return Err(crate::scheduler::EnqueueOutcome::CorruptedTopology);
+      };
+      if record.admission != *certificate || ActorRunStateStore::<T>::contains_key(actor_id) {
+        return Err(crate::scheduler::EnqueueOutcome::CorruptedTopology);
+      }
+      let resources = if contract.steps.is_empty() {
+        ActorStepResourceEnvelope {
+          control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+          effect: Weight::zero(),
+        }
+      } else {
+        Self::derive_step_resource_envelopes(contract)
+          .and_then(|envelopes| envelopes.first().copied())
+          .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)?
+      };
+      let state = ActiveActorState {
+        identity: record.identity,
+        hot: record.hot,
+        contract: contract.clone(),
+        run_state: None,
+      };
+      Self::publish_actor_publication(
+        ActorRef {
+          actor_id,
+          generation: record.generation,
+        },
+        &state,
+        None,
+        resources,
+        frame_system::Pallet::<T>::block_number(),
+        ServiceCutoff::Open,
+      )
     }
 
     pub(crate) fn remove_admitted_contract_geometry(
@@ -10063,7 +10205,15 @@ pub mod pallet {
         Self::deposit_event(Event::ContractUpdated { actor_id });
         #[cfg(test)]
         crate::mock::control_atomicity_checkpoint(actor_id)?;
-        if schedule_changed || run_cancelled {
+        // A canonical Contract replacement already republished one generation-bound process and
+        // residence, so the legacy prime must not run a second time through another authority.
+        let canonical_republished = ActorProcesses::<T>::get(actor_id).is_some_and(|process| {
+          matches!(
+            ActorSemanticStates::<T>::get(actor_id),
+            Some(ActorSemanticState::Active(record)) if record.generation == process.generation
+          )
+        });
+        if !canonical_republished && (schedule_changed || run_cancelled) {
           Self::prime_frame_actor_schedule(actor_id).map_err(Self::placement_error)?;
         }
         Self::reconcile_actor_state_hold_with_authority(actor_id)?;
