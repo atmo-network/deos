@@ -4381,8 +4381,15 @@ mod benches {
   ) {
     let (state, admission, loaded_step) = Pallet::<T>::load_frame_actor_service_state(actor_id)
       .expect("benchmark frame service state is coherent");
-    Pallet::<T>::remove_primary_control_cell_inner(actor_id)
-      .expect("benchmark frame source primary is consumed");
+    // The canonical Service round is the sole ordinary drain: opening the round commits the
+    // block frontier that the measured attempt observes, replacing the retired legacy primary
+    // control-cell consumption.
+    let now = frame_system::Pallet::<T>::block_number();
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Pallet::<T>::begin_service_round(now)
+        .expect("effectful benchmark frame canonical round begins");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
     (
       state,
       admission,
@@ -6530,10 +6537,8 @@ mod benches {
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
     let context = Pallet::<T>::step_control_weight_context(step_count, cursor, p, 0)
       .expect("real tail context exists");
     assert_eq!(context.steps_in_fragment, s);
@@ -6550,39 +6555,56 @@ mod benches {
     loaded_step: LoadedActorStepOf<T>,
     now: BlockNumberFor<T>,
   ) -> Weight {
-    let ticket = Pallet::<T>::build_actor_step_ticket(
-      actor_id,
-      state
-        .hot
-        .queue_ticket
-        .expect("real consumed Ready ticket exists"),
-      now,
-      &state.identity,
-      &state.hot,
-      state.run_state.as_ref(),
-      &admission,
-    )
-    .expect("real Running Step ticket builds");
+    let retry_deadline = if let StepErrorPolicy::RetryLater { max_attempts } =
+      loaded_step.step.on_error
+    {
+      let attempted = state.run_state.as_ref().map_or(1, |run| {
+        run.unsuccessful_attempts_at_cursor.saturating_add(1)
+      });
+      if attempted < max_attempts {
+        let eligible_at = Pallet::<T>::suspension_eligible_at(
+          state.contract.cooldown_blocks,
+          state.contract.window,
+          now,
+          attempted,
+        )
+        .expect("retry eligibility is representable");
+        (now.checked_add(&One::one()) != Some(eligible_at)).then_some(WakeupKey::Block(eligible_at))
+      } else {
+        None
+      }
+    } else {
+      None
+    };
     let maximum_fee = Pallet::<T>::maximum_current_action_fee(
       state.identity.actor_class.actor_type(),
       &loaded_step.step,
       loaded_step.resources,
     )
     .expect("current Action fee matches production");
-    let plan = Pallet::<T>::build_current_step_plan(
+    let plan = Pallet::<T>::build_canonical_current_step_plan(
       actor_id,
       state.identity.clone(),
       state.hot.clone(),
       state.run_state.clone(),
       admission.clone(),
-      ticket,
       loaded_step,
       maximum_fee,
     )
     .expect("real carried Running plan builds");
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("real Running Actor reference exists");
+    let (_, kind) = Pallet::<T>::load_service_actor_semantic_state_with_kind(actor)
+      .expect("real Running canonical Service residence exists");
     polkadot_sdk::frame_support::storage::with_transaction(|| {
-      let result =
-        Pallet::<T>::execute_current_step_and_place(actor_id, &state, plan, &admission, now);
+      let result = Pallet::<T>::execute_effectful_step_on_service_with_deadline(
+        actor,
+        kind,
+        state,
+        plan,
+        &admission,
+        now,
+        retry_deadline,
+      );
       match result {
         Ok(evidence) => {
           let effect_weight = evidence.actual_effect_weight;
@@ -6640,8 +6662,9 @@ mod benches {
         };
         assert!(T::AssetOps::balance(&state.identity.sovereign_account, asset).is_zero());
         assert!(T::AssetOps::balance(to, asset).is_zero());
-        assert_eq!(benchmark_fixture_ready_occupancy::<T>(), 1);
-        assert!(state.hot.queue_ticket.is_some());
+        assert_eq!(ServiceHeader::<T>::get().count, 1);
+        assert!(ServiceNodes::<T>::contains_key(actor_id));
+        assert!(state.hot.queue_ticket.is_none());
       }
     }
     #[cfg(feature = "try-runtime")]
@@ -6984,13 +7007,12 @@ mod benches {
     }
     assert_eq!(state.hot.cycle_state, CycleState::Idle);
     assert!(state.hot.pending_signal && state.run_state.is_none());
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).expect("Idle Ready cell exists");
+    // A fresh occurrence publishes one canonical Pending Service member for the following block,
+    // so the fixture advances to that eligible block instead of reading a retired legacy primary
+    // control cell.
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
     frame_system::Pallet::<T>::set_block_number(
-      cell.eligible_at.expect("Opening eligibility exists"),
+      frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()),
     );
     let surfaces = Pallet::<T>::opening_surfaces(&state.contract.steps, 0);
     assert!(surfaces.len() as u32 <= T::MaxOpeningSnapshotEntries::get());
@@ -7073,8 +7095,9 @@ mod benches {
         .all(|surface| run.opening_snapshot.contains_key(surface))
     );
     assert_eq!(run.last_step_outcome, Some(StepOutcome::Skipped(skip)));
-    assert_eq!(benchmark_fixture_ready_occupancy::<T>(), 1);
-    assert!(state.hot.queue_ticket.is_some());
+    assert_eq!(ServiceHeader::<T>::get().count, 1);
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    assert!(state.hot.queue_ticket.is_none());
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real Opening successor passes full audit");
   }
@@ -7098,10 +7121,8 @@ mod benches {
       assert_eq!(state.hot.unsuccessful_attempt_streak, 1);
       assert!(state.run_state.is_none());
       assert!(state.hot.queue_ticket.is_none() && state.hot.wakeup_pointer.is_none());
-      assert!(matches!(
-        ActorControlLocators::<T>::get(actor_id),
-        Some(ActorControlLocation::Unsignaled)
-      ));
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(ServiceNodes::<T>::contains_key(actor_id));
       let ActorTask::Unstake { asset, .. } = state.contract.steps[0].task else {
         unreachable!()
       };
@@ -7145,15 +7166,13 @@ mod benches {
           .iter()
           .filter(|record| record.event == receipt)
           .count(),
-        usize::from(matches!(profile, ReachableOpeningProfile::CompleteMax)),
-        "only the predicated completion profile includes invocation-receipt deposition"
+        1,
+        "every canonical completion invokes StopCycle and deposits its effect receipt"
       );
       assert!(state.run_state.is_none());
       assert!(state.hot.queue_ticket.is_none() && state.hot.wakeup_pointer.is_none());
-      assert!(matches!(
-        ActorControlLocators::<T>::get(actor_id),
-        Some(ActorControlLocation::Unsignaled)
-      ));
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(ServiceNodes::<T>::contains_key(actor_id));
     } else {
       assert_eq!(state.hot.cycle_state, CycleState::Suspended);
       let run = state.run_state.as_ref().expect("real retry Run persists");
@@ -7165,9 +7184,10 @@ mod benches {
       let due = Pallet::<T>::suspension_eligible_at(2, None, now, 1)
         .expect("retry eligibility is representable");
       assert_eq!(run.eligible_at, due);
-      assert!(
-        matches!(ActorControlLocators::<T>::get(actor_id), Some(ActorControlLocation::Waiting { key: WakeupKey::Block(at), .. }) if at == due)
-      );
+      assert!(!ServiceNodes::<T>::contains_key(actor_id));
+      let handle = DeadlineHandles::<T>::get(actor_id)
+        .expect("retry suspends into a canonical deadline residence");
+      assert_eq!(handle.key, WakeupKey::Block(due));
       assert_eq!(
         run.opening_snapshot.len(),
         Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
@@ -8137,7 +8157,10 @@ mod benches {
     }
     Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
       .expect("real Manual occurrence latches the actor");
-    // Normal Q1 service consumes only Step 0 at this block; false predicates invoke no Task.
+    // Canonical publication serves the occurrence one block after the Manual latch. Normal Q1
+    // service then consumes only Step 0 at that block; false predicates invoke no Task.
+    let admitted = now.saturating_add(1u32.into());
+    frame_system::Pallet::<T>::set_block_number(admitted);
     Pallet::<T>::execute_cycle(Weight::MAX);
     let state = Pallet::<T>::active_actor_state(actor_id).expect("reachable actor remains active");
     assert_eq!(state.hot.cycle_state, CycleState::Running);
@@ -8146,7 +8169,7 @@ mod benches {
       .as_ref()
       .expect("Opening published a real Run");
     assert_eq!(run.cursor, 1);
-    assert_eq!(run.last_committed_step_block, Some(now));
+    assert_eq!(run.last_committed_step_block, Some(admitted));
     assert_eq!(run.cycle_nonce, state.identity.cycle_nonce + 1);
     assert_eq!(run.opening_snapshot.len(), surfaces.len());
     assert!(
@@ -12010,7 +12033,14 @@ mod benches {
       effect_weight =
         execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
     }
-    assert_eq!(effect_weight, Weight::zero());
+    assert_eq!(
+      effect_weight,
+      T::TaskEffectWeight::actual_effect_weight(
+        &ActorTask::StopCycle,
+        TaskEffectExecution::Invoked,
+      )
+      .expect("StopCycle has host effect evidence")
+    );
     assert_user_pipeline_accounting::<T>(actor_id, accounting_before);
     assert_reachable_opening::<T>(
       actor_id,
@@ -12056,7 +12086,14 @@ mod benches {
       effect_weight =
         execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
     }
-    assert_eq!(effect_weight, Weight::zero());
+    assert_eq!(
+      effect_weight,
+      T::TaskEffectWeight::actual_effect_weight(
+        &ActorTask::StopCycle,
+        TaskEffectExecution::Invoked,
+      )
+      .expect("StopCycle has host effect evidence")
+    );
     assert_user_pipeline_accounting::<T>(actor_id, accounting_before);
     assert_reachable_opening::<T>(
       actor_id,
