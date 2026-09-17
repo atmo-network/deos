@@ -4263,6 +4263,7 @@ impl<T: Config> Pallet<T> {
     )
   }
 
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
   pub(crate) fn request_activation(
     actor_id: ActorId,
   ) -> Result<ActivationOutcome, ActivationFailure> {
@@ -4293,6 +4294,7 @@ impl<T: Config> Pallet<T> {
     Self::preflight_paged_enqueue_actor_state(actor_id, state, admission, loaded_step.as_ref())
   }
 
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
   pub(crate) fn preflight_activation_loaded(
     actor_id: ActorId,
     state: ActiveActorStateOf<T>,
@@ -4560,6 +4562,7 @@ impl<T: Config> Pallet<T> {
     }
   }
 
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
   fn request_activation_inner(actor_id: ActorId) -> Result<ActivationOutcome, ActivationFailure> {
     let loaded = Self::load_actor_state_with_authority(actor_id);
     let state = match loaded {
@@ -4618,6 +4621,7 @@ impl<T: Config> Pallet<T> {
       .flatten()
   }
 
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
   fn invalidate_ready_to_unsignaled_inner(
     actor_id: ActorId,
   ) -> Result<Option<QueueTicket>, EnqueueOutcome> {
@@ -4662,6 +4666,7 @@ impl<T: Config> Pallet<T> {
     Ok(ticket)
   }
 
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
   pub(crate) fn try_invalidate_ready_to_unsignaled(
     actor_id: ActorId,
   ) -> Result<Option<QueueTicket>, EnqueueOutcome> {
@@ -4674,14 +4679,6 @@ impl<T: Config> Pallet<T> {
       },
     )
     .map_err(|_| EnqueueOutcome::CorruptedTopology)?
-  }
-
-  pub(crate) fn invalidate_ready_to_unsignaled_with_authority(
-    actor_id: ActorId,
-  ) -> Result<(), EnqueueOutcome> {
-    Self::try_invalidate_ready_to_unsignaled(actor_id)?
-      .map(|_| ())
-      .ok_or(EnqueueOutcome::CorruptedTopology)
   }
 
   pub fn paged_head_entry() -> Option<(QueueTicket, QueueEntry<BlockNumberFor<T>>)> {
@@ -7465,46 +7462,13 @@ impl<T: Config> Pallet<T> {
           "temporal canonical publication failed",
         )),
       };
-    } else if !Self::try_charge_automatic_trigger_occurrence(
-      actor_type,
-      &state.identity.sovereign_account,
-      breakdown,
-    )
-    .map_err(|_| DispatchError::Other("temporal collection failed"))?
-    {
-      return Ok(false);
     }
-    if trigger_family == TriggerFamily::Cadenced {
-      let (state, _, _) = Self::load_frame_actor_service_state(actor_id)
-        .ok_or(DispatchError::Other("cadence latch authority disappeared"))?;
-      if state.hot.trigger_wakeup_pointer.is_some() {
-        Self::trigger_wakeup_substrate_invalidate_loaded(actor_id, state, &admission)
-          .map_err(|_| DispatchError::Other("cadence latch disable failed"))?;
-      }
-    }
-    let activation = Self::request_activation(actor_id);
-    match activation {
-      Ok(ActivationOutcome::Coalesced | ActivationOutcome::Latched) => {
-        let paused_hot =
-          Self::load_control_authority_with_authority(actor_id).map(|(_, hot, _)| hot);
-        if let Some(hot) = paused_hot
-          && hot.lifecycle.is_paused()
-          && hot.queue_ticket.is_some()
-        {
-          Self::invalidate_ready_to_unsignaled_with_authority(actor_id)
-            .map_err(|_| DispatchError::Other("paused temporal queue invalidation failed"))?;
-        }
-        Self::reconcile_actor_state_hold_with_authority(actor_id)
-          .map_err(|_| DispatchError::Other("temporal latch hold reconciliation failed"))?;
-        Self::deposit_event(Event::TriggerOccurrenceProcessed {
-          actor_id,
-          trigger_family: breakdown.trigger_family,
-          fee: breakdown.trigger_fee,
-        });
-        Ok(false)
-      }
-      _ => Err(DispatchError::Other("temporal activation failed")),
-    }
+    // Fresh genesis publishes canonical Actors only, so a temporal occurrence that is not
+    // canonically owned is an incoherent pre-cutover carrier state rather than a supported
+    // legacy activation path. Canonical publication remains the sole temporal placement owner.
+    Err(DispatchError::Other(
+      "temporal owner is not canonically published",
+    ))
   }
 
   pub fn drain_overdue_wakeups_cursor(
