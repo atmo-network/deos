@@ -10378,11 +10378,9 @@ pub mod pallet {
         })
         .transpose()?;
       Self::with_control_transaction(|| {
-        let run_cancelled = if let Some(reason) = cancellation_reason {
-          Self::cancel_run_internal(actor_id, reason, None)?
-        } else {
-          false
-        };
+        if let Some(reason) = cancellation_reason {
+          Self::cancel_run_internal(actor_id, reason, None)?;
+        }
         let crossing_state = if let Some(transition) = trigger_transition {
           Self::commit_trigger_transition(
             actor_id,
@@ -10435,17 +10433,6 @@ pub mod pallet {
         Self::deposit_event(Event::ContractUpdated { actor_id });
         #[cfg(test)]
         crate::mock::control_atomicity_checkpoint(actor_id)?;
-        // A canonical Contract replacement already republished one generation-bound process and
-        // residence, so the legacy prime must not run a second time through another authority.
-        let canonical_republished = ActorProcesses::<T>::get(actor_id).is_some_and(|process| {
-          matches!(
-            ActorSemanticStates::<T>::get(actor_id),
-            Some(ActorSemanticState::Active(record)) if record.generation == process.generation
-          )
-        });
-        if !canonical_republished && (schedule_changed || run_cancelled) {
-          Self::prime_frame_actor_schedule(actor_id).map_err(Self::placement_error)?;
-        }
         Self::reconcile_actor_state_hold_with_authority(actor_id)?;
         Ok(())
       })
@@ -10653,7 +10640,7 @@ pub mod pallet {
           Error::<T>::ActorRunNotFound
         );
         Self::record_control_mutation_with_authority(actor_id, now)?;
-        Self::prime_frame_actor_schedule(actor_id).map_err(Self::placement_error)
+        Ok(())
       })
     }
 
