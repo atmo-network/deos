@@ -6791,7 +6791,7 @@ impl<T: Config> Pallet<T> {
       let due_tick = anchor_tick
         .checked_add(delay_ticks)
         .ok_or(DispatchError::Other("genesis temporal deadline failed"))?;
-      state.hot.trigger_runtime_state = match state.contract.trigger {
+      let initialized = match state.contract.trigger {
         Trigger::AtTime { .. } => TriggerRuntimeState::AtTime {
           anchor_tick: Some(anchor_tick),
           consumed: false,
@@ -6801,6 +6801,48 @@ impl<T: Config> Pallet<T> {
         },
         _ => return Err(DispatchError::Other("tick wakeup owner changed trigger")),
       };
+      // Genesis installation records `None` as the bounded bootstrap marker because no consensus
+      // timestamp exists yet and `plan_actor_publication` publishes a Tick(0) bootstrap deadline;
+      // the first observed timestamp initializes the anchor here. A canonically published Actor
+      // therefore re-anchors and places its deadline through the canonical carrier, while a
+      // pre-cutover carrier keeps the legacy waiting-substrate transition.
+      let canonical = !ActorControlLocators::<T>::contains_key(actor_id)
+        && !ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+        && ActorProcesses::<T>::contains_key(actor_id);
+      if canonical {
+        let actor = Self::load_actor_ref(actor_id).ok_or(DispatchError::Other(
+          "genesis temporal generation authority is missing",
+        ))?;
+        let handle = Self::plan_deadline_destination(actor, WakeupKey::Tick(due_tick))
+          .map_err(|_| DispatchError::Other("genesis temporal deadline planning failed"))?;
+        let Some(ActorSemanticState::Active(current)) = ActorSemanticStates::<T>::get(actor_id)
+        else {
+          return Err(DispatchError::Other(
+            "genesis temporal semantic authority is missing",
+          ));
+        };
+        if current.generation != actor.generation
+          || current.identity != state.identity
+          || current.hot != state.hot
+          || current.admission != admission
+        {
+          return Err(DispatchError::Other(
+            "genesis temporal semantic authority is corrupt",
+          ));
+        }
+        let mut replacement = current.clone();
+        replacement.hot.trigger_runtime_state = initialized;
+        replacement.hot.trigger_wakeup_pointer = Some(TriggerWakeupPointer {
+          tick: due_tick,
+          page_id: handle.page,
+          slot: u32::from(handle.slot),
+        });
+        ActorSemanticStates::<T>::insert(actor_id, ActorSemanticState::Active(replacement));
+        Self::insert_trigger_deadline_member(handle)
+          .map_err(|_| DispatchError::Other("genesis temporal placement failed"))?;
+        return Ok(false);
+      }
+      state.hot.trigger_runtime_state = initialized;
       Self::try_store_control_hot_with_authority(actor_id, state.hot.clone())
         .map_err(|_| DispatchError::Other("genesis temporal authority update failed"))?;
       let placement = {

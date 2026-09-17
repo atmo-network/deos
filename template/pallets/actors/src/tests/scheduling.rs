@@ -4358,7 +4358,7 @@ fn immutable_zero_step_at_time_closes_at_authored_cycle_nonce() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn uninitialized_genesis_cadence_reanchors_from_frame_authority() {
+fn uninitialized_genesis_cadence_reanchors_canonically() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
@@ -4370,8 +4370,8 @@ fn uninitialized_genesis_cadence_reanchors_from_frame_authority() {
     frame_system::Pallet::<Test>::set_block_number(100);
     Actors::on_idle(100, Weight::MAX);
 
-    let (_, identity, hot, _) = Actors::load_frame_control_authority(actor_id)
-      .expect("reanchored Cadenced frame authority exists");
+    let (identity, hot, _) = Actors::load_control_authority_with_authority(actor_id)
+      .expect("canonical semantic authority exists");
     assert_eq!(identity.cycle_nonce, 0);
     assert!(!hot.pending_signal);
     assert!(matches!(
@@ -4380,13 +4380,15 @@ fn uninitialized_genesis_cadence_reanchors_from_frame_authority() {
         anchor_tick: Some(100)
       }
     ));
-    assert_eq!(
-      hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
-      Some(101)
-    );
+    assert_eq!(hot.trigger_wakeup_pointer.map(|pointer| pointer.tick), Some(101));
     assert!(ActorIdentities::<Test>::get(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(actor_id));
+    assert_eq!(
+      crate::TriggerDeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(crate::WakeupKey::Tick(101))
+    );
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
