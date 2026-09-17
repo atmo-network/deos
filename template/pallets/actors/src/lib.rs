@@ -6469,14 +6469,23 @@ pub mod pallet {
               state.hot.clone(),
               state.contract.clone(),
             );
+            // The global circuit breaker defers all ordinary Step effects and automatic terminal
+            // close while retaining exact placement, mirroring the legacy admission decision which
+            // returns `Skip` before terminal or capacity classification. Only explicit lifecycle and
+            // bounded sweep cleanup may still act while the breaker is active.
+            let classification = Self::classify_actor_loaded(&instance, state.run_state.as_ref())
+              .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+            if classification.execution_phase
+              == crate::types::ActorExecutionPhase::GlobalCircuitBreaker
+            {
+              return Ok((ServiceRoundEncounter::BreakerRefused(actor), Weight::zero(), None));
+            }
             // A due schedule window or an exhausted cycle nonce is terminal before any Step
             // attempt. The canonical service round must own that decision: an Idle resident has
             // no Step to attempt, so without this branch a window-expiry deadline returned to
             // Service would only advance the ring cursor and leave the Actor active past its
             // window. Close through the same atomic owner used by authored entry points.
-            let terminal_reason = Self::classify_actor_loaded(&instance, state.run_state.as_ref())
-              .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?
-              .terminal_reason;
+            let terminal_reason = classification.terminal_reason;
             // A latched User Idle opening must own the same admission-time insolvency decision as
             // the legacy admission path: when the sovereign balance cannot cover the ledger floor
             // plus the Pipeline Machine fee, close with `CycleAdmissionInsufficient` instead of

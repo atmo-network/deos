@@ -596,6 +596,7 @@ impl<T: Config> Pallet<T> {
             }
             Ok(ServiceRoundEncounter::Empty | ServiceRoundEncounter::Closed) => break,
             Ok(ServiceRoundEncounter::AlreadyAttempted(_)) => break,
+            Ok(ServiceRoundEncounter::BreakerRefused(_)) => break,
             Err(_) => {
               starved = executed == 0;
               break;

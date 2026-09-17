@@ -87,6 +87,9 @@ pub enum ServiceRoundEncounter {
   /// The eligible head holds no admitted work this round; its Idle residence was retained and the
   /// bounded cursor advanced without executing a Step or recording an attempt.
   NoWork(ActorRef),
+  /// The global circuit breaker is active, so the eligible head keeps its exact placement and no
+  /// Step effect or ordinary automatic terminal close runs this round.
+  BreakerRefused(ActorRef),
 }
 
 /// Rejected transaction-local operations on the inert service-ring round frontier.

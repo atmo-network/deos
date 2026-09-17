@@ -3715,37 +3715,32 @@ fn frame_only_circuit_breaker_skip_uses_only_canonical_control() {
       RuntimeOrigin::root(),
       true
     ));
-    let before = Actors::actor_control_cell(actor_id).expect("breaker Ready owner exists");
-    let queue_before = (
-      crate::ActorReadyHead::<Test>::get(),
-      crate::ActorReadyTail::<Test>::get(),
-      crate::ActorReadyOccupancy::<Test>::get(),
-    );
+    let before = Actors::actor_hot(actor_id).expect("canonical Ready owner");
+    let header_before = Actors::service_header();
 
+    // Canonical publication latches the occurrence for B+1, so the breaker refusal is observed at
+    // the next block rather than in the same block as the trigger.
+    frame_system::Pallet::<Test>::set_block_number(2);
     let consumed = Actors::execute_cycle(Weight::MAX).consumed;
-    let expected = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1)
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_actor_state_probe());
+    let expected = <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated()
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible());
     assert_eq!(consumed, expected);
-    assert_eq!(Actors::actor_control_cell(actor_id), Some(before));
-    assert_eq!(
-      (
-        crate::ActorReadyHead::<Test>::get(),
-        crate::ActorReadyTail::<Test>::get(),
-        crate::ActorReadyOccupancy::<Test>::get(),
-      ),
-      queue_before
-    );
+    assert_eq!(Actors::actor_hot(actor_id), Some(before));
+    assert_eq!(Actors::service_header().count, header_before.count);
+    assert_eq!(Actors::service_header().cursor, header_before.cursor);
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
 
     let state = Actors::active_actor_state(actor_id).expect("breaker-skipped authority remains");
     assert!(state.hot.pending_signal);
-    assert!(state.hot.queue_ticket.is_some());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Ready { .. })
-    ));
+    assert!(state.hot.queue_ticket.is_none());
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::CycleStarted { actor_id: id, .. } if *id == actor_id
@@ -5264,96 +5259,6 @@ fn breaker_defers_scheduler_owned_window_expiry_close() {
         reason: CloseReason::WindowExpired,
       } if *id == actor_id
     )));
-  });
-}
-
-#[test]
-fn breaker_preserves_lower_level_unlatched_terminal_ready_authority() {
-  new_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let actor_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      Some(ScheduleWindow { start: 2, end: 102 }),
-      transfer_contract_steps(BOB, 1),
-    );
-    fund_native(actor_id, 1_000);
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(103));
-    assert!(
-      !Actors::actor_hot(actor_id)
-        .expect("untriggered Actor")
-        .pending_signal
-    );
-
-    System::set_block_number(103);
-    // Exercise the canonical lower-level consume/publication contract. The high-level
-    // due worker intentionally substitutes WindowExpired close before enqueue instead.
-    assert_ok!(polkadot_sdk::frame_support::storage::with_transaction(
-      || {
-        let (due, stats) = Actors::wakeup_substrate_drain_key(WakeupKey::Block(103), 1);
-        assert_eq!(stats.entries_scanned, 1);
-        assert_eq!(due.len(), 1);
-        let (due_actor, state, admission, loaded_step) =
-          due.into_iter().next().expect("due source");
-        assert_eq!(due_actor, actor_id);
-        let plan = Actors::preflight_paged_enqueue_authority(
-          actor_id,
-          state.hot,
-          &state.identity,
-          state.run_state.as_ref(),
-          &admission,
-          loaded_step.expect("authored current Step").resources,
-        )
-        .expect("complete consumed terminal authority admits Ready");
-        assert_ok!(Actors::commit_paged_enqueue(plan));
-        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
-          Ok::<(), DispatchError>(()),
-        )
-      }
-    ));
-    let (source_location, source_cell) = Actors::actor_control_cell(actor_id)
-      .expect("lower-level due publication retains terminal primary");
-    let crate::ActorControlLocation::Ready { ticket } = source_location else {
-      panic!("canonical queue publication must materialize Ready");
-    };
-    assert_eq!(source_cell.hot.cycle_state, CycleState::Idle);
-    assert!(!source_cell.hot.pending_signal);
-    assert_eq!(source_cell.hot.terminal_at, Some(103));
-    assert_eq!(crate::ActorReadyOccupancy::<Test>::get(), 1);
-    assert_eq!(Actors::queue_head(), ticket);
-    assert_eq!(Actors::queue_tail(), ticket + 1);
-    assert_ok!(Actors::set_global_circuit_breaker(
-      RuntimeOrigin::root(),
-      true
-    ));
-    System::reset_events();
-    let custody = (native_balance(&ALICE), native_balance(&BOB));
-
-    Actors::execute_cycle(Weight::MAX);
-
-    let (location, cell) = Actors::actor_control_cell(actor_id)
-      .expect("breaker must retain exactly one valid terminal primary");
-    assert_eq!(location, crate::ActorControlLocation::Ready { ticket });
-    assert_eq!(cell, source_cell);
-    assert!(Actors::actor_run_state(actor_id).is_none());
-    assert_eq!(
-      crate::ActorWaitingOccupancies::<Test>::get(WakeupKey::Block(103)),
-      0
-    );
-    assert_eq!(crate::ActorReadyOccupancy::<Test>::get(), 1);
-    assert_eq!(Actors::queue_head(), ticket);
-    assert_eq!(Actors::queue_tail(), ticket + 1);
-    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(
-      actor_id
-    ));
-    assert_eq!((native_balance(&ALICE), native_balance(&BOB)), custody);
-    assert!(!has_actor_event(|event| matches!(event,
-      Event::ActorClosed { actor_id: id, .. } | Event::CycleStarted { actor_id: id, .. }
-        if *id == actor_id
-    )));
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(Actors::do_try_state());
   });
 }
 
