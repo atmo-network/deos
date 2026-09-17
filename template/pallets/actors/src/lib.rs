@@ -9030,20 +9030,11 @@ pub mod pallet {
   }
 
   impl<T: Config> Pallet<T> {
-    pub(crate) fn materialization_family_has_work(family: u8, now: BlockNumberFor<T>) -> bool {
+    pub(crate) fn materialization_family_has_work(family: u8, _now: BlockNumberFor<T>) -> bool {
       match family {
-        0 if !WakeupWorkerFaultState::<T>::exists() => {
-          let Ok(now_tick) = Self::current_scheduler_tick() else {
-            return false;
-          };
-          [WakeupClock::Block, WakeupClock::Tick]
-            .into_iter()
-            .filter_map(Self::wakeup_cursor_peek_key)
-            .any(|key| match key {
-              WakeupKey::Block(block) => block <= now,
-              WakeupKey::Tick(tick) => tick <= now_tick,
-            })
-        }
+        // Family 0 is the retired pre-cutover waiting-substrate worker. Fresh-genesis canonical
+        // publication never populates `WakeupCursor*`, so production carries no family-0 work.
+        0 => false,
         1 => {
           !CrossingWorkerFaultState::<T>::exists()
             && CrossingPendingFeedListState::<T>::get().count > 0
@@ -9058,18 +9049,14 @@ pub mod pallet {
 
     fn service_materialization_family(
       family: u8,
-      now: BlockNumberFor<T>,
+      _now: BlockNumberFor<T>,
       remaining: Weight,
-      wakeups: &mut WakeupDrainStats,
       crossing: &mut crate::crossing::CrossingWorkCounters,
       fanout_pages: &mut u32,
     ) -> Weight {
       match family {
-        0 => {
-          let mut meter = WeightMeter::with_limit(remaining);
-          *wakeups = Self::drain_overdue_wakeups_cursor_resuming(now, &mut meter, *wakeups);
-          meter.consumed()
-        }
+        // The pre-cutover waiting-substrate worker is retired; family 0 consumes no Weight.
+        0 => Weight::zero(),
         1 => {
           let (consumed, updated) =
             Self::service_crossing_transitions_resuming(remaining, *crossing);
@@ -9100,7 +9087,6 @@ pub mod pallet {
         shared_limit.proof_size().min(available.proof_size()),
       );
       let mut consumed_total = Weight::zero();
-      let mut wakeups = WakeupDrainStats::default();
       let mut crossing = crate::crossing::CrossingWorkCounters::default();
       let mut fanout_pages = 0u32;
       let all_minimum_quanta = Self::materialization_family_minimum(0)
@@ -9123,7 +9109,6 @@ pub mod pallet {
           family,
           now,
           family_budget,
-          &mut wakeups,
           &mut crossing,
           &mut fanout_pages,
         );
@@ -9135,7 +9120,6 @@ pub mod pallet {
           family_cursor,
           now,
           remaining,
-          &mut wakeups,
           &mut crossing,
           &mut fanout_pages,
         ));

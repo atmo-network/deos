@@ -958,7 +958,6 @@ fn starvation_observation_weight() -> Weight {
 /// blocked by weight with no admitted attempt, the only spec 8.6.3 starvation trigger.
 fn starvation_blocked_budget(actor_id: u64) -> Weight {
   let base = starvation_observation_weight();
-  let cursor = <TestWeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future();
   let scan = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
   let state_probe = Actors::scheduler_actor_state_probe_weight_upper();
   let consume = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
@@ -972,7 +971,6 @@ fn starvation_blocked_budget(actor_id: u64) -> Weight {
       .expect("current control owner exists"),
   };
   let full = base
-    .saturating_add(cursor)
     .saturating_add(scan)
     .saturating_add(state_probe)
     .saturating_add(consume)

@@ -3771,10 +3771,6 @@ fn empty_materialization_families_charge_only_their_measured_probes_and_yield() 
     frame_system::Pallet::<Test>::set_block_number(1);
     let expected = <TestWeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::materialization_coordinator_base())
-      .saturating_add(
-        <TestWeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future()
-          .saturating_mul(2),
-      )
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::crossing_worker_base())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::observation_fanout_base())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::block_resource_finalize())
