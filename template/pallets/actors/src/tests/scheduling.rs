@@ -81,13 +81,17 @@ fn user_pipeline_insolvency_closes_before_effect_capacity_deferral() {
         let balance_before = native_balance(&sovereign);
         let recipient_before = native_balance(&BOB);
         let actor_before = Actors::active_actor_view(actor_id).expect("paid readiness");
+        let process_before = crate::ActorProcesses::<Test>::get(actor_id);
+        // The canonical occurrence is published as Pending Service at B+1, so the direct pass must
+        // observe the next block for the head to be selectable.
+        System::set_block_number(2);
         let limits = crate::SimulationBudget {
           actor_control: Weight::from_parts(u64::MAX / 2, u64::MAX / 2),
           shared_economic: effect_capacity,
         }
         .checked_limits()
         .expect("independent component limits fit");
-        let mut resources = crate::BlockResourceState::new(1);
+        let mut resources = crate::BlockResourceState::new(2);
         assert_ok!(resources.begin_prepass());
         assert_ok!(resources.open_external_phase());
         assert_ok!(resources.begin_drain());
@@ -112,10 +116,9 @@ fn user_pipeline_insolvency_closes_before_effect_capacity_deferral() {
         )));
         if solvent {
           assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
-          assert_eq!(
-            Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-            Some(actor_id)
-          );
+          // The deferred effectful attempt rolls the canonical resident back unchanged; the legacy
+          // paged head is not part of canonical publication.
+          assert_eq!(crate::ActorProcesses::<Test>::get(actor_id), process_before);
           Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
           assert_eq!(
             Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
@@ -6546,7 +6549,6 @@ fn queue_progress_handles_adjacent_removal() {
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id3));
     System::set_block_number(2);
     run_idle(Weight::MAX);
-    assert!(Actors::active_actor_view(id3).is_some());
     assert_eq!(
       Actors::active_actor_view(id0)
         .expect("id0 live")
@@ -6565,9 +6567,14 @@ fn queue_progress_handles_adjacent_removal() {
         .cycle_nonce,
       1
     );
-    System::set_block_number(3);
-    run_idle(Weight::MAX);
+    // The insolvent adjacent tail is closed by the same Service round that advances the funded
+    // prefix, so adjacent removal never stalls the remaining queue.
     assert!(Actors::active_actor_view(id3).is_none());
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::ActorClosed { actor_id, reason: CloseReason::CycleAdmissionInsufficient }
+        if *actor_id == id3
+    )));
   });
 }
 

@@ -6477,10 +6477,35 @@ pub mod pallet {
             let terminal_reason = Self::classify_actor_loaded(&instance, state.run_state.as_ref())
               .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?
               .terminal_reason;
+            // A latched User Idle opening must own the same admission-time insolvency decision as
+            // the legacy admission path: when the sovereign balance cannot cover the ledger floor
+            // plus the Pipeline Machine fee, close with `CycleAdmissionInsufficient` instead of
+            // attempting an effectful or zero-Step cycle. Without this the canonical round defers
+            // forever behind the protected floor. Terminal reasons take precedence; other actor
+            // classes and non-Idle states keep unlimited System admission.
+            let admission_insufficient = if terminal_reason.is_none()
+              && state.identity.actor_class.actor_type() == ActorType::User
+              && state.hot.cycle_state == CycleState::Idle
+              && state.hot.pending_signal
+            {
+              match Self::pipeline_capacity_sufficient(
+                actor.actor_id,
+                ActorType::User,
+                &instance.sovereign_account,
+              ) {
+                Ok(sufficient) => !sufficient,
+                Err(_) => return Err(ServiceRoundError::ProcessResidenceMismatch),
+              }
+            } else {
+              false
+            };
+            let close_reason = terminal_reason.or_else(|| {
+              admission_insufficient.then_some(CloseReason::CycleAdmissionInsufficient)
+            });
             let idle_no_work = state.hot.cycle_state == CycleState::Idle
               && !state.hot.pending_signal
               && state.run_state.is_none();
-            if let Some(reason) = terminal_reason {
+            if let Some(reason) = close_reason {
               let close_envelope = selector_envelope
                 .saturating_add(Self::close_dispatch_weight_upper());
               let mut reservation =
