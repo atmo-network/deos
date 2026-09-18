@@ -645,6 +645,28 @@ mod benches {
     benchmark_fixture_admission::<T>(actor_id)
   }
 
+  /// Resolves the cursor and current-Step resource envelope for a benchmark Actor from its legacy
+  /// primary when one exists, otherwise from its canonical semantic authority. Canonically
+  /// published Actors own no legacy primary cell, but the retired paged-FIFO benchmark fixtures
+  /// still measure pre-cutover substrate operations, so they must be able to observe an Actor that
+  /// was created through the public canonical path.
+  fn benchmark_fixture_service_cursor_and_resources<T: Config>(
+    actor_id: ActorId,
+    state: &ActiveActorStateOf<T>,
+  ) -> (u32, ActorStepResourceEnvelope) {
+    if let Some((_, cell)) = Pallet::<T>::actor_control_cell(actor_id) {
+      return (cell.cursor, cell.resources);
+    }
+    let cursor = state.run_state.as_ref().map_or(0, |run| run.cursor);
+    let resources = Pallet::<T>::derive_step_resource_envelopes(&state.contract)
+      .and_then(|envelopes| envelopes.first().copied())
+      .unwrap_or(ActorStepResourceEnvelope {
+        control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+        effect: Weight::zero(),
+      });
+    (cursor, resources)
+  }
+
   fn benchmark_fixture_align_primary_control<T: Config>(actor_id: ActorId) {
     let identity =
       benchmark_fixture_scalar_identity::<T>(actor_id).expect("benchmark identity exists");
@@ -686,21 +708,22 @@ mod benches {
   ) -> impl FnOnce() {
     let (state, admission, _) = Pallet::<T>::load_frame_actor_service_state(actor_id)
       .expect("benchmark consumed source service authority exists");
-    let (_, cell) =
-      Pallet::<T>::actor_control_cell(actor_id).expect("benchmark consumed source primary exists");
+    let (cursor, resources) = benchmark_fixture_service_cursor_and_resources::<T>(actor_id, &state);
     let mut hot = state.hot;
     hot.pending_signal = true;
-    Pallet::<T>::remove_primary_control_cell_inner(actor_id)
-      .expect("benchmark service source is consumed before Waiting publication");
+    if ActorControlLocators::<T>::contains_key(actor_id) {
+      Pallet::<T>::remove_primary_control_cell_inner(actor_id)
+        .expect("benchmark service source is consumed before Waiting publication");
+    }
     move || {
       Pallet::<T>::try_wakeup_substrate_schedule_transition_with_authority(
         actor_id,
         WakeupKey::Block(wakeup_block),
         hot,
         &state.identity,
-        cell.cursor,
+        cursor,
         &admission,
-        cell.resources,
+        resources,
       )
       .expect("benchmark consumed service Waiting placement fits")
     }
@@ -712,8 +735,7 @@ mod benches {
   ) -> impl FnOnce() {
     let (state, admission, _) = Pallet::<T>::load_frame_actor_service_state(actor_id)
       .expect("benchmark source service authority exists");
-    let (_, cell) =
-      Pallet::<T>::actor_control_cell(actor_id).expect("benchmark source primary exists");
+    let (cursor, resources) = benchmark_fixture_service_cursor_and_resources::<T>(actor_id, &state);
     let mut hot = state.hot;
     hot.pending_signal = true;
     move || {
@@ -722,9 +744,9 @@ mod benches {
         WakeupKey::Block(wakeup_block),
         hot,
         &state.identity,
-        cell.cursor,
+        cursor,
         &admission,
-        cell.resources,
+        resources,
       )
       .expect("benchmark latched service Waiting placement fits")
     }
@@ -777,9 +799,7 @@ mod benches {
     let Some((state, admission, _)) = Pallet::<T>::load_frame_actor_service_state(actor_id) else {
       return false;
     };
-    let Some((_, cell)) = Pallet::<T>::actor_control_cell(actor_id) else {
-      return false;
-    };
+    let (_, resources) = benchmark_fixture_service_cursor_and_resources::<T>(actor_id, &state);
     let mut hot = state.hot;
     if hot.cycle_state == CycleState::Idle {
       hot.pending_signal = true;
@@ -790,7 +810,7 @@ mod benches {
       &state.identity,
       state.run_state.as_ref(),
       &admission,
-      cell.resources,
+      resources,
     )
     .and_then(Pallet::<T>::commit_paged_enqueue)
     .is_ok()
@@ -801,14 +821,15 @@ mod benches {
   ) -> impl FnOnce() -> bool {
     let (state, admission, _) = Pallet::<T>::load_frame_actor_service_state(actor_id)
       .expect("benchmark destination authority exists");
-    let (_, cell) =
-      Pallet::<T>::actor_control_cell(actor_id).expect("benchmark destination primary exists");
+    let (_, resources) = benchmark_fixture_service_cursor_and_resources::<T>(actor_id, &state);
     let mut hot = state.hot;
     if hot.cycle_state == CycleState::Idle {
       hot.pending_signal = true;
     }
-    Pallet::<T>::remove_primary_control_cell_inner(actor_id)
-      .expect("benchmark destination source is consumed before measurement");
+    if ActorControlLocators::<T>::contains_key(actor_id) {
+      Pallet::<T>::remove_primary_control_cell_inner(actor_id)
+        .expect("benchmark destination source is consumed before measurement");
+    }
     move || {
       Pallet::<T>::preflight_paged_enqueue_authority(
         actor_id,
@@ -816,7 +837,7 @@ mod benches {
         &state.identity,
         state.run_state.as_ref(),
         &admission,
-        cell.resources,
+        resources,
       )
       .and_then(Pallet::<T>::commit_paged_enqueue)
       .is_ok()
