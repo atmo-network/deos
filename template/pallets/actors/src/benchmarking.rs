@@ -6421,24 +6421,25 @@ mod benches {
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    let (location, cell) =
-      Pallet::<T>::actor_control_cell(actor_id).expect("real Ready authority exists");
-    let ActorControlLocation::Ready { ticket } = location else {
-      panic!("Q1 continuation must have a real Ready ticket");
-    };
+    // A canonically published Actor owns no legacy Ready primary, so its current-Step ticket is the
+    // generation-bound canonical successor derived from the persisted Run and admission.
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    let admission =
+      benchmark_fixture_admission::<T>(actor_id).expect("real canonical admission exists");
     let context = Pallet::<T>::step_control_weight_context(step_count, cursor, 0, 0)
       .expect("tail context exists");
     assert_eq!(context.steps_in_fragment, s);
-    let ticket = Pallet::<T>::build_actor_step_ticket(
+    let ticket = ActorStepTicket {
       actor_id,
-      ticket,
-      run.eligible_at,
-      &state.identity,
-      &state.hot,
-      Some(run),
-      &cell.admission,
-    )
-    .expect("real Ready authority builds a ticket");
+      cycle_nonce: run.cycle_nonce,
+      cursor: run.cursor,
+      ticket: 0,
+      eligible_at: run.eligible_at,
+      contract_commitment: ActorContractCommitment {
+        semantic_contract_id: admission.semantic_contract_id,
+        body_commitment: admission.body_commitment,
+      },
+    };
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real Running tail passes full premeasurement audit");
     Ok((actor_id, ticket))
@@ -7546,8 +7547,8 @@ mod benches {
           task: ActorTask::AddLiquidity {
             asset_a,
             asset_b,
-            amount_a: AmountResolution::Percent(Perbill::from_parts(1)),
-            amount_b: AmountResolution::Percent(Perbill::from_parts(1)),
+            amount_a: AmountResolution::Percent(Perbill::from_percent(50)),
+            amount_b: AmountResolution::Percent(Perbill::from_percent(50)),
             min_lp_out: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value(),
           },
           on_error: StepErrorPolicy::RetryLater {
@@ -7611,9 +7612,10 @@ mod benches {
         ..
       }))
     ));
-    assert!(
-      matches!(ActorControlLocators::<T>::get(actor_id), Some(ActorControlLocation::Waiting { key: WakeupKey::Block(at), .. }) if at == run.eligible_at)
-    );
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    let handle = DeadlineHandles::<T>::get(actor_id)
+      .expect("skip source suspends into a canonical deadline residence");
+    assert_eq!(handle.key, WakeupKey::Block(run.eligible_at));
     assert_eq!(
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
