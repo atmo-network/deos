@@ -2664,8 +2664,6 @@ mod market_tasks;
 mod observations;
 mod scheduling;
 mod storage_and_api;
-#[cfg(feature = "runtime-benchmarks")]
-mod waiting_integrity;
 mod wakeups;
 
 /// Change only the already-located canonical primary, including deliberate corruption.
