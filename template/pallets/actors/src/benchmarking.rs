@@ -1567,7 +1567,10 @@ mod benches {
         "real transition changes the suspended Actor detector phase"
       );
     }
-    assert!(benchmark_fixture_hot::<T>(actor_id).unwrap().pending_signal);
+    // Canonical crossing coalesces a fire observed while the Actor is suspended on retry: the
+    // phase advances to WaitingForRearm without requesting a second Cycle or charging a fee
+    // (`busy_crossing_fire_and_rearm_preserve_canonical_residence_without_future_pipeline`).
+    assert!(!benchmark_fixture_hot::<T>(actor_id).unwrap().pending_signal);
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id).unwrap().encode(),
       retained_run
@@ -1619,16 +1622,13 @@ mod benches {
       ActorRunStateStore::<T>::get(actor_id).unwrap().encode(),
       retained_run
     );
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Waiting { .. })
-    ));
+    assert!(DeadlineHandles::<T>::contains_key(actor_id));
     assert!(
       ActorRunStateStore::<T>::get(actor_id).unwrap().eligible_at
         > frame_system::Pallet::<T>::block_number()
     );
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("joint retry, deferred latch and real cursor are coherent");
+    Pallet::<T>::do_try_state().expect("joint retry, coalesced fire and real cursor are coherent");
     let native = T::FeeNativeAssetId::get();
     let custody = T::AssetOps::balance(&identity.sovereign_account, native);
     let sink = T::AssetOps::balance(&T::FeeSink::get(), native);
@@ -4191,6 +4191,19 @@ mod benches {
         {
           break;
         }
+        // Canonical publication serves the fired cohort no earlier than the next block, so
+        // advance to the guards' earliest eligibility before draining the service ring.
+        let guard_eligible_from = occurrence_cohort
+          .iter()
+          .filter(|id| **id != actor_id)
+          .filter_map(|id| ServiceNodes::<T>::get(*id).map(|node| node.eligible_from))
+          .max();
+        if let Some(next) = guard_eligible_from {
+          let current = frame_system::Pallet::<T>::block_number();
+          if next > current {
+            frame_system::Pallet::<T>::set_block_number(next);
+          }
+        }
         Pallet::<T>::execute_cycle(Weight::MAX);
       }
       assert!(
@@ -4203,11 +4216,9 @@ mod benches {
       Pallet::<T>::resume_actor(RawOrigin::Signed(identity.owner.clone()).into(), actor_id)
         .expect("target resumes its retained occurrence through the public lifecycle");
     }
-    let (_, ready) = Pallet::<T>::actor_control_cell(actor_id)
-      .expect("real occurrence retains canonical control authority");
-    let eligible_at = ready
-      .eligible_at
-      .expect("latched service has an eligibility boundary");
+    let eligible_at = ServiceNodes::<T>::get(actor_id)
+      .expect("latched occurrence owns one canonical service member")
+      .eligible_from;
     frame_system::Pallet::<T>::set_block_number(now.max(eligible_at));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real close occurrence preserves canonical state");
@@ -4218,22 +4229,18 @@ mod benches {
       }
       if benchmark_fixture_hot::<T>(actor_id)
         .is_some_and(|hot| hot.cycle_state == CycleState::Suspended)
-        && matches!(
-          ActorControlLocators::<T>::get(actor_id),
-          Some(ActorControlLocation::Waiting { .. })
-        )
+        && !ServiceNodes::<T>::contains_key(actor_id)
+        && DeadlineHandles::<T>::contains_key(actor_id)
         && occurrence_cohort
           .iter()
           .all(|id| benchmark_fixture_hot::<T>(*id).is_some_and(|hot| !hot.pending_signal))
       {
         break;
       }
-      if let Some((ActorControlLocation::Ready { .. }, cell)) =
-        Pallet::<T>::actor_control_cell(actor_id)
-      {
+      if let Some(node) = ServiceNodes::<T>::get(actor_id) {
         let current = frame_system::Pallet::<T>::block_number();
-        if let Some(next) = cell.eligible_at.filter(|next| *next > current) {
-          frame_system::Pallet::<T>::set_block_number(next);
+        if node.eligible_from > current {
+          frame_system::Pallet::<T>::set_block_number(node.eligible_from);
         }
       }
     }
@@ -4260,14 +4267,14 @@ mod benches {
     let state = Pallet::<T>::active_actor_state(actor_id).expect("retry Actor remains active");
     assert_eq!(state.hot.cycle_state, CycleState::Suspended);
     assert!(!state.hot.pending_signal);
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Waiting { .. })
-    ));
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
     let contract =
       Pallet::<T>::load_actor_contract(actor_id).expect("retry Contract remains admitted");
     let surfaces = Pallet::<T>::opening_surfaces(&contract.steps, 0);
     let run = state.run_state.as_ref().expect("Opening published the Run");
+    let handle = DeadlineHandles::<T>::get(actor_id)
+      .expect("suspended retry owns one canonical deadline residence");
+    assert_eq!(handle.key, WakeupKey::Block(run.eligible_at));
     assert_eq!(run.cursor, 0);
     assert!(matches!(
       run.last_step_outcome,
