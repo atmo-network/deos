@@ -2389,13 +2389,26 @@ pub mod pallet {
       let maximum_fee =
         Self::maximum_current_step_fee(identity.actor_class.actor_type(), loaded_step.resources)
           .ok()?;
-      Self::build_current_step_plan(
+      if hot.queue_ticket.is_some() {
+        return Self::build_current_step_plan(
+          actor_id,
+          identity,
+          hot,
+          run,
+          admission,
+          ticket,
+          loaded_step,
+          maximum_fee,
+        );
+      }
+      // A canonically published Actor owns no legacy queue ticket, so its current-Step plan is the
+      // generation-bound canonical successor rather than a paged-FIFO entry.
+      Self::build_canonical_current_step_plan(
         actor_id,
         identity,
         hot,
         run,
         admission,
-        ticket,
         loaded_step,
         maximum_fee,
       )

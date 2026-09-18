@@ -3287,48 +3287,33 @@ mod benches {
 
   fn prepare_reachable_suspended_head<T: Config>()
   -> Result<(ActorId, ActorStepTicketOf<T>), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let (actor_id, funding) = create_reachable_manual_retry::<T>(100)?;
-    open_reachable_retry::<T>(actor_id, funding);
-    let run = ActorRunStateStore::<T>::get(actor_id).expect("real retry Run exists");
-    let retained_run = run.encode();
-    frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    let stats = Pallet::<T>::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter);
-    assert!(stats.ready_entries >= 1);
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
-    assert_eq!(
-      ActorRunStateStore::<T>::get(actor_id)
-        .expect("due Run remains")
-        .encode(),
-      retained_run
-    );
-    let state =
-      Pallet::<T>::active_actor_state(actor_id).expect("due Actor has canonical authority");
-    let Some(ActorControlLocation::Ready { ticket }) = ActorControlLocators::<T>::get(actor_id)
-    else {
-      panic!("actual due wakeup must publish a Ready ticket");
-    };
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).expect("Ready control cell exists");
-    let ticket = Pallet::<T>::build_actor_step_ticket(
-      actor_id,
-      ticket,
-      run.eligible_at,
-      &state.identity,
-      &state.hot,
-      state.run_state.as_ref(),
-      &cell.admission,
-    )
-    .expect("canonical due authority produces the measured Step ticket");
+    // A maximum-geometry retry Contract whose tail amount sources stay at Percent(1%) suspends at
+    // cursor 0 on the canonical B+1 opening; the inner fixture returns the due retry to its
+    // Pending Service residence exactly as the production block deadline frontier would.
+    let tail_legs = T::MaxContractSteps::get().saturating_sub(1).saturating_mul(2);
+    let (actor_id, skip) = prepare_reachable_suspended_head_inner::<T>(tail_legs, 0, 0, None)?;
+    assert!(skip.is_none());
+    let state = Pallet::<T>::active_actor_state(actor_id)
+      .expect("suspended head retains canonical authority");
     assert_eq!(state.hot.cycle_state, CycleState::Suspended);
-    assert_eq!(
-      run.opening_snapshot.len(),
-      Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    let run = state.run_state.expect("suspended head retains Run");
+    let admission =
+      benchmark_fixture_admission::<T>(actor_id).expect("suspended head owns admission");
+    let ticket = ActorStepTicket {
+      actor_id,
+      cycle_nonce: run.cycle_nonce,
+      cursor: run.cursor,
+      ticket: 0,
+      eligible_at: run.eligible_at,
+      contract_commitment: ActorContractCommitment {
+        semantic_contract_id: admission.semantic_contract_id,
+        body_commitment: admission.body_commitment,
+      },
+    };
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("real due Ready fixture passes full state audit");
+    Pallet::<T>::do_try_state().expect("canonical suspended head passes full state audit");
     Ok((actor_id, ticket))
   }
 
@@ -13255,9 +13240,6 @@ mod benches {
   fn run_progress() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     let actor_id = prepare_reachable_running::<T>(T::MaxContractSteps::get())?;
     let state = ActorRunStateStore::<T>::get(actor_id).expect("real Running state exists");
-    let eligible_at = state.eligible_at;
-    let location = ActorControlLocators::<T>::get(actor_id);
-    assert!(matches!(location, Some(ActorControlLocation::Ready { .. })));
     let retained = state.encode();
     #[block]
     {
@@ -13274,12 +13256,8 @@ mod benches {
       benchmark_fixture_hot::<T>(actor_id)
         .is_some_and(|hot| hot.cycle_state == CycleState::Running)
     );
-    assert_eq!(ActorControlLocators::<T>::get(actor_id), location);
-    let pointer = benchmark_fixture_hot::<T>(actor_id)
-      .and_then(|hot| hot.wakeup_pointer)
-      .expect("Running temporal reference exists");
-    assert_eq!(pointer.block, WakeupKey::Block(eligible_at));
-    assert!(Pallet::<T>::wakeup_page_entry_matches(pointer, actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real Running persistence passes full state audit");
     Ok(())
@@ -13291,8 +13269,10 @@ mod benches {
     let (actor_id, _) = prepare_reachable_suspended_head::<T>()?;
     let state = ActorRunStateStore::<T>::get(actor_id).expect("real Suspended state exists");
     let eligible_at = state.eligible_at;
-    let location = ActorControlLocators::<T>::get(actor_id);
-    assert!(matches!(location, Some(ActorControlLocation::Ready { .. })));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    let node = ServiceNodes::<T>::get(actor_id)
+      .expect("a due canonical retry owns one Pending Service member");
+    assert_eq!(node.eligible_from, eligible_at);
     let expected_event = Event::<T>::CycleSuspended {
       actor_id,
       cycle_nonce: state.cycle_nonce,
@@ -13319,12 +13299,11 @@ mod benches {
       benchmark_fixture_hot::<T>(actor_id)
         .is_some_and(|hot| hot.cycle_state == CycleState::Suspended)
     );
-    assert_eq!(ActorControlLocators::<T>::get(actor_id), location);
-    let pointer = benchmark_fixture_hot::<T>(actor_id)
-      .and_then(|hot| hot.wakeup_pointer)
-      .expect("Suspended temporal reference exists");
-    assert_eq!(pointer.block, WakeupKey::Block(eligible_at));
-    assert!(Pallet::<T>::wakeup_page_entry_matches(pointer, actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    let node = ServiceNodes::<T>::get(actor_id)
+      .expect("persisted suspension retains its Pending Service member");
+    assert_eq!(node.eligible_from, eligible_at);
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
     frame_system::Pallet::<T>::assert_last_event(expected_event.into());
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real suspension persistence passes full state audit");
@@ -13350,14 +13329,13 @@ mod benches {
         .expect("benchmark completion must clear Actor run");
     }
     assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
-    let (_, completed) = Pallet::<T>::load_primary_control_cell(actor_id)
-      .expect("benchmark completed primary remains");
-    assert_eq!(completed.hot.cycle_state, CycleState::Idle);
-    assert_eq!(completed.identity.cycle_nonce, run.cycle_nonce);
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Unsignaled)
-    ));
+    let completed_identity =
+      benchmark_fixture_identity::<T>(actor_id).expect("completed Actor retains identity");
+    assert_eq!(completed_identity.cycle_nonce, run.cycle_nonce);
+    let completed = benchmark_fixture_hot::<T>(actor_id).expect("completed Actor retains hot");
+    assert_eq!(completed.cycle_state, CycleState::Idle);
+    assert!(completed.queue_ticket.is_none());
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("completed real Run passes full state audit");
     Ok(())
@@ -15710,24 +15688,23 @@ mod benches {
   fn reachable_suspended_head_retry_payload_tradeoffs() {
     new_test_ext().execute_with(|| {
       let (actor_id, _) = prepare_reachable_suspended_head::<Test>()
-        .expect("current-attempt two-leg head reaches a real due retry");
+        .expect("current-attempt head reaches a real due retry");
       let state = Pallet::<Test>::active_actor_state(actor_id).expect("due source exists");
       let run = state
         .run_state
         .as_ref()
         .expect("first failure retained Run");
+      assert_eq!(run.cursor, 0);
       assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
-      let ActorTask::AddLiquidity {
-        amount_a, amount_b, ..
-      } = &state.contract.steps[0].task
-      else {
-        panic!("two-leg head remains authored")
+      assert_eq!(run.last_step_outcome, Some(StepOutcome::FundingUnavailable));
+      let ActorTask::Transfer { amount, .. } = &state.contract.steps[0].task else {
+        panic!("suspended head keeps its authored zero-resolution head")
       };
-      assert!(matches!(amount_a, AmountResolution::Fixed(_)));
-      assert!(matches!(amount_b, AmountResolution::Percent(_)));
+      assert!(matches!(amount, AmountResolution::Fixed(_)));
+      assert!(ServiceNodes::<Test>::contains_key(actor_id));
       #[cfg(feature = "try-runtime")]
       Pallet::<Test>::do_try_state()
-        .expect("current-attempt retry reconciles exact Ready ownership");
+        .expect("current-attempt retry reconciles canonical Service ownership");
     });
   }
   #[cfg(test)]
