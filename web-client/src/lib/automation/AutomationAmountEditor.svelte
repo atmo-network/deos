@@ -24,24 +24,15 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
     const type = (event.currentTarget as HTMLSelectElement)
       .value as ActorAuthoringAmount['type'];
     amount =
-      type === 'Fixed'
-        ? { type, value: '0' }
-        : type === 'AllAvailable'
-          ? { type }
-          : { type, parts: 500_000_000 };
+      type === 'Fixed' ? { type, value: '0' } : { type, parts: 500_000_000 };
   }
 
   const observation = $derived.by(() => {
     switch (amount.type) {
       case 'Fixed':
         return 'Artifact value; live capacity still applies';
-      case 'PercentageOfCurrent':
-      case 'AllAvailable':
+      case 'Percent':
         return 'Re-observed at each step attempt';
-      case 'PercentageAtOpening':
-        return 'Frozen at logical-cycle start';
-      case 'PercentageOfLastFunding':
-        return 'Frozen from the latest accepted funding';
     }
   });
 </script>
@@ -55,10 +46,7 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
       selectClass="h-9 py-1.5 text-xs"
     >
       <option value="Fixed">Fixed</option>
-      <option value="PercentageOfCurrent">% current</option>
-      <option value="PercentageAtOpening">% at opening</option>
-      <option value="PercentageOfLastFunding">% last funding</option>
-      <option value="AllAvailable">All available</option>
+      <option value="Percent">% current</option>
     </SelectField>
     {#if amount.type === 'Fixed'}
       <TextField
@@ -68,7 +56,7 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
         bind:value={amount.value}
         inputClass="h-9 py-1.5 text-xs tabnum"
       />
-    {:else if amount.type !== 'AllAvailable'}
+    {:else}
       <NumberInput
         label="Perbill parts"
         min={0}

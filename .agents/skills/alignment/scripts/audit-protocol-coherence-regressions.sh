@@ -741,16 +741,16 @@ main() {
         "Retired simulation-only Actors outcome vocabulary reintroduced" \
         "$TEMPLATE_DIR/pallets/actors" "$TEMPLATE_DIR/runtime" "$PROJECT_ROOT/docs" \
         "$PROJECT_ROOT/wiki" "$PROJECT_ROOT/web-client"
-    require_anchor 'BoundedVec<Result<bool, PredicateError>, MaxOpeningPredicateResults>' \
-        "$actors_lifecycle_types" \
-        "Actors exact Opening predicate result storage is missing"
+    reject_pattern 'MaxOpeningPredicateResults|opening_predicate_results|ObservationTiming::Opening' \
+        "Retired Actors Opening predicate authority reintroduced" \
+        "$TEMPLATE_DIR/pallets/actors" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/web-client/src"
     reject_pattern '\bPredicateEvaluation\b' \
         "Tri-state Actors predicate evaluation reintroduced" \
         "$TEMPLATE_DIR/pallets/actors" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/web-client/src"
-    require_anchor 'opening_and_current_predicates_observe_distinct_step_state' "$actors_tests" \
-        "Actors explicit Opening/Current timing evidence is missing"
-    require_anchor 'opening_predicate_result_is_reused_by_run_state' "$actors_tests" \
-        "Actors frozen Opening truth evidence is missing"
+    require_anchor 'predicates_observe_current_step_state' "$actors_tests" \
+        "Actors current predicate freshness evidence is missing"
+    require_anchor 'predicate_is_rechecked_from_current_state_after_retry' "$actors_tests" \
+        "Actors retry-time current predicate evidence is missing"
     require_anchor 'unavailable_observation_skips_without_incrementing_failures' "$actors_tests" \
         "Actors false-precondition skip evidence is missing"
     require_anchor 'bounded_dnf_is_canonical_and_mode_distinct' "$actors_tests" \
@@ -846,14 +846,14 @@ main() {
     require_anchor 'cadenced_latch_disables_detection_until_pipeline_opening' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors Cadenced useful-latch disable/re-arm evidence is missing"
-    require_anchor 'busy_cadenced_occurrence_charges_and_preserves_independent_run_service' \
+    require_anchor 'busy_cadenced_occurrence_advances_deadline_without_future_cycle' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors busy Cadenced occurrence evidence is missing"
     require_anchor 'underfunded_cadenced_occurrence_advances_without_fee_readiness_or_apoptosis' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors automatic Cadenced underfunding evidence is missing"
-    require_anchor 'pipeline_and_trigger_temporal_memberships_coexist_and_drain_independently' \
-        "$TEMPLATE_DIR/pallets/actors/src/tests/wakeups.rs" \
+    require_anchor 'next_block_cadence_rearms_after_each_deferred_opening_without_late_fifo_tickets' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors independent Pipeline/Trigger temporal topology evidence is missing"
     require_anchor 'cadenced_trigger_occurrence' \
         "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \

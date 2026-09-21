@@ -1,8 +1,11 @@
 use super::*;
-use crate::{FundingProvenance, TriggerCauseProvenance};
+use crate::{
+  ActorProcesses, FundingProvenance, ProcessResidence, ServiceNodes, ServiceResidenceKind,
+  TriggerCauseProvenance,
+};
 
 #[test]
-fn cancelled_run_auto_close_precedes_insufficient_next_pipeline_fee() {
+fn cancelled_run_returns_idle_without_a_deferred_manual_cycle() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
     setup_temporary_retry_pool();
@@ -25,39 +28,27 @@ fn cancelled_run_auto_close_precedes_insufficient_next_pipeline_fee() {
     ));
     run_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_some());
+
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    assert!(!Actors::pending_signal(actor_id));
     assert_ok!(Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id));
-    let cancelled =
-      Actors::active_actor_view(actor_id).expect("deferred readiness survives cancel");
+
+    let cancelled = Actors::active_actor_view(actor_id).expect("cancelled Actor remains active");
     assert_eq!(cancelled.cycle_nonce, 1);
-    assert!(cancelled.pending_signal);
+    assert_eq!(cancelled.cycle_state, CycleState::Idle);
+    assert!(!cancelled.pending_signal);
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert_eq!(
-      Actors::actor_control_cell(actor_id).and_then(|(_, cell)| cell.eligible_at),
-      Some(3)
-    );
-    Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
-    assert_eq!(Actors::active_actor_view(actor_id), Some(cancelled));
-    let sovereign = sovereign_account(actor_id);
-    let excess = native_balance(&sovereign)
-      .checked_sub(TestMinUserBalance::get())
-      .expect("funded Actor covers the protected floor");
-    deplete_user_sovereign(actor_id, excess);
-    System::set_block_number(3);
-    System::reset_events();
-    run_idle(Weight::MAX);
-    assert!(Actors::active_actor_view(actor_id).is_none());
-    assert_eq!(native_balance(&sovereign), TestMinUserBalance::get());
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::ActorClosed { actor_id: id, reason: CloseReason::AutoCloseNonceReached }
-        if *id == actor_id
-    )));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
     assert!(!has_actor_event(|event| matches!(
-      event, Event::CycleStarted { actor_id: id, .. } if *id == actor_id
+      event,
+      Event::ActorClosed { actor_id: id, .. } if *id == actor_id
     )));
     #[cfg(feature = "try-runtime")]
     assert_ok!(Actors::do_try_state());
@@ -95,13 +86,17 @@ fn user_pipeline_insolvency_closes_before_effect_capacity_deferral() {
         let balance_before = native_balance(&sovereign);
         let recipient_before = native_balance(&BOB);
         let actor_before = Actors::active_actor_view(actor_id).expect("paid readiness");
+        let process_before = crate::ActorProcesses::<Test>::get(actor_id);
+        // The canonical occurrence is published as Pending Service at B+1, so the direct pass must
+        // observe the next block for the head to be selectable.
+        System::set_block_number(2);
         let limits = crate::SimulationBudget {
           actor_control: Weight::from_parts(u64::MAX / 2, u64::MAX / 2),
           shared_economic: effect_capacity,
         }
         .checked_limits()
         .expect("independent component limits fit");
-        let mut resources = crate::BlockResourceState::new(1);
+        let mut resources = crate::BlockResourceState::new(2);
         assert_ok!(resources.begin_prepass());
         assert_ok!(resources.open_external_phase());
         assert_ok!(resources.begin_drain());
@@ -126,10 +121,9 @@ fn user_pipeline_insolvency_closes_before_effect_capacity_deferral() {
         )));
         if solvent {
           assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
-          assert_eq!(
-            Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-            Some(actor_id)
-          );
+          // The deferred effectful attempt rolls the canonical resident back unchanged; the legacy
+          // paged head is not part of canonical publication.
+          assert_eq!(crate::ActorProcesses::<Test>::get(actor_id), process_before);
           Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
           assert_eq!(
             Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
@@ -152,11 +146,11 @@ fn user_pipeline_insolvency_closes_before_effect_capacity_deferral() {
 }
 
 #[test]
-fn idle_weight_refusal_reads_only_header_and_user_fee_prerequisite() {
+fn canonical_weight_refusal_reads_no_actor_cold_state() {
   for actor_type in [ActorType::System, ActorType::User] {
     let mut ext = new_test_ext();
-    let (actor_id, cutoff, minimum_probe, header_key, native_key, payload_keys) =
-      ext.execute_with(|| {
+    let (actor_id, process_key, service_key, contract_key, payload_key, envelope) = ext
+      .execute_with(|| {
         System::set_block_number(1);
         let actor_id = match actor_type {
           ActorType::System => create_system_with(
@@ -178,117 +172,79 @@ fn idle_weight_refusal_reads_only_header_and_user_fee_prerequisite() {
           RuntimeOrigin::signed(ALICE),
           actor_id
         ));
-        let minimum_probe =
-          <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1)
-            .saturating_add(Actors::scheduler_actor_state_probe_weight_upper())
+        // The occurrence published at block 1 is served at B+1.
+        System::set_block_number(2);
+        let selector = <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated()
+          .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible());
+        let complete = selector.saturating_add(
+          <TestWeightInfo as crate::WeightInfo>::scheduler_inner_zero_step_complete()
             .saturating_add(
-              <TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
-                .max(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page()),
-            );
+              <TestWeightInfo as crate::WeightInfo>::service_round_admit_eligible().max(
+                <TestWeightInfo as crate::WeightInfo>::service_member_retire_interior().max(
+                  <TestWeightInfo as crate::WeightInfo>::service_member_retire_pair_cursor()
+                    .max(<TestWeightInfo as crate::WeightInfo>::service_member_retire_singleton()),
+                ),
+              ),
+            ),
+        );
         (
           actor_id,
-          Actors::queue_tail(),
-          minimum_probe,
+          crate::ActorProcesses::<Test>::hashed_key_for(actor_id),
+          crate::ServiceNodes::<Test>::hashed_key_for(actor_id),
           crate::ActorContractHeads::<Test>::hashed_key_for(actor_id),
-          polkadot_sdk::frame_system::Account::<Test>::hashed_key_for(sovereign_account(actor_id)),
-          [
-            crate::ActorFunding::<Test>::hashed_key_for(actor_id),
-            crate::ActorRunHeads::<Test>::hashed_key_for(actor_id),
-            crate::ActorRunPayloads::<Test>::hashed_key_for(actor_id),
-          ],
+          crate::ActorRunPayloads::<Test>::hashed_key_for(actor_id),
+          (selector, complete),
         )
       });
     ext.commit_all().expect("commit fixture before recording");
     let before = ext.execute_with(|| polkadot_sdk::sp_io::storage::root(StateVersion::V1));
     ext.commit_all().expect("commit root calculation");
+    let (selector, complete) = envelope;
     for scarce in [
-      Weight::from_parts(minimum_probe.ref_time(), u64::MAX),
-      Weight::from_parts(u64::MAX, minimum_probe.proof_size()),
+      complete.saturating_sub(Weight::from_parts(1, 0)),
+      selector.saturating_sub(Weight::from_parts(1, 0)),
     ] {
-      for domain in [
-        None,
-        Some(crate::BlockResourceDomain::ActorControl),
-        Some(crate::BlockResourceDomain::ActorDrainEffect),
-      ] {
-        let recorder = polkadot_sdk::sp_trie::recorder::Recorder::<
-          polkadot_sdk::sp_core::Blake2Hasher,
-        >::default();
-        ext.execute_with_recorder(recorder.clone(), || {
-          if let Some(domain) = domain {
-            let ample = Weight::from_parts(u64::MAX / 2, u64::MAX / 2);
-            let shared_economic = if domain == crate::BlockResourceDomain::ActorDrainEffect {
-              if scarce.ref_time() == u64::MAX {
-                Weight::from_parts(ample.ref_time(), 0)
-              } else {
-                Weight::from_parts(0, ample.proof_size())
-              }
-            } else {
-              ample
-            };
-            let limits = crate::SimulationBudget {
-              actor_control: ample,
-              shared_economic,
-            }
-            .checked_limits()
-            .expect("independent resource lanes fit");
-            let mut resources = crate::BlockResourceState::new(1);
-            assert_ok!(resources.begin_prepass());
-            assert_ok!(resources.open_external_phase());
-            assert_ok!(resources.begin_drain());
-            let pass = Actors::execute_cycle_to_cutoff_with_resources(
-              Weight::MAX,
-              cutoff,
-              &mut resources,
-              limits,
-              crate::BlockResourceDomain::ActorDrainEffect,
-              if domain == crate::BlockResourceDomain::ActorControl {
-                scarce.min(ample)
-              } else {
-                ample
-              },
-            );
-            assert_eq!(resources.outstanding_reservations(), 0);
-            assert_eq!(resources.usage().actor_effect_used(), Weight::zero());
-            assert_eq!(resources.usage().actor_control_used(), pass.consumed);
-          } else {
-            Actors::execute_cycle_to_cutoff(scarce, cutoff);
-          }
-        });
-        let recorded = recorder.recorded_keys();
-        let was_read = |key: &[u8]| {
-          recorded
-            .values()
-            .any(|keys| keys.keys().any(|read| read.as_ref() == key))
-        };
-        assert!(
-          was_read(&header_key),
-          "terminal policy requires the Contract header"
-        );
+      let recorder =
+        polkadot_sdk::sp_trie::recorder::Recorder::<polkadot_sdk::sp_core::Blake2Hasher>::default();
+      ext.execute_with_recorder(recorder.clone(), || {
+        let mut refused = WeightMeter::with_limit(scarce);
         assert_eq!(
-          was_read(&native_key),
-          actor_type == ActorType::User,
-          "only User admission requires a native-fee balance read"
+          Actors::service_canonical_round_head(&mut refused, 2),
+          Err(crate::ServiceRoundError::InsufficientWeight)
         );
-        for key in &payload_keys {
-          assert!(
-            !was_read(key),
-            "Weight-rejected Idle {actor_type:?} read payload {key:?}"
-          );
-        }
-        ext.execute_with(|| {
-          assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-          assert_eq!(
-            Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-            Some(actor_id)
-          );
-        });
-        ext.commit_all().expect("commit unchanged rejection state");
+        assert_eq!(refused.consumed(), Weight::zero());
+      });
+      let recorded = recorder.recorded_keys();
+      for key in [&process_key, &service_key, &contract_key, &payload_key] {
+        assert!(
+          !recorded
+            .values()
+            .any(|keys| keys.keys().any(|read| read.as_ref() == key.as_slice())),
+          "sub-envelope Weight refusal read cold key {key:?}"
+        );
       }
+      ext.execute_with(|| {
+        assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
+      });
+      ext.commit_all().expect("commit unchanged refusal");
+    }
+    // Positive control: an admitted round does read the ring and process authority.
+    let recorder =
+      polkadot_sdk::sp_trie::recorder::Recorder::<polkadot_sdk::sp_core::Blake2Hasher>::default();
+    ext.execute_with_recorder(recorder.clone(), || {
+      let mut admitted = WeightMeter::with_limit(Weight::MAX);
+      assert!(Actors::service_canonical_round_head(&mut admitted, 2).is_ok());
+    });
+    let recorded = recorder.recorded_keys();
+    for key in [&process_key, &service_key] {
+      assert!(
+        recorded
+          .values()
+          .any(|keys| keys.keys().any(|read| read.as_ref() == key.as_slice())),
+        "admitted round did not read {key:?}"
+      );
     }
     ext.execute_with(|| {
-      let recipient = native_balance(&BOB);
-      Actors::execute_cycle_to_cutoff(Weight::MAX, cutoff);
-      assert_eq!(native_balance(&BOB), recipient + 10);
       assert_eq!(
         Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
         Some(1)
@@ -296,185 +252,6 @@ fn idle_weight_refusal_reads_only_header_and_user_fee_prerequisite() {
       #[cfg(feature = "try-runtime")]
       assert_ok!(Actors::do_try_state());
     });
-  }
-}
-
-#[test]
-fn suspended_weight_refusal_avoids_run_payload_and_funding_reads() {
-  for funding_unavailable in [false, true] {
-    for cursor in [0, 1] {
-      for actor_type in [ActorType::System, ActorType::User] {
-        let mut ext = new_test_ext();
-        let (actor_id, cutoff, probe, native_key, cold_keys) = ext.execute_with(|| {
-          System::set_block_number(1);
-          setup_temporary_retry_pool();
-          let mut steps = if cursor == 0 {
-            Vec::new()
-          } else {
-            transfer_contract_steps(BOB, 1).into_inner()
-          };
-          let mut retry = temporary_retry_swap_plan().into_inner();
-          retry[0].on_error = StepErrorPolicy::RetryLater { max_attempts: 2 };
-          if funding_unavailable {
-            retry[0].task = Task::SwapIn {
-              asset_in: TestAsset::Local(77),
-              asset_out: TestAsset::Native,
-              amount_in: AmountResolution::Fixed(10),
-              slippage_tolerance: Perbill::one(),
-            };
-          }
-          steps.extend(retry);
-          let steps = BoundedVec::try_from(steps).expect("head or tail retry fits");
-          let actor_id = match actor_type {
-            ActorType::System => create_system_with(ALICE, manual_schedule(), None, steps),
-            ActorType::User => {
-              create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps)
-            }
-          };
-          fund_native(actor_id, 1_000_000_000_000_000);
-          set_temporary_dex_failure(!funding_unavailable);
-          assert_ok!(Actors::manual_trigger(
-            RuntimeOrigin::signed(ALICE),
-            actor_id
-          ));
-          run_idle(Weight::MAX);
-          let run =
-            Actors::actor_run_state(actor_id).expect("recoverable failure suspends the cycle");
-          assert_eq!(
-            run.suspension,
-            Some(if funding_unavailable {
-              crate::SuspensionReason::FundingUnavailable
-            } else {
-              crate::SuspensionReason::Temporary
-            })
-          );
-          assert_eq!(run.cursor, cursor);
-          let due = run.eligible_at;
-          System::set_block_number(due);
-          Actors::on_initialize(due);
-          Actors::on_idle(due, starvation_blocked_budget(actor_id));
-          assert_eq!(
-            Actors::actor_run_state(actor_id)
-              .expect("retry retained")
-              .encode(),
-            run.encode()
-          );
-          assert_eq!(
-            Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-            Some(actor_id)
-          );
-          let probe = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1)
-            .saturating_add(Actors::scheduler_actor_state_probe_weight_upper())
-            .saturating_add(
-              <TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
-                .max(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page()),
-            );
-          (
-            actor_id,
-            Actors::queue_tail(),
-            probe,
-            polkadot_sdk::frame_system::Account::<Test>::hashed_key_for(sovereign_account(
-              actor_id,
-            )),
-            [
-              crate::ActorFunding::<Test>::hashed_key_for(actor_id),
-              crate::ActorRunPayloads::<Test>::hashed_key_for(actor_id),
-            ],
-          )
-        });
-        ext.commit_all().expect("commit retry fixture");
-        let before = ext.execute_with(|| polkadot_sdk::sp_io::storage::root(StateVersion::V1));
-        ext.commit_all().expect("commit root calculation");
-        for scarce in [
-          Weight::from_parts(probe.ref_time(), u64::MAX),
-          Weight::from_parts(u64::MAX, probe.proof_size()),
-        ] {
-          for domain in [
-            None,
-            Some(crate::BlockResourceDomain::ActorControl),
-            Some(crate::BlockResourceDomain::ActorDrainEffect),
-          ] {
-            let recorder = polkadot_sdk::sp_trie::recorder::Recorder::<
-              polkadot_sdk::sp_core::Blake2Hasher,
-            >::default();
-            ext.execute_with_recorder(recorder.clone(), || {
-              if let Some(domain) = domain {
-                let ample = Weight::from_parts(u64::MAX / 2, u64::MAX / 2);
-                let limits = crate::SimulationBudget {
-                  actor_control: ample,
-                  shared_economic: if domain == crate::BlockResourceDomain::ActorDrainEffect {
-                    if scarce.ref_time() == u64::MAX {
-                      Weight::from_parts(ample.ref_time(), 0)
-                    } else {
-                      Weight::from_parts(0, ample.proof_size())
-                    }
-                  } else {
-                    ample
-                  },
-                }
-                .checked_limits()
-                .expect("independent resource lanes fit");
-                let mut resources = crate::BlockResourceState::new(System::block_number());
-                assert_ok!(resources.begin_prepass());
-                assert_ok!(resources.open_external_phase());
-                assert_ok!(resources.begin_drain());
-                let pass = Actors::execute_cycle_to_cutoff_with_resources(
-                  Weight::MAX,
-                  cutoff,
-                  &mut resources,
-                  limits,
-                  crate::BlockResourceDomain::ActorDrainEffect,
-                  if domain == crate::BlockResourceDomain::ActorControl {
-                    scarce.min(ample)
-                  } else {
-                    ample
-                  },
-                );
-                assert_eq!(resources.outstanding_reservations(), 0);
-                assert_eq!(resources.usage().actor_effect_used(), Weight::zero());
-                assert_eq!(resources.usage().actor_control_used(), pass.consumed);
-              } else {
-                Actors::execute_cycle_to_cutoff(scarce, cutoff);
-              }
-            });
-            let recorded = recorder.recorded_keys();
-            assert_eq!(
-              recorded.values().any(|keys| keys
-                .keys()
-                .any(|read| read.as_ref() == native_key.as_slice())),
-              actor_type == ActorType::User,
-              "User retry liability requires its native balance"
-            );
-            for key in &cold_keys {
-              assert!(
-                !recorded
-                  .values()
-                  .any(|keys| keys.keys().any(|read| read.as_ref() == key.as_slice())),
-                "Weight-rejected Suspended {actor_type:?} read cold payload {key:?}"
-              );
-            }
-            ext.execute_with(|| {
-              assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-              assert_eq!(
-                Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-                Some(actor_id)
-              );
-            });
-            ext.commit_all().expect("commit unchanged refusal");
-          }
-        }
-        ext.execute_with(|| {
-          set_temporary_dex_failure(false);
-          if funding_unavailable {
-            set_asset_balance(&sovereign_account(actor_id), TestAsset::Local(77), 100);
-          }
-          Actors::execute_cycle_to_cutoff(Weight::MAX, cutoff);
-          assert!(Actors::actor_run_state(actor_id).is_none());
-          #[cfg(feature = "try-runtime")]
-          assert_ok!(Actors::do_try_state());
-        });
-      }
-    }
   }
 }
 
@@ -501,7 +278,9 @@ fn suspended_expiry_and_breaker_precede_liability_and_effect_deferral() {
             assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
             run_idle(Weight::MAX);
             let run = Actors::actor_run_state(actor_id).expect("ordinary retry");
-            assert_eq!(run.eligible_at, 2);
+            // The occurrence published at block 1 is served at B+1, so a cooldown of one block
+            // makes the retry eligible at block 3.
+            assert_eq!(run.eligible_at, 3);
             System::set_block_number(2);
             if paused { assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id)); }
             if breaker { assert_ok!(Actors::set_global_circuit_breaker(RuntimeOrigin::root(), true)); }
@@ -510,11 +289,16 @@ fn suspended_expiry_and_breaker_precede_liability_and_effect_deferral() {
               let excess = native_balance(&sovereign).checked_sub(TestMinUserBalance::get()).expect("funded fee floor");
               deplete_user_sovereign(actor_id, excess);
             }
-            assert_eq!(Actors::paged_head_entry().map(|(_, entry)| entry.actor_id), Some(actor_id));
+            assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+            assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
             let custody = native_balance(&sovereign);
             clear_fee_collections();
             System::reset_events();
             System::set_block_number(102);
+            // Window expiry for a paused Actor is owned by the canonical temporal deadline carrier.
+            // Returning it to Service in B=102 makes it first executable in B+1=103.
+            service_canonical_temporal_frontiers(102);
+            System::set_block_number(103);
             let limits = crate::SimulationBudget {
               actor_control: Weight::from_parts(u64::MAX / 2, u64::MAX / 2),
               shared_economic: effect_capacity,
@@ -549,473 +333,844 @@ fn suspended_expiry_and_breaker_precede_liability_and_effect_deferral() {
 }
 
 #[test]
-fn running_fifo_head_avoids_cold_reads_before_eligibility_and_weight_admission() {
-  let mut ext = new_test_ext();
-  let (actor_id, due, cutoff, cold_keys) = ext.execute_with(|| {
-    System::set_block_number(1);
-    let steps = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
+fn next_work_plan_types_unsignaled_process_authority_without_writes() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    let resources = fixture_step_resource_envelope(actor_id);
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("detach canonical publication for pure process planning");
+    let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+
+    let mut paused = state.clone();
+    paused.hot.lifecycle = crate::ActiveLifecycle::Paused;
+    paused.contract.window = None;
+    let expected_not_before = paused
+      .run_state
+      .as_ref()
+      .expect("suspended Run authority")
+      .eligible_at;
+    assert_eq!(
+      Actors::test_plan_next_work_source(&paused, paused.run_state.as_ref(), 0),
+      Ok((
+        crate::StepControlPlacement::None,
+        None,
+        Some(crate::ProcessDisablement {
+          cause: crate::ProcessDisableCause::OwnerPaused,
+          revival_authority: crate::ProcessRevivalAuthority::Owner,
+          basis: crate::SuspendedProcessBasis::Suspended {
+            not_before: expected_not_before,
+          },
+        }),
+        None,
+      ))
+    );
+
+    let mut unlatched = state.clone();
+    unlatched.hot.lifecycle = crate::ActiveLifecycle::Active;
+    unlatched.hot.cycle_state = crate::CycleState::Idle;
+    unlatched.hot.pending_signal = false;
+    unlatched.contract.window = None;
+    assert_eq!(
+      Actors::test_plan_next_work_source(&unlatched, None, 0),
+      Ok((
+        crate::StepControlPlacement::None,
+        None,
+        Some(crate::ProcessDisablement {
+          cause: crate::ProcessDisableCause::Protocol,
+          revival_authority: crate::ProcessRevivalAuthority::Protocol,
+          basis: crate::SuspendedProcessBasis::Idle,
+        }),
+        None,
+      ))
+    );
+    let (disabled, admission_round, deadline) =
+      Actors::test_plan_process_destination(actor, &unlatched, None, 0)
+        .expect("unlatched Actor has a complete disabled destination");
+    assert_eq!(disabled.generation, actor.generation);
+    assert!(matches!(
+      disabled.status,
+      crate::ProcessStatus::Disabled(crate::ProcessDisablement {
+        cause: crate::ProcessDisableCause::Protocol,
+        ..
+      })
+    ));
+    assert_eq!(
+      (disabled.residence, admission_round, deadline),
+      (None, None, None)
+    );
+
+    let mut pending = unlatched;
+    pending.hot.pending_signal = true;
+    assert_eq!(
+      Actors::test_plan_next_work_source(&pending, None, System::block_number()),
+      Ok((
+        crate::StepControlPlacement::Queue,
+        None,
+        None,
+        Some(crate::ServiceResidenceKind::Pending),
+      ))
+    );
+    let (service, admission_round, deadline) =
+      Actors::test_plan_process_destination(actor, &pending, None, System::block_number())
+        .expect("pending Actor has a complete Service destination");
+    assert_eq!(
+      (service.generation, service.status, service.residence),
+      (
+        actor.generation,
+        crate::ProcessStatus::Serving,
+        Some(crate::ProcessResidence::Service(
+          crate::ServiceResidenceKind::Pending,
+        )),
+      )
+    );
+    assert_eq!(
+      (admission_round, deadline),
+      (Some(System::block_number()), None)
+    );
+
+    let (sleeping, admission_round, deadline) =
+      Actors::test_plan_process_destination(actor, &state, state.run_state.as_ref(), 0)
+        .expect("suspended Actor has a complete Deadline destination");
+    let deadline = deadline.expect("exact Deadline handle");
+    assert_eq!(admission_round, None);
+    assert_eq!(deadline.actor, actor);
+    assert_eq!(
+      sleeping.residence,
+      Some(crate::ProcessResidence::Deadline {
+        key: deadline.key,
+        page: deadline.page,
+        slot: deadline.slot,
+      })
+    );
+
+    let mut temporal = state.clone();
+    temporal.contract.trigger = Trigger::Cadenced { every_ticks: 5 };
+    temporal.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
+      anchor_tick: Some(0),
+    };
+    temporal.hot.trigger_wakeup_pointer = None;
+    let (planned_hot, planned_process, _, process_deadline, trigger_deadline) =
+      Actors::test_plan_actor_publication(
+        actor,
+        &temporal,
+        temporal.run_state.as_ref(),
+        resources,
+        0,
+      )
+      .expect("process residence and temporal Trigger plan together");
+    let process_deadline = process_deadline.expect("suspended process owns Block deadline");
+    let trigger_deadline = trigger_deadline.expect("Cadenced Trigger owns Tick deadline");
+    assert!(matches!(process_deadline.key, WakeupKey::Block(_)));
+    assert!(matches!(trigger_deadline.key, WakeupKey::Tick(_)));
+    assert_eq!(process_deadline.actor, trigger_deadline.actor);
+    assert_eq!(
+      planned_process.residence,
+      Some(crate::ProcessResidence::Deadline {
+        key: process_deadline.key,
+        page: process_deadline.page,
+        slot: process_deadline.slot,
+      })
+    );
+    assert_eq!(
+      planned_hot.trigger_wakeup_pointer,
+      Some(crate::TriggerWakeupPointer {
+        tick: match trigger_deadline.key {
+          WakeupKey::Tick(tick) => tick,
+          WakeupKey::Block(_) => unreachable!("Trigger deadline uses Tick clock"),
+        },
+        page_id: trigger_deadline.page,
+        slot: u32::from(trigger_deadline.slot),
+      })
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      before,
+      "typed process and destination planning must remain storage-free"
+    );
+
+    crate::DeadlineHandles::<Test>::insert(actor_id, process_deadline);
+    crate::TriggerDeadlineHandles::<Test>::insert(actor_id, trigger_deadline);
+    assert_eq!(
+      crate::DeadlineHandles::<Test>::get(actor_id),
+      Some(process_deadline)
+    );
+    assert_eq!(
+      crate::TriggerDeadlineHandles::<Test>::get(actor_id),
+      Some(trigger_deadline),
+      "independent reverse owners must preserve both simultaneous memberships"
+    );
+  });
+}
+
+#[test]
+fn composite_publication_preflight_rejects_stale_resources_and_partial_canonical_authority() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let resources = fixture_step_resource_envelope(actor_id);
+    let actor = crate::ActorRef {
+      actor_id,
+      generation: crate::ActorSemanticStates::<Test>::get(actor_id)
+        .and_then(|semantic| match semantic {
+          crate::ActorSemanticState::Active(record) => Some(record.generation),
+          crate::ActorSemanticState::Dormant(_) => None,
+        })
+        .expect("active generation"),
+    };
+    // Canonical creation publishes the Actor immediately, so the pre-publication preflight is
+    // reached by detaching that exact publication back to its semantic-only source.
+    let state = Actors::detach_actor_publication(actor, state.clone(), state.run_state.as_ref())
+      .expect("canonical publication detaches to its pre-publication source");
+
+    assert_eq!(
+      Actors::test_preflight_actor_publication(
+        actor,
+        &state,
+        state.run_state.as_ref(),
+        resources,
+        0,
+      ),
+      Ok(())
+    );
+    let mut stale_resources = resources;
+    stale_resources.effect = stale_resources
+      .effect
+      .saturating_add(Weight::from_parts(1, 0));
+    assert_eq!(
+      Actors::test_preflight_actor_publication(
+        actor,
+        &state,
+        state.run_state.as_ref(),
+        stale_resources,
+        0,
+      ),
+      Err(crate::scheduler::EnqueueOutcome::CorruptedTopology)
+    );
+
+    crate::ActorProcesses::<Test>::insert(
+      actor_id,
+      crate::ActorProcess {
+        generation: actor.generation,
+        last_attempted: None,
+        status: crate::ProcessStatus::Disabled(crate::ProcessDisablement {
+          cause: crate::ProcessDisableCause::Protocol,
+          revival_authority: crate::ProcessRevivalAuthority::Protocol,
+          basis: crate::SuspendedProcessBasis::Idle,
+        }),
+        residence: None,
+      },
+    );
+    assert_eq!(
+      Actors::test_preflight_actor_publication(
+        actor,
+        &state,
+        state.run_state.as_ref(),
+        resources,
+        0,
+      ),
+      Err(crate::scheduler::EnqueueOutcome::CorruptedTopology),
+      "a partial canonical publication must fail before the transaction boundary"
+    );
+  });
+}
+
+#[test]
+fn composite_publication_rehomes_an_existing_temporal_trigger_pointer() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let resources = fixture_step_resource_envelope(actor_id);
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    // Detach the canonical publication so the rehomed Trigger pointer is the only stale carrier.
+    let run_state = state.run_state.clone();
+    let mut state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
+    state.hot.trigger_wakeup_pointer = Some(crate::TriggerWakeupPointer {
+      tick: 9,
+      page_id: 77,
+      slot: 3,
+    });
+    crate::ActorSemanticStates::<Test>::mutate(actor_id, |semantic| {
+      let Some(crate::ActorSemanticState::Active(record)) = semantic else {
+        panic!("active semantic record");
+      };
+      record.hot = state.hot.clone();
+    });
+
+    Actors::test_publish_actor_publication(actor, &state, state.run_state.as_ref(), resources, 0)
+      .expect("existing temporal authority is rehomed");
+
+    let handle = crate::TriggerDeadlineHandles::<Test>::get(actor_id)
+      .expect("canonical Trigger deadline owns the migrated tick");
+    assert_eq!(handle.key, WakeupKey::Tick(9));
+    assert_eq!(
+      crate::ActorSemanticStates::<Test>::get(actor_id).and_then(|semantic| match semantic {
+        crate::ActorSemanticState::Active(record) => record.hot.trigger_wakeup_pointer,
+        crate::ActorSemanticState::Dormant(_) => None,
       }),
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(2),
+      Some(crate::TriggerWakeupPointer {
+        tick: 9,
+        page_id: handle.page,
+        slot: u32::from(handle.slot),
       }),
-    ])
-    .expect("two Steps fit");
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, steps);
-    fund_native(actor_id, 100);
+      "semantic Trigger authority must point only at the new canonical residence"
+    );
+  });
+}
+
+#[test]
+fn canonical_cadenced_deadline_publishes_pending_service() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      timer_schedule(1),
+      None,
+      inert_contract_steps(),
+    );
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert_eq!(
+      crate::TriggerDeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Tick(2))
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let mut meter = WeightMeter::with_limit(Weight::MAX);
+    let pass = Actors::service_due_deadline_frontiers(
+      &mut meter,
+      crate::ServiceResidenceKind::Live,
+      2,
+      2,
+      Some(WakeupKey::Block(3)),
+      Some(WakeupKey::Tick(3)),
+    )
+    .expect("canonical deadline frontiers are admitted");
+    assert_eq!(
+      pass.tick,
+      Ok(crate::DueTickDeadlineMutation::TemporalTriggerProcessed(
+        actor
+      ))
+    );
+    assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(matches!(
+      crate::ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        status: crate::ProcessStatus::Serving,
+        residence: Some(crate::ProcessResidence::Service(
+          crate::ServiceResidenceKind::Pending
+        )),
+        ..
+      })
+    ));
+    let hot = crate::ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|semantic| match semantic {
+        crate::ActorSemanticState::Active(record) => Some(record.hot),
+        crate::ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("Cadenced semantic state survives");
+    assert!(hot.pending_signal);
+    assert!(hot.trigger_wakeup_pointer.is_none());
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
+    )));
+  });
+}
+
+#[test]
+fn composite_publication_commits_process_and_temporal_trigger_deadlines_atomically() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let resources = fixture_step_resource_envelope(actor_id);
+    let actor = crate::ActorRef {
+      actor_id,
+      generation: crate::ActorSemanticStates::<Test>::get(actor_id)
+        .and_then(|semantic| match semantic {
+          crate::ActorSemanticState::Active(record) => Some(record.generation),
+          crate::ActorSemanticState::Dormant(_) => None,
+        })
+        .expect("active generation"),
+    };
+    state.contract.trigger = Trigger::Cadenced { every_ticks: 5 };
+    state.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
+      anchor_tick: Some(0),
+    };
+    state.hot.trigger_wakeup_pointer = None;
+    let admission = Actors::build_admission_certificate(&state.contract)
+      .expect("temporal Contract remains admissible");
+    let semantic = crate::ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|semantic| match semantic {
+        crate::ActorSemanticState::Active(mut record) => {
+          record.hot = state.hot.clone();
+          record.admission = admission;
+          Some(record)
+        }
+        crate::ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("active semantic record");
+    crate::ActorSemanticStates::<Test>::insert(
+      actor_id,
+      crate::ActorSemanticState::Active(semantic),
+    );
+    // Re-derive the pre-publication source so the Cadenced successor owns both deadlines.
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
+
+    Actors::test_publish_actor_publication(actor, &state, state.run_state.as_ref(), resources, 0)
+      .expect("complete canonical publication commits");
+
+    let process_handle =
+      crate::DeadlineHandles::<Test>::get(actor_id).expect("suspended process owns Block deadline");
+    let trigger_handle = crate::TriggerDeadlineHandles::<Test>::get(actor_id)
+      .expect("Cadenced Trigger owns independent Tick deadline");
+    assert!(matches!(process_handle.key, WakeupKey::Block(_)));
+    assert!(matches!(trigger_handle.key, WakeupKey::Tick(_)));
+    assert_eq!(process_handle.actor, trigger_handle.actor);
+    let hot = crate::ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|semantic| match semantic {
+        crate::ActorSemanticState::Active(record) => Some(record.hot),
+        crate::ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("semantic Hot remains active");
+    assert_eq!(
+      hot.trigger_wakeup_pointer,
+      Some(crate::TriggerWakeupPointer {
+        tick: match trigger_handle.key {
+          WakeupKey::Tick(tick) => tick,
+          WakeupKey::Block(_) => unreachable!("Trigger deadline uses Tick clock"),
+        },
+        page_id: trigger_handle.page,
+        slot: u32::from(trigger_handle.slot),
+      })
+    );
+  });
+}
+
+#[test]
+fn temporal_trigger_deadline_removal_is_independent_and_transactional() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let resources = fixture_step_resource_envelope(actor_id);
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    state.contract.trigger = Trigger::Cadenced { every_ticks: 5 };
+    state.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
+      anchor_tick: Some(0),
+    };
+    state.hot.trigger_wakeup_pointer = None;
+    let admission = Actors::build_admission_certificate(&state.contract)
+      .expect("temporal Contract remains admissible");
+    crate::ActorSemanticStates::<Test>::mutate(actor_id, |semantic| {
+      let Some(crate::ActorSemanticState::Active(record)) = semantic else {
+        panic!("active semantic record");
+      };
+      record.hot = state.hot.clone();
+      record.admission = admission;
+    });
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
+    Actors::test_publish_actor_publication(actor, &state, state.run_state.as_ref(), resources, 0)
+      .expect("complete canonical publication commits");
+
+    let process_before = crate::ActorProcesses::<Test>::get(actor_id)
+      .expect("suspended process remains independently resident");
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let refused: Result<(), crate::DeadlineMutationError> =
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        Actors::remove_trigger_deadline_member(actor).expect("exact Trigger member removes");
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          crate::DeadlineMutationError::InvalidDestination,
+        ))
+      });
+    assert_eq!(
+      refused,
+      Err(crate::DeadlineMutationError::InvalidDestination)
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "a later caller refusal must restore the complete Trigger carrier root"
+    );
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::remove_trigger_deadline_member(actor).expect("exact Trigger member removes");
+      crate::ActorSemanticStates::<Test>::mutate(actor_id, |semantic| {
+        let Some(crate::ActorSemanticState::Active(record)) = semantic else {
+          panic!("active semantic record");
+        };
+        record.hot.trigger_wakeup_pointer = None;
+      });
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
+    assert_eq!(
+      crate::ActorProcesses::<Test>::get(actor_id),
+      Some(process_before)
+    );
+    assert!(crate::DeadlineHandles::<Test>::contains_key(actor_id));
+  });
+}
+
+#[test]
+fn canonical_occurrence_preserves_busy_process_residence() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_canonical_suspended_system_retry(1);
+    let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    let sovereign = sovereign_account(actor_id);
+    assert!(matches!(state.contract.trigger, Trigger::Manual));
+    let process_before = crate::ActorProcesses::<Test>::get(actor_id)
+      .expect("busy process has one canonical residence");
+    let process_handle_before = crate::DeadlineHandles::<Test>::get(actor_id);
+
+    assert_eq!(
+      Actors::commit_canonical_trigger_occurrence_with_authority(
+        actor,
+        ActorType::System,
+        &sovereign,
+        crate::TriggerFeeBreakdown {
+          trigger_family: TriggerFamily::Manual,
+          trigger_fee: 0,
+        },
+        state,
+        System::block_number(),
+      ),
+      Ok(crate::scheduler::ActivationOutcome::Latched)
+    );
+    assert_eq!(
+      crate::ActorProcesses::<Test>::get(actor_id),
+      Some(process_before)
+    );
+    assert_eq!(
+      crate::DeadlineHandles::<Test>::get(actor_id),
+      process_handle_before
+    );
+    assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(matches!(
+      crate::ActorSemanticStates::<Test>::get(actor_id),
+      Some(crate::ActorSemanticState::Active(record))
+        if record.hot.pending_signal && record.hot.trigger_wakeup_pointer.is_none()
+    ));
+  });
+}
+
+#[test]
+fn canonical_lifecycle_transition_atomically_pauses_and_resumes_service_authority() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let resources = fixture_step_resource_envelope(actor_id);
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    state.contract.trigger = Trigger::Cadenced { every_ticks: 5 };
+    state.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
+      anchor_tick: Some(0),
+    };
+    state.hot.trigger_wakeup_pointer = None;
+    let admission = Actors::build_admission_certificate(&state.contract)
+      .expect("temporal Contract remains admissible");
+    crate::ActorSemanticStates::<Test>::mutate(actor_id, |semantic| {
+      let Some(crate::ActorSemanticState::Active(record)) = semantic else {
+        panic!("active semantic record");
+      };
+      record.hot = state.hot.clone();
+      record.admission = admission;
+    });
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
+    Actors::test_publish_actor_publication(actor, &state, state.run_state.as_ref(), resources, 0)
+      .expect("complete canonical publication commits");
+
+    let mut source = state.clone();
+    source.hot = match crate::ActorSemanticStates::<Test>::get(actor_id) {
+      Some(crate::ActorSemanticState::Active(record)) => record.hot,
+      _ => panic!("canonical semantic source remains active"),
+    };
+    let mut successor = source.clone();
+    successor.hot.lifecycle = crate::ActiveLifecycle::Paused;
+    successor.hot.trigger_wakeup_pointer = None;
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let invalid_resources = crate::ActorStepResourceEnvelope {
+      control: polkadot_sdk::sp_weights::Weight::zero(),
+      effect: polkadot_sdk::sp_weights::Weight::zero(),
+    };
+    assert_eq!(
+      Actors::test_transition_actor_publication_to_successor(
+        actor,
+        &source,
+        &successor,
+        source.run_state.as_ref(),
+        invalid_resources,
+        1,
+      ),
+      Err(crate::scheduler::EnqueueOutcome::CorruptedTopology),
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "late publication refusal restores process and Trigger carriers",
+    );
+
+    Actors::test_transition_actor_publication_to_successor(
+      actor,
+      &source,
+      &successor,
+      source.run_state.as_ref(),
+      resources,
+      1,
+    )
+    .expect("canonical pause transition commits");
+    assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(!crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(matches!(
+      crate::ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        status: crate::ProcessStatus::Disabled(_),
+        residence: None,
+        ..
+      })
+    ));
+
+    let paused = successor;
+    let mut resumed = paused.clone();
+    resumed.hot.lifecycle = crate::ActiveLifecycle::Active;
+    resumed.hot.pending_signal = true;
+    Actors::test_transition_actor_publication_to_successor(
+      actor,
+      &paused,
+      &resumed,
+      resumed.run_state.as_ref(),
+      resources,
+      2,
+    )
+    .expect("canonical resume and latched occurrence publish one Service residence");
+    assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(matches!(
+      crate::ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        status: crate::ProcessStatus::Serving,
+        residence: Some(crate::ProcessResidence::Service(_)),
+        ..
+      })
+    ));
+    assert!(matches!(
+      crate::ActorSemanticStates::<Test>::get(actor_id),
+      Some(crate::ActorSemanticState::Active(record))
+        if record.hot.lifecycle == crate::ActiveLifecycle::Active
+          && record.hot.pending_signal
+    ));
+  });
+}
+
+#[test]
+fn canonical_terminal_removal_closes_service_authority_transactionally() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, BoundedVec::default());
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
-    let run = Actors::actor_run_state(actor_id).expect("real Opening persists its successor");
-    assert_eq!(run.cursor, 1);
-    assert!(run.eligible_at > System::block_number());
+    let state = Actors::active_actor_state(actor_id).expect("real latched Actor");
+    let resources = fixture_step_resource_envelope(actor_id);
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    let run_state = state.run_state.clone();
+    let mut state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
+    Actors::test_publish_actor_publication(actor, &state, state.run_state.as_ref(), resources, 1)
+      .expect("complete canonical publication commits");
+    state.hot = match crate::ActorSemanticStates::<Test>::get(actor_id) {
+      Some(crate::ActorSemanticState::Active(record)) => record.hot,
+      _ => panic!("canonical semantic source remains active"),
+    };
+
+    let active_count = crate::ActiveActorCount::<Test>::get();
+    crate::ActiveActorCount::<Test>::put(0);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert_noop!(
+      Actors::test_remove_actor_publication_and_finalize(
+        actor,
+        state.clone(),
+        state.run_state.as_ref(),
+        CloseReason::OwnerInitiated,
+      ),
+      crate::Error::<Test>::ActiveActorCountInvariant
+    );
     assert_eq!(
-      Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-      Some(actor_id)
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "late terminal refusal restores semantic, process, and both deadline owners",
     );
-    let cold_keys = [
-      crate::ActorContractHeads::<Test>::hashed_key_for(actor_id),
-      crate::ActorContractTailChunks::<Test>::hashed_key_for(actor_id, 0),
-      crate::ActorFunding::<Test>::hashed_key_for(actor_id),
-      crate::ActorRunPayloads::<Test>::hashed_key_for(actor_id),
-    ];
-    (actor_id, run.eligible_at, Actors::queue_tail(), cold_keys)
-  });
-  ext
-    .commit_all()
-    .expect("fixture overlay commits before read recording");
-  let before = ext.execute_with(|| polkadot_sdk::sp_io::storage::root(StateVersion::V1));
-  ext
-    .commit_all()
-    .expect("root calculation leaves no overlay authority");
-  let recorder =
-    polkadot_sdk::sp_trie::recorder::Recorder::<polkadot_sdk::sp_core::Blake2Hasher>::default();
-  ext.execute_with_recorder(recorder.clone(), || {
-    Actors::execute_cycle_to_cutoff(Weight::MAX, cutoff);
-  });
-  let recorded = recorder.recorded_keys();
-  for key in &cold_keys {
-    assert!(
-      !recorded
-        .values()
-        .any(|keys| keys.keys().any(|read| read.as_ref() == key.as_slice())),
-      "future head read cold key {key:?}"
-    );
-  }
-  ext.execute_with(|| {
-    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-    assert_eq!(
-      Actors::actor_run_state(actor_id).map(|run| run.cursor),
-      Some(1)
-    );
-    System::set_block_number(due);
-  });
-  ext
-    .commit_all()
-    .expect("eligible fixture overlay commits before positive control");
-  let (minimum_probe, eligible_root, step_resources) = ext.execute_with(|| {
-    let probe = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1)
-      .saturating_add(Actors::scheduler_actor_state_probe_weight_upper())
-      .saturating_add(
-        <TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
-          .max(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page()),
-      );
-    let resources = Actors::actor_control_cell(actor_id)
-      .expect("canonical Running primary")
-      .1
-      .resources;
-    (
-      probe,
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      resources,
+    crate::ActiveActorCount::<Test>::put(active_count);
+
+    Actors::test_remove_actor_publication_and_finalize(
+      actor,
+      state.clone(),
+      state.run_state.as_ref(),
+      CloseReason::OwnerInitiated,
     )
-  });
-  ext
-    .commit_all()
-    .expect("eligible root commits before recording");
-  for scarce in [
-    Weight::from_parts(minimum_probe.ref_time(), u64::MAX),
-    Weight::from_parts(u64::MAX, minimum_probe.proof_size()),
-  ] {
-    for (domain, cleanup_only) in [
-      (None, false),
-      (Some(crate::BlockResourceDomain::ActorControl), false),
-      (Some(crate::BlockResourceDomain::ActorBaseEffect), false),
-      (Some(crate::BlockResourceDomain::ActorDrainEffect), false),
-      (None, true),
-      (Some(crate::BlockResourceDomain::ActorControl), true),
-    ] {
-      let scarce = if cleanup_only {
-        let step = if domain.is_none() {
-          step_resources.control.saturating_add(step_resources.effect)
-        } else {
-          step_resources.control
-        };
-        if scarce.ref_time() == u64::MAX {
-          Weight::from_parts(
-            u64::MAX,
-            scarce.proof_size().saturating_add(step.proof_size()),
-          )
-        } else {
-          Weight::from_parts(scarce.ref_time().saturating_add(step.ref_time()), u64::MAX)
-        }
-      } else {
-        scarce
-      };
-      let recorder =
-        polkadot_sdk::sp_trie::recorder::Recorder::<polkadot_sdk::sp_core::Blake2Hasher>::default();
-      ext.execute_with_recorder(recorder.clone(), || {
-        if let Some(domain) = domain {
-          let limits = crate::SimulationBudget {
-            actor_control: Weight::from_parts(u64::MAX / 2, u64::MAX / 2),
-            shared_economic: Weight::from_parts(u64::MAX / 2, u64::MAX / 2),
-          }
-          .checked_limits()
-          .expect("two ample lanes fit");
-          let mut resources = crate::BlockResourceState::new(due);
-          assert_ok!(resources.begin_prepass());
-          let effect_domain = if domain == crate::BlockResourceDomain::ActorBaseEffect {
-            let saturated = if scarce.ref_time() == u64::MAX {
-              Weight::from_parts(0, limits.actor_base_turn().proof_size())
-            } else {
-              Weight::from_parts(limits.actor_base_turn().ref_time(), 0)
-            };
-            assert!(
-              saturated
-                .saturating_add(step_resources.effect)
-                .all_lte(limits.shared_economic())
-            );
-            let mut prior = resources
-              .reserve(limits, domain, saturated)
-              .expect("prior Actor work fits its base turn exactly");
-            assert_ok!(resources.settle(&mut prior, saturated));
-            domain
-          } else {
-            assert_ok!(resources.open_external_phase());
-            crate::BlockResourceDomain::ActorDrainEffect
-          };
-          if domain == crate::BlockResourceDomain::ActorDrainEffect {
-            let saturated = if scarce.ref_time() == u64::MAX {
-              Weight::from_parts(0, limits.shared_economic().proof_size())
-            } else {
-              Weight::from_parts(limits.shared_economic().ref_time(), 0)
-            };
-            let mut user = resources
-              .reserve(limits, crate::BlockResourceDomain::UserDispatch, saturated)
-              .expect("prior user work fits exactly");
-            assert_ok!(resources.settle(&mut user, saturated));
-          }
-          if effect_domain == crate::BlockResourceDomain::ActorDrainEffect {
-            assert_ok!(resources.begin_drain());
-          }
-          let prior_usage = resources.usage();
-          let pass = Actors::execute_cycle_to_cutoff_with_resources(
-            Weight::MAX,
-            cutoff,
-            &mut resources,
-            limits,
-            effect_domain,
-            if domain == crate::BlockResourceDomain::ActorControl {
-              scarce.min(limits.actor_control())
-            } else {
-              limits.actor_control()
-            },
-          );
-          assert_eq!(resources.outstanding_reservations(), 0);
-          assert_eq!(
-            resources.usage().actor_effect_used(),
-            prior_usage.actor_effect_used()
-          );
-          assert_eq!(resources.usage().actor_control_used(), pass.consumed);
-          assert_eq!(
-            resources.usage().user_dispatch_used(),
-            prior_usage.user_dispatch_used()
-          );
-        } else {
-          Actors::execute_cycle_to_cutoff(scarce, cutoff);
-        }
-      });
-      let recorded = recorder.recorded_keys();
-      for key in &cold_keys {
-        assert!(
-          !recorded
-            .values()
-            .any(|keys| keys.keys().any(|read| read.as_ref() == key.as_slice())),
-          "Weight-rejected Running head read cold key {key:?}"
-        );
-      }
-      ext.execute_with(|| {
-        assert_eq!(
-          polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-          eligible_root
-        );
-      });
-      ext
-        .commit_all()
-        .expect("refusal assertions stay outside the next recording");
-    }
-  }
-  let recorder =
-    polkadot_sdk::sp_trie::recorder::Recorder::<polkadot_sdk::sp_core::Blake2Hasher>::default();
-  ext.execute_with_recorder(recorder.clone(), || {
-    Actors::execute_cycle_to_cutoff(Weight::MAX, cutoff);
-  });
-  let recorded = recorder.recorded_keys();
-  for key in &cold_keys {
-    assert!(
-      recorded
-        .values()
-        .any(|keys| keys.keys().any(|read| read.as_ref() == key.as_slice())),
-      "eligible positive control did not record cold key {key:?}"
-    );
-  }
-  ext.execute_with(|| {
-    assert!(Actors::actor_run_state(actor_id).is_none());
-    assert_eq!(
-      Actors::actor_identity(actor_id).map(|identity| identity.cycle_nonce),
-      Some(1)
-    );
+    .expect("canonical terminal removal converges on ordinary finalization");
+    assert!(!crate::ActorSemanticStates::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(!crate::SovereignIndex::<Test>::contains_key(
+      state.identity.sovereign_account
+    ));
   });
 }
 
 #[test]
-fn initial_placement_preserves_creation_and_reactivation_authority() {
-  for schedule in [manual_schedule(), at_time_schedule(10), timer_schedule(10)] {
-    for empty in [false, true] {
-      new_test_ext().execute_with(|| {
-        frame_system::Pallet::<Test>::set_block_number(1);
-        let window = matches!(schedule.trigger, Trigger::Manual).then_some(ScheduleWindow {
-          start: 10,
-          end: 10 + <<Test as crate::Config>::MinWindowLength as Get<u64>>::get(),
-        });
-        let steps = if empty { BoundedVec::default() } else { inert_contract_steps() };
-        let contract = system_active_contract(schedule.clone(), window, steps);
-        let actor_id = NextActorId::<Test>::get();
-        for reactivation in [false, true] {
-          if reactivation {
-            frame_system::Pallet::<Test>::set_block_number(2);
-            assert_ok!(Actors::deactivate_actor(RuntimeOrigin::root(), actor_id));
-            frame_system::Pallet::<Test>::set_block_number(3);
-          }
-          let install = || {
-            if reactivation {
-              Actors::activate_actor(RuntimeOrigin::root(), actor_id, contract.clone().expect("active Contract"))
-            } else {
-              Actors::create_system_actor(RuntimeOrigin::root(), ALICE, Mutability::Mutable, contract.clone())
-            }
-          };
-          let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-          Actors::test_fail_wakeup_placement_with_capacity();
-          assert_noop!(install(), Error::<Test>::QueueCapacityUnavailable);
-          assert_eq!(polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1), before);
-          assert_ok!(install());
-          let (state, admission, step) = Actors::load_frame_actor_service_state(actor_id)
-            .expect("complete installed authority");
-          assert_eq!(step.is_some(), !empty);
-          assert_eq!(state.hot.cycle_state, CycleState::Idle);
-          assert!(!state.hot.pending_signal);
-          assert!(state.hot.queue_ticket.is_none());
-          assert!(state.run_state.is_none());
-          let expected_key = if let Some(window) = window {
-            assert!(state.hot.trigger_wakeup_pointer.is_none());
-            let pointer = state.hot.wakeup_pointer.expect("terminal Block pointer");
-            assert_eq!(pointer.block, WakeupKey::Block(window.end + 1));
-            pointer.block
-          } else {
-            assert!(state.hot.wakeup_pointer.is_none());
-            let pointer = state.hot.trigger_wakeup_pointer.expect("initial Tick pointer");
-            assert_eq!(pointer.tick, if reactivation { 13 } else { 11 });
-            WakeupKey::Tick(pointer.tick)
-          };
-          let (location, cell) = Actors::actor_control_cell(actor_id).expect("installed primary");
-          assert!(matches!(location, crate::ActorControlLocation::Waiting { key, .. } if key == expected_key));
-          assert_eq!(cell.admission, admission);
-          #[cfg(feature = "try-runtime")]
-          assert_ok!(Actors::do_try_state());
-        }
-      });
-    }
-  }
-}
+fn composite_publication_rolls_back_every_owner_after_carrier_mutation_failures() {
+  let corrupted = crate::scheduler::EnqueueOutcome::CorruptedTopology;
 
-#[test]
-fn temporal_replacement_publishes_exact_primary_and_preserves_failed_source() {
-  for schedule in [at_time_schedule(10), timer_schedule(10)] {
-    for empty in [false, true] {
-      new_test_ext().execute_with(|| {
-        frame_system::Pallet::<Test>::set_block_number(1);
-        let steps = if empty {
-          BoundedVec::default()
-        } else {
-          inert_contract_steps()
-        };
-        let actor_id = create_system_with(ALICE, manual_schedule(), None, steps);
-        let mut replacement = Actors::load_actor_contract(actor_id).expect("admitted Contract");
-        replacement.trigger = schedule.trigger.clone();
-        frame_system::Pallet::<Test>::set_block_number(2);
-        let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-        Actors::test_fail_wakeup_placement_with_capacity();
-        assert_noop!(
-          Actors::update_contract(RuntimeOrigin::root(), actor_id, replacement.clone()),
-          Error::<Test>::QueueCapacityUnavailable
-        );
-        assert_eq!(
-          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-          before
-        );
-        assert_ok!(Actors::update_contract(
-          RuntimeOrigin::root(),
-          actor_id,
-          replacement
-        ));
-        let (state, admission, loaded_step) =
-          Actors::load_frame_actor_service_state(actor_id).expect("complete temporal authority");
-        assert_eq!(loaded_step.is_some(), !empty);
-        let anchor = match state.hot.trigger_runtime_state {
-          TriggerRuntimeState::AtTime { anchor_tick, .. }
-          | TriggerRuntimeState::Cadenced { anchor_tick } => {
-            anchor_tick.expect("anchored replacement")
-          }
-          _ => panic!("temporal Trigger"),
-        };
-        let pointer = state.hot.trigger_wakeup_pointer.expect("Tick pointer");
-        assert_eq!(pointer.tick, anchor + 10);
-        let (location, cell) = Actors::actor_control_cell(actor_id).expect("sole primary");
-        let crate::ActorControlLocation::Waiting { key, page, slot } = location else {
-          panic!("Tick primary");
-        };
-        assert_eq!(key, WakeupKey::Tick(pointer.tick));
-        assert_eq!(page, pointer.page_id);
-        assert_eq!(u32::from(slot), pointer.slot);
-        assert_eq!(cell.admission, admission);
-        assert_eq!(cell.cursor, 0);
-        assert_eq!(
-          cell.resources,
-          loaded_step.map_or(
-            crate::ActorStepResourceEnvelope {
-              control: <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::scheduler_inner_zero_step_complete(),
-              effect: Weight::zero(),
-            },
-            |loaded| loaded.resources
-          )
-        );
-        let published =
-          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-        assert_ok!(Actors::prime_frame_actor_schedule(actor_id));
-        assert_eq!(
-          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-          published
-        );
-        #[cfg(feature = "try-runtime")]
-        assert_ok!(Actors::do_try_state());
-      });
-    }
-  }
-}
-
-#[test]
-fn retained_ingress_rejects_incomplete_authority_without_writes() {
-  for enqueue in [false, true] {
-    new_test_ext().execute_with(|| {
-      let actor_id = create_suspended_system_retry(1);
-      let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
-      let invoke = || {
-        if enqueue {
-          Actors::try_paged_enqueue(actor_id)
-        } else {
-          Actors::try_wakeup_substrate_schedule_inner(actor_id, 10)
-        }
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let resources = fixture_step_resource_envelope(actor_id);
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    state.hot.lifecycle = crate::ActiveLifecycle::Active;
+    state.hot.cycle_state = crate::CycleState::Idle;
+    state.hot.pending_signal = true;
+    state.run_state = None;
+    crate::ActorRunStateStore::<Test>::remove(actor_id);
+    crate::ActorSemanticStates::<Test>::mutate(actor_id, |semantic| {
+      let Some(crate::ActorSemanticState::Active(record)) = semantic else {
+        panic!("active semantic record");
       };
-      let funding = crate::ActorFunding::<Test>::take(actor_id).expect("funding authority");
-      let corrupt = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-      assert_eq!(
-        invoke(),
-        Err(crate::scheduler::EnqueueOutcome::CorruptedTopology)
-      );
-      assert_eq!(
-        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-        corrupt
-      );
-      crate::ActorFunding::<Test>::insert(actor_id, funding);
-      let payload = crate::ActorRunPayloads::<Test>::take(actor_id).expect("Run payload authority");
-      let corrupt = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-      assert_eq!(
-        invoke(),
-        Err(crate::scheduler::EnqueueOutcome::CorruptedTopology)
-      );
-      assert_eq!(
-        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-        corrupt
-      );
-      crate::ActorRunPayloads::<Test>::insert(actor_id, payload);
-      let expected = if enqueue && state.hot.queue_ticket.is_some() {
-        Err(crate::scheduler::EnqueueOutcome::AlreadyLive)
-      } else {
-        Ok(())
-      };
-      assert_eq!(invoke(), expected, "retained ingress enqueue={enqueue}");
-      assert_eq!(
-        Actors::actor_run_state(actor_id).encode(),
-        state.run_state.encode()
-      );
-      assert!(Actors::active_actor_state(actor_id).is_some());
-      #[cfg(feature = "try-runtime")]
-      assert_ok!(Actors::do_try_state());
+      record.hot = state.hot.clone();
     });
-  }
-}
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
+    crate::ServiceHeader::<Test>::mutate(|header| {
+      header.count = 0;
+      header.cursor = Some(actor);
+    });
+    let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
 
-#[test]
-fn retained_wakeup_deferral_preserves_capacity_rollback_and_rejects_corruption() {
+    assert_eq!(
+      Actors::test_publish_actor_publication(actor, &state, None, resources, 2),
+      Err(corrupted),
+      "malformed Service topology fails after semantic and process publication"
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      before,
+      "Service insertion failure must restore semantic, process, ring, and legacy state"
+    );
+  });
+
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
-    let (_, cell) = Actors::actor_control_cell(actor_id).expect("canonical primary");
-    let invoke = || {
-      Actors::test_schedule_next_work_source(
-        actor_id,
-        &state,
-        &cell.admission,
-        cell.resources,
-        None,
-        0,
-      )
-    };
+    let resources = fixture_step_resource_envelope(actor_id);
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    let (_, _, process_deadline) =
+      Actors::test_plan_process_destination(actor, &state, state.run_state.as_ref(), 0)
+        .expect("suspended process destination");
+    let process_key = process_deadline.expect("process deadline handle").key;
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
+    crate::DeadlineIndexPositions::<Test>::insert(process_key, 0);
     let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-    Actors::test_fail_wakeup_placement_with_capacity();
+
     assert_eq!(
-      invoke(),
-      Err(crate::scheduler::EnqueueOutcome::WakeupCapacityExhausted)
+      Actors::test_publish_actor_publication(
+        actor,
+        &state,
+        state.run_state.as_ref(),
+        resources,
+        0,
+      ),
+      Err(corrupted),
+      "stale process Deadline index fails after page and reverse-handle insertion"
     );
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      before
+      before,
+      "process Deadline index failure must restore every publication owner"
     );
-    crate::ActorFunding::<Test>::remove(actor_id);
-    let corrupt = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+  });
+
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let resources = fixture_step_resource_envelope(actor_id);
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    state.contract.trigger = Trigger::Cadenced { every_ticks: 5 };
+    state.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
+      anchor_tick: Some(0),
+    };
+    state.hot.trigger_wakeup_pointer = None;
+    let admission = Actors::build_admission_certificate(&state.contract)
+      .expect("temporal Contract remains admissible");
+    crate::ActorSemanticStates::<Test>::mutate(actor_id, |semantic| {
+      let Some(crate::ActorSemanticState::Active(record)) = semantic else {
+        panic!("active semantic record");
+      };
+      record.hot = state.hot.clone();
+      record.admission = admission;
+    });
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
+    let (_, _, _, _, trigger_deadline) = Actors::test_plan_actor_publication(
+      actor,
+      &state,
+      state.run_state.as_ref(),
+      resources,
+      0,
+    )
+    .expect("composite temporal destination");
+    let trigger_key = trigger_deadline
+      .expect("temporal Trigger deadline handle")
+      .key;
+    crate::DeadlineIndexPositions::<Test>::insert(trigger_key, 0);
+    let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+
     assert_eq!(
-      invoke(),
-      Err(crate::scheduler::EnqueueOutcome::CorruptedTopology)
+      Actors::test_publish_actor_publication(
+        actor,
+        &state,
+        state.run_state.as_ref(),
+        resources,
+        0,
+      ),
+      Err(corrupted),
+      "stale Trigger Deadline index fails after process Deadline publication"
     );
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      corrupt
+      before,
+      "Trigger Deadline failure must also roll back the earlier process carrier"
     );
-    crate::ActorFunding::<Test>::insert(actor_id, state.funding.clone());
-    assert_eq!(invoke(), Ok((crate::StepControlPlacement::Wakeup, vec![])));
-    assert_eq!(
-      Actors::actor_run_state(actor_id).encode(),
-      state.run_state.encode()
-    );
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(Actors::do_try_state());
   });
 }
 
@@ -1042,7 +1197,7 @@ fn supplied_run_is_the_only_consumed_scheduling_authority() {
           RuntimeOrigin::signed(ALICE),
           actor_id
         ));
-        Actors::on_idle(1, Weight::MAX);
+        run_idle(Weight::MAX);
         actor_id
       };
       let state = Actors::active_actor_state(actor_id).expect("real active Run");
@@ -1059,13 +1214,15 @@ fn supplied_run_is_the_only_consumed_scheduling_authority() {
         .as_ref()
         .expect("real lifecycle Run")
         .clone();
-      let (_, cell) = Actors::actor_control_cell(actor_id).expect("canonical primary");
+      let (_, admission, _) =
+        Actors::load_frame_actor_service_state(actor_id).expect("canonical service authority");
+      let resources = fixture_step_resource_envelope(actor_id);
       let invoke = |supplied| {
         Actors::test_schedule_next_work_source(
           actor_id,
           &state,
-          &cell.admission,
-          cell.resources,
+          &admission,
+          resources,
           supplied,
           run.eligible_at,
         )
@@ -1121,6 +1278,43 @@ fn empty_on_idle_settles_housekeeping_into_actor_control() {
     assert_eq!(
       Actors::finalized_block_resource_telemetry().map(|snapshot| snapshot.block_number()),
       Some(1)
+    );
+    Actors::on_finalize(1);
+  });
+}
+
+#[test]
+fn optional_work_halt_preserves_mandatory_idle_finalization() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    run_prepass();
+    let mut state = Actors::block_resource_state().expect("prepass opens resource state");
+    state.halt_optional_actor_work();
+    let usage_before = state.usage();
+    crate::CurrentBlockResourceState::<Test>::put(state);
+
+    let consumed = Actors::on_idle(1, Weight::MAX);
+    let finalized = Actors::block_resource_state().expect("halted block still finalizes");
+    let mandatory = <TestWeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::block_resource_finalize());
+    assert_eq!(consumed, mandatory);
+    assert_eq!(finalized.phase(), crate::BlockResourcePhase::Finalizable);
+    assert!(finalized.optional_actor_work_halted());
+    assert_eq!(finalized.outstanding_reservations(), 0);
+    assert_eq!(
+      finalized.usage().actor_control_used(),
+      usage_before.actor_control_used().saturating_add(mandatory)
+    );
+    assert_eq!(
+      finalized.usage().actor_effect_used(),
+      usage_before.actor_effect_used()
+    );
+    assert_eq!(
+      Actors::finalized_block_resource_telemetry().map(|snapshot| (
+        snapshot.block_number(),
+        snapshot.optional_actor_work_halted()
+      )),
+      Some((1, true))
     );
     Actors::on_finalize(1);
   });
@@ -1259,7 +1453,7 @@ fn exhausted_actor_control_prevents_on_idle_housekeeping_mutation() {
 }
 
 #[test]
-fn block_initialize_freezes_the_pre_external_ticket_frontier() {
+fn mandatory_prepass_does_not_publish_legacy_ticket_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     crate::ActorReadyTail::<Test>::put(7);
@@ -1273,7 +1467,7 @@ fn block_initialize_freezes_the_pre_external_ticket_frontier() {
       <TestWeightInfo as crate::WeightInfo>::scheduler_on_initialize_cutoff()
         .all_lte(empty_prepass)
     );
-    assert_eq!(Actors::prepass_execution_cutoff(), Some((1, 7)));
+    assert_eq!(Actors::prepass_execution_cutoff(), Some((0, 3)));
     let state = Actors::block_resource_state().expect("resource state is opened once");
     assert_eq!(state.phase(), crate::BlockResourcePhase::ExternalPhase);
     assert_eq!(state.usage().actor_control_used(), empty_prepass);
@@ -1284,86 +1478,16 @@ fn block_initialize_freezes_the_pre_external_ticket_frontier() {
       Actors::actor_prepass(RuntimeOrigin::none()),
       crate::Error::<Test>::PrepassDuplicateOrStale
     );
-    assert_eq!(Actors::prepass_execution_cutoff(), Some((1, 7)));
+    assert_eq!(Actors::prepass_execution_cutoff(), Some((0, 3)));
     let duplicate = Actors::block_resource_state().expect("duplicate preserves state");
     assert_eq!(duplicate.usage(), state.usage());
     assert!(!duplicate.optional_actor_work_halted());
-  });
-}
 
-#[test]
-fn prepass_materialization_stays_behind_the_frozen_cutoff_until_next_block() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
-    run_prepass();
     Actors::on_idle(1, Weight::MAX);
-    Actors::on_finalize(1);
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let cutoff = Actors::next_queue_ticket();
-    run_prepass();
-    assert_eq!(Actors::prepass_execution_cutoff(), Some((2, cutoff)));
-    let deferred = Actors::active_actor_view(actor_id).expect("timer Actor remains active");
-    assert_eq!(deferred.cycle_nonce, 0);
-    assert!(deferred.pending_signal);
-    assert!(deferred.queue_ticket.is_some_and(|ticket| ticket >= cutoff));
-    Actors::on_idle(2, Weight::MAX);
-    Actors::on_finalize(2);
-
-    frame_system::Pallet::<Test>::set_block_number(3);
-    run_prepass();
-    assert_eq!(
-      Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
-      Some(1)
-    );
-  });
-}
-
-#[test]
-fn hook_order_fixture_exposes_external_ticket_after_prepass_cutoff() {
-  new_test_ext().execute_with(|| {
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let before_external = Actors::next_queue_ticket();
-
-    let consumed = run_actor_hook_order_with_external(
-      1,
-      || {
-        assert_ok!(Actors::manual_trigger(
-          RuntimeOrigin::signed(ALICE),
-          actor_id
-        ));
-      },
-      Weight::MAX,
-    );
-
-    assert_eq!(
-      Actors::prepass_execution_cutoff(),
-      Some((1, before_external))
-    );
-    assert!(
-      Actors::prepass_execution_cutoff()
-        .is_some_and(|(_, cutoff)| Actors::next_queue_ticket() > cutoff)
-    );
-    let hot = Actors::actor_hot(actor_id).expect("Actor remains pending for the next block");
-    assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some());
-    assert_eq!(
-      Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
-      Some(0)
-    );
-    assert!(
-      <TestWeightInfo as crate::WeightInfo>::scheduler_on_initialize_cutoff().all_lte(consumed)
-    );
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
-      Some(1)
-    );
+    assert_eq!(Actors::prepass_execution_cutoff(), Some((0, 3)));
+    assert_eq!(Actors::queue_head(), 0);
+    assert_eq!(Actors::queue_tail(), 9);
+    assert_eq!(Actors::queue_occupancy(), 0);
   });
 }
 
@@ -1385,200 +1509,6 @@ fn certified_ingress_maps_funding_provenance_to_cause_phase() {
     Actors::test_trigger_cause_provenance(None),
     TriggerCauseProvenance::Deferred
   );
-}
-
-#[test]
-fn activation_preflight_selects_prime_schedule_without_mutating_state() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      None,
-      contract_steps_with_step(make_step(Task::StopCycle)),
-    );
-    let root_before =
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-
-    assert_eq!(Actors::test_activation_plan_kind(actor_id), Ok(4));
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      root_before
-    );
-    let actor = Actors::active_actor_view(actor_id).expect("active actor");
-    assert!(!actor.pending_signal);
-    assert!(actor.queue_ticket.is_none());
-  });
-}
-
-#[test]
-fn ready_activation_plan_commits_its_frozen_destination_from_canonical_authority() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      None,
-      contract_steps_with_step(make_step(Task::StopCycle)),
-    );
-    let loaded = if cfg!(feature = "runtime-benchmarks") {
-      Actors::load_actor_state(actor_id)
-    } else {
-      Actors::load_frame_actor_state(actor_id)
-    };
-    let crate::LoadedActorStateOf::Active(state) = loaded else {
-      panic!("active Actor state");
-    };
-    let plan = Actors::preflight_activation_loaded(actor_id, state)
-      .expect("ready activation preflight succeeds");
-    assert!(matches!(
-      &plan.action,
-      crate::scheduler::ActivationAction::EnqueueReady(Ok(_))
-    ));
-
-    assert_eq!(
-      Actors::commit_activation_plan(plan),
-      Ok(crate::scheduler::ActivationOutcome::Latched)
-    );
-    let hot = Actors::actor_hot(actor_id).expect("committed hot authority");
-    assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some());
-    assert_eq!(hot.unsuccessful_attempt_streak, 0);
-    let (location, _, frame_hot, _) = Actors::load_frame_control_authority(actor_id)
-      .expect("ready destination owns frame authority");
-    assert!(matches!(
-      location,
-      crate::ActorControlLocation::Ready { .. }
-    ));
-    assert_eq!(frame_hot, hot);
-  });
-}
-
-#[test]
-fn deferred_activation_preserves_source_on_failure_and_publishes_exact_waiting() {
-  for saturated in [false, true] {
-    for empty in [false, true] {
-      new_test_ext().execute_with(|| {
-        frame_system::Pallet::<Test>::set_block_number(1);
-        let window = (!saturated).then_some(ScheduleWindow {
-          start: 10,
-          end: 10 + <<Test as crate::Config>::MinWindowLength as Get<u64>>::get(),
-        });
-        let steps = if empty {
-          BoundedVec::default()
-        } else {
-          inert_contract_steps()
-        };
-        let actor_id = create_system_with(ALICE, manual_schedule(), window, steps);
-        if saturated {
-          seed_saturated_tombstone_queue();
-        }
-        let state = Actors::active_actor_state(actor_id).expect("canonical activation source");
-        let plan = Actors::preflight_activation_loaded(actor_id, state).expect("valid preflight");
-        if saturated {
-          assert!(matches!(
-            plan.action,
-            crate::scheduler::ActivationAction::EnqueueReady(Err(
-              crate::EnqueueOutcome::CapacityUnavailable
-            ))
-          ));
-        } else {
-          assert!(matches!(
-            plan.action,
-            crate::scheduler::ActivationAction::PrimeSchedule(Ok(
-              crate::scheduler::PrimeSchedulePlan::BlockWakeup(10)
-            ))
-          ));
-        }
-        let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-        Actors::test_fail_wakeup_placement_with_capacity();
-        assert_noop!(
-          Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id),
-          Error::<Test>::QueueCapacityUnavailable
-        );
-        assert_eq!(
-          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-          before
-        );
-        assert_ok!(Actors::manual_trigger(
-          RuntimeOrigin::signed(ALICE),
-          actor_id
-        ));
-        let hot = Actors::actor_hot(actor_id).expect("published activation");
-        assert!(hot.pending_signal);
-        assert!(hot.queue_ticket.is_none());
-        assert_eq!(
-          hot.wakeup_pointer.expect("Waiting pointer").block,
-          WakeupKey::Block(if saturated { 2 } else { 10 })
-        );
-        assert!(matches!(
-          Actors::actor_control_cell(actor_id)
-            .expect("canonical primary")
-            .0,
-          crate::ActorControlLocation::Waiting { .. }
-        ));
-        #[cfg(feature = "try-runtime")]
-        assert_ok!(Actors::do_try_state());
-      });
-    }
-  }
-}
-
-#[test]
-fn activation_preflight_selects_exact_block_wakeup_without_mutating_state() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      Schedule {
-        trigger: Trigger::manual(),
-        cooldown_blocks: 10,
-      },
-      None,
-      contract_steps_with_step(make_step(Task::StopCycle)),
-    );
-    mutate_actor_hot_coherent(actor_id, |hot| hot.last_cycle_block = Some(1));
-    let root_before =
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-
-    assert_eq!(Actors::test_activation_plan_kind(actor_id), Ok(5));
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      root_before
-    );
-    let actor = Actors::active_actor_view(actor_id).expect("active actor");
-    assert!(!actor.pending_signal);
-    assert!(actor.queue_ticket.is_none());
-    assert!(actor.wakeup_pointer.is_none());
-  });
-}
-
-#[test]
-fn cadenced_activation_preflight_carries_queue_authority_without_mutating_state() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      Schedule {
-        trigger: Trigger::cadenced(10),
-        cooldown_blocks: 0,
-      },
-      None,
-      contract_steps_with_step(make_step(Task::StopCycle)),
-    );
-    let actor_before = Actors::active_actor_view(actor_id).expect("active actor");
-    let root_before =
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-
-    assert_eq!(Actors::test_activation_plan_kind(actor_id), Ok(2));
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      root_before
-    );
-    let actor_after = Actors::active_actor_view(actor_id).expect("active actor");
-    assert_eq!(actor_after, actor_before);
-    assert!(actor_after.queue_ticket.is_none());
-  });
 }
 
 #[test]
@@ -1766,7 +1696,10 @@ fn zero_step_opening_completes_without_step_or_run_state() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert_eq!(Actors::queue_occupancy(), 1);
+    // Canonical publication gives the latched zero-Step Actor one generation-bound
+    // `Service(Pending)` membership for the next block instead of a legacy ready ticket.
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(Actors::service_header().count, 1);
     let (state, _, loaded_step) =
       Actors::load_frame_actor_service_state(actor_id).expect("zero-Step service state loads");
     assert!(loaded_step.is_none());
@@ -1779,8 +1712,10 @@ fn zero_step_opening_completes_without_step_or_run_state() {
     );
     System::reset_events();
 
+    // The canonical occurrence is ineligible in its own block, so the service pass runs at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
     let budget = TestBlockResourceBudget::get();
-    let mut resource_state = crate::BlockResourceState::new(1);
+    let mut resource_state = crate::BlockResourceState::new(2);
     assert_eq!(resource_state.begin_prepass(), Ok(()));
     assert_eq!(resource_state.open_external_phase(), Ok(()));
     assert_eq!(resource_state.begin_drain(), Ok(()));
@@ -1853,7 +1788,7 @@ fn frame_only_manual_zero_step_uses_only_canonical_control() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let state = Actors::active_actor_state(actor_id).expect("frame successor remains active");
     assert_eq!(state.identity.cycle_nonce, 1);
@@ -1865,13 +1800,13 @@ fn frame_only_manual_zero_step_uses_only_canonical_control() {
       crate::ActorStateHolds::<Test>::get(actor_id),
       Some(installed_hold)
     );
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    // Public creation already publishes canonical semantic/process authority, so no legacy control
+    // locator or scalar hot cell survives the completed zero-Step cycle.
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(crate::ActorSemanticStates::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
       event,
       Event::CycleSummary {
@@ -1906,7 +1841,7 @@ fn frame_only_opening_stop_cycle_uses_only_canonical_control() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let state = Actors::active_actor_state(actor_id).expect("StopCycle successor remains active");
     assert_eq!(state.identity.cycle_nonce, 1);
@@ -1925,13 +1860,10 @@ fn frame_only_opening_stop_cycle_uses_only_canonical_control() {
         step_index: 0,
       } if *id == actor_id
     )));
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -2049,7 +1981,6 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
       actor_id
     ));
     assert!(Actors::active_actor_view(actor_id).is_none());
-    assert!(Actors::actor_funding(actor_id).is_none());
     assert!(Actors::actor_identity(actor_id).is_some());
     assert_eq!(Actors::actor_identity_count(), 1);
     assert_eq!(Actors::active_actor_count(), 0);
@@ -2120,35 +2051,35 @@ fn user_pause_resume_churn_is_limited_to_one_queue_mutation_per_block() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert_eq!(Actors::queue_tail(), 1);
+    assert_eq!(Actors::service_header().count, 1);
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
     assert!(
-      Actors::actor_hot(actor_id)
+      Actors::active_actor_view(actor_id)
         .expect("paused actor")
-        .queue_ticket
-        .is_none()
+        .lifecycle
+        .is_paused()
     );
     assert_noop!(
       Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id),
       Error::<Test>::ControlMutationRateLimited
     );
     assert_eq!(
-      Actors::queue_tail(),
-      1,
-      "rate-limited resume must not append"
+      Actors::service_header().count,
+      0,
+      "rate-limited resume must not republish service residence"
     );
 
     frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id));
-    assert_eq!(Actors::queue_tail(), 2);
+    assert_eq!(Actors::service_header().count, 1);
     assert_noop!(
       Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id),
       Error::<Test>::ControlMutationRateLimited
     );
     assert_eq!(
-      Actors::queue_tail(),
-      2,
-      "rate-limited pause must not create a tombstone"
+      Actors::service_header().count,
+      1,
+      "rate-limited pause must preserve service residence"
     );
   });
 }
@@ -2166,18 +2097,25 @@ fn successful_manual_execution_preserves_canonical_control() {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      run_idle(Weight::MAX);
+      frame_system::Pallet::<Test>::set_block_number(2);
+      let pass = Actors::execute_cycle(Weight::MAX);
+      assert!(!pass.starved);
+      assert_ne!(pass.consumed, Weight::zero());
 
       if predicate_stop {
-        assert!(has_actor_event(|event| matches!(
-          event,
-          Event::StepSkipped {
-            actor_id: id,
-            step_index: 0,
-            reason: StepSkippedReason::PreconditionFalse,
-            ..
-          } if *id == actor_id
-        )));
+        assert!(
+          has_actor_event(|event| matches!(
+            event,
+            Event::StepSkipped {
+              actor_id: id,
+              step_index: 0,
+              reason: StepSkippedReason::PreconditionFalse,
+              ..
+            } if *id == actor_id
+          )),
+          "canonical manual execution events: {:?}",
+          System::events(),
+        );
         assert!(!has_actor_event(|event| matches!(
           event,
           Event::CycleStopped { actor_id: id, .. } if *id == actor_id
@@ -2188,8 +2126,12 @@ fn successful_manual_execution_preserves_canonical_control() {
         Event::CycleSummary { actor_id: id, .. } if *id == actor_id
       )));
       assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-      assert!(Actors::actor_hot(actor_id).is_some());
-      assert!(Actors::actor_control_cell(actor_id).is_some());
+      let active = Actors::active_actor_state(actor_id)
+        .expect("canonical process authority retains the active Actor");
+      assert_eq!(active.hot.cycle_state, CycleState::Idle);
+      assert!(Actors::actor_control_cell(actor_id).is_none());
+      assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+      assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
       #[cfg(feature = "try-runtime")]
       assert_ok!(crate::Pallet::<Test>::do_try_state());
     });
@@ -2198,7 +2140,7 @@ fn successful_manual_execution_preserves_canonical_control() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn canonical_execution_preserves_running_successor_and_q1() {
+fn mandatory_hook_preserves_canonical_running_successor_and_q1() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let steps = BoundedVec::try_from(vec![
@@ -2210,14 +2152,18 @@ fn canonical_execution_preserves_running_successor_and_q1() {
       make_step(Task::StopCycle),
     ])
     .expect("two Steps fit");
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, steps);
-    fund_native(actor_id, 10);
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps);
+    fund_native(actor_id, 1_000_000_000_000_000_000);
 
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
     Actors::on_idle(1, Weight::MAX);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .unwrap_or_else(|| {
@@ -2231,12 +2177,20 @@ fn canonical_execution_preserves_running_successor_and_q1() {
     );
 
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
-    Actors::on_idle(1, Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_state(actor_id)
+        .expect("canonical process authority retains the Running Actor")
+        .hot
+        .cycle_state,
+      CycleState::Running,
+    );
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    run_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
-        .expect("same-block retry retains the Running successor")
+        .expect("same-round retry retains the Running successor")
         .cursor,
       1,
     );
@@ -2249,17 +2203,610 @@ fn canonical_execution_preserves_running_successor_and_q1() {
       } if *id == actor_id
     )));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert_eq!(
+      Actors::active_actor_state(actor_id)
+        .expect("same-round refusal retains canonical Running authority")
+        .hot
+        .cycle_state,
+      CycleState::Running,
+    );
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert_eq!(
+      Actors::active_actor_state(actor_id)
+        .expect("canonical process authority retains the completed Actor")
+        .hot
+        .cycle_state,
+      CycleState::Idle,
+    );
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn mandatory_hook_preserves_public_retry_prefix_and_canonical_residence() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut retry = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Local(77),
+      amount: AmountResolution::Fixed(10),
+    });
+    retry.on_error = StepErrorPolicy::RetryLater { max_attempts: 3 };
+    let steps = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(1),
+      }),
+      retry,
+    ])
+    .expect("prefix and retry Steps fit");
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 2,
+      },
+      None,
+      steps,
+    );
+    fund_native(actor_id, 1_000_000_000_000_000_000);
+    let sovereign = sovereign_account(actor_id);
+    let recipient_before = native_balance(&BOB);
+
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    Actors::on_idle(1, Weight::MAX);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    let resident_node = crate::ServiceNodes::<Test>::get(actor_id)
+      .expect("successful prefix retains the canonical Service node");
+    assert_eq!(native_balance(&BOB), recipient_before + 1);
+    assert_eq!(
+      Actors::actor_run_state(actor_id)
+        .expect("prefix commits before the retry Step")
+        .cursor,
+      1,
+    );
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+
+    run_idle(Weight::MAX);
+    assert_eq!(
+      crate::ServiceNodes::<Test>::get(actor_id),
+      Some(resident_node)
+    );
+    assert_eq!(native_balance(&BOB), recipient_before + 1);
+
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+    let suspended = Actors::actor_run_state(actor_id)
+      .expect("missing tracked input produces a genuine suspended Run");
+    assert_eq!(suspended.cursor, 1);
+    assert_eq!(
+      suspended.suspension,
+      Some(crate::SuspensionReason::FundingUnavailable)
+    );
+    assert_eq!(suspended.eligible_at, 5);
+    assert!(!crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(
+      crate::DeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(5))
+    );
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    assert_eq!(native_balance(&BOB), recipient_before + 1);
+
+    set_asset_balance(&sovereign, TestAsset::Local(77), 1_000);
+    frame_system::Pallet::<Test>::set_block_number(5);
+    Actors::on_initialize(5);
+    run_idle(Weight::MAX);
+    assert!(Actors::actor_run_state(actor_id).is_some());
+    frame_system::Pallet::<Test>::set_block_number(6);
+    run_idle(Weight::MAX);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    assert_eq!(native_balance(&BOB), recipient_before + 1);
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(77)), 10);
+    assert_eq!(asset_balance(&sovereign, TestAsset::Local(77)), 990);
+    assert_eq!(
+      Actors::active_actor_state(actor_id)
+        .expect("recovered Actor remains active")
+        .hot
+        .cycle_state,
+      CycleState::Idle,
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn public_user_v1_trace_preserves_prefix_retries_non_adjacent_and_recomputes() {
+  #[derive(Debug, PartialEq)]
+  struct TurnLedgerRow {
+    block: u64,
+    logical_reads: &'static [&'static str],
+    logical_writes: &'static [&'static str],
+    membership_inserts: u32,
+    membership_removes: u32,
+    successor_publications: u32,
+    reserved_control: Weight,
+    reserved_effect: Weight,
+    settled_control: Weight,
+    settled_effect: Weight,
+    fees: Balance,
+    useful_effects: &'static [&'static str],
+  }
+
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    setup_temporary_retry_pool();
+    let retry_task = Task::SwapIn {
+      asset_in: TestAsset::Native,
+      asset_out: TestAsset::Local(77),
+      amount_in: AmountResolution::Percent(Perbill::from_percent(50)),
+      slippage_tolerance: Perbill::one(),
+    };
+    let steps = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(1),
+      }),
+      StepOf::<Test> {
+        precondition: None,
+        task: retry_task.clone(),
+        on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
+      },
+      make_step(Task::Transfer {
+        to: CHARLIE,
+        asset: TestAsset::Local(77),
+        amount: AmountResolution::Fixed(1),
+      }),
+    ])
+    .expect("integrated V1 Steps fit");
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 2,
+      },
+      None,
+      steps,
+    );
+    fund_native(actor_id, 1_000_000);
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound Actor");
+    let step_resources = Actors::derive_step_resource_envelopes(
+      &Actors::actor_contract(actor_id).expect("integrated Contract remains admitted"),
+    )
+    .expect("integrated Contract resources remain derivable");
+    let sovereign = sovereign_account(actor_id);
+    let bob_before = native_balance(&BOB);
+    let charlie_before = asset_balance(&CHARLIE, TestAsset::Local(77));
+    let pool_before = native_balance(&u64::MAX);
+    let mut ledger = Vec::new();
+    let mut event_cursor = System::events().len();
+    let mut record_turn = |block,
+                           logical_reads,
+                           logical_writes,
+                           membership_inserts,
+                           membership_removes,
+                           successor_publications,
+                           reserved: crate::ActorStepResourceEnvelope,
+                           useful_effects| {
+      let events = System::events();
+      let fees = events[event_cursor..]
+        .iter()
+        .filter_map(|record| match &record.event {
+          RuntimeEvent::Actors(Event::PipelineFeeCharged { fee, .. })
+          | RuntimeEvent::Actors(Event::ActionFeeCharged { fee, .. }) => Some(*fee),
+          _ => None,
+        })
+        .fold(0u128, Balance::saturating_add);
+      event_cursor = events.len();
+      let resources = crate::CurrentBlockResourceState::<Test>::get()
+        .expect("every serviced turn retains reconciled resource state");
+      assert_eq!(resources.outstanding_reservations(), 0);
+      ledger.push(TurnLedgerRow {
+        block,
+        logical_reads,
+        logical_writes,
+        membership_inserts,
+        membership_removes,
+        successor_publications,
+        reserved_control: reserved.control,
+        reserved_effect: reserved.effect,
+        settled_control: resources.usage().actor_control_used(),
+        settled_effect: resources.usage().actor_effect_used(),
+        fees,
+        useful_effects,
+      });
+    };
+
+    set_temporary_dex_failure(true);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_prepass();
+    run_idle(Weight::MAX);
+    record_turn(
+      2,
+      &["semantic", "service", "contract[0]", "balances"],
+      &["semantic", "process", "run", "balances", "events"],
+      0,
+      0,
+      0,
+      step_resources[0],
+      &["transfer-native"],
+    );
+    assert_eq!(native_balance(&BOB), bob_before + 1);
+    let after_prefix = Actors::actor_run_state(actor_id).expect("prefix commits");
+    assert_eq!(
+      (
+        after_prefix.cursor,
+        after_prefix.unsuccessful_attempts_at_cursor
+      ),
+      (1, 0)
+    );
+    assert_eq!(
+      crate::ServiceNodes::<Test>::get(actor_id)
+        .expect("running Actor has one Service residence")
+        .generation,
+      actor.generation
+    );
+    assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_prepass();
+    run_idle(Weight::MAX);
+    record_turn(
+      3,
+      &[
+        "semantic",
+        "service",
+        "process",
+        "run",
+        "contract[1]",
+        "dex",
+        "balances",
+      ],
+      &[
+        "semantic", "process", "run", "service", "deadline", "fees", "events",
+      ],
+      1,
+      1,
+      1,
+      step_resources[1],
+      &[],
+    );
+    let suspended = Actors::actor_run_state(actor_id).expect("temporary attempt suspends");
+    assert_eq!(
+      (suspended.cursor, suspended.unsuccessful_attempts_at_cursor),
+      (1, 1)
+    );
+    assert_eq!(
+      suspended.suspension,
+      Some(crate::SuspensionReason::Temporary)
+    );
+    assert_eq!(suspended.eligible_at, 5);
+    assert!(!crate::ServiceNodes::<Test>::contains_key(actor_id));
+    let deadline = crate::DeadlineHandles::<Test>::get(actor_id)
+      .expect("non-adjacent retry owns one Deadline residence");
+    assert_eq!((deadline.actor, deadline.key), (actor, WakeupKey::Block(5)));
+    assert_eq!(native_balance(&u64::MAX), pool_before);
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+
+    fund_native(actor_id, 10_000_000);
+    let before_recovery = native_balance(&sovereign);
+    let action_fee = <TestWeightToFee as polkadot_sdk::sp_weights::WeightToFee>::weight_to_fee(
+      &Actors::weight_upper_bound(&retry_task),
+    );
+    let expected_in = Perbill::from_percent(50).mul_floor(
+      before_recovery
+        .saturating_sub(action_fee)
+        .saturating_sub(TestMinUserBalance::get()),
+    );
+    set_temporary_dex_failure(false);
+
+    frame_system::Pallet::<Test>::set_block_number(5);
+    Actors::on_initialize(5);
+    run_prepass();
+    run_idle(Weight::MAX);
+    record_turn(
+      5,
+      &["deadline", "process", "semantic"],
+      &["deadline", "service", "process", "semantic"],
+      1,
+      1,
+      1,
+      crate::ActorStepResourceEnvelope {
+        control: Weight::zero(),
+        effect: Weight::zero(),
+      },
+      &[],
+    );
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert_eq!(
+      Actors::actor_run_state(actor_id)
+        .expect("recovery is deferred to B+1")
+        .cursor,
+      1
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(6);
+    run_prepass();
+    run_idle(Weight::MAX);
+    record_turn(
+      6,
+      &[
+        "semantic",
+        "service",
+        "process",
+        "run",
+        "contract[1]",
+        "dex",
+        "balances",
+      ],
+      &["semantic", "process", "run", "balances", "fees", "events"],
+      0,
+      0,
+      0,
+      step_resources[1],
+      &["swap"],
+    );
+    let recovered = Actors::actor_run_state(actor_id).expect("recovered Step commits");
+    assert_eq!(
+      (recovered.cursor, recovered.unsuccessful_attempts_at_cursor),
+      (2, 0)
+    );
+    assert_eq!(
+      native_balance(&u64::MAX),
+      pool_before.saturating_add(expected_in)
+    );
+    assert_eq!(
+      asset_balance(&CHARLIE, TestAsset::Local(77)),
+      charlie_before
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(7);
+    run_prepass();
+    run_idle(Weight::MAX);
+    record_turn(
+      7,
+      &[
+        "semantic",
+        "service",
+        "process",
+        "run",
+        "contract[2]",
+        "balances",
+      ],
+      &["semantic", "process", "run", "balances", "fees", "events"],
+      0,
+      0,
+      0,
+      step_resources[2],
+      &["transfer-local"],
+    );
+    assert_eq!(ledger.len(), 5);
+    assert_eq!(
+      ledger.iter().map(|row| row.block).collect::<Vec<_>>(),
+      vec![2, 3, 5, 6, 7]
+    );
+    assert!(
+      ledger
+        .iter()
+        .all(|row| !row.logical_reads.is_empty() && !row.logical_writes.is_empty())
+    );
+    assert!(
+      ledger
+        .iter()
+        .all(|row| row.settled_control != Weight::zero())
+    );
+    assert!(
+      ledger
+        .iter()
+        .filter(|row| !row.useful_effects.is_empty())
+        .all(|row| {
+          row.reserved_control != Weight::zero()
+            && row.reserved_effect != Weight::zero()
+            && row.settled_effect != Weight::zero()
+            && row.settled_effect.all_lte(row.reserved_effect)
+            && row.fees > 0
+        })
+    );
+    let interior = ledger
+      .iter()
+      .find(|row| row.block == 6)
+      .expect("interior resident turn");
+    assert_eq!(
+      (
+        interior.membership_inserts,
+        interior.membership_removes,
+        interior.successor_publications
+      ),
+      (0, 0, 0)
+    );
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(
+      asset_balance(&CHARLIE, TestAsset::Local(77)),
+      charlie_before + 1
+    );
+    assert_eq!(
+      Actors::active_actor_state(actor_id)
+        .expect("persistent Actor completes Idle")
+        .hot
+        .cycle_state,
+      CycleState::Idle,
+    );
+    assert_eq!(
+      crate::ServiceNodes::<Test>::get(actor_id)
+        .expect("Idle manual Actor has one canonical Service residence")
+        .generation,
+      actor.generation
+    );
+    assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn mandatory_hook_resolves_percent_against_current_balance_between_adjacent_steps() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let percentage = AmountResolution::Percent(Perbill::from_percent(50));
+    let steps = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Local(77),
+        amount: percentage,
+      }),
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Local(77),
+        amount: percentage,
+      }),
+    ])
+    .expect("two percent Steps fit");
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps);
+    fund_native(actor_id, 1_000_000_000_000_000_000);
+    let sovereign = sovereign_account(actor_id);
+    set_asset_balance(&sovereign, TestAsset::Local(77), 1_000);
+    let bob_before = asset_balance(&BOB, TestAsset::Local(77));
+
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    // The first Step resolves half of the current tracked balance after its action fee.
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(77)), bob_before + 499);
+    assert_eq!(asset_balance(&sovereign, TestAsset::Local(77)), 501);
+    assert_eq!(
+      Actors::actor_run_state(actor_id)
+        .expect("first Step commits a running cursor")
+        .cursor,
+      1,
+    );
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+
+    // A normal external credit between Steps raises the later resolution's current input.
+    set_asset_balance(&sovereign, TestAsset::Local(77), 400);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      asset_balance(&BOB, TestAsset::Local(77)),
+      bob_before + 499 + 450
+    );
+    assert_eq!(asset_balance(&sovereign, TestAsset::Local(77)), 451);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn mandatory_hook_reresolves_percent_on_a_recovered_retry_attempt() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    setup_temporary_retry_pool();
+    let task = Task::SwapIn {
+      asset_in: TestAsset::Native,
+      asset_out: TestAsset::Local(77),
+      amount_in: AmountResolution::Percent(Perbill::from_percent(50)),
+      slippage_tolerance: Perbill::one(),
+    };
+    let retry_step = StepOf::<Test> {
+      precondition: None,
+      task: task.clone(),
+      on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
+    };
+    let steps = BoundedVec::try_from(vec![retry_step]).expect("retry Step fits");
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps);
+    fund_native(actor_id, 1_000_000);
+    let sovereign = sovereign_account(actor_id);
+    let pool_before = native_balance(&u64::MAX);
+
+    // A genuine temporary effect failure suspends the Run without committing a resolved effect.
+    set_temporary_dex_failure(true);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    let suspended = Actors::actor_run_state(actor_id).expect("temporary failure suspends the Run");
+    assert_eq!(
+      suspended.suspension,
+      Some(crate::SuspensionReason::Temporary)
+    );
+    assert_eq!(native_balance(&u64::MAX), pool_before);
+
+    // A normal external credit between Attempts raises the later resolution's current input.
+    fund_native(actor_id, 10_000_000);
+    let before_recovery = native_balance(&sovereign);
+    let action_fee = <TestWeightToFee as polkadot_sdk::sp_weights::WeightToFee>::weight_to_fee(
+      &Actors::weight_upper_bound(&task),
+    );
+    let expected_in = Perbill::from_percent(50).mul_floor(
+      before_recovery
+        .saturating_sub(action_fee)
+        .saturating_sub(TestMinUserBalance::get()),
+    );
+    set_temporary_dex_failure(false);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(
+      native_balance(&u64::MAX),
+      pool_before.saturating_add(expected_in),
+      "the recovered Attempt re-resolves Percent against the current tracked balance"
+    );
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -2324,15 +2871,18 @@ fn manual_middle_step_preserves_canonical_control() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    Actors::on_idle(1, Weight::MAX);
+    // Canonical publication makes the occurrence ineligible in its own block, so the first Step
+    // executes at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::execute_cycle(Weight::MAX);
     let run = Actors::actor_run_state(actor_id).expect("middle-Step Run survives");
     assert_eq!(run.cursor, 1);
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::execute_cycle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,
@@ -2340,7 +2890,7 @@ fn manual_middle_step_preserves_canonical_control() {
     )));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -2367,12 +2917,11 @@ fn frame_only_paused_ready_pop_uses_only_canonical_control() {
     ));
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
     let paused_before =
-      Actors::actor_control_cell(actor_id).expect("pause atom retains canonical authority");
-    assert_eq!(paused_before.0, crate::ActorControlLocation::Unsignaled);
-    assert!(paused_before.1.hot.lifecycle.is_paused());
+      Actors::active_actor_state(actor_id).expect("pause atom retains canonical authority");
+    assert!(paused_before.hot.lifecycle.is_paused());
     System::reset_events();
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let state = Actors::active_actor_state(actor_id).expect("paused authority remains active");
     assert!(state.hot.lifecycle.is_paused());
@@ -2382,13 +2931,10 @@ fn frame_only_paused_ready_pop_uses_only_canonical_control() {
       crate::ActorStateHolds::<Test>::get(actor_id),
       Some(installed_hold)
     );
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::CycleStarted { actor_id: id, .. } if *id == actor_id
@@ -2412,37 +2958,33 @@ fn frame_only_circuit_breaker_skip_uses_only_canonical_control() {
       RuntimeOrigin::root(),
       true
     ));
-    let before = Actors::actor_control_cell(actor_id).expect("breaker Ready owner exists");
-    let queue_before = (
-      crate::ActorReadyHead::<Test>::get(),
-      crate::ActorReadyTail::<Test>::get(),
-      crate::ActorReadyOccupancy::<Test>::get(),
-    );
+    let before = Actors::actor_hot(actor_id).expect("canonical Ready owner");
+    let header_before = Actors::service_header();
 
+    // Canonical publication latches the occurrence for B+1, so the breaker refusal is observed at
+    // the next block rather than in the same block as the trigger.
+    frame_system::Pallet::<Test>::set_block_number(2);
     let consumed = Actors::execute_cycle(Weight::MAX).consumed;
-    let expected = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1)
+    let expected = <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated()
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_actor_state_probe());
     assert_eq!(consumed, expected);
-    assert_eq!(Actors::actor_control_cell(actor_id), Some(before));
-    assert_eq!(
-      (
-        crate::ActorReadyHead::<Test>::get(),
-        crate::ActorReadyTail::<Test>::get(),
-        crate::ActorReadyOccupancy::<Test>::get(),
-      ),
-      queue_before
-    );
+    assert_eq!(Actors::actor_hot(actor_id), Some(before));
+    assert_eq!(Actors::service_header().count, header_before.count);
+    assert_eq!(Actors::service_header().cursor, header_before.cursor);
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
 
     let state = Actors::active_actor_state(actor_id).expect("breaker-skipped authority remains");
     assert!(state.hot.pending_signal);
-    assert!(state.hot.queue_ticket.is_some());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Ready { .. })
-    ));
+    assert!(state.hot.queue_ticket.is_none());
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::CycleStarted { actor_id: id, .. } if *id == actor_id
@@ -2502,49 +3044,41 @@ fn manual_trigger_survives_paused_queue_pop_and_resume() {
 }
 
 #[test]
-fn queued_actor_is_preserved_when_proof_budget_cannot_admit_probe() {
+fn mandatory_prepass_pass_admits_effectful_service_without_double_reserving_control() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    fund_native(actor_id, 1_000);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    let scan_weight =
-      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(
-        1,
-      );
+    assert!(crate::ActorControlLocators::<Test>::get(actor_id).is_none());
+    frame_system::Pallet::<Test>::set_block_number(2);
     let budget = TestBlockResourceBudget::get();
-    let mut resource_state = crate::BlockResourceState::new(1);
+    let mut resource_state = crate::BlockResourceState::new(2);
     assert_eq!(resource_state.begin_prepass(), Ok(()));
-    assert_eq!(resource_state.open_external_phase(), Ok(()));
-    assert_eq!(resource_state.begin_drain(), Ok(()));
-    let pass = Actors::execute_cycle_to_cutoff_with_resources(
-      Weight::from_parts(
-        u64::MAX,
-        scan_weight
-          .proof_size()
-          .saturating_add(Actors::scheduler_actor_probe_weight_upper().proof_size())
-          .saturating_sub(1),
-      ),
+    // The enclosing pass owns the ActorControl envelope; the canonical Service round must admit
+    // the effectful head without reserving that control a second time.
+    Actors::execute_cycle_to_cutoff_with_resources(
+      Weight::MAX,
       Actors::next_queue_ticket(),
       &mut resource_state,
       budget.limits(),
-      crate::BlockResourceDomain::ActorDrainEffect,
+      crate::BlockResourceDomain::ActorBaseEffect,
       budget.limits().actor_control(),
     );
+    let executed = Actors::active_actor_view(actor_id).expect("Actors exists");
+    assert_eq!(executed.cycle_nonce, 1);
+    assert!(!executed.pending_signal);
     assert_eq!(resource_state.outstanding_reservations(), 0);
-    assert_eq!(resource_state.usage().actor_control_used(), pass.consumed);
-    assert_eq!(resource_state.usage().actor_effect_used(), Weight::zero());
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert!(instance.pending_signal);
-    assert_eq!(instance.cycle_nonce, 0);
-    assert!(
-      Actors::actor_hot(actor_id)
-        .expect("queued actor")
-        .queue_ticket
-        .is_some()
-    );
+    assert!(resource_state.usage().actor_effect_used() != Weight::zero());
+    assert!(crate::ActorControlLocators::<Test>::get(actor_id).is_none());
   });
 }
 
@@ -2595,89 +3129,6 @@ fn global_fifo_services_system_actor_when_it_is_the_only_ready_work() {
     }
     let system = Actors::active_actor_view(system_id).expect("system Actors exists");
     assert!(system.cycle_nonce >= 1);
-  });
-}
-
-#[test]
-fn paged_enqueue_coalesces_without_a_per_block_insertion_cap() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let total = 32u32 + 7;
-    for _ in 0..total {
-      let id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-      assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
-    }
-    assert_eq!(
-      Actors::queue_tail().saturating_sub(Actors::queue_head()),
-      u64::from(total)
-    );
-    assert_eq!(Actors::wakeup_cursor_len(), 0);
-  });
-}
-
-#[test]
-fn tombstone_drain_rolls_back_on_live_occupancy_exceeding_span() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(enqueue_latched_actor(actor_id));
-    assert_eq!(Actors::paged_invalidate(actor_id), Some(0));
-    restore_structural_queue_tombstone(actor_id);
-    crate::ActorReadyOccupancy::<Test>::put(2);
-    let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-
-    assert_eq!(
-      Actors::paged_drain_tombstones(Actors::queue_tail(), 1),
-      Err(crate::EnqueueOutcome::CorruptedTopology),
-    );
-
-    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-  });
-}
-
-#[test]
-fn tombstone_drain_rolls_back_on_cross_page_corruption() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let page_size = 32u32;
-    for _ in 0..=page_size {
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-      assert!(enqueue_latched_actor(actor_id));
-      assert!(Actors::paged_invalidate(actor_id).is_some());
-      restore_structural_queue_tombstone(actor_id);
-    }
-    crate::ActorReadyFrameChunks::<Test>::remove(1);
-    let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-
-    assert_eq!(
-      Actors::paged_drain_tombstones(Actors::queue_tail(), page_size + 1),
-      Err(crate::EnqueueOutcome::CorruptedTopology),
-    );
-
-    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-    assert!(
-      crate::ActorReadyFrameChunks::<Test>::get(0).is_some(),
-      "first page deletion rolls back"
-    );
-  });
-}
-
-#[test]
-fn tombstone_drain_missing_current_page_is_blocked_without_mutation() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(enqueue_latched_actor(actor_id));
-    assert!(Actors::paged_invalidate(actor_id).is_some());
-    restore_structural_queue_tombstone(actor_id);
-    crate::ActorReadyFrameChunks::<Test>::remove(0);
-    let cutoff = Actors::queue_tail();
-    let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-
-    let (kind, entry, scanned) = Actors::test_head_discovery(cutoff, 1, 0, Weight::MAX);
-
-    assert_eq!((kind, entry, scanned), (3, None, 0));
-    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
   });
 }
 
@@ -2743,125 +3194,6 @@ fn enqueue_rolls_back_on_missing_or_malformed_tail_page() {
 
 #[cfg(feature = "try-runtime")]
 #[test]
-fn try_state_rejects_frame_and_physical_queue_mismatch() {
-  for corruption in 0u8..3 {
-    new_test_ext().execute_with(|| {
-      frame_system::Pallet::<Test>::set_block_number(1);
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-      let other = create_system_with(BOB, manual_schedule(), None, inert_contract_steps());
-      assert_ok!(Actors::manual_trigger(
-        RuntimeOrigin::signed(ALICE),
-        actor_id
-      ));
-      match corruption {
-        0 => crate::ActorControlLocators::<Test>::insert(
-          actor_id,
-          crate::ActorControlLocation::Ready { ticket: 1 },
-        ),
-        1 => crate::ActorReadyFrameChunks::<Test>::mutate(0, |maybe| {
-          maybe.as_mut().expect("queue page")[0]
-            .as_mut()
-            .expect("live cell")
-            .actor_id = other;
-        }),
-        2 => {
-          crate::ActorReadyFrameChunks::<Test>::mutate(0, |maybe| {
-            let page = maybe.as_mut().expect("queue page");
-            let first = page.get_mut(0).expect("first queue slot").take();
-            let second = ::core::mem::replace(page.get_mut(1).expect("second queue slot"), first);
-            *page.get_mut(0).expect("first queue slot") = second;
-          });
-          crate::ActorReadyTail::<Test>::put(2);
-        }
-        _ => unreachable!(),
-      }
-      assert!(
-        crate::Pallet::<Test>::do_try_state().is_err(),
-        "corruption case {corruption}"
-      );
-    });
-  }
-}
-
-#[test]
-fn live_occupancy_and_tombstone_span_are_independently_bounded() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let mut actors = Vec::new();
-    for _ in 0..5 {
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-      assert_ok!(Actors::manual_trigger(
-        RuntimeOrigin::signed(ALICE),
-        actor_id
-      ));
-      actors.push(actor_id);
-    }
-    assert_eq!(Actors::combined_queue_occupancy(), 5);
-    // Tombstones retain physical span but no longer contribute to live occupancy.
-    for actor_id in &actors[0..4] {
-      assert!(Actors::paged_invalidate(*actor_id).is_some());
-      restore_structural_queue_tombstone(*actor_id);
-    }
-    assert_eq!(
-      Actors::combined_queue_occupancy(),
-      1,
-      "invalidation removes exactly four live cells"
-    );
-    assert_eq!(Actors::queue_tail() - Actors::queue_head(), 5);
-    let cutoff = Actors::next_queue_ticket();
-    let drained = Actors::paged_drain_tombstones(cutoff, 10).expect("valid queue topology");
-    assert_eq!(drained.tombstones_skipped, 4);
-    assert_eq!(
-      Actors::combined_queue_occupancy(),
-      1,
-      "draining tombstones does not decrement live occupancy"
-    );
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn paged_queue_uses_one_live_actor_ticket_and_lazy_invalidation() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-
-    assert!(enqueue_latched_actor(actor_id));
-    assert!(Actors::paged_enqueue(actor_id));
-    assert_eq!(Actors::queue_head(), 0);
-    assert_eq!(Actors::queue_tail(), 1);
-    assert_eq!(
-      Actors::actor_hot(actor_id).expect("hot state").queue_ticket,
-      Some(0)
-    );
-    assert_eq!(
-      crate::ActorReadyFrameChunks::<Test>::get(0)
-        .expect("head page")
-        .iter()
-        .filter(|cell| cell.is_some())
-        .count(),
-      1
-    );
-
-    assert_eq!(Actors::paged_invalidate(actor_id), Some(0));
-    restore_structural_queue_tombstone(actor_id);
-    assert_eq!(
-      Actors::actor_hot(actor_id).expect("hot state").queue_ticket,
-      None
-    );
-    assert!(crate::ActorReadyFrameChunks::<Test>::get(0).expect("tombstone page")[0].is_none());
-    let drained = Actors::paged_drain_tombstones(Actors::next_queue_ticket(), 1)
-      .expect("invalidated head drains as a tombstone");
-    assert_eq!(drained.tombstones_skipped, 1);
-    assert_eq!(Actors::queue_head(), 1);
-    assert_eq!(Actors::queue_tail(), 1);
-    assert!(crate::ActorReadyFrameChunks::<Test>::get(0).is_none());
-  });
-}
-
-#[cfg(feature = "try-runtime")]
-#[test]
 fn canonical_queue_try_state_rejects_a_malformed_page_width() {
   new_test_ext().execute_with(|| {
     crate::ActorReadyFrameChunks::<Test>::insert(
@@ -2872,276 +3204,6 @@ fn canonical_queue_try_state_rejects_a_malformed_page_width() {
     crate::ActorReadyTail::<Test>::put(2);
     crate::ActorReadyOccupancy::<Test>::put(0);
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
-  });
-}
-
-fn consume_structural_ready_head(ticket: u64) {
-  let (_, entry) = Actors::paged_head_entry().expect("live structural head");
-  let (_, mut cell) = Actors::actor_control_cell(entry.actor_id).expect("source primary");
-  assert_eq!(cell.hot.cycle_state, CycleState::Idle);
-  assert!(Actors::paged_consume_head(ticket));
-  assert!(Actors::actor_control_cell(entry.actor_id).is_none());
-  cell.hot.pending_signal = false;
-  cell.eligible_at = None;
-  crate::ActorUnsignaledControlCells::<Test>::insert(entry.actor_id, cell);
-  crate::ActorControlLocators::<Test>::insert(
-    entry.actor_id,
-    crate::ActorControlLocation::Unsignaled,
-  );
-}
-
-#[test]
-fn paged_queue_crosses_and_reclaims_page_boundaries_without_prefix_rewrites() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let mut actors = Vec::new();
-    for _ in 0..33 {
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-      assert!(enqueue_latched_actor(actor_id));
-      actors.push(actor_id);
-    }
-    assert_eq!(Actors::queue_tail(), 33);
-    assert_eq!(
-      crate::ActorReadyFrameChunks::<Test>::get(0)
-        .expect("full first page")
-        .iter()
-        .filter(|cell| cell.is_some())
-        .count(),
-      32
-    );
-    assert_eq!(
-      crate::ActorReadyFrameChunks::<Test>::get(1)
-        .expect("partial second page")
-        .iter()
-        .filter(|cell| cell.is_some())
-        .count(),
-      1
-    );
-
-    for (ticket, actor_id) in actors.iter().take(32).copied().enumerate() {
-      let (position, entry) = Actors::paged_head_entry().expect("queue head exists");
-      assert_eq!(
-        (position, entry.ticket, entry.actor_id),
-        (ticket as u64, ticket as u64, actor_id)
-      );
-      consume_structural_ready_head(ticket as u64);
-    }
-    assert_eq!(Actors::queue_head(), 32);
-    assert!(crate::ActorReadyFrameChunks::<Test>::get(0).is_none());
-    assert_eq!(
-      crate::ActorReadyFrameChunks::<Test>::get(1)
-        .expect("remaining head page")
-        .iter()
-        .filter(|cell| cell.is_some())
-        .count(),
-      1
-    );
-
-    consume_structural_ready_head(32);
-    assert_eq!(Actors::queue_head(), 33);
-    assert_eq!(Actors::queue_tail(), 33);
-    assert!(crate::ActorReadyFrameChunks::<Test>::get(1).is_none());
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn paged_queue_replacement_ticket_leaves_old_entry_as_tombstone() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_a = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let actor_b = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(enqueue_latched_actor(actor_a));
-    assert_eq!(Actors::paged_invalidate(actor_a), Some(0));
-    restore_structural_queue_tombstone(actor_a);
-    assert!(enqueue_latched_actor(actor_b));
-    assert!(enqueue_latched_actor(actor_a));
-
-    assert_eq!(
-      Actors::actor_hot(actor_a)
-        .expect("actor A hot")
-        .queue_ticket,
-      Some(2)
-    );
-    assert_eq!(
-      Actors::actor_hot(actor_b)
-        .expect("actor B hot")
-        .queue_ticket,
-      Some(1)
-    );
-    assert_eq!(Actors::queue_head(), 0);
-    assert!(crate::ActorReadyFrameChunks::<Test>::get(0).expect("tombstone page")[0].is_none());
-    assert!(Actors::paged_head_entry().is_none());
-    let drained = Actors::paged_drain_tombstones(Actors::next_queue_ticket(), 1)
-      .expect("replacement head drains as a tombstone");
-    assert_eq!(drained.tombstones_skipped, 1);
-    assert_eq!(
-      Actors::actor_hot(actor_a)
-        .expect("actor A hot")
-        .queue_ticket,
-      Some(2)
-    );
-    let (position, entry) = Actors::paged_head_entry().expect("queue head exists");
-    assert_eq!((position, entry.ticket, entry.actor_id), (1, 1, actor_b));
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn paged_tombstone_drain_is_scan_bounded_and_reclaims_multiple_pages() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let mut actors = Vec::new();
-    for _ in 0..65 {
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-      assert!(enqueue_latched_actor(actor_id));
-      actors.push(actor_id);
-    }
-    for actor_id in actors {
-      assert!(Actors::paged_invalidate(actor_id).is_some());
-      restore_structural_queue_tombstone(actor_id);
-    }
-
-    let cutoff = Actors::queue_tail();
-    let first = Actors::paged_drain_tombstones(cutoff, 10).expect("valid first drain");
-    assert_eq!(first.entries_scanned, 10);
-    assert_eq!(first.tombstones_skipped, 10);
-    assert_eq!(first.pages_touched, 1);
-    assert_eq!(first.pages_deleted, 0);
-    assert_eq!(Actors::queue_head(), 10);
-
-    let rest = Actors::paged_drain_tombstones(cutoff, 55).expect("valid remaining drain");
-    assert_eq!(rest.entries_scanned, 55);
-    assert_eq!(rest.tombstones_skipped, 55);
-    assert_eq!(rest.pages_touched, 3);
-    assert_eq!(rest.pages_deleted, 3);
-    assert_eq!(Actors::queue_head(), 65);
-    assert_eq!(Actors::queue_tail(), 65);
-    assert!(crate::ActorReadyFrameChunks::<Test>::get(0).is_none());
-    assert!(crate::ActorReadyFrameChunks::<Test>::get(1).is_none());
-    assert!(crate::ActorReadyFrameChunks::<Test>::get(2).is_none());
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn mandatory_prepass_reclaims_saturated_fifo_without_domain_spill() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    seed_saturated_tombstone_queue();
-    let cutoff = Actors::queue_tail();
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(2));
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_prepass();
-    assert!(Actors::queue_head() > 0);
-    let actor = Actors::active_actor_view(actor_id).expect("deferred Actor is materialized");
-    assert_eq!(actor.queue_ticket, Some(cutoff));
-    assert!(actor.pending_signal);
-    assert_eq!(actor.cycle_nonce, 0);
-    assert_eq!(Actors::prepass_execution_cutoff(), Some((2, cutoff)));
-    let state = Actors::block_resource_state().expect("prepass resource state exists");
-    assert_eq!(state.usage().actor_effect_used(), Weight::zero());
-    assert_eq!(state.outstanding_reservations(), 0);
-    assert_eq!(state.phase(), crate::BlockResourcePhase::ExternalPhase);
-  });
-}
-
-#[test]
-fn saturated_tombstone_queue_reclaims_head_before_ingress_and_recovers_deferred_work() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let capacity = <<Test as crate::Config>::MaxQueueLength as Get<u32>>::get();
-    for page_id in 0..capacity.div_ceil(32) {
-      crate::ActorReadyFrameChunks::<Test>::insert(
-        u64::from(page_id),
-        BoundedVec::try_from(vec![None; 32]).expect("canonical tombstone page"),
-      );
-    }
-    crate::ActorReadyHead::<Test>::put(0);
-    crate::ActorReadyTail::<Test>::put(u64::from(capacity));
-    crate::ActorReadyOccupancy::<Test>::put(0);
-
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(2));
-    assert_ok!(Actors::set_global_circuit_breaker(
-      RuntimeOrigin::root(),
-      true
-    ));
-    let cleanup_budget =
-      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
-        .saturating_add(
-          <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::materialization_coordinator_base(),
-        )
-        .saturating_add(
-          <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::block_resource_finalize(),
-        )
-        .saturating_add(
-        <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(
-          1,
-        ),
-      );
-    Actors::on_idle(1, cleanup_budget);
-    assert_eq!(
-      Actors::queue_head(),
-      1,
-      "saturated stale head must make progress before ingress"
-    );
-    assert_eq!(Actors::queue_tail(), u64::from(capacity));
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(Actors::set_global_circuit_breaker(
-      RuntimeOrigin::root(),
-      false
-    ));
-    Actors::on_idle(2, Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("deferred actor survives")
-        .cycle_nonce,
-      1
-    );
-    assert_eq!(Actors::queue_head(), Actors::queue_tail());
-    assert_eq!(scheduled_wakeup_block(actor_id), None);
-  });
-}
-
-#[test]
-fn queue_ticket_exhaustion_closes_through_the_unified_sink() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
-      None,
-      transfer_contract_steps(BOB, 10),
-    );
-    fund_native(actor_id, 1_000);
-    let sovereign = sovereign_account(actor_id);
-    // Monotonic ticket namespace at the ceiling closes through the single
-    // scheduler-exhaustion terminal owner.
-    crate::ActorReadyHead::<Test>::put(u64::MAX);
-    crate::ActorReadyTail::<Test>::put(u64::MAX);
-    let actor_before = native_balance(&sovereign);
-    assert_ok!(Actors::notify_address_event(
-      actor_id,
-      TestAsset::Native,
-      100,
-      &ALICE
-    ));
-    assert_eq!(native_balance(&sovereign), actor_before);
-    assert!(Actors::active_actor_view(actor_id).is_none());
   });
 }
 
@@ -3178,151 +3240,6 @@ fn queue_cohort_preflight_ticket_exhaustion_is_read_only() {
 }
 
 #[test]
-fn stale_close_entry_drains_as_tombstone_before_recreated_slot_runs() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    // Create a User actor at slot 3, trigger it into the FIFO, then close it while queued.
-    let first = create_user_with_slot(
-      ALICE,
-      3,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      transfer_contract_steps(BOB, 1),
-    );
-    fund_native(first, 1_000_000_000_000_000);
-    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), first));
-    assert!(
-      Actors::actor_hot(first)
-        .expect("queued actor")
-        .queue_ticket
-        .is_some(),
-      "closed actor is physically queued"
-    );
-    assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), first));
-    assert!(Actors::actor_hot(first).is_none(), "actor is closed");
-
-    // Recreate at the same slot; the stale queue entry must not signal the fresh identity.
-    let second = create_user_with_slot(
-      ALICE,
-      3,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      transfer_contract_steps(BOB, 1),
-    );
-    fund_native(second, 1_000_000_000_000_000);
-    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), second));
-    let second_ticket = Actors::actor_hot(second)
-      .and_then(|hot| hot.queue_ticket)
-      .expect("recreated actor has its own ticket");
-    assert_ne!(
-      second_ticket, 0,
-      "fresh ticket must differ from the stale one"
-    );
-
-    // The stale head is a tombstone (actor closed, ticket cleared) and drains in physical order.
-    let cutoff = Actors::next_queue_ticket();
-    let drained = Actors::paged_drain_tombstones(cutoff, 10).expect("valid stale drain");
-    assert_eq!(drained.tombstones_skipped, 1, "stale entry is a tombstone");
-    assert_eq!(Actors::queue_head(), 1);
-
-    // No CycleStarted for the recreated actor from the stale entry; the live head is the fresh
-    // actor only after the fresh trigger.
-    assert!(Actors::actor_hot(second).is_some_and(|hot| hot.pending_signal));
-    frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
-    let started: Vec<_> = frame_system::Pallet::<Test>::events()
-      .into_iter()
-      .filter_map(|record| match record.event {
-        RuntimeEvent::Actors(Event::CycleStarted { actor_id, .. }) => Some(actor_id),
-        _ => None,
-      })
-      .collect();
-    assert_eq!(started, vec![second], "only the recreated actor executes");
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn paged_tombstone_drain_stops_at_live_head_and_honors_cutoff() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let stale = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let live = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let appended_after_cutoff =
-      create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), stale));
-    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), live));
-    let cutoff = Actors::queue_tail();
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      appended_after_cutoff
-    ));
-    assert_eq!(Actors::paged_invalidate(stale), Some(0));
-    restore_structural_queue_tombstone(stale);
-    assert_eq!(Actors::paged_invalidate(appended_after_cutoff), Some(2));
-    restore_structural_queue_tombstone(appended_after_cutoff);
-
-    let drained = Actors::paged_drain_tombstones(cutoff, 100).expect("valid cutoff drain");
-    assert_eq!(drained.entries_scanned, 2);
-    assert_eq!(drained.tombstones_skipped, 1);
-    assert_eq!(drained.pages_touched, 1);
-    assert_eq!(Actors::queue_head(), 1);
-    assert_eq!(Actors::queue_tail(), 3);
-    assert_eq!(
-      Actors::actor_hot(live).expect("live actor").queue_ticket,
-      Some(1)
-    );
-
-    let (_, mut live_cell) = Actors::actor_control_cell(live).expect("live primary before consume");
-    assert!(Actors::paged_consume_head(1));
-    assert!(Actors::actor_control_cell(live).is_none());
-    live_cell.hot.pending_signal = false;
-    live_cell.eligible_at = None;
-    crate::ActorUnsignaledControlCells::<Test>::insert(live, live_cell);
-    crate::ActorControlLocators::<Test>::insert(live, crate::ActorControlLocation::Unsignaled);
-    let after_live = Actors::paged_drain_tombstones(cutoff, 100).expect("valid post-live drain");
-    assert_eq!(
-      after_live.entries_scanned, 0,
-      "ticket 2 is beyond the captured cutoff"
-    );
-    assert_eq!(Actors::queue_head(), 2);
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn paged_scheduler_preserves_the_unexecuted_fifo_suffix() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let max_exec: u32 = <Test as crate::Config>::MaxExecutionsPerBlock::get();
-    let total = max_exec + 2;
-    let mut ids = Vec::new();
-    for _ in 0..total {
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-      ids.push(actor_id);
-      assert_ok!(Actors::manual_trigger(
-        RuntimeOrigin::signed(ALICE),
-        actor_id
-      ));
-    }
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
-    assert_eq!(Actors::queue_tail().saturating_sub(Actors::queue_head()), 2);
-    assert_eq!(
-      Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-      Some(ids[max_exec as usize])
-    );
-    frame_system::Pallet::<Test>::set_block_number(3);
-    run_idle(Weight::MAX);
-    assert_eq!(Actors::queue_head(), Actors::queue_tail());
-  });
-}
-
-#[test]
 fn repeated_trigger_same_block_yields_one_ticket_and_one_execution() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -3333,8 +3250,9 @@ fn repeated_trigger_same_block_yields_one_ticket_and_one_execution() {
       transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000_000_000_000_000);
-    // Two manual triggers in the same block latch one pending_signal and one FIFO ticket;
-    // the post-worker cutoff enforces executions(A, B) <= 1.
+    // Two manual triggers in the same block coalesce into one latched pending signal and one
+    // generation-bound `Service(Pending)` membership in the single service ring; the post-worker
+    // cutoff enforces executions(A, B) <= 1 per block.
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
@@ -3343,15 +3261,17 @@ fn repeated_trigger_same_block_yields_one_ticket_and_one_execution() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert_eq!(
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(Actors::service_header().count, 1);
+    assert!(
       Actors::actor_hot(actor_id)
-        .and_then(|hot| hot.queue_ticket)
-        .expect("one live ticket"),
-      0
+        .expect("latched actor")
+        .queue_ticket
+        .is_none()
     );
     frame_system::Pallet::<Test>::set_block_number(2);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    Actors::execute_cycle(Weight::MAX);
     let started = frame_system::Pallet::<Test>::events()
       .into_iter()
       .filter(|record| {
@@ -3368,13 +3288,69 @@ fn repeated_trigger_same_block_yields_one_ticket_and_one_execution() {
         .cycle_nonce,
       1
     );
-    assert_eq!(
-      Actors::queue_head(),
-      Actors::queue_tail(),
-      "FIFO fully consumed"
-    );
+    // The committed prefix publishes exactly one successor `Service(Pending)` for the next block.
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(Actors::service_header().count, 1);
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
+fn repeated_scheduler_pass_same_block_preserves_one_committed_step_turn() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut steps = transfer_contract_steps(BOB, 10).into_inner();
+    steps.extend(transfer_contract_steps(BOB, 20).into_inner());
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      BoundedVec::try_from(steps).expect("two Steps fit"),
+    );
+    fund_native(actor_id, 1_000_000_000_000_000);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let recipient_before = MockAssetOps::balance(&BOB, TestAsset::Native);
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::execute_cycle(Weight::MAX);
+    let first_run = Actors::actor_run_state(actor_id).expect("successor remains live");
+    assert_eq!(first_run.cursor, 1);
+    assert_eq!(first_run.last_committed_step_block, Some(2));
+    assert_eq!(
+      MockAssetOps::balance(&BOB, TestAsset::Native),
+      recipient_before + 10
+    );
+
+    // The committed prefix publishes exactly one successor `Service(Pending)` for the next block.
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+
+    Actors::execute_cycle(Weight::MAX);
+    let same_block_run = Actors::actor_run_state(actor_id).expect("successor remains live");
+    assert_eq!(same_block_run.cursor, first_run.cursor);
+    assert_eq!(
+      same_block_run.last_committed_step_block,
+      first_run.last_committed_step_block
+    );
+    assert!(
+      crate::ServiceNodes::<Test>::contains_key(actor_id),
+      "same-block refusal preserves exact successor authority"
+    );
+    assert_eq!(
+      MockAssetOps::balance(&BOB, TestAsset::Native),
+      recipient_before + 10
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::execute_cycle(Weight::MAX);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(
+      MockAssetOps::balance(&BOB, TestAsset::Native),
+      recipient_before + 30
+    );
   });
 }
 
@@ -3414,6 +3390,12 @@ fn simulation_and_scheduler_reject_the_same_protected_fee_floor_boundary() {
     let actor_before = Actors::active_actor_view(actor_id).expect("actor before simulation");
     let events_before = System::events();
 
+    // The canonical occurrence is eligible at B+1, so the viability projection must be taken at
+    // that eligible block rather than in the publication block.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let hot = Actors::actor_hot(actor_id).expect("pending canonical head");
+    assert!(hot.pending_signal);
+    assert_eq!(hot.cycle_state, CycleState::Idle);
     let result = Actors::simulate_current_contract(
       actor_id,
       ActorType::User,
@@ -3460,7 +3442,9 @@ fn scheduler_retries_manual_continuation_after_cooldown_without_new_signal() {
       actor_id
     ));
     run_idle(Weight::MAX);
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(3));
+    // The occurrence published at block 1 is served at B+1, so a two-block cooldown makes the
+    // retry eligible at block 4.
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(4));
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("suspended")
@@ -3478,7 +3462,18 @@ fn scheduler_retries_manual_continuation_after_cooldown_without_new_signal() {
     );
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(3);
+    frame_system::Pallet::<Test>::set_block_number(4);
+    Actors::on_initialize(4);
+    run_prepass();
+    run_idle(Weight::MAX);
+    assert_eq!(
+      Actors::actor_run_state(actor_id)
+        .expect("due retry waits for B+1 after Service reentry")
+        .unsuccessful_attempts_at_cursor,
+      1
+    );
+    frame_system::Pallet::<Test>::set_block_number(5);
+    run_prepass();
     run_idle(Weight::MAX);
     let completed = Actors::active_actor_view(actor_id).expect("actor completes");
     assert_eq!(completed.cycle_nonce, 1);
@@ -3521,8 +3516,12 @@ fn canonical_fifo_executes_global_ticket_order_across_actor_types() {
         actor_id
       ));
     }
+    // Canonical publication makes every latched Actor ineligible in its own block, so the first
+    // service pass runs at B+1. One pass is bounded by `MaxExecutionsPerBlock` and preserves the
+    // single global publication order across User and System Actor types.
+    frame_system::Pallet::<Test>::set_block_number(2);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    Actors::execute_cycle(Weight::MAX);
 
     let started: Vec<_> = frame_system::Pallet::<Test>::events()
       .into_iter()
@@ -3539,9 +3538,9 @@ fn canonical_fifo_executes_global_ticket_order_across_actor_types() {
       0
     );
 
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    Actors::execute_cycle(Weight::MAX);
     assert!(has_actor_event(|event| matches!(
       event,
       Event::CycleStarted { actor_id, .. } if *actor_id == system_b
@@ -3570,6 +3569,7 @@ fn canonical_fifo_uses_one_physical_ticket_sequence() {
       inert_contract_steps(),
     );
 
+    let triggered = [system_a, user_a, system_b, user_b];
     for (owner, actor_id) in [
       (ALICE, system_a),
       (ALICE, user_a),
@@ -3582,58 +3582,35 @@ fn canonical_fifo_uses_one_physical_ticket_sequence() {
       ));
     }
 
-    assert_eq!(Actors::next_queue_ticket(), 4);
-    let tickets: Vec<_> = crate::ActorReadyFrameChunks::<Test>::get(0)
-      .expect("canonical queue page")
-      .into_iter()
-      .enumerate()
-      .filter_map(|(slot, cell)| cell.map(|_| slot as u64))
-      .collect();
-    assert_eq!(tickets, vec![0, 1, 2, 3]);
-    assert_eq!(Actors::queue_occupancy(), 4);
-  });
-}
-
-#[test]
-fn canonical_tombstones_cannot_bypass_the_oldest_live_head() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let scan = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
-    let old_user = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_contract_steps(),
-    );
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      old_user
-    ));
-    for _ in 0..3 {
-      let tombstone = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-      assert_ok!(Actors::manual_trigger(
-        RuntimeOrigin::signed(ALICE),
-        tombstone
-      ));
-      assert!(Actors::paged_invalidate(tombstone).is_some());
-      restore_structural_queue_tombstone(tombstone);
+    // Canonical publication gives every latched Actor exactly one generation-bound
+    // `Service(Pending)` membership in the single persistent service ring; no legacy ready-frame
+    // ticket or scalar allocator is mirrored.
+    let header = Actors::service_header();
+    assert_eq!(header.count, 4);
+    for actor_id in triggered {
+      let hot = Actors::actor_hot(actor_id).expect("latched Actor");
+      assert!(hot.pending_signal);
+      assert!(hot.queue_ticket.is_none());
+      assert!(ServiceNodes::<Test>::contains_key(actor_id));
+      assert_eq!(
+        ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
     }
-    let later_system = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      later_system
-    ));
-    let cutoff = Actors::next_queue_ticket();
-    let (state, entry, _) = Actors::test_head_discovery(cutoff, 1, 0, scan);
-    assert_eq!(state, 1);
-    assert_eq!(entry.map(|entry| entry.actor_id), Some(old_user));
 
-    assert_eq!(Actors::paged_invalidate(old_user), Some(0));
-    restore_structural_queue_tombstone(old_user);
-    let (state, entry, scanned) = Actors::test_head_discovery(cutoff, 5, 0, scan.saturating_mul(5));
-    assert_eq!((state, scanned), (1, 5));
-    assert_eq!(entry.map(|entry| entry.actor_id), Some(later_system));
+    // The ring is one circular physical sequence in publication order.
+    let first = header.cursor.expect("non-empty ring cursor");
+    let mut order = vec![first.actor_id];
+    let mut current = ServiceNodes::<Test>::get(first.actor_id)
+      .expect("cursor member")
+      .next;
+    while current != first {
+      order.push(current.actor_id);
+      current = ServiceNodes::<Test>::get(current.actor_id)
+        .expect("ring member")
+        .next;
+    }
+    assert_eq!(order, triggered);
   });
 }
 
@@ -3649,49 +3626,16 @@ fn pipeline_opening_rearms_cadence_from_current_tick() {
     );
     fund_native(actor_id, 1_000);
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut wakeup_meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut wakeup_meter);
+    service_canonical_temporal_frontiers(2);
     assert!(Actors::actor_hot(actor_id).is_some_and(|hot| hot.trigger_wakeup_pointer.is_none()));
     let bob_before = native_balance(&BOB);
 
-    let _ = Actors::execute_cycle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert_eq!(native_balance(&BOB), bob_before + 10);
     let state = Actors::active_actor_state(actor_id).expect("Actor remains active");
     assert_eq!(state.identity.cycle_nonce, 1);
     assert!(state.hot.trigger_wakeup_pointer.is_some());
-  });
-}
-
-#[test]
-fn scheduler_close_rolls_back_on_fifo_topology_corruption() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      Some(ScheduleWindow { start: 1, end: 101 }),
-      transfer_contract_steps(BOB, 10),
-    );
-    fund_native(actor_id, 1_000);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    frame_system::Pallet::<Test>::set_block_number(102);
-    Actors::test_corrupt_queue_before_close_consume();
-    let actor_before = Actors::active_actor_view(actor_id).expect("actor");
-    let events_before = System::events();
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-
-    let _ = Actors::execute_cycle(Weight::MAX);
-
-    assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
-    assert_eq!(System::events(), events_before);
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
-    );
   });
 }
 
@@ -3717,7 +3661,14 @@ fn run_retry_preserves_independent_external_timer_cadence() {
       hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
       Some(cadence_due + 100)
     );
-    assert!(hot.queue_ticket.is_some());
+    // The suspended retry keeps its structural residence in the canonical process/Service carrier
+    // while the external cadence keeps its own Trigger deadline, so no legacy queue ticket exists.
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(hot.queue_ticket.is_none());
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("suspended")
@@ -3763,7 +3714,11 @@ fn pause_and_breaker_gate_scheduler_owned_retry() {
       RuntimeOrigin::root(),
       true
     ));
-    run_idle(Weight::MAX);
+    // Drive exactly one block: the canonical breaker refusal retains placement without the
+    // helper's multi-block continuation loop advancing into future rounds.
+    Actors::on_initialize(3);
+    run_prepass();
+    Actors::on_idle(3, Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("breaker gated")
@@ -3777,7 +3732,9 @@ fn pause_and_breaker_gate_scheduler_owned_retry() {
     ));
     set_temporary_dex_failure(false);
     frame_system::Pallet::<Test>::set_block_number(4);
-    run_idle(Weight::MAX);
+    Actors::on_initialize(4);
+    run_prepass();
+    Actors::on_idle(4, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(
       Actors::active_actor_view(actor_id)
@@ -3789,14 +3746,14 @@ fn pause_and_breaker_gate_scheduler_owned_retry() {
 }
 
 #[test]
-fn cancellation_requeues_a_signal_latched_for_the_next_logical_run() {
+fn cancellation_does_not_requeue_an_ignored_busy_manual_signal() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert!(Actors::pending_signal(actor_id));
+    assert!(!Actors::pending_signal(actor_id));
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
@@ -3805,21 +3762,9 @@ fn cancellation_requeues_a_signal_latched_for_the_next_logical_run() {
     ));
     let cancelled = Actors::active_actor_view(actor_id).expect("cancelled actor remains");
     assert_eq!(cancelled.cycle_state, CycleState::Idle);
-    assert!(cancelled.pending_signal);
-    assert!(cancelled.queue_ticket.is_some());
-
-    for block in 2..=4 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      Actors::on_initialize(block);
-      run_prepass();
-      Actors::on_idle(block, Weight::MAX);
-      if Actors::active_actor_view(actor_id).is_some_and(|actor| actor.cycle_nonce == 2) {
-        break;
-      }
-    }
-    let completed = Actors::active_actor_view(actor_id).expect("next logical cycle completes");
-    assert_eq!(completed.cycle_nonce, 2);
-    assert!(!completed.pending_signal);
+    assert_eq!(cancelled.cycle_nonce, 1);
+    assert!(!cancelled.pending_signal);
+    assert!(cancelled.queue_ticket.is_none());
   });
 }
 
@@ -3962,12 +3907,8 @@ fn shared_materialization_remainder_follows_rotated_first_family_after_reserving
     let minima = [
       Actors::materialization_family_minimum(0),
       Actors::materialization_family_minimum(1),
-      Actors::materialization_family_minimum(2),
     ];
-    let lendable = shared
-      .saturating_sub(minima[0])
-      .saturating_sub(minima[1])
-      .saturating_sub(minima[2]);
+    let lendable = shared.saturating_sub(minima[0]).saturating_sub(minima[1]);
     assert!(lendable.ref_time() > 0 && lendable.proof_size() > 0);
     assert_eq!(
       Actors::materialization_family_budget(
@@ -3979,7 +3920,7 @@ fn shared_materialization_remainder_follows_rotated_first_family_after_reserving
       lendable
     );
 
-    for cursor in 0u8..3 {
+    for cursor in 0u8..2 {
       let first = Actors::materialization_family_budget(
         cursor,
         0,
@@ -3987,7 +3928,7 @@ fn shared_materialization_remainder_follows_rotated_first_family_after_reserving
         crate::MaterializationMinimumReservation::ReserveAllFamilies,
       );
       assert_eq!(first, minima[usize::from(cursor)].saturating_add(lendable));
-      let next = cursor.saturating_add(1) % 3;
+      let next = cursor.saturating_add(1) % 2;
       let after_first = shared.saturating_sub(first);
       assert_eq!(
         Actors::materialization_family_budget(
@@ -4008,14 +3949,13 @@ fn empty_materialization_families_charge_only_their_measured_probes_and_yield() 
     frame_system::Pallet::<Test>::set_block_number(1);
     let expected = <TestWeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::materialization_coordinator_base())
-      .saturating_add(
-        <TestWeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future()
-          .saturating_mul(2),
-      )
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::crossing_worker_base())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::observation_fanout_base())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::block_resource_finalize())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1));
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::classify_due_block_deadline())
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::classify_due_tick_deadline())
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_begin_populated())
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible());
 
     assert_eq!(Actors::on_idle(1, Weight::MAX), expected);
     assert_eq!(Actors::materialization_family_cursor(), 1);
@@ -4023,14 +3963,6 @@ fn empty_materialization_families_charge_only_their_measured_probes_and_yield() 
     assert_eq!(Actors::crossing_pending_feed_list().count, 0);
     assert_eq!(Actors::dirty_observation_list().count, 0);
   });
-}
-
-#[test]
-fn mixed_materialization_ticket_order_is_reproducible_from_cursor_and_block_state() {
-  assert_eq!(
-    mixed_materialization_ticket_trace(),
-    mixed_materialization_ticket_trace()
-  );
 }
 
 #[test]
@@ -4046,13 +3978,13 @@ fn materialization_family_cursor_rotates_deterministically_and_corruption_fails_
     .saturating_add(
       <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::block_resource_finalize(),
     );
-    for expected in [1u8, 2, 0] {
+    for expected in [1u8, 0] {
       let used = Actors::on_idle(1, Weight::MAX);
       assert!(fixed.all_lte(used));
       assert_eq!(Actors::materialization_family_cursor(), expected);
     }
 
-    crate::MaterializationFamilyCursor::<Test>::put(3);
+    crate::MaterializationFamilyCursor::<Test>::put(2);
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     assert_eq!(Actors::on_idle(1, Weight::MAX), fixed);
     assert_eq!(
@@ -4085,7 +4017,10 @@ fn starvation_emits_observability_event_once_without_control_effects() {
       .expect("queued actor")
       .queue_ticket;
     assert!(!GlobalCircuitBreaker::<Test>::get());
-    run_idle(starvation_blocked_budget(actor_id));
+    // The canonical occurrence published by `manual_trigger` is eligible at B+1, so the first
+    // weight-blocked Drain observation is the next block.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_drain_only(starvation_blocked_budget(actor_id));
     assert_eq!(
       IdleStarvationState::<Test>::get(),
       IdleStarvationPhase::Starving {
@@ -4096,9 +4031,9 @@ fn starvation_emits_observability_event_once_without_control_effects() {
       event,
       Event::IdleStarvationDetected { .. } | Event::IdleStarvationRecovered { .. }
     )));
-    for block in 2..=(threshold + 2) {
+    for block in 3..=(threshold + 3) {
       frame_system::Pallet::<Test>::set_block_number(block as u64);
-      run_idle(starvation_blocked_budget(actor_id));
+      run_drain_only(starvation_blocked_budget(actor_id));
     }
     let detections = frame_system::Pallet::<Test>::events()
       .into_iter()
@@ -4143,9 +4078,9 @@ fn proof_size_exhaustion_counts_as_idle_starvation() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    for block in 1..=threshold {
+    for block in 2..=(threshold + 1) {
       frame_system::Pallet::<Test>::set_block_number(u64::from(block));
-      run_idle(starvation_blocked_budget(actor_id));
+      run_drain_only(starvation_blocked_budget(actor_id));
     }
     assert_eq!(
       IdleStarvationState::<Test>::get(),
@@ -4198,7 +4133,7 @@ fn starvation_recovery_is_observable_once_and_healthy_idle_stays_sparse() {
     ));
     for block in 2..=(threshold + 1) {
       frame_system::Pallet::<Test>::set_block_number(block as u64);
-      run_idle(starvation_blocked_budget(actor_id));
+      run_drain_only(starvation_blocked_budget(actor_id));
     }
     assert_eq!(
       IdleStarvationState::<Test>::get(),
@@ -4250,13 +4185,13 @@ fn breaker_freezes_starvation_count_without_recovery_event() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    for block in 1..=threshold {
+    for block in 2..=(threshold + 1) {
       frame_system::Pallet::<Test>::set_block_number(block as u64);
-      run_idle(starvation_blocked_budget(actor_id));
+      run_drain_only(starvation_blocked_budget(actor_id));
     }
     GlobalCircuitBreaker::<Test>::put(true);
     frame_system::Pallet::<Test>::set_block_number(threshold.saturating_add(1) as u64);
-    run_idle(starvation_blocked_budget(actor_id));
+    run_drain_only(starvation_blocked_budget(actor_id));
     assert_eq!(
       IdleStarvationState::<Test>::get(),
       IdleStarvationPhase::Alerted {
@@ -4273,7 +4208,7 @@ fn breaker_freezes_starvation_count_without_recovery_event() {
       })
       .count();
     frame_system::Pallet::<Test>::set_block_number(threshold.saturating_add(2) as u64);
-    run_idle(starvation_blocked_budget(actor_id));
+    run_drain_only(starvation_blocked_budget(actor_id));
     assert_eq!(
       IdleStarvationState::<Test>::get(),
       IdleStarvationPhase::Alerted {
@@ -4391,96 +4326,6 @@ fn breaker_defers_scheduler_owned_window_expiry_close() {
 }
 
 #[test]
-fn breaker_preserves_lower_level_unlatched_terminal_ready_authority() {
-  new_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let actor_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      Some(ScheduleWindow { start: 2, end: 102 }),
-      transfer_contract_steps(BOB, 1),
-    );
-    fund_native(actor_id, 1_000);
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(103));
-    assert!(
-      !Actors::actor_hot(actor_id)
-        .expect("untriggered Actor")
-        .pending_signal
-    );
-
-    System::set_block_number(103);
-    // Exercise the canonical lower-level consume/publication contract. The high-level
-    // due worker intentionally substitutes WindowExpired close before enqueue instead.
-    assert_ok!(polkadot_sdk::frame_support::storage::with_transaction(
-      || {
-        let (due, stats) = Actors::wakeup_substrate_drain_key(WakeupKey::Block(103), 1);
-        assert_eq!(stats.entries_scanned, 1);
-        assert_eq!(due.len(), 1);
-        let (due_actor, state, admission, loaded_step) =
-          due.into_iter().next().expect("due source");
-        assert_eq!(due_actor, actor_id);
-        let plan = Actors::preflight_paged_enqueue_authority(
-          actor_id,
-          state.hot,
-          &state.identity,
-          state.run_state.as_ref(),
-          &admission,
-          loaded_step.expect("authored current Step").resources,
-        )
-        .expect("complete consumed terminal authority admits Ready");
-        assert_ok!(Actors::commit_paged_enqueue(plan));
-        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
-          Ok::<(), DispatchError>(()),
-        )
-      }
-    ));
-    let (source_location, source_cell) = Actors::actor_control_cell(actor_id)
-      .expect("lower-level due publication retains terminal primary");
-    let crate::ActorControlLocation::Ready { ticket } = source_location else {
-      panic!("canonical queue publication must materialize Ready");
-    };
-    assert_eq!(source_cell.hot.cycle_state, CycleState::Idle);
-    assert!(!source_cell.hot.pending_signal);
-    assert_eq!(source_cell.hot.terminal_at, Some(103));
-    assert_eq!(crate::ActorReadyOccupancy::<Test>::get(), 1);
-    assert_eq!(Actors::queue_head(), ticket);
-    assert_eq!(Actors::queue_tail(), ticket + 1);
-    assert_ok!(Actors::set_global_circuit_breaker(
-      RuntimeOrigin::root(),
-      true
-    ));
-    System::reset_events();
-    let custody = (native_balance(&ALICE), native_balance(&BOB));
-
-    Actors::execute_cycle(Weight::MAX);
-
-    let (location, cell) = Actors::actor_control_cell(actor_id)
-      .expect("breaker must retain exactly one valid terminal primary");
-    assert_eq!(location, crate::ActorControlLocation::Ready { ticket });
-    assert_eq!(cell, source_cell);
-    assert!(Actors::actor_run_state(actor_id).is_none());
-    assert_eq!(
-      crate::ActorWaitingOccupancies::<Test>::get(WakeupKey::Block(103)),
-      0
-    );
-    assert_eq!(crate::ActorReadyOccupancy::<Test>::get(), 1);
-    assert_eq!(Actors::queue_head(), ticket);
-    assert_eq!(Actors::queue_tail(), ticket + 1);
-    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(
-      actor_id
-    ));
-    assert_eq!((native_balance(&ALICE), native_balance(&BOB)), custody);
-    assert!(!has_actor_event(|event| matches!(event,
-      Event::ActorClosed { actor_id: id, .. } | Event::CycleStarted { actor_id: id, .. }
-        if *id == actor_id
-    )));
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(Actors::do_try_state());
-  });
-}
-
-#[test]
 fn at_time_occurrence_charges_once_consumes_deadline_and_latches_readiness() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -4494,13 +4339,12 @@ fn at_time_occurrence_charges_once_consumes_deadline_and_latches_readiness() {
     clear_fee_collections();
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
 
     assert_eq!(fee_collections(), vec![at_time_trigger_fee()]);
     let hot = Actors::actor_hot(actor_id).expect("AtTime Actor remains active");
     assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some());
+    assert!(hot.queue_ticket.is_none());
     assert!(hot.trigger_wakeup_pointer.is_none());
     assert!(matches!(
       hot.trigger_runtime_state,
@@ -4516,29 +4360,79 @@ fn at_time_occurrence_charges_once_consumes_deadline_and_latches_readiness() {
     )));
 
     frame_system::Pallet::<Test>::set_block_number(20);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(20, &mut meter);
+    service_canonical_temporal_frontiers(20);
     assert_eq!(fee_collections(), vec![at_time_trigger_fee()]);
   });
+}
+
+#[test]
+fn temporal_occurrence_refuses_selector_and_schedule_mismatched_wake_qualification() {
+  for (schedule, mismatched_trigger, mismatched_window) in [
+    (at_time_schedule(1), RuntimeTrigger::at_time(2), None),
+    (timer_schedule(1), RuntimeTrigger::cadenced(2), None),
+    (
+      at_time_schedule(1),
+      RuntimeTrigger::at_time(1),
+      Some(crate::ScheduleWindow { start: 2, end: 20 }),
+    ),
+  ] {
+    new_test_ext().execute_with(|| {
+      frame_system::Pallet::<Test>::set_block_number(1);
+      let actor_id = create_system_with(ALICE, schedule, None, inert_contract_steps());
+      let (state, admission, loaded_step) =
+        Actors::load_frame_actor_service_state(actor_id).expect("temporal authority exists");
+      let replacement = crate::ActorAdmissionCertificate::new(
+        admission.semantic_contract_id,
+        admission.body_commitment,
+        mismatched_trigger.wake_qualification(&mismatched_window),
+        admission.runtime_actor_semantics_version,
+        admission.production_weight_identity,
+        admission.body_geometry_version,
+        admission.configured_bounds_commitment,
+        admission.maximum_lifecycle_weight,
+      );
+      let hot_before = Actors::actor_hot(actor_id).expect("temporal Actor exists");
+      let events_before = System::events();
+      let balances_before = (native_balance(&ALICE), native_balance(&BOB));
+
+      assert_eq!(
+        Actors::process_due_temporal_occurrence_loaded(
+          actor_id,
+          state,
+          replacement,
+          loaded_step,
+          2,
+        ),
+        Err(DispatchError::Other(
+          "temporal wake qualification is corrupt"
+        )),
+      );
+      assert_eq!(Actors::actor_hot(actor_id), Some(hot_before));
+      assert_eq!(System::events(), events_before);
+      assert_eq!(
+        (native_balance(&ALICE), native_balance(&BOB)),
+        balances_before
+      );
+    });
+  }
 }
 
 #[test]
 fn latched_at_time_replacement_does_not_retrigger_running_pipeline() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let steps = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-      make_step(Task::Transfer {
-        to: CHARLIE,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-    ])
-    .expect("two-Step Contract fits");
+    let steps = BoundedVec::try_from(
+      (0..6)
+        .map(|_| {
+          make_step(Task::Transfer {
+            to: BOB,
+            asset: TestAsset::Native,
+            amount: AmountResolution::Fixed(1),
+          })
+        })
+        .collect::<Vec<_>>(),
+    )
+    .expect("six-Step Contract fits");
     let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps);
     fund_native(actor_id, 1_000_000);
     assert_ok!(Actors::manual_trigger(
@@ -4546,6 +4440,8 @@ fn latched_at_time_replacement_does_not_retrigger_running_pipeline() {
       actor_id
     ));
     frame_system::Pallet::<Test>::set_block_number(2);
+    // The latched manual occurrence survives the schedule replacement and opens the Pipeline at
+    // its B+1 eligible block, retaining the replacement AtTime deadline for the next tick.
     let mut replacement = Actors::actor_contract(actor_id).expect("admitted Contract");
     replacement.trigger = RuntimeTrigger::at_time(2);
     assert_ok!(Actors::update_contract(
@@ -4553,13 +4449,21 @@ fn latched_at_time_replacement_does_not_retrigger_running_pipeline() {
       actor_id,
       replacement
     ));
-    Actors::execute_cycle(Weight::MAX);
+    run_next_idle(Weight::MAX);
+    assert!(
+      crate::TriggerDeadlineHandles::<Test>::get(actor_id).is_none(),
+      "opening a preserved latch releases the replacement AtTime one-shot deadline"
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
     let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
     clear_fee_collections();
+    System::reset_events();
 
+    // A later temporal service pass must observe no leftover one-shot occurrence and must not
+    // re-trigger the Running Pipeline.
     frame_system::Pallet::<Test>::set_block_number(4);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(4, &mut meter);
+    service_canonical_temporal_frontiers(4);
 
     assert!(fee_collections().is_empty());
     let hot = Actors::actor_hot(actor_id).expect("busy AtTime Actor remains active");
@@ -4596,8 +4500,7 @@ fn underfunded_at_time_occurrence_selects_prepaid_custody_neutral_apoptosis() {
     clear_fee_collections();
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
 
     assert!(fee_collections().is_empty());
     assert!(!Actors::active_actor_exists(actor_id));
@@ -4631,8 +4534,7 @@ fn frame_only_underfunded_at_time_closes_from_consumed_wakeup_authority() {
     clear_fee_collections();
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
 
     assert!(fee_collections().is_empty());
     assert!(!Actors::active_actor_exists(actor_id));
@@ -4661,10 +4563,11 @@ fn frame_only_zero_step_at_time_uses_only_canonical_control() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, at_time_schedule(1), None, BoundedVec::default());
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
-    Actors::execute_cycle(Weight::MAX);
+    // B+1 canonical temporal service: block 2 processes the due AtTime deadline and publishes the
+    // Pending Service member; block 3 executes the zero-Step cycle. Canonical publication leaves no
+    // legacy control locator or scalar hot cell behind.
+    run_next_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let state = Actors::active_actor_state(actor_id).expect("AtTime successor remains active");
     assert_eq!(state.identity.cycle_nonce, 1);
@@ -4672,13 +4575,10 @@ fn frame_only_zero_step_at_time_uses_only_canonical_control() {
       state.hot.trigger_runtime_state,
       TriggerRuntimeState::AtTime { consumed: true, .. }
     ));
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -4700,8 +4600,7 @@ fn at_time_collection_failure_rolls_back_consumption_and_retains_wakeup() {
     set_fail_fee_sink_transfer(true);
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
     set_fail_fee_sink_transfer(false);
 
     assert_eq!(native_balance(&sovereign), before);
@@ -4759,8 +4658,8 @@ fn immutable_zero_step_at_time_closes_at_authored_cycle_nonce() {
     clear_fee_collections();
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
     Actors::execute_cycle(Weight::MAX);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
@@ -4794,7 +4693,7 @@ fn immutable_zero_step_at_time_closes_at_authored_cycle_nonce() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn uninitialized_genesis_cadence_reanchors_from_frame_authority() {
+fn uninitialized_genesis_cadence_reanchors_canonically() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
@@ -4806,8 +4705,8 @@ fn uninitialized_genesis_cadence_reanchors_from_frame_authority() {
     frame_system::Pallet::<Test>::set_block_number(100);
     Actors::on_idle(100, Weight::MAX);
 
-    let (_, identity, hot, _) = Actors::load_frame_control_authority(actor_id)
-      .expect("reanchored Cadenced frame authority exists");
+    let (identity, hot, _) = Actors::load_control_authority_with_authority(actor_id)
+      .expect("canonical semantic authority exists");
     assert_eq!(identity.cycle_nonce, 0);
     assert!(!hot.pending_signal);
     assert!(matches!(
@@ -4822,7 +4721,14 @@ fn uninitialized_genesis_cadence_reanchors_from_frame_authority() {
     );
     assert!(ActorIdentities::<Test>::get(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(
+      actor_id
+    ));
+    assert_eq!(
+      crate::TriggerDeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(crate::WakeupKey::Tick(101))
+    );
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -4864,23 +4770,26 @@ fn cadenced_latch_disables_detection_until_pipeline_opening() {
     clear_fee_collections();
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
     let first = Actors::actor_hot(actor_id).expect("Cadenced Actor remains active");
-    let placement = first.queue_ticket;
     assert!(first.pending_signal);
-    assert!(placement.is_some());
+    assert!(first.queue_ticket.is_none());
     assert!(first.trigger_wakeup_pointer.is_none());
+    assert_eq!(
+      crate::ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+      Some(crate::ProcessResidence::Service(
+        crate::ServiceResidenceKind::Pending
+      ))
+    );
 
     frame_system::Pallet::<Test>::set_block_number(3);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(3, &mut meter);
+    service_canonical_temporal_frontiers(3);
 
     let fee = cadenced_trigger_fee();
     assert_eq!(fee_collections(), vec![fee]);
     let second = Actors::actor_hot(actor_id).expect("Cadenced Actor remains active");
     assert!(second.pending_signal);
-    assert_eq!(second.queue_ticket, placement);
+    assert!(second.queue_ticket.is_none());
     assert!(second.trigger_wakeup_pointer.is_none());
     assert!(has_actor_event(|event| matches!(
       event,
@@ -4902,15 +4811,10 @@ fn at_time_occurrence_uses_primary_pending_authority() {
     assert!(!Actors::pending_signal(actor_id));
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
 
-    let (location, _, frame_hot, _) = Actors::load_frame_control_authority(actor_id)
-      .expect("AtTime occurrence retains canonical primary");
-    assert!(matches!(
-      location,
-      crate::ActorControlLocation::Ready { .. }
-    ));
+    let state = Actors::active_actor_state(actor_id).expect("AtTime pending authority exists");
+    let frame_hot = state.hot;
     assert!(frame_hot.pending_signal);
     assert!(
       matches!(
@@ -4920,6 +4824,8 @@ fn at_time_occurrence_uses_primary_pending_authority() {
       "{:?}",
       frame_hot.trigger_runtime_state
     );
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     let projected_hot = Actors::actor_hot(actor_id).expect("canonical hot projection exists");
     assert!(projected_hot.pending_signal);
     assert_eq!(
@@ -4948,15 +4854,10 @@ fn cadenced_occurrence_uses_primary_pending_authority() {
     assert!(!Actors::pending_signal(actor_id));
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
 
-    let (location, _, frame_hot, _) = Actors::load_frame_control_authority(actor_id)
-      .expect("Cadenced occurrence retains canonical primary");
-    assert!(matches!(
-      location,
-      crate::ActorControlLocation::Ready { .. }
-    ));
+    let state = Actors::active_actor_state(actor_id).expect("Cadenced pending authority exists");
+    let frame_hot = state.hot;
     assert!(frame_hot.pending_signal);
     assert!(matches!(
       frame_hot.trigger_runtime_state,
@@ -4965,6 +4866,8 @@ fn cadenced_occurrence_uses_primary_pending_authority() {
       }
     ));
     assert!(frame_hot.trigger_wakeup_pointer.is_none());
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     let projected_hot = Actors::actor_hot(actor_id).expect("canonical hot projection exists");
     assert_eq!(projected_hot.pending_signal, frame_hot.pending_signal);
     assert_eq!(
@@ -4990,55 +4893,17 @@ fn cadenced_occurrence_uses_primary_pending_authority() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn paused_temporal_occurrence_restores_unsignaled_frame_with_canonical_control() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
-    run_idle(Weight::MAX);
-    assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
-    frame_system::Pallet::<Test>::set_block_number(6);
-
-    crate::NextWakeupClock::<Test>::put(WakeupClock::Tick);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    let stats = Actors::drain_overdue_wakeups_cursor(6, &mut meter);
-    assert_eq!(stats.entries_scanned, 1);
-    assert_eq!(stats.ready_entries, 1);
-    assert!(!crate::WakeupWorkerFaultState::<Test>::exists());
-
-    assert_eq!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    );
-    let (_, _, hot, _) = Actors::load_frame_control_authority(actor_id)
-      .expect("paused temporal Unsignaled frame authority exists");
-    assert!(hot.lifecycle.is_paused());
-    assert!(hot.pending_signal);
-    assert_eq!(hot.queue_ticket, None);
-    assert!(ActorIdentities::<Test>::get(actor_id).is_none());
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[cfg(not(feature = "runtime-benchmarks"))]
-#[test]
 fn cadenced_rearm_uses_frozen_opening_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
     assert!(Actors::pending_signal(actor_id));
-    Actors::execute_cycle(Weight::MAX);
+    // Opening happens at B+1, so the next cadence frontier starts strictly after that tick.
+    run_next_idle(Weight::MAX);
 
-    let crate::LoadedActorStateOf::Active(state) =
-      Actors::load_actor_state_for_frame_control(actor_id)
-    else {
-      panic!("rearmed Cadenced frame state is active");
-    };
+    let state = Actors::active_actor_state(actor_id).expect("rearmed Cadenced state is active");
     assert_eq!(state.identity.cycle_nonce, 1);
     assert!(!state.hot.pending_signal);
     assert!(state.hot.queue_ticket.is_none());
@@ -5050,7 +4915,7 @@ fn cadenced_rearm_uses_frozen_opening_authority() {
     ));
     assert_eq!(
       state.hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
-      Some(3)
+      Some(4)
     );
     let projected_hot = Actors::actor_hot(actor_id).expect("canonical hot projection exists");
     assert_eq!(
@@ -5061,9 +4926,22 @@ fn cadenced_rearm_uses_frozen_opening_authority() {
       projected_hot.trigger_wakeup_pointer,
       state.hot.trigger_wakeup_pointer
     );
+    // The rearm is owned by the canonical Trigger deadline carrier, not the legacy waiting
+    // reference substrate that production `on_idle` no longer drains for temporal triggers.
+    let handle = Actors::trigger_deadline_handles(actor_id)
+      .expect("canonical Trigger deadline member is registered");
+    assert_eq!(handle.key, WakeupKey::Tick(4));
     assert_eq!(
-      crate::ActorWaitingOccupancies::<Test>::get(WakeupKey::Tick(3)),
-      1
+      u32::from(handle.slot),
+      projected_hot
+        .trigger_wakeup_pointer
+        .expect("projected pointer exists")
+        .slot
+    );
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+    assert_eq!(
+      crate::ActorWaitingOccupancies::<Test>::get(WakeupKey::Tick(4)),
+      0
     );
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
@@ -5071,94 +4949,53 @@ fn cadenced_rearm_uses_frozen_opening_authority() {
 }
 
 #[test]
-fn busy_cadenced_occurrence_charges_and_preserves_independent_run_service() {
+fn busy_cadenced_occurrence_advances_deadline_without_future_cycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let steps = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-      make_step(Task::Transfer {
-        to: CHARLIE,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-    ])
-    .expect("two-Step Contract fits");
+    let steps = BoundedVec::try_from(
+      (0..6)
+        .map(|_| {
+          make_step(Task::Transfer {
+            to: BOB,
+            asset: TestAsset::Native,
+            amount: AmountResolution::Fixed(1),
+          })
+        })
+        .collect::<Vec<_>>(),
+    )
+    .expect("six-Step Contract fits");
     let actor_id = create_user_with(ALICE, Mutability::Mutable, timer_schedule(1), None, steps);
     fund_native(actor_id, 1_000_000);
+    // The occurrence at tick 2 publishes one Pending Service for B+1. Opening it on the next block
+    // executes the head plus one bounded drain cohort, re-arms the next cadence deadline, and
+    // leaves the Pipeline Running with a positive cursor.
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
-    Actors::execute_cycle(Weight::MAX);
+    service_canonical_temporal_frontiers(2);
+    run_next_idle(Weight::MAX);
     let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
     clear_fee_collections();
+    System::reset_events();
 
-    frame_system::Pallet::<Test>::set_block_number(3);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(3, &mut meter);
+    // The next cadence occurrence fires while the Pipeline is still busy. It only advances the
+    // deadline and must not charge a Trigger fee or publish a future cycle.
+    frame_system::Pallet::<Test>::set_block_number(4);
+    service_canonical_temporal_frontiers(4);
 
-    assert_eq!(fee_collections(), vec![cadenced_trigger_fee()]);
+    assert!(fee_collections().is_empty());
     let hot = Actors::actor_hot(actor_id).expect("busy Cadenced Actor remains active");
     assert_eq!(hot.cycle_state, CycleState::Running);
-    assert!(hot.pending_signal);
-    assert!(hot.trigger_wakeup_pointer.is_none());
+    assert!(!hot.pending_signal);
+    assert_eq!(
+      hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
+      Some(5)
+    );
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
+    )));
     let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
     assert_eq!(run_after.cursor, run_before.cursor);
     assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);
-  });
-}
-
-#[cfg(not(feature = "runtime-benchmarks"))]
-#[test]
-fn busy_cadenced_occurrence_preserves_frame_service_with_canonical_control() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let steps = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-      make_step(Task::Transfer {
-        to: CHARLIE,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-    ])
-    .expect("two-Step Contract fits");
-    let actor_id = create_user_with(ALICE, Mutability::Mutable, timer_schedule(1), None, steps);
-    fund_native(actor_id, 1_000_000);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
-    Actors::execute_cycle(Weight::MAX);
-    let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
-    clear_fee_collections();
-
-    frame_system::Pallet::<Test>::set_block_number(3);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    let stats = Actors::drain_overdue_wakeups_cursor(3, &mut meter);
-
-    assert_eq!(stats.entries_scanned, 1);
-    assert_eq!(stats.ready_entries, 1);
-    assert!(!crate::WakeupWorkerFaultState::<Test>::exists());
-    assert_eq!(fee_collections(), vec![cadenced_trigger_fee()]);
-    let (_, _, hot, _) = Actors::load_frame_control_authority(actor_id)
-      .expect("busy Cadenced frame authority remains active");
-    assert_eq!(hot.cycle_state, CycleState::Running);
-    assert!(hot.pending_signal);
-    assert!(hot.trigger_wakeup_pointer.is_none());
-    let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
-    assert_eq!(run_after.cursor, run_before.cursor);
-    assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);
-    assert!(ActorIdentities::<Test>::get(actor_id).is_none());
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 
@@ -5179,8 +5016,7 @@ fn underfunded_cadenced_occurrence_advances_without_fee_readiness_or_apoptosis()
     clear_fee_collections();
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
 
     assert!(fee_collections().is_empty());
     let hot = Actors::actor_hot(actor_id).expect("underfunded process remains active");
@@ -5211,8 +5047,7 @@ fn cadenced_collection_failure_advances_deadline_without_readiness() {
     set_fail_fee_sink_transfer(true);
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
     set_fail_fee_sink_transfer(false);
 
     assert_eq!(native_balance(&sovereign), before);
@@ -5243,25 +5078,30 @@ fn next_block_cadence_rearms_after_each_deferred_opening_without_late_fifo_ticke
         .cycle_nonce,
       0
     );
+
+    // Each cadence occurrence publishes one Pending Service for B+1. The deferred opening executes
+    // the cycle, re-arms the next deadline, and never materializes a legacy FIFO queue ticket.
     frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_idle(2, Weight::MAX);
+    service_canonical_temporal_frontiers(2);
+    let latched = Actors::actor_hot(actor_id).expect("Actors exists");
+    assert!(latched.pending_signal);
+    assert!(latched.queue_ticket.is_none());
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+
+    run_next_idle(Weight::MAX);
     let after_first = Actors::active_actor_view(actor_id).expect("Actors exists");
     assert_eq!(after_first.cycle_nonce, 1);
     assert!(after_first.queue_ticket.is_none());
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(3));
-    for block in 3..=6 {
+    assert!(!Actors::pending_signal(actor_id));
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(4));
+
+    for block in [4, 6] {
       frame_system::Pallet::<Test>::set_block_number(block);
-      Actors::on_initialize(block);
-      run_prepass();
-      Actors::on_idle(block, Weight::MAX);
+      service_canonical_temporal_frontiers(block);
+      run_next_idle(Weight::MAX);
       let actor = Actors::active_actor_view(actor_id).expect("Actors exists");
-      if block % 2 == 1 {
-        assert!(actor.pending_signal);
-        assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 0);
-      } else {
-        assert!(!actor.pending_signal);
-        assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 1);
-      }
+      assert!(actor.queue_ticket.is_none());
+      assert!(!actor.pending_signal);
     }
     assert_eq!(
       Actors::active_actor_view(actor_id)
@@ -5284,6 +5124,13 @@ fn paused_timer_waits_for_resume_without_queue_churn_or_signal_loss() {
     run_idle(Weight::MAX);
     assert_eq!(scheduled_wakeup_block(actor_id), Some(2));
     assert_ok!(Actors::pause_actor(RuntimeOrigin::root(), actor_id));
+
+    // Pause releases the canonical Trigger deadline and leaves no queue ticket or Service
+    // residence behind, so time passing while paused performs no cycle work.
+    assert_eq!(scheduled_wakeup_block(actor_id), None);
+    let paused = Actors::actor_hot(actor_id).expect("paused actor");
+    assert!(paused.lifecycle.is_paused());
+    assert!(paused.queue_ticket.is_none());
     frame_system::Pallet::<Test>::set_block_number(6);
     run_idle(Weight::MAX);
     assert_eq!(
@@ -5293,26 +5140,19 @@ fn paused_timer_waits_for_resume_without_queue_churn_or_signal_loss() {
       0
     );
     assert_eq!(scheduled_wakeup_block(actor_id), None);
-    let paused = Actors::actor_hot(actor_id).expect("paused actor");
-    assert!(paused.pending_signal);
-    assert!(paused.queue_ticket.is_none());
+
+    // Resume re-arms the cadence from the current tick, so the deferred opening still occurs.
     frame_system::Pallet::<Test>::set_block_number(7);
     assert_ok!(Actors::resume_actor(RuntimeOrigin::root(), actor_id));
-    run_idle(Weight::MAX);
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(8));
+    frame_system::Pallet::<Test>::set_block_number(8);
+    service_canonical_temporal_frontiers(8);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("Actors exists")
         .cycle_nonce,
       1
-    );
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(8));
-    frame_system::Pallet::<Test>::set_block_number(8);
-    run_idle(Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("Actors exists")
-        .cycle_nonce,
-      2
     );
   });
 }
@@ -5379,10 +5219,11 @@ fn scheduler_ignores_sparse_id_gaps() {
     assert_eq!(Actors::next_actor_id(), 2001);
     assert!(Actors::active_actor_view(0).is_some());
     assert!(Actors::active_actor_view(2000).is_some());
-    // Run one block: both actors must execute despite 2000-wide ID gap
-    System::set_block_number(2);
+    // Run one canonical service block: both actors must execute despite 2000-wide ID gap.
+    // Canonical publication serves the occurrence at B+1 through the mandatory prepass and
+    // Drain phase, so the block boundary and hooks must be driven canonically.
     System::reset_events();
-    Actors::on_idle(2, Weight::from_parts(u64::MAX, u64::MAX));
+    run_next_idle(Weight::from_parts(u64::MAX, u64::MAX));
     let executed: alloc::vec::Vec<_> = System::events()
       .iter()
       .filter_map(|r| {
@@ -5515,7 +5356,6 @@ fn queue_progress_handles_adjacent_removal() {
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id3));
     System::set_block_number(2);
     run_idle(Weight::MAX);
-    assert!(Actors::active_actor_view(id3).is_some());
     assert_eq!(
       Actors::active_actor_view(id0)
         .expect("id0 live")
@@ -5534,9 +5374,14 @@ fn queue_progress_handles_adjacent_removal() {
         .cycle_nonce,
       1
     );
-    System::set_block_number(3);
-    run_idle(Weight::MAX);
+    // The insolvent adjacent tail is closed by the same Service round that advances the funded
+    // prefix, so adjacent removal never stalls the remaining queue.
     assert!(Actors::active_actor_view(id3).is_none());
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::ActorClosed { actor_id, reason: CloseReason::CycleAdmissionInsufficient }
+        if *actor_id == id3
+    )));
   });
 }
 
@@ -5619,137 +5464,9 @@ fn queue_progress_matrix_keeps_progress_and_coverage() {
   }
 }
 
-#[test]
-fn admission_time_close_reasons_require_complete_queue_and_cleanup_budget() {
-  let reasons = [
-    CloseReason::WindowExpired,
-    CloseReason::CycleAdmissionInsufficient,
-    CloseReason::CycleNonceExhausted,
-    CloseReason::ConsecutiveFailures,
-    CloseReason::AutoCloseNonceReached,
-  ];
-  for reason in reasons {
-    assert_scheduler_close_requires_atomic_budget(reason, Weight::from_parts(1, 0));
-    assert_scheduler_close_requires_atomic_budget(reason, Weight::from_parts(0, 1));
-  }
-}
-
-#[test]
-fn scheduler_fails_closed_without_consuming_a_corrupt_live_head() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    let hot_before = Actors::actor_hot(actor_id).expect("queued actor");
-    let head_before = Actors::queue_head();
-    let events_before = frame_system::Pallet::<Test>::events();
-
-    ActorFunding::<Test>::remove(actor_id);
-    let corrupt_root =
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-    assert_eq!(
-      Actors::try_paged_enqueue(actor_id),
-      Err(crate::EnqueueOutcome::CorruptedTopology)
-    );
-    assert_eq!(
-      Actors::try_paged_invalidate(actor_id),
-      Err(crate::EnqueueOutcome::CorruptedTopology)
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      corrupt_root
-    );
-    Actors::execute_cycle(Weight::MAX);
-
-    assert_eq!(Actors::queue_head(), head_before);
-    assert_eq!(Actors::actor_hot(actor_id), Some(hot_before));
-    assert_eq!(frame_system::Pallet::<Test>::events(), events_before);
-    assert!(
-      Actors::actor_identity(actor_id).is_none(),
-      "full classification rejects corruption"
-    );
-    assert_eq!(
-      Actors::actor_control_cell(actor_id)
-        .expect("retained primary")
-        .1
-        .identity
-        .cycle_nonce,
-      0
-    );
-  });
-}
-
-#[test]
-fn mixed_fifo_stops_at_corrupt_actor_without_touching_valid_suffix() {
-  for corrupt_index in 0usize..3 {
-    new_test_ext().execute_with(|| {
-      frame_system::Pallet::<Test>::set_block_number(1);
-      let actors = (0..3)
-        .map(|_| create_system_with(ALICE, manual_schedule(), None, inert_contract_steps()))
-        .collect::<Vec<_>>();
-      for actor_id in &actors {
-        assert_ok!(Actors::manual_trigger(
-          RuntimeOrigin::signed(ALICE),
-          *actor_id
-        ));
-      }
-      let sovereign_accounts = actors
-        .iter()
-        .map(|actor_id| {
-          Actors::actor_identity(*actor_id)
-            .expect("identity")
-            .sovereign_account
-        })
-        .collect::<Vec<_>>();
-      ActorFunding::<Test>::remove(actors[corrupt_index]);
-      let suffix_hot = actors[corrupt_index..]
-        .iter()
-        .map(|actor_id| Actors::actor_hot(*actor_id).expect("queued actor"))
-        .collect::<Vec<_>>();
-      let suffix_balances = sovereign_accounts[corrupt_index..]
-        .iter()
-        .map(native_balance)
-        .collect::<Vec<_>>();
-      frame_system::Pallet::<Test>::reset_events();
-
-      Actors::execute_cycle(Weight::MAX);
-
-      assert_eq!(Actors::queue_head(), corrupt_index as u64);
-      for (index, actor_id) in actors.iter().enumerate() {
-        let (_, cell) = Actors::actor_control_cell(*actor_id).expect("primary remains");
-        assert_eq!(cell.identity.cycle_nonce, u64::from(index < corrupt_index));
-        assert_eq!(
-          Actors::actor_identity(*actor_id).is_none(),
-          index == corrupt_index
-        );
-      }
-      for (offset, actor_id) in actors[corrupt_index..].iter().enumerate() {
-        assert_eq!(
-          Actors::actor_hot(*actor_id),
-          Some(suffix_hot[offset].clone())
-        );
-        assert_eq!(
-          native_balance(&sovereign_accounts[corrupt_index + offset]),
-          suffix_balances[offset]
-        );
-      }
-      let actor_events = System::events()
-        .into_iter()
-        .filter(|record| matches!(record.event, RuntimeEvent::Actors(..)))
-        .count();
-      assert_eq!(actor_events, corrupt_index.saturating_mul(3));
-      #[cfg(feature = "try-runtime")]
-      assert!(crate::Pallet::<Test>::do_try_state().is_err());
-    });
-  }
-}
-
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn eligibility_projection_uses_primary_authority_and_rejects_missing_primary() {
+fn eligibility_projection_rejects_missing_canonical_contract_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
@@ -5758,7 +5475,7 @@ fn eligibility_projection_uses_primary_authority_and_rejects_missing_primary() {
       ActorExecutionPhase::WaitingSignal
     );
 
-    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    crate::ActorContractHeads::<Test>::remove(actor_id);
     assert_eq!(
       Actors::actor_eligibility(actor_id),
       Err(crate::ActorClassificationError::ActorInvariant)
@@ -5781,13 +5498,12 @@ fn eligibility_projection_reports_exact_at_time_gate_and_consumption() {
       active_eligibility(actor_id).execution_phase,
       ActorExecutionPhase::WaitingCadenceTick(21)
     );
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(21, &mut meter);
+    service_canonical_temporal_frontiers(21);
     assert_eq!(
       active_eligibility(actor_id).execution_phase,
       ActorExecutionPhase::Ready
     );
-    Actors::execute_cycle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       active_eligibility(actor_id).execution_phase,
       ActorExecutionPhase::WaitingSignal
@@ -5832,5 +5548,34 @@ fn eligibility_projection_reports_exact_cadence_gate_without_actor_phase() {
       Err(SimulationError::NotReady),
       "simulation must not synthesize readiness before scheduler materialization"
     );
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn canonical_in_place_hot_mutation_requires_no_legacy_primary() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      inert_contract_steps(),
+    );
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(
+      actor_id
+    ));
+    let before = Actors::actor_hot(actor_id).expect("canonical semantic Hot owner");
+    Actors::try_mutate_control_hot_with_authority(actor_id, Error::<Test>::ActorNotFound, |hot| {
+      hot.pending_signal = !before.pending_signal;
+      Ok(())
+    })
+    .expect("canonical in-place Hot mutation commits through the semantic owner");
+    let after = Actors::actor_hot(actor_id).expect("canonical semantic Hot owner");
+    assert_eq!(after.pending_signal, !before.pending_signal);
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
   });
 }

@@ -46,10 +46,6 @@ fn all_preconditions(
 ) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
   let clause = predicates
     .into_iter()
-    .map(|predicate| pallet_deos_actors::TimedPredicate {
-      timing: pallet_deos_actors::ObservationTiming::Current,
-      predicate,
-    })
     .collect::<alloc::vec::Vec<_>>()
     .try_into()
     .expect("runtime predicates fit");
@@ -263,8 +259,8 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: foreign,
-          amount_a: AmountResolution::AllAvailable,
-          amount_b: AmountResolution::AllAvailable,
+          amount_a: AmountResolution::Percent(Perbill::one()),
+          amount_b: AmountResolution::Percent(Perbill::one()),
           min_lp_out: 1,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -274,7 +270,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         task: Task::SwapIn {
           asset_in: foreign,
           asset_out: AssetKind::Native,
-          amount_in: AmountResolution::AllAvailable,
+          amount_in: AmountResolution::Percent(Perbill::one()),
           slippage_tolerance: primitives::ecosystem::params::SYSTEM_ACTORS_MAX_SWAP_SLIPPAGE,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -283,7 +279,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         precondition: None,
         task: Task::SplitTransfer {
           asset: lp_asset,
-          amount: AmountResolution::AllAvailable,
+          amount: AmountResolution::Percent(Perbill::one()),
           legs: alloc::vec![
             pallet_deos_actors::SplitLeg {
               to: Actors::sovereign_account_id_system(actor_ids::TOL_BUCKET_A_ACTORS_ID),
@@ -354,13 +350,58 @@ fn tmctol_guarantee_state_flags_anchor_mutation_as_violation() {
 fn tmctol_guarantee_state_rejects_orphan_unsignaled_anchor_control() {
   new_test_ext().execute_with(|| {
     let anchor_id = actor_ids::TOL_BUCKET_A_ACTORS_ID;
-    let (_, mut orphan) = Actors::actor_control_cell(actor_ids::BURN_ACTOR_ID)
-      .expect("genesis Burn Actor has canonical control");
-    orphan.actor_id = anchor_id;
     assert!(!pallet_deos_actors::ActorControlLocators::<Runtime>::contains_key(anchor_id));
-    // Deliberately corrupt only the directly keyed process owner: a sealed dormant
-    // Anchor must not be reported healthy merely because its locator is absent.
-    pallet_deos_actors::ActorUnsignaledControlCells::<Runtime>::insert(anchor_id, orphan);
+    // Deliberately corrupt only the retained directly keyed legacy owner: a sealed dormant
+    // Anchor must not be reported healthy merely because its locator is absent. Canonical
+    // genesis Actors intentionally provide no legacy control cell to clone.
+    pallet_deos_actors::ActorUnsignaledControlCells::<Runtime>::insert(
+      anchor_id,
+      pallet_deos_actors::ActorControlCell {
+        actor_id: anchor_id,
+        identity: pallet_deos_actors::ActorControlIdentity {
+          owner: ALICE,
+          actor_class: pallet_deos_actors::ActorClass::System {
+            sovereign_id: anchor_id,
+          },
+          mutability: pallet_deos_actors::Mutability::Mutable,
+          cycle_nonce: 0,
+          last_control_mutation_block: 0,
+        },
+        hot: pallet_deos_actors::ActorControlHotState {
+          lifecycle: pallet_deos_actors::ActiveLifecycle::Active,
+          cycle_state: pallet_deos_actors::CycleState::Idle,
+          trigger_runtime_state: pallet_deos_actors::TriggerRuntimeState::Stateless,
+          unsuccessful_attempt_streak: 0,
+          pending_signal: true,
+          wakeup_pointer: None,
+          trigger_wakeup_pointer: None,
+          terminal_at: None,
+          schedule_anchor: 0,
+          last_cycle_block: None,
+        },
+        pipeline_service_identity: [0; 32],
+        cursor: 0,
+        eligible_at: None,
+        admission: pallet_deos_actors::ActorAdmissionCertificate::new(
+          [1; 32],
+          [2; 32],
+          pallet_deos_actors::ActorWakeQualification {
+            family: pallet_deos_actors::TriggerFamily::Manual,
+            selector_commitment: [3; 32],
+            schedule_commitment: [4; 32],
+          },
+          1,
+          [5; 32],
+          1,
+          [6; 32],
+          Weight::from_parts(1, 1),
+        ),
+        resources: pallet_deos_actors::ActorStepResourceEnvelope {
+          control: Weight::from_parts(1, 1),
+          effect: Weight::from_parts(1, 1),
+        },
+      },
+    );
 
     let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
     assert!(state.tol_anchor.active_state_exists);
@@ -656,7 +697,7 @@ fn burn_actor_swaps_foreign_to_native_then_burns_via_updated_plan() {
         task: Task::SwapIn {
           asset_in: AssetKind::Local(super::common::ASSET_A),
           asset_out: AssetKind::Native,
-          amount_in: AmountResolution::AllAvailable,
+          amount_in: AmountResolution::Percent(Perbill::one()),
           slippage_tolerance: Perbill::from_percent(5),
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -668,7 +709,7 @@ fn burn_actor_swaps_foreign_to_native_then_burns_via_updated_plan() {
         },]),
         task: Task::Burn {
           asset: AssetKind::Native,
-          amount: AmountResolution::AllAvailable,
+          amount: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       },
@@ -1511,9 +1552,13 @@ fn native_tmc_mint_routes_collateral_and_tokens_to_default_liquidity_actor_sink(
       hot.pending_signal,
       "TMC distribution must notify the liquidity actor directly"
     );
-    assert!(
-      hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some(),
-      "direct TMC ingress must retain exact scheduler readiness"
+    assert!(hot.queue_ticket.is_none());
+    assert!(hot.wakeup_pointer.is_none());
+    assert_eq!(
+      Actors::service_nodes(liquidity_actor_id)
+        .expect("direct TMC ingress publishes canonical Service work")
+        .eligible_from,
+      2
     );
   });
 }
@@ -1839,7 +1884,9 @@ fn bldr_full_e2e_router_tmc_splitter_liquidity_anchor() {
       (
         pallet_deos_actors::Trigger::address_event(
           pallet_deos_actors::SourceFilter::Any,
-          pallet_deos_actors::AssetFilter::Any,
+          pallet_deos_actors::AssetFilter::Whitelist(
+            alloc::vec![bldr_asset].try_into().expect("one asset fits"),
+          ),
         ),
         0,
         None,
@@ -2263,7 +2310,7 @@ fn tol_bucket_drainage_pressure_respects_anchor_immutability() {
           lp_asset,
           asset_a,
           asset_b,
-          lp_amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(10)),
+          lp_amount: AmountResolution::Percent(Perbill::from_percent(10)),
           min_amount_a: 1,
           min_amount_b: 1,
         },

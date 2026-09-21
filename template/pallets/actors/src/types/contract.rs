@@ -8,19 +8,7 @@ use polkadot_sdk::{sp_runtime::Perbill, sp_weights::Weight};
 )]
 pub enum AmountResolution<Balance> {
   Fixed(Balance),
-  PercentageOfCurrent(Perbill),
-  PercentageAtOpening(Perbill),
-  PercentageOfLastFunding(Perbill),
-  AllAvailable,
-}
-
-impl<Balance> AmountResolution<Balance> {
-  pub fn requires_frozen_cycle_snapshot(&self) -> bool {
-    matches!(
-      self,
-      Self::PercentageAtOpening(_) | Self::PercentageOfLastFunding(_)
-    )
-  }
+  Percent(Perbill),
 }
 
 #[derive(
@@ -108,24 +96,6 @@ pub enum Task<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>> {
 impl<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>>
   Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>
 {
-  pub fn requires_frozen_cycle_snapshot(&self) -> bool {
-    match self {
-      Self::Transfer { amount, .. }
-      | Self::SplitTransfer { amount, .. }
-      | Self::Burn { amount, .. }
-      | Self::Mint { amount, .. }
-      | Self::Stake { amount, .. } => amount.requires_frozen_cycle_snapshot(),
-      Self::SwapIn { amount_in, .. } => amount_in.requires_frozen_cycle_snapshot(),
-      Self::SwapOut { amount_out, .. } => amount_out.requires_frozen_cycle_snapshot(),
-      Self::AddLiquidity {
-        amount_a, amount_b, ..
-      } => amount_a.requires_frozen_cycle_snapshot() || amount_b.requires_frozen_cycle_snapshot(),
-      Self::RemoveLiquidity { lp_amount, .. } => lp_amount.requires_frozen_cycle_snapshot(),
-      Self::DonateLiquidity { max_amount_a, .. } => max_amount_a.requires_frozen_cycle_snapshot(),
-      Self::Unstake { shares, .. } => shares.requires_frozen_cycle_snapshot(),
-      Self::StopCycle => false,
-    }
-  }
 }
 
 impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get<u32>> Clone
@@ -993,6 +963,24 @@ impl<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId>
     }
   }
 
+  pub fn wake_qualification<BlockNumber: Encode>(
+    &self,
+    window: &Option<ScheduleWindow<BlockNumber>>,
+  ) -> ActorWakeQualification
+  where
+    AccountId: Encode,
+    AssetId: Encode,
+    ObservationFeedId: Encode,
+  {
+    ActorWakeQualification {
+      family: self.family(),
+      selector_commitment: (ACTOR_WAKE_SELECTOR_HASH_DOMAIN, self)
+        .using_encoded(frame::hashing::blake2_256),
+      schedule_commitment: (ACTOR_WAKE_SCHEDULE_HASH_DOMAIN, window)
+        .using_encoded(frame::hashing::blake2_256),
+    }
+  }
+
   pub fn manual_source_enabled(&self) -> bool {
     matches!(self, Self::Manual)
   }
@@ -1075,41 +1063,14 @@ pub enum Predicate<AssetId, Balance, BlockNumber = u32, ObservationFeedId = ()> 
   TypeInfo,
   MaxEncodedLen,
 )]
-pub enum ObservationTiming {
-  Opening,
-  Current,
-}
-
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
 pub enum PredicateError {
   InvalidObservation,
-}
-
-#[derive(
-  Clone,
-  Copy,
-  Debug,
-  Decode,
-  DecodeWithMemTracking,
-  Encode,
-  Eq,
-  Ord,
-  PartialEq,
-  PartialOrd,
-  TypeInfo,
-  MaxEncodedLen,
-)]
-pub struct TimedPredicate<P> {
-  pub timing: ObservationTiming,
-  pub predicate: P,
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxClauses, MaxPerClause))]
 pub struct Precondition<P, MaxClauses: Get<u32>, MaxPerClause: Get<u32>> {
-  pub clauses: BoundedVec<BoundedVec<TimedPredicate<P>, MaxPerClause>, MaxClauses>,
+  pub clauses: BoundedVec<BoundedVec<P, MaxPerClause>, MaxClauses>,
 }
 
 impl<P, MaxClauses: Get<u32>, MaxPerClause: Get<u32>> Precondition<P, MaxClauses, MaxPerClause> {
@@ -1121,21 +1082,8 @@ impl<P, MaxClauses: Get<u32>, MaxPerClause: Get<u32>> Precondition<P, MaxClauses
       .sum()
   }
 
-  pub fn opening_predicate_count(&self) -> u32 {
-    self
-      .clauses
-      .iter() // deos-bypass: bounded-iter — MaxClauses bounds the outer visit.
-      .flat_map(|clause| {
-        clause.iter() // deos-bypass: bounded-iter — MaxPerClause bounds each inner visit.
-      })
-      .filter(|timed| timed.timing == ObservationTiming::Opening)
-      .count() as u32
-  }
-
   pub fn evaluation_units(&self) -> u32 {
-    self
-      .predicate_count()
-      .saturating_add(self.opening_predicate_count())
+    self.predicate_count()
   }
 }
 
@@ -1218,11 +1166,7 @@ impl<
   >
 {
   pub fn requires_frozen_cycle_snapshot(&self) -> bool {
-    self
-      .precondition
-      .as_ref()
-      .is_some_and(|precondition| precondition.opening_predicate_count() > 0)
-      || self.task.requires_frozen_cycle_snapshot()
+    false
   }
 }
 
@@ -1414,6 +1358,8 @@ pub enum OpeningSurface<AssetId> {
 pub const ACTOR_CONTRACT_HASH_DOMAIN: [u8; 19] = *b"DEOS_ACTOR_CONTRACT";
 pub const ACTOR_BODY_HASH_DOMAIN: [u8; 15] = *b"DEOS_ACTOR_BODY";
 pub const ACTOR_ADMISSION_HASH_DOMAIN: [u8; 20] = *b"DEOS_ACTOR_ADMISSION";
+pub const ACTOR_WAKE_SELECTOR_HASH_DOMAIN: [u8; 24] = *b"DEOS_ACTOR_WAKE_SELECTOR";
+pub const ACTOR_WAKE_SCHEDULE_HASH_DOMAIN: [u8; 24] = *b"DEOS_ACTOR_WAKE_SCHEDULE";
 pub const MAX_STEPS_PER_TAIL_CHUNK: u32 = 4;
 
 #[derive(
@@ -1525,12 +1471,22 @@ pub struct LoadedActorStep<Step> {
 }
 
 #[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorWakeQualification {
+  pub family: TriggerFamily,
+  pub selector_commitment: [u8; 32],
+  pub schedule_commitment: [u8; 32],
+}
+
+#[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
 #[scale_info(skip_type_params(Resources))]
 pub struct ActorAdmissionCertificate<Resources> {
   pub semantic_contract_id: [u8; 32],
   pub body_commitment: [u8; 32],
+  pub wake_qualification: ActorWakeQualification,
   pub runtime_actor_semantics_version: u32,
   pub production_weight_identity: [u8; 32],
   pub body_geometry_version: u32,
@@ -1541,9 +1497,11 @@ pub struct ActorAdmissionCertificate<Resources> {
 }
 
 impl<Resources> ActorAdmissionCertificate<Resources> {
+  #[allow(clippy::too_many_arguments)]
   pub fn new(
     semantic_contract_id: [u8; 32],
     body_commitment: [u8; 32],
+    wake_qualification: ActorWakeQualification,
     runtime_actor_semantics_version: u32,
     production_weight_identity: [u8; 32],
     body_geometry_version: u32,
@@ -1553,6 +1511,7 @@ impl<Resources> ActorAdmissionCertificate<Resources> {
     let admission_identity = Self::derive_admission_identity(
       &semantic_contract_id,
       &body_commitment,
+      &wake_qualification,
       runtime_actor_semantics_version,
       &production_weight_identity,
       body_geometry_version,
@@ -1562,6 +1521,7 @@ impl<Resources> ActorAdmissionCertificate<Resources> {
     Self {
       semantic_contract_id,
       body_commitment,
+      wake_qualification,
       runtime_actor_semantics_version,
       production_weight_identity,
       body_geometry_version,
@@ -1572,9 +1532,11 @@ impl<Resources> ActorAdmissionCertificate<Resources> {
     }
   }
 
+  #[allow(clippy::too_many_arguments)]
   pub fn derive_admission_identity(
     semantic_contract_id: &[u8; 32],
     body_commitment: &[u8; 32],
+    wake_qualification: &ActorWakeQualification,
     runtime_actor_semantics_version: u32,
     production_weight_identity: &[u8; 32],
     body_geometry_version: u32,
@@ -1585,6 +1547,7 @@ impl<Resources> ActorAdmissionCertificate<Resources> {
       ACTOR_ADMISSION_HASH_DOMAIN,
       semantic_contract_id,
       body_commitment,
+      wake_qualification,
       runtime_actor_semantics_version,
       production_weight_identity,
       body_geometry_version,
@@ -1599,12 +1562,17 @@ impl<Resources> ActorAdmissionCertificate<Resources> {
       == Self::derive_admission_identity(
         &self.semantic_contract_id,
         &self.body_commitment,
+        &self.wake_qualification,
         self.runtime_actor_semantics_version,
         &self.production_weight_identity,
         self.body_geometry_version,
         &self.configured_bounds_commitment,
         self.maximum_lifecycle_weight,
       )
+  }
+
+  pub fn authorizes_wake(&self, qualification: ActorWakeQualification) -> bool {
+    self.has_valid_identity() && self.wake_qualification == qualification
   }
 }
 
@@ -1714,14 +1682,6 @@ impl<Trigger, BlockNumber, Steps, FundingPolicy>
       pipeline_machine_envelope,
     })
   }
-}
-
-#[derive(
-  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-pub struct ActorFundingState<FundingAccumulated, FundingTrackedAssets> {
-  pub funding_accumulated: FundingAccumulated,
-  pub funding_tracked_assets: FundingTrackedAssets,
 }
 
 #[derive(

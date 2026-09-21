@@ -1,21 +1,20 @@
 use crate::{
   ActiveLifecycle, ActorActivationPlacement, ActorClass, ActorClassification,
   ActorClassificationError, ActorContract, ActorControlLocators, ActorEligibility,
-  ActorExecutionPhase, ActorFunding, ActorId, ActorIdentities, ActorReadyHead, ActorReadyOccupancy,
-  ActorReadyTail, ActorRunAuthority, ActorRunStateStore, ActorTriggerActivation, ActorType,
-  AmountResolution, AssetFilter, AssetFilterOf, AttemptDisposition, CancellationReason,
-  CloseReason, CrossingDirection, CrossingMemberPages, CrossingMemberships, CrossingPhase,
-  CrossingTransition, CycleResult, CycleState, Error, Event, FeeChargeKind, FeeEnvelopeError,
-  FeeEnvelopeInput, FundingSourcePolicy, GlobalCircuitBreaker, IdleStarvationPhase,
-  IdleStarvationState, InitialLifecycle, InputLimit, LoadedActorStateOf, Mutability, NextActorId,
-  ObservationCrossing, ObservationSubscriberPageList, ObservationTiming, OpeningSurface,
+  ActorExecutionPhase, ActorId, ActorIdentities, ActorRunAuthority, ActorRunStateStore,
+  ActorTriggerActivation, ActorType, AmountResolution, AssetFilter, AssetFilterOf,
+  AttemptDisposition, CancellationReason, CloseReason, CrossingDirection, CrossingMemberPages,
+  CrossingMemberships, CrossingPhase, CrossingTransition, CycleResult, CycleState, Error, Event,
+  FeeChargeKind, FeeEnvelopeError, FeeEnvelopeInput, FundingSourcePolicy, GlobalCircuitBreaker,
+  IdleStarvationPhase, IdleStarvationState, InitialLifecycle, InputLimit, LoadedActorStateOf,
+  Mutability, NextActorId, ObservationCrossing, ObservationSubscriberPageList, OpeningSurface,
   OutcomeTotals, OwnerSlotBitmaps, Precondition, Predicate, RetryClass, ScheduleWindow,
   SimulationError, SimulationMode, SimulationStepRecord, SourceFilter, SourceFilterOf,
   SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf, StepOutcome,
-  StepSkippedReason, SuspensionReason, SystemSovereignState, Task, TaskFailure, TaskOf,
-  TimedPredicate, Trigger, TriggerFamily, TriggerRuntimeState, WakeupClock, WakeupKey, WakeupPage,
-  WakeupPointer, adapters::AssetOps, compose_attempt_fee_envelope, fee_native_protected_minimum,
-  mock::*, settle_attempt_fee_step,
+  StepSkippedReason, SuspensionReason, SystemSovereignState, Task, TaskFailure, TaskOf, Trigger,
+  TriggerFamily, TriggerRuntimeState, WakeupClock, WakeupKey, WakeupPage, WakeupPointer,
+  adapters::AssetOps, compose_attempt_fee_envelope, fee_native_protected_minimum, mock::*,
+  settle_attempt_fee_step,
 };
 use alloc::collections::BTreeSet;
 
@@ -139,7 +138,7 @@ use polkadot_sdk::frame_support::{
   __private::metadata_ir::{
     StorageEntryMetadataIR, StorageEntryModifierIR, StorageEntryTypeIR, StorageHasherIR,
   },
-  BoundedBTreeMap, BoundedBTreeSet, BoundedVec, assert_noop, assert_ok,
+  BoundedBTreeMap, BoundedVec, assert_noop, assert_ok,
   traits::{Currency, Get, Hooks, LockableCurrency, StorageInfoTrait, WithdrawReasons},
 };
 use polkadot_sdk::sp_runtime::StateVersion;
@@ -167,53 +166,16 @@ type MockBlockNumber = polkadot_sdk::frame_system::pallet_prelude::BlockNumberFo
 type TestWeightInfo = crate::weights::TestWeightInfo;
 
 fn run_contract_authority(actor_id: ActorId) -> ActorRunAuthority<[u8; 32]> {
-  let admission = Actors::actor_control_cell(actor_id)
-    .expect("Actor admission certificate exists")
-    .1
-    .admission;
+  let admission = Actors::load_control_authority_with_authority(actor_id)
+    .map(|(_, _, admission)| admission)
+    .or_else(|| Actors::actor_control_cell(actor_id).map(|(_, cell)| cell.admission))
+    .expect("Actor admission certificate exists");
   ActorRunAuthority {
     semantic_contract_id: admission.semantic_contract_id,
     body_commitment: admission.body_commitment,
     admission_identity: admission.admission_identity,
+    pipeline_service_identity: crate::pipeline_service_identity(admission.admission_identity),
   }
-}
-
-fn restore_structural_queue_tombstone(actor_id: ActorId) {
-  assert_eq!(
-    ActorControlLocators::<Test>::get(actor_id),
-    Some(crate::ActorControlLocation::Unsignaled)
-  );
-  mutate_primary_control_cell(actor_id, |cell| cell.hot.pending_signal = false);
-  assert!(
-    Actors::actor_hot(actor_id)
-      .expect("invalidated Actor exists")
-      .queue_ticket
-      .is_none()
-  );
-}
-
-fn schedule_latched_service_wakeup(actor_id: ActorId, wakeup_block: MockBlockNumber) -> bool {
-  try_schedule_latched_service_wakeup(actor_id, wakeup_block).is_ok()
-}
-
-fn try_schedule_latched_service_wakeup(
-  actor_id: ActorId,
-  wakeup_block: MockBlockNumber,
-) -> Result<(), crate::scheduler::EnqueueOutcome> {
-  let (location, cell) = Actors::actor_control_cell(actor_id)
-    .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
-  let (identity, mut hot, admission) = Actors::project_control_cell(&cell, location)
-    .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
-  hot.pending_signal = true;
-  Actors::try_wakeup_substrate_schedule_transition_with_authority(
-    actor_id,
-    WakeupKey::Block(wakeup_block),
-    hot,
-    &identity,
-    cell.cursor,
-    &admission,
-    cell.resources,
-  )
 }
 
 fn enqueue_latched_actor(actor_id: ActorId) -> bool {
@@ -238,8 +200,59 @@ fn enqueue_latched_actor(actor_id: ActorId) -> bool {
   result.is_ok()
 }
 
+/// Canonical equivalent of the legacy `enqueue_latched_actor` fixture for triggers whose manual
+/// source is disabled (`AtTime` and observation schedules). Fresh-genesis publication owns no
+/// legacy paged-FIFO entry, so a witness that needs a real production Service head must latch
+/// through the canonical Trigger owner instead, which publishes one `Service(Pending)` occurrence
+/// eligible at the following block.
+fn latch_canonical_occurrence(actor_id: ActorId, family: TriggerFamily) -> bool {
+  let Some(crate::ActorSemanticState::Active(record)) =
+    crate::ActorSemanticStates::<Test>::get(actor_id)
+  else {
+    return false;
+  };
+  let actor = crate::ActorRef {
+    actor_id,
+    generation: record.generation,
+  };
+  let actor_type = record.identity.actor_class.actor_type();
+  let breakdown = Actors::trigger_fee_for_weight(
+    actor_type,
+    family,
+    <TestWeightInfo as crate::WeightInfo>::manual_trigger(),
+  );
+  polkadot_sdk::frame_support::storage::with_transaction(|| {
+    let Some((state, _, _)) = Actors::load_frame_actor_service_state(actor_id) else {
+      return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok::<
+        bool,
+        DispatchError,
+      >(false));
+    };
+    let sovereign = state.identity.sovereign_account;
+    let result = Actors::commit_canonical_trigger_occurrence_with_authority(
+      actor,
+      actor_type,
+      &sovereign,
+      breakdown,
+      state,
+      frame_system::Pallet::<Test>::block_number(),
+    );
+    match result {
+      Ok(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+        bool,
+        DispatchError,
+      >(true)),
+      Err(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok::<
+        bool,
+        DispatchError,
+      >(false)),
+    }
+  })
+  .unwrap_or(false)
+}
+
 fn scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
-  Actors::actor_hot(actor_id).and_then(|hot| {
+  let hot = Actors::actor_hot(actor_id).and_then(|hot| {
     hot
       .wakeup_pointer
       .map(|pointer| match pointer.block {
@@ -247,18 +260,15 @@ fn scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
         WakeupKey::Tick(tick) => tick,
       })
       .or_else(|| hot.trigger_wakeup_pointer.map(|pointer| pointer.tick))
-  })
-}
-
-fn canonical_scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
-  Actors::active_actor_view(actor_id).and_then(|actor| {
-    actor
-      .wakeup_pointer
-      .map(|pointer| match pointer.block {
-        WakeupKey::Block(block) => block,
-        WakeupKey::Tick(tick) => tick,
-      })
-      .or_else(|| actor.trigger_wakeup_pointer.map(|pointer| pointer.tick))
+  });
+  // A canonically published Actor owns its block deadline in the generation-bound process
+  // residence and `DeadlineHandles`, not in the legacy `hot.wakeup_pointer` projection, so the
+  // query must consult the canonical carrier too.
+  hot.or_else(|| {
+    crate::DeadlineHandles::<Test>::get(actor_id).map(|handle| match handle.key {
+      WakeupKey::Block(block) => block,
+      WakeupKey::Tick(tick) => tick,
+    })
   })
 }
 
@@ -376,6 +386,12 @@ fn crossing_phase(actor_id: ActorId) -> CrossingPhase {
   }
 }
 
+/// Canonical observable of latched crossings: the number of `Service(Pending)` ring members a
+/// Crossing cohort publishes, which replaces the legacy paged `ActorReadyOccupancy` observable.
+fn canonical_service_occupancy() -> u32 {
+  crate::ServiceHeader::<Test>::get().count
+}
+
 fn drain_crossing_work() -> u32 {
   drain_crossing_work_with_limit(512)
 }
@@ -387,41 +403,6 @@ fn drain_crossing_work_with_limit(limit: u32) -> u32 {
     }
   }
   panic!("Crossing work did not converge within the bounded fixture");
-}
-
-fn assert_on_idle_wakeup_insufficiency_preserves_state(wakeup_budget: Weight) {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(10);
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      None,
-      transfer_contract_steps(BOB, 1),
-    );
-    assert!(schedule_latched_service_wakeup(actor_id, 10));
-    GlobalCircuitBreaker::<Test>::put(true);
-    let hot_before = Actors::actor_hot(actor_id).expect("actor before bounded wakeup pass");
-    let bucket_before = Actors::wakeup_buckets(10).expect("due wakeup bucket");
-    let page_before = Actors::wakeup_pages((10, 0)).expect("due wakeup page");
-    let cursor_before = Actors::wakeup_cursor_peek();
-    let events_before = System::events();
-    let remaining =
-      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
-        .saturating_add(wakeup_budget);
-
-    let used = Actors::on_idle(10, remaining);
-
-    assert!(
-      used.all_lte(remaining),
-      "on_idle must not exceed its caller budget"
-    );
-    assert_eq!(Actors::actor_hot(actor_id), Some(hot_before));
-    assert_eq!(Actors::wakeup_buckets(10), Some(bucket_before));
-    assert_eq!(Actors::wakeup_pages((10, 0)), Some(page_before));
-    assert_eq!(Actors::wakeup_cursor_peek(), cursor_before);
-    assert!(Actors::wakeup_worker_fault().is_none());
-    assert_eq!(System::events(), events_before);
-  });
 }
 
 fn ordinary_transfer_to_actor(
@@ -494,26 +475,13 @@ fn timer_schedule(every_ticks: u32) -> RuntimeSchedule {
   }
 }
 
-fn timed_all_conditions(
-  timing: ObservationTiming,
-  predicates: Vec<Predicate<TestAsset, Balance, u32, u32>>,
-) -> Option<crate::PreconditionOf<Test>> {
-  let clause = BoundedVec::try_from(
-    predicates
-      .into_iter()
-      .map(|predicate| TimedPredicate { timing, predicate })
-      .collect::<Vec<_>>(),
-  )
-  .expect("predicates fit");
-  Some(Precondition {
-    clauses: BoundedVec::try_from(vec![clause]).expect("clause fits"),
-  })
-}
-
 fn all_conditions(
   predicates: Vec<Predicate<TestAsset, Balance, u32, u32>>,
 ) -> Option<crate::PreconditionOf<Test>> {
-  timed_all_conditions(ObservationTiming::Current, predicates)
+  let clause = BoundedVec::try_from(predicates).expect("predicates fit");
+  Some(Precondition {
+    clauses: BoundedVec::try_from(vec![clause]).expect("clause fits"),
+  })
 }
 
 fn any_conditions(
@@ -521,13 +489,7 @@ fn any_conditions(
 ) -> Option<crate::PreconditionOf<Test>> {
   let clauses = predicates
     .into_iter()
-    .map(|predicate| {
-      BoundedVec::try_from(vec![TimedPredicate {
-        timing: ObservationTiming::Current,
-        predicate,
-      }])
-      .expect("predicate fits")
-    })
+    .map(|predicate| BoundedVec::try_from(vec![predicate]).expect("predicate fits"))
     .collect::<Vec<_>>();
   Some(Precondition {
     clauses: BoundedVec::try_from(clauses).expect("clauses fit"),
@@ -695,10 +657,6 @@ fn system_active_contract_with_completion(
   })
 }
 
-fn actor_funding(actor_id: u64) -> crate::ActorFundingStateOf<Test> {
-  Actors::actor_funding(actor_id).expect("active actor funding exists")
-}
-
 fn sovereign_account(actor_id: u64) -> AccountId {
   Actors::active_actor_view(actor_id)
     .map(|inst| inst.sovereign_account)
@@ -714,6 +672,8 @@ fn mutate_actor_hot_coherent(
   actor_id: ActorId,
   mutate: impl FnOnce(&mut crate::ActorHotStateOf<Test>),
 ) {
+  // `try_mutate_control_hot` follows the semantic owner for a canonically published actor and the
+  // mirrored primary for a pre-cutover fixture that still stages one, so both builds share it.
   assert_ok!(Actors::try_mutate_control_hot(
     actor_id,
     Error::<Test>::ActorNotFound,
@@ -756,7 +716,6 @@ fn actor_state_hold_total(actor_id: ActorId) -> Balance {
     .saturating_add(hold.breakdown.contract_head)
     .saturating_add(hold.breakdown.contract_body)
     .saturating_add(hold.breakdown.detector)
-    .saturating_add(hold.breakdown.funding)
     .saturating_add(hold.breakdown.run)
 }
 
@@ -800,6 +759,48 @@ fn setup_temporary_retry_pool() {
   set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
 }
 
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn assert_no_legacy_actor_authority(actor_id: ActorId) {
+  assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+  assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(
+    actor_id
+  ));
+  assert_eq!(crate::ActorReadyHead::<Test>::get(), 0);
+  assert_eq!(crate::ActorReadyTail::<Test>::get(), 0);
+  assert_eq!(crate::ActorReadyOccupancy::<Test>::get(), 0);
+  assert_eq!(crate::ActorReadyFrameChunks::<Test>::iter().count(), 0);
+  assert_eq!(crate::ActorWaitingHeads::<Test>::iter().count(), 0);
+  assert_eq!(crate::ActorWaitingTails::<Test>::iter().count(), 0);
+  assert_eq!(crate::ActorWaitingOccupancies::<Test>::iter().count(), 0);
+  assert_eq!(crate::ActorWaitingFrameChunks::<Test>::iter().count(), 0);
+}
+
+fn create_canonical_suspended_system_retry(block: u64) -> u64 {
+  frame_system::Pallet::<Test>::set_block_number(block);
+  setup_temporary_retry_pool();
+  let actor_id = Actors::next_actor_id();
+  let mut contract = system_active_contract(manual_schedule(), None, temporary_retry_swap_plan())
+    .expect("retry Contract is valid");
+  contract.cooldown_blocks = 5;
+  assert_ok!(Actors::create_system_actor(
+    RuntimeOrigin::root(),
+    ALICE,
+    Mutability::Mutable,
+    Some(contract),
+  ));
+  age_fixture_control_clock(actor_id);
+  fund_native(actor_id, 100);
+  set_temporary_dex_failure(true);
+  assert_ok!(Actors::manual_trigger(
+    RuntimeOrigin::signed(ALICE),
+    actor_id
+  ));
+  run_next_idle(Weight::MAX);
+  assert!(Actors::actor_run_state(actor_id).is_some());
+  actor_id
+}
+
+/// Staged pre-cutover fixture retained only for tests that publish legacy authority themselves.
 fn create_suspended_system_retry(block: u64) -> u64 {
   frame_system::Pallet::<Test>::set_block_number(block);
   setup_temporary_retry_pool();
@@ -811,7 +812,6 @@ fn create_suspended_system_retry(block: u64) -> u64 {
     actor_id
   ));
   run_idle(Weight::MAX);
-  assert!(Actors::actor_run_state(actor_id).is_some());
   actor_id
 }
 
@@ -863,23 +863,6 @@ fn deplete_user_sovereign(actor_id: u64, amount: Balance) {
   MockAssetOps::burn(&acc, TestAsset::Native, amount).expect("fixture depletion burn succeeds");
 }
 
-fn run_actor_hook_order_with_external(
-  now: u64,
-  external: impl FnOnce(),
-  idle_weight: Weight,
-) -> Weight {
-  frame_system::Pallet::<Test>::set_block_number(now);
-  let initialize_weight = Actors::on_initialize(now);
-  let prepass_weight = Actors::actor_prepass(RuntimeOrigin::none())
-    .expect("fixture prepass succeeds")
-    .actual_weight
-    .unwrap_or_else(Weight::zero);
-  external();
-  initialize_weight
-    .saturating_add(prepass_weight)
-    .saturating_add(Actors::on_idle(now, idle_weight))
-}
-
 fn run_next_idle(weight: Weight) {
   let now = frame_system::Pallet::<Test>::block_number()
     .checked_add(1)
@@ -888,6 +871,38 @@ fn run_next_idle(weight: Weight) {
   Actors::on_initialize(now);
   run_prepass();
   run_idle(weight);
+}
+
+/// Drives one canonical temporal deadline frontier at `now`, mirroring the production `on_idle`
+/// housekeeping call. Canonically published Actors register temporal triggers in the `Deadline*`
+/// carrier, which the retired paged Waiting substrate never observes.
+fn service_canonical_temporal_frontiers(now: MockBlockNumber) {
+  let mut meter = WeightMeter::with_limit(Weight::MAX);
+  let _ = Actors::service_due_deadline_frontiers(
+    &mut meter,
+    crate::ServiceResidenceKind::Live,
+    now,
+    now,
+    Some(WakeupKey::Block(now.saturating_add(1))),
+    Some(WakeupKey::Tick(now.saturating_add(1))),
+  );
+}
+
+/// Advances to the absolute `block` and drives exactly one canonical Service round there:
+/// `on_initialize`, the mandatory prepass, then `on_idle`. Canonical retries and future
+/// occurrences are deadline-gated at an absolute eligible block, so a witness that knows the
+/// persisted `eligible_at` must advance to it instead of assuming same-block execution.
+fn run_canonical_round_at(block: MockBlockNumber, weight: Weight) {
+  frame_system::Pallet::<Test>::set_block_number(block);
+  Actors::on_initialize(block);
+  run_prepass();
+  run_idle(weight);
+}
+
+/// Services a due Deadline at `block`, then executes its newly admitted Service work at B+1.
+fn run_canonical_reentry_at(block: MockBlockNumber, weight: Weight) {
+  run_canonical_round_at(block, weight);
+  run_next_idle(weight);
 }
 
 fn run_prepass() {
@@ -904,10 +919,22 @@ fn run_idle(weight: Weight) {
   let max_blocks =
     <<Test as crate::Config>::MaxContractSteps as Get<u32>>::get().saturating_mul(2u32);
   for _ in 1..max_blocks {
-    if !ActorControlLocators::<Test>::iter_keys()
+    let legacy_running = ActorControlLocators::<Test>::iter_keys()
       .filter_map(Actors::actor_hot)
-      .any(|hot| hot.cycle_state == CycleState::Running)
-    {
+      .any(|hot| hot.cycle_state == CycleState::Running);
+    // Canonical production authority keeps hot state in the semantic record rather than in a legacy
+    // control locator. A fresh occurrence publishes one Pending Service at B+1, so the helper must
+    // advance one block to reach it; a Running continuation keeps its one-round-per-call contract
+    // and is advanced explicitly by the caller, mirroring the legacy predicate.
+    let canonical_pending = crate::ActorSemanticStates::<Test>::iter().any(|(actor_id, state)| {
+      matches!(
+        state,
+        crate::ActorSemanticState::Active(record)
+          if record.hot.pending_signal && record.hot.cycle_state == CycleState::Idle
+      ) && (crate::ActorProcesses::<Test>::contains_key(actor_id)
+        || crate::ServiceNodes::<Test>::contains_key(actor_id))
+    });
+    if !legacy_running && !canonical_pending {
       break;
     }
     let Some(next) = now.checked_add(1) else {
@@ -921,29 +948,56 @@ fn run_idle(weight: Weight) {
   }
 }
 
+/// Drives exactly one Actors Drain pass at the current block without running the mandatory prepass
+/// or the multi-block continuation loop. Starvation telemetry is owned by the Drain pass (the
+/// prepass normally resolves eligible weight before Drain), so a weight-blocked live head must be
+/// observed here rather than through the pre-service helper.
+fn run_drain_only(weight: Weight) {
+  let now = frame_system::Pallet::<Test>::block_number();
+  Actors::on_idle(now, weight);
+}
+
 fn starvation_observation_weight() -> Weight {
   <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
 }
 
-/// Proof-limited on_idle budget that admits the wakeup cursor, queue scan, hot/contract probes, and
-/// the head consume, but not the actor's current Step admission. This materializes a live FIFO head
-/// blocked by weight with no admitted attempt, the only spec 8.6.3 starvation trigger.
-fn starvation_blocked_budget(actor_id: u64) -> Weight {
-  let base = starvation_observation_weight();
-  let cursor = <TestWeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future();
-  let scan = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
-  let state_probe = Actors::scheduler_actor_state_probe_weight_upper();
-  let consume = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
-    .max(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page());
-  let (_, cell) = Actors::actor_control_cell(actor_id).expect("current control owner exists");
-  let step = cell.resources.control.saturating_add(cell.resources.effect);
-  let full = base
-    .saturating_add(cursor)
-    .saturating_add(scan)
-    .saturating_add(state_probe)
-    .saturating_add(consume)
-    .saturating_add(step);
+/// Proof-limited on_idle budget one unit short of the complete canonical outer Service owner. This
+/// reaches an eligible Service head but cannot admit an attempt, the spec 8.6.3 starvation trigger.
+fn starvation_blocked_budget(_actor_id: u64) -> Weight {
+  let full =
+    starvation_observation_weight().saturating_add(Actors::scheduler_complete_outer_weight_upper());
   Weight::from_parts(u64::MAX, full.proof_size().saturating_sub(1))
+}
+
+/// Canonical equivalent of the retired legacy control-cell resource envelope. A canonically
+/// published Actor stores its current-Step envelope in the semantic/service owner, so the
+/// pre-cutover fixtures that used `actor_control_cell(...).resources` read it from there instead.
+fn fixture_step_resource_envelope(actor_id: crate::ActorId) -> crate::ActorStepResourceEnvelope {
+  if let Some((_, cell)) = Actors::actor_control_cell(actor_id) {
+    return cell.resources;
+  }
+  Actors::load_frame_actor_service_state(actor_id)
+    .and_then(|(_, _, loaded_step)| loaded_step)
+    .map(|loaded| loaded.resources)
+    .unwrap_or(crate::ActorStepResourceEnvelope {
+      control: <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_inner_zero_step_complete(),
+      effect: Weight::zero(),
+    })
+}
+
+/// Test fixture: clears the canonical carrier published by creation and then publishes one inert
+/// Service member, so ring tests can construct membership without the creation-time Disabled
+/// process tripping the single-authority publication guard.
+fn publish_test_service_member(
+  actor: crate::ActorRef,
+  kind: crate::ServiceResidenceKind,
+  now: MockBlockNumber,
+) -> Result<(), crate::ServicePublicationError> {
+  crate::ActorProcesses::<Test>::remove(actor.actor_id);
+  crate::ServiceNodes::<Test>::remove(actor.actor_id);
+  crate::DeadlineHandles::<Test>::remove(actor.actor_id);
+  crate::TriggerDeadlineHandles::<Test>::remove(actor.actor_id);
+  Actors::publish_service_member(actor, kind, now)
 }
 
 fn run_idle_until_cycle_nonce(actor_id: u64, target_cycle_nonce: u64) {
@@ -957,6 +1011,32 @@ fn run_idle_until_cycle_nonce(actor_id: u64, target_cycle_nonce: u64) {
     }
   }
   panic!("cycle nonce did not reach target");
+}
+
+/// Advances canonical per-round Service until the Actor opens no further Run and owns no pending
+/// occurrence. Canonical execution commits at most one Step per block, so a multi-Step witness must
+/// advance one explicit round per Step instead of relying on a single same-block `run_idle` pass,
+/// which stops as soon as the committed prefix leaves the Actor `Running`.
+fn run_next_idle_to_completion(actor_id: u64) {
+  let rounds = <<Test as crate::Config>::MaxContractSteps as Get<u32>>::get() as usize + 1;
+  for _ in 0..rounds {
+    if Actors::actor_run_state(actor_id).is_none() && !Actors::pending_signal(actor_id) {
+      return;
+    }
+    run_next_idle(Weight::MAX);
+  }
+  panic!("canonical cycle did not complete within the bounded contract step budget");
+}
+
+/// Drives one canonical Cadenced occurrence: advance to the Actor's scheduled deadline block,
+/// service the canonical temporal frontier to publish the Pending Service, then run the next
+/// canonical round. Canonical cadence publishes for the following block and re-arms strictly after
+/// the opening, so consecutive occurrences are not adjacent blocks.
+fn run_scheduled_cadence_occurrence(actor_id: crate::ActorId) {
+  let block = scheduled_wakeup_block(actor_id).expect("Cadenced Actor owns a scheduled deadline");
+  frame_system::Pallet::<Test>::set_block_number(block);
+  service_canonical_temporal_frontiers(block);
+  run_next_idle(Weight::MAX);
 }
 
 fn actor_event_count(predicate: impl Fn(&Event<Test>) -> bool) -> usize {
@@ -974,83 +1054,6 @@ fn has_actor_event(predicate: impl Fn(&Event<Test>) -> bool) -> bool {
   actor_event_count(predicate) > 0
 }
 
-fn mixed_materialization_ticket_trace() -> Vec<u64> {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    set_observation(
-      7,
-      crate::ScalarObservationState::Fresh {
-        value: 50,
-        observed_at: 1,
-      },
-    );
-    let steps = contract_steps_with_step(make_step(Task::StopCycle));
-    let cadence_actor = create_system_with(
-      ALICE,
-      Schedule {
-        trigger: RuntimeTrigger::cadenced(1),
-        cooldown_blocks: 0,
-      },
-      None,
-      steps.clone(),
-    );
-    let crossing_actor = create_system_with(
-      BOB,
-      Schedule {
-        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
-        cooldown_blocks: 0,
-      },
-      None,
-      steps.clone(),
-    );
-    let change_actor = create_system_with(
-      CHARLIE,
-      Schedule {
-        trigger: RuntimeTrigger::observation_change(8),
-        cooldown_blocks: 0,
-      },
-      None,
-      steps,
-    );
-    assert_ok!(Actors::set_global_circuit_breaker(
-      RuntimeOrigin::root(),
-      true
-    ));
-    assert_ok!(Actors::note_observation_transition(
-      7,
-      crate::ObservationTransition {
-        revision: 2,
-        previous: Some(50),
-        current: 150,
-      },
-    ));
-    assert_ok!(Actors::note_observation_changed(8, 1));
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
-
-    let mut trace = crate::ActorReadyFrameChunks::<Test>::iter()
-      .flat_map(|(page_id, page)| {
-        page
-          .into_iter()
-          .enumerate()
-          .filter_map(move |(slot, cell)| {
-            cell.map(|cell| (page_id * 32 + slot as u64, cell.actor_id))
-          })
-      })
-      .collect::<Vec<_>>();
-    trace.sort_unstable_by_key(|(ticket, _)| *ticket);
-    let actor_trace = trace
-      .into_iter()
-      .map(|(_, actor_id)| actor_id)
-      .collect::<Vec<_>>();
-    assert_eq!(
-      actor_trace,
-      vec![cadence_actor, crossing_actor, change_actor]
-    );
-    actor_trace
-  })
-}
-
 // --- Error Coverage Tests ---
 
 // --- Task & Predicate Coverage Tests ---
@@ -1063,105 +1066,6 @@ fn mixed_materialization_ticket_trace() -> Vec<u64> {
 
 // --- Multi-Asset Funding Tests ---
 
-fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall: Weight) {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let is_system = matches!(
-      reason,
-      CloseReason::ConsecutiveFailures | CloseReason::AutoCloseNonceReached
-    );
-    let actor_id = if is_system {
-      create_system_with(ALICE, manual_schedule(), None, inert_contract_steps())
-    } else {
-      create_user_with(
-        ALICE,
-        Mutability::Mutable,
-        manual_schedule(),
-        None,
-        inert_contract_steps(),
-      )
-    };
-    match reason {
-      CloseReason::WindowExpired => fund_native(actor_id, 1_000),
-      CloseReason::CycleAdmissionInsufficient => {
-        let balance = native_balance(&sovereign_account(actor_id));
-        deplete_user_sovereign(actor_id, balance);
-        fund_native(
-          actor_id,
-          TestMinUserBalance::get().saturating_add(manual_trigger_fee()),
-        );
-      }
-      CloseReason::CycleNonceExhausted => {
-        fund_native(actor_id, 1_000);
-        mutate_actor_identity_coherent(actor_id, |identity| identity.cycle_nonce = u64::MAX - 1);
-      }
-      CloseReason::ConsecutiveFailures => {
-        mutate_actor_hot_coherent(actor_id, |hot| {
-          hot.unsuccessful_attempt_streak = <Test as crate::Config>::MaxConsecutiveFailures::get();
-        });
-      }
-      CloseReason::AutoCloseNonceReached => {
-        mutate_actor_identity_coherent(actor_id, |identity| identity.cycle_nonce = 1);
-        let mut contract = Actors::load_actor_contract(actor_id).expect("actor contract exists");
-        contract.auto_close_at_cycle_nonce = Some(1);
-        assert_ok!(Actors::store_actor_contract(actor_id, contract));
-      }
-      unsupported => panic!("unsupported admission-time close reason: {unsupported:?}"),
-    }
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    if reason == CloseReason::CycleNonceExhausted {
-      mutate_actor_identity_coherent(actor_id, |identity| identity.cycle_nonce = u64::MAX);
-    }
-    if reason == CloseReason::WindowExpired {
-      let mut contract = Actors::load_actor_contract(actor_id).expect("actor contract exists");
-      contract.window = Some(ScheduleWindow { start: 0, end: 0 });
-      assert_ok!(Actors::store_actor_contract(actor_id, contract));
-    }
-    let before = Actors::actor_hot(actor_id)
-      .unwrap_or_else(|| panic!("{reason:?} actor remains active before scheduler admission"));
-    let queue_head = ActorReadyHead::<Test>::get();
-    frame_system::Pallet::<Test>::reset_events();
-    let discovery = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
-    // Discovery and the loaded-state probe are provisional for a complete FIFO close. The
-    // accepted close owner replaces them and source consumption instead of being added to them.
-    let pre_admission =
-      discovery.saturating_add(Actors::scheduler_actor_state_probe_weight_upper());
-    let close = if reason == CloseReason::CycleAdmissionInsufficient {
-      <TestWeightInfo as crate::WeightInfo>::pipeline_admission_apoptosis()
-    } else {
-      Actors::close_cleanup_weight_upper()
-    };
-    let budget = close.saturating_sub(shortfall);
-    let consumed = Actors::execute_cycle(budget).consumed;
-    let after =
-      Actors::actor_hot(actor_id).expect("incomplete atomic close budget preserves actor");
-    assert_eq!(after.queue_ticket, before.queue_ticket);
-    assert_eq!(ActorReadyHead::<Test>::get(), queue_head);
-    assert!(!has_actor_event(|event| matches!(
-      event,
-      Event::ActorClosed { actor_id: id, .. } if *id == actor_id
-    )));
-    assert!(consumed.all_lte(pre_admission));
-    assert!(consumed.all_lte(budget));
-
-    let consumed = Actors::execute_cycle(Weight::MAX).consumed;
-    assert_eq!(
-      consumed,
-      close.saturating_add(discovery),
-      "the complete entry owner replaces its provisional prefix; the later empty-queue probe remains a distinct pass operation"
-    );
-    assert!(Actors::active_actor_view(actor_id).is_none());
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::ActorClosed { actor_id: id, reason: closed_reason }
-        if *id == actor_id && *closed_reason == reason
-    )));
-  });
-}
-
 #[cfg(test)]
 mod proptest_actor {
   use super::Schedule;
@@ -1171,10 +1075,10 @@ mod proptest_actor {
     run_prepass, set_asset_balance, setup_pool, setup_temporary_retry_pool, sovereign_account,
   };
   use crate::{
-    ActorControlLocators, ActorFunding, ActorIdentities, ActorReadyOccupancy, ActorRunStateStore,
-    AmountResolution, AssetFilter, CrossingDirection, CrossingPhase, CrossingTransition,
-    CycleState, Event, FundingSourcePolicy, Mutability, ObservationCrossing, SourceFilter,
-    StepErrorPolicy, StepOf, SystemSovereignState, SystemSovereigns, Task, Trigger, mock::*,
+    ActorControlLocators, ActorIdentities, ActorRunStateStore, AmountResolution, AssetFilter,
+    CrossingDirection, CrossingPhase, CrossingTransition, CycleState, Event, FundingSourcePolicy,
+    Mutability, ObservationCrossing, SourceFilter, StepErrorPolicy, StepOf, SystemSovereignState,
+    SystemSovereigns, Task, Trigger, mock::*,
   };
   use codec::Encode;
   use polkadot_sdk::frame_support::{
@@ -1183,7 +1087,7 @@ mod proptest_actor {
   };
   use polkadot_sdk::{
     frame_system,
-    sp_runtime::{Perbill, StateVersion, Weight},
+    sp_runtime::{Perbill, Weight},
   };
   use proptest::prelude::*;
 
@@ -1369,6 +1273,7 @@ mod proptest_actor {
       run_prepass();
       run_idle(Weight::MAX);
       run_next_idle(Weight::MAX);
+      run_next_idle(Weight::MAX);
       assert!(Actors::actor_run_state(actor_id).is_none());
       assert_eq!(native_balance(&actor), 70);
       assert_eq!(native_balance(&BOB), bob_before + 10);
@@ -1519,7 +1424,7 @@ mod proptest_actor {
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
-          amount_in: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(10)),
+          amount_in: AmountResolution::Percent(Perbill::from_percent(10)),
           slippage_tolerance: Perbill::one(),
         },
         on_error: RETRY_LATER,
@@ -1554,60 +1459,71 @@ mod proptest_actor {
     tracked_accounts: &std::collections::BTreeSet<AccountId>,
     conserved_total: Balance,
   ) {
-    let hot_ids: std::collections::BTreeSet<_> =
-      ActorControlLocators::<Test>::iter_keys().collect();
+    let semantic_records: std::collections::BTreeMap<_, _> =
+      crate::ActorSemanticStates::<Test>::iter().collect();
+    let active_ids: std::collections::BTreeSet<_> = semantic_records
+      .iter()
+      .filter_map(|(actor_id, state)| {
+        matches!(state, crate::ActorSemanticState::Active(_)).then_some(*actor_id)
+      })
+      .collect();
+    let semantic_dormant_ids: std::collections::BTreeSet<_> = semantic_records
+      .iter()
+      .filter_map(|(actor_id, state)| {
+        matches!(state, crate::ActorSemanticState::Dormant(_)).then_some(*actor_id)
+      })
+      .collect();
+    let dormant_ids: std::collections::BTreeSet<_> = ActorIdentities::<Test>::iter_keys().collect();
+    assert_eq!(
+      semantic_dormant_ids, dormant_ids,
+      "dormant identity registry agrees with the semantic dormant partition"
+    );
+    let identity_ids: std::collections::BTreeSet<_> =
+      active_ids.union(&dormant_ids).copied().collect();
     let contract_ids: std::collections::BTreeSet<_> =
       crate::ActorContractHeads::<Test>::iter_keys().collect();
-    let funding_ids: std::collections::BTreeSet<_> = ActorFunding::<Test>::iter_keys().collect();
-    let dormant_ids: std::collections::BTreeSet<_> = ActorIdentities::<Test>::iter_keys().collect();
-    assert!(hot_ids.is_disjoint(&dormant_ids));
-    let identity_ids: std::collections::BTreeSet<_> =
-      hot_ids.union(&dormant_ids).copied().collect();
+    let process_ids: std::collections::BTreeSet<_> =
+      crate::ActorProcesses::<Test>::iter_keys().collect();
     let run_ids: std::collections::BTreeSet<_> = ActorRunStateStore::<Test>::iter_keys().collect();
-    assert_eq!(hot_ids, contract_ids);
-    assert_eq!(hot_ids, funding_ids);
-    assert!(run_ids.is_subset(&hot_ids));
-    assert!(hot_ids.is_subset(&identity_ids));
-    assert_eq!(Actors::active_actor_count() as usize, hot_ids.len());
-    assert_eq!(Actors::actor_identity_count() as usize, identity_ids.len());
-    let primary_ids: Vec<_> = crate::ActorUnsignaledControlCells::<Test>::iter_values()
-      .map(|cell| cell.actor_id)
-      .chain(
-        crate::ActorReadyFrameChunks::<Test>::iter_values()
-          .flat_map(|page| page.into_iter().flatten().map(|cell| cell.actor_id)),
-      )
-      .chain(
-        crate::ActorWaitingFrameChunks::<Test>::iter_values().flat_map(|page| {
-          page
-            .entries
-            .into_iter()
-            .flatten()
-            .filter_map(|entry| entry.into_primary().map(|cell| cell.actor_id))
-        }),
-      )
-      .collect();
     assert_eq!(
-      primary_ids.len(),
-      hot_ids.len(),
-      "each active Actor has exactly one primary"
+      active_ids, contract_ids,
+      "every active Actor owns admitted Contract geometry"
     );
     assert_eq!(
-      primary_ids
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>(),
-      hot_ids
+      active_ids, process_ids,
+      "every active Actor owns one generation-bound process"
+    );
+    assert!(run_ids.is_subset(&active_ids));
+    assert_eq!(Actors::active_actor_count() as usize, active_ids.len());
+    assert_eq!(Actors::actor_identity_count() as usize, identity_ids.len());
+    assert!(
+      ActorControlLocators::<Test>::iter_keys().next().is_none(),
+      "canonical publication never recreates a legacy control locator"
     );
     let run_payload_ids: std::collections::BTreeSet<_> =
       crate::ActorRunPayloads::<Test>::iter_keys().collect();
     assert_eq!(
       run_ids, run_payload_ids,
-      "Run head and payload inventories agree"
+      "canonical Run head and payload tiers agree"
     );
 
-    let mut live_tickets = std::collections::BTreeSet::new();
-    let mut live_wakeups = std::collections::BTreeSet::new();
-    for actor_id in &hot_ids {
-      let hot = Actors::actor_hot(*actor_id).expect("primary hot state resolves");
+    for actor_id in &active_ids {
+      let crate::ActorSemanticState::Active(record) = semantic_records
+        .get(actor_id)
+        .expect("active semantic record")
+      else {
+        unreachable!("active partition")
+      };
+      assert!(
+        Actors::load_canonical_actor_semantic_state(crate::ActorRef {
+          actor_id: *actor_id,
+          generation: record.generation,
+        })
+        .is_ok(),
+        "active Actor {actor_id} owns coherent canonical process/residence authority"
+      );
+      let hot = Actors::actor_hot(*actor_id).expect("active hot state resolves");
+      assert_eq!(hot, record.hot, "Hot projection matches its semantic owner");
       let identity = Actors::actor_identity(*actor_id).expect("primary identity resolves");
       assert_eq!(
         Actors::sovereign_index(&identity.sovereign_account),
@@ -1616,13 +1532,6 @@ mod proptest_actor {
       assert_eq!(
         matches!(hot.cycle_state, CycleState::Running | CycleState::Suspended),
         run_ids.contains(actor_id)
-      );
-      let funding = ActorFunding::<Test>::get(actor_id).expect("funding key resolves");
-      assert!(
-        funding
-          .funding_accumulated
-          .keys()
-          .all(|asset| funding.funding_tracked_assets.contains(asset))
       );
       if let Some(run_state) = ActorRunStateStore::<Test>::get(*actor_id) {
         let contract = Actors::load_actor_contract(*actor_id).expect("contract key resolves");
@@ -1642,75 +1551,7 @@ mod proptest_actor {
           CycleState::Idle => panic!("Idle Actor cannot retain run state"),
         }
       }
-      if let Some(ticket) = hot.queue_ticket {
-        assert!(
-          live_tickets.insert(ticket),
-          "duplicate live queue ticket {ticket}"
-        );
-        let resolves = crate::ActorReadyFrameChunks::<Test>::get(ticket / 32)
-          .and_then(|page| page.get((ticket % 32) as usize).cloned().flatten())
-          .is_some_and(|cell| cell.actor_id == *actor_id);
-        assert!(resolves, "live ticket resolves inside the canonical FIFO");
-      }
-      if let Some(pointer) = hot.wakeup_pointer {
-        assert!(
-          live_wakeups.insert((pointer.block, pointer.page_id, pointer.slot)),
-          "duplicate live wakeup pointer"
-        );
-        let page = crate::ActorWaitingFrameChunks::<Test>::get((pointer.block, pointer.page_id))
-          .expect("live wakeup page exists");
-        assert_eq!(
-          page
-            .entries
-            .get(pointer.slot as usize)
-            .and_then(Option::as_ref)
-            .map(|entry| match entry {
-              crate::ActorWaitingEntry::Primary(cell) => cell.actor_id,
-              crate::ActorWaitingEntry::Reference(reference) => {
-                assert_eq!(
-                  reference.admission_identity,
-                  Actors::actor_control_cell(*actor_id)
-                    .expect("primary admission")
-                    .1
-                    .admission
-                    .admission_identity
-                );
-                reference.actor_id
-              }
-            }),
-          Some(*actor_id)
-        );
-      }
-      if let Some(pointer) = hot.trigger_wakeup_pointer {
-        let key = crate::WakeupKey::Tick(pointer.tick);
-        assert!(
-          live_wakeups.insert((key, pointer.page_id, pointer.slot)),
-          "duplicate live Trigger wakeup pointer"
-        );
-        let page = crate::ActorWaitingFrameChunks::<Test>::get((key, pointer.page_id))
-          .expect("live Trigger wakeup page exists");
-        assert_eq!(
-          page
-            .entries
-            .get(pointer.slot as usize)
-            .and_then(Option::as_ref)
-            .map(|entry| match entry {
-              crate::ActorWaitingEntry::Primary(cell) => cell.actor_id,
-              crate::ActorWaitingEntry::Reference(reference) => {
-                assert_eq!(
-                  reference.admission_identity,
-                  Actors::actor_control_cell(*actor_id)
-                    .expect("primary admission")
-                    .1
-                    .admission
-                    .admission_identity
-                );
-                reference.actor_id
-              }
-            }),
-          Some(*actor_id)
-        );
-      }
+      assert!(hot.queue_ticket.is_none() && hot.wakeup_pointer.is_none());
     }
     for actor_id in &dormant_ids {
       let identity = ActorIdentities::<Test>::get(actor_id).expect("dormant key resolves");
@@ -1733,7 +1574,7 @@ mod proptest_actor {
           assert_eq!(Actors::sovereign_index(sovereign), None);
         }
       } else {
-        assert!(hot_ids.contains(&actor_id) || dormant_ids.contains(&actor_id));
+        assert!(active_ids.contains(&actor_id) || dormant_ids.contains(&actor_id));
       }
     }
     assert_eq!(Actors::owner_slot_bitmap(ALICE), [0; 32]);
@@ -1890,13 +1731,13 @@ mod proptest_actor {
             );
             actor_ids.push((actor_id, owner));
           }
-          let after_create = ActorControlLocators::<Test>::iter_keys().count();
+          let after_create = Actors::active_actor_count() as usize;
           let close_count = closes.min(creates);
           for i in 0..close_count {
             let (actor_id, owner) = actor_ids[i as usize];
             assert_ok!(Actors::close_actor(RuntimeOrigin::signed(owner), actor_id));
           }
-          let after_close = ActorControlLocators::<Test>::iter_keys().count();
+          let after_close = Actors::active_actor_count() as usize;
           (after_create, after_close, (creates - close_count) as usize)
         });
       prop_assert_eq!(active_after_create, creates as usize);
@@ -1907,73 +1748,6 @@ mod proptest_actor {
         expected_after_close,
         active_after_close
       );
-    }
-  }
-
-  proptest! {
-    #![proptest_config(ProptestConfig {
-      cases: 32,
-      rng_seed: proptest::test_runner::RngSeed::Fixed(0xDE05_0731),
-      ..ProptestConfig::default()
-    })]
-
-    #[test]
-    fn seeded_scheduler_corruption_transitions_preserve_exact_pre_state(
-      corruption in 0u8..5,
-    ) {
-      new_test_ext().execute_with(|| {
-        frame_system::Pallet::<Test>::set_block_number(1);
-        let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-        let rejected = match corruption {
-          0 => {
-            assert!(super::schedule_latched_service_wakeup(actor_id, 10));
-            crate::ActorWaitingCursorIndices::<Test>::remove(crate::WakeupKey::Block(10));
-            let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-            let rejected = Actors::try_wakeup_substrate_schedule_inner(actor_id, 20).is_err();
-            prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-            rejected
-          }
-          1 => {
-            assert!(super::schedule_latched_service_wakeup(actor_id, 10));
-            super::mutate_primary_control_cell(actor_id, |cell| {
-              cell.hot.wakeup_pointer
-                .as_mut().expect("pointer").slot = 7;
-            });
-            let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-            let rejected = Actors::try_wakeup_substrate_schedule_inner(actor_id, 20).is_err();
-            prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-            rejected
-          }
-          2 => {
-            assert!(super::schedule_latched_service_wakeup(actor_id, 10));
-            crate::ActorWaitingOccupancies::<Test>::insert(crate::WakeupKey::Block(10), 0);
-            let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-            let rejected = Actors::try_wakeup_substrate_schedule_inner(actor_id, 20).is_err();
-            prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-            rejected
-          }
-          3 => {
-            assert!(super::enqueue_latched_actor(actor_id));
-            assert!(Actors::paged_invalidate(actor_id).is_some());
-            ActorReadyOccupancy::<Test>::put(2);
-            let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-            let rejected = Actors::paged_drain_tombstones(Actors::next_queue_ticket(), 1).is_err();
-            prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-            rejected
-          }
-          _ => {
-            assert!(super::enqueue_latched_actor(actor_id));
-            assert!(Actors::paged_invalidate(actor_id).is_some());
-            crate::ActorReadyFrameChunks::<Test>::remove(0);
-            let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-            let rejected = Actors::paged_drain_tombstones(Actors::next_queue_ticket(), 1).is_err();
-            prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-            rejected
-          }
-        };
-        prop_assert!(rejected);
-        Ok(())
-      })?;
     }
   }
 
@@ -2036,13 +1810,27 @@ mod proptest_actor {
         for (index, operation) in operations.iter().enumerate() {
           let block = (index as u64).saturating_add(2);
           frame_system::Pallet::<Test>::set_block_number(block);
-          let before_hot: std::collections::BTreeMap<_, _> = ActorControlLocators::<Test>::iter_keys()
-            .map(|id| (id, Actors::actor_hot(id).expect("active primary"))).collect();
+          let is_active = || {
+            matches!(
+              crate::ActorSemanticStates::<Test>::get(system_id),
+              Some(crate::ActorSemanticState::Active(_))
+            )
+          };
+          let before_hot: std::collections::BTreeMap<_, _> =
+            crate::ActorSemanticStates::<Test>::iter()
+              .filter_map(|(actor_id, state)| {
+                matches!(state, crate::ActorSemanticState::Active(_)).then_some(actor_id)
+              })
+              .map(|id| (id, Actors::actor_hot(id).expect("active hot state")))
+              .collect();
           let before_identities: std::collections::BTreeMap<_, _> =
-            ActorIdentities::<Test>::iter().chain(ActorControlLocators::<Test>::iter_keys()
-              .map(|id| (id, Actors::actor_identity(id).expect("active identity")))).collect();
+            crate::ActorSemanticStates::<Test>::iter()
+              .filter_map(|(actor_id, state)| {
+                matches!(state, crate::ActorSemanticState::Active(_)).then_some(actor_id)
+              })
+              .map(|id| (id, Actors::actor_identity(id).expect("active identity")))
+              .collect();
           let before_continuation = ActorRunStateStore::<Test>::get(system_id);
-          let before_funding = ActorFunding::<Test>::get(system_id);
           let before_system_balance = Balances::free_balance(system_sovereign);
           let before_bob_balance = Balances::free_balance(BOB);
           let before_event_count = frame_system::Pallet::<Test>::events().len();
@@ -2050,23 +1838,21 @@ mod proptest_actor {
           match operation {
             ModelOp::Create => {}
             ModelOp::Activate
-              if !closed
-                && ActorIdentities::<Test>::contains_key(system_id)
-                && !ActorControlLocators::<Test>::contains_key(system_id) => {
+              if !closed && ActorIdentities::<Test>::contains_key(system_id) && !is_active() => {
               let _ = Actors::activate_actor(
                 RuntimeOrigin::root(),
                 system_id,
                 system_contract(Trigger::manual()).expect("direct Actor Contract"),
               );
             }
-            ModelOp::Deactivate if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::Deactivate if !closed && is_active() => {
               let _ = Actors::deactivate_actor(RuntimeOrigin::root(), system_id);
             }
             ModelOp::Fund if !closed => {
               let recipient = Actors::actor_identity(system_id)
                 .map(|identity| identity.sovereign_account);
               if let Some(recipient) = recipient {
-                if ActorControlLocators::<Test>::contains_key(system_id) {
+                if is_active() {
                   let provenance = crate::FundingProvenance::Signed;
                   if Actors::preflight_funding_event(
                     system_id,
@@ -2100,7 +1886,7 @@ mod proptest_actor {
                 }
               }
             }
-            ModelOp::Signal if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::Signal if !closed && is_active() => {
               let schedule = Schedule {
                 trigger: Trigger::address_event(
                   SourceFilter::Any,
@@ -2136,17 +1922,17 @@ mod proptest_actor {
               }
             }
             ModelOp::ManualTrigger | ModelOp::Enqueue
-              if !closed && ActorControlLocators::<Test>::contains_key(system_id) =>
+              if !closed && is_active() =>
             {
               let _ = Actors::manual_trigger(RuntimeOrigin::root(), system_id);
             }
-            ModelOp::Pause if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::Pause if !closed && is_active() => {
               let _ = Actors::pause_actor(RuntimeOrigin::root(), system_id);
             }
-            ModelOp::Resume if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::Resume if !closed && is_active() => {
               let _ = Actors::resume_actor(RuntimeOrigin::root(), system_id);
             }
-            ModelOp::UpdateContract if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::UpdateContract if !closed && is_active() => {
               let _ = update_contract_partial!(
                 RuntimeOrigin::root(),
                 system_id,
@@ -2154,11 +1940,11 @@ mod proptest_actor {
                 crate::CompletionPolicy::Persistent,
               );
             }
-            ModelOp::Wakeup if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::Wakeup if !closed && is_active() => {
               let schedule = timer_schedule_pt(2);
               let _ = update_contract_partial!(RuntimeOrigin::root(), system_id, schedule, None);
             }
-            ModelOp::UpdateCrossing if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::UpdateCrossing if !closed && is_active() => {
               let schedule = Schedule {
                 trigger: Trigger::observation_crossing(
                   9,
@@ -2309,7 +2095,7 @@ mod proptest_actor {
             }), "unexpected control-event delta: {actor_event_delta:?}");
           }
           if !closed
-            && !ActorControlLocators::<Test>::contains_key(system_id)
+            && !is_active()
             && !ActorIdentities::<Test>::contains_key(system_id)
             && SystemSovereigns::<Test>::get(system_id) == Some(SystemSovereignState::Vacant)
           {
@@ -2327,15 +2113,11 @@ mod proptest_actor {
             } else {
               assert_eq!(Balances::free_balance(system_sovereign), before_system_balance);
               assert_eq!(Balances::free_balance(BOB), before_bob_balance);
-              assert_eq!(
-                ActorFunding::<Test>::get(system_id).as_ref().map(Encode::encode),
-                before_funding.as_ref().map(Encode::encode)
-              );
             }
           }
           if matches!(operation, ModelOp::Pause | ModelOp::Resume)
             && before_continuation.is_some()
-            && ActorControlLocators::<Test>::contains_key(system_id)
+            && is_active()
           {
             assert_eq!(
               after_continuation.as_ref().map(Encode::encode),
@@ -2701,9 +2483,7 @@ fn parity_target_step(case: StepParityCase) -> StepOf<Test> {
     ),
     StepParityStimulus::ResolutionSkipped => (
       None,
-      transfer(AmountResolution::PercentageOfCurrent(Perbill::from_parts(
-        1,
-      ))),
+      transfer(AmountResolution::Percent(Perbill::from_parts(1))),
     ),
     StepParityStimulus::FundingUnavailable => (None, transfer(AmountResolution::Fixed(10))),
     StepParityStimulus::SuccessfulTask => (None, transfer(AmountResolution::Fixed(5))),
@@ -2885,41 +2665,4 @@ mod market_tasks;
 mod observations;
 mod scheduling;
 mod storage_and_api;
-#[cfg(feature = "runtime-benchmarks")]
-mod waiting_integrity;
 mod wakeups;
-
-/// Change only the already-located canonical primary, including deliberate corruption.
-/// This fixture helper neither repairs topology nor relocates authority.
-fn mutate_primary_control_cell(
-  actor_id: ActorId,
-  mutate: impl FnOnce(&mut crate::ActorControlCellOf<Test>),
-) {
-  let (location, mut cell) =
-    Actors::actor_control_cell(actor_id).expect("canonical primary fixture");
-  mutate(&mut cell);
-  match location {
-    crate::ActorControlLocation::Unsignaled => {
-      crate::ActorUnsignaledControlCells::<Test>::insert(actor_id, cell);
-    }
-    crate::ActorControlLocation::Ready { ticket } => {
-      crate::ActorReadyFrameChunks::<Test>::mutate(ticket / 32, |page| {
-        *page
-          .as_mut()
-          .expect("Ready page fixture")
-          .get_mut((ticket % 32) as usize)
-          .expect("Ready slot fixture") = Some(cell);
-      });
-    }
-    crate::ActorControlLocation::Waiting { key, page, slot } => {
-      crate::ActorWaitingFrameChunks::<Test>::mutate((key, page), |page| {
-        *page
-          .as_mut()
-          .expect("Waiting page fixture")
-          .entries
-          .get_mut(usize::from(slot))
-          .expect("Waiting slot fixture") = Some(crate::ActorWaitingEntry::Primary(cell));
-      });
-    }
-  }
-}

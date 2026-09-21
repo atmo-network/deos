@@ -220,7 +220,6 @@ const generatedBounds = await format(
     `export const ACTORS_MAX_TEMPORAL_DELAY_TICKS = ${decodeUnsignedConstant(manifest, 'MaxTemporalDelayTicks', 8)};\n` +
     `export const ACTORS_MAX_RETRY_ATTEMPTS = ${decodeUnsignedConstant(manifest, 'MaxRetryAttempts', 4)};\n` +
     `export const ACTORS_MAX_OPENING_SNAPSHOT_ENTRIES = ${decodeUnsignedConstant(manifest, 'MaxOpeningSnapshotEntries', 4)};\n` +
-    `export const ACTORS_MAX_OPENING_PREDICATE_RESULTS = ${decodeUnsignedConstant(manifest, 'MaxOpeningPredicateResults', 4)};\n` +
     `export const ACTORS_MAX_PRECONDITION_CLAUSES = ${decodeUnsignedConstant(manifest, 'MaxPreconditionClauses', 4)};\n` +
     `export const ACTORS_MAX_PREDICATES_PER_CLAUSE = ${decodeUnsignedConstant(manifest, 'MaxPredicatesPerClause', 4)};\n` +
     `export const ACTORS_MAX_PREDICATES_PER_STEP = ${decodeUnsignedConstant(manifest, 'MaxPredicatesPerStep', 4)};\n` +

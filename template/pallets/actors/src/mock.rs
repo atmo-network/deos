@@ -166,9 +166,11 @@ thread_local! {
   static OBSERVATIONS: RefCell<
     alloc::collections::BTreeMap<u32, crate::ScalarObservationState<u64>>,
   > = RefCell::new(alloc::collections::BTreeMap::new());
+  static OBSERVATION_REVISION_RACE_SOURCE: RefCell<Option<u64>> = const { RefCell::new(None) };
   static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_DEX_FAILURE: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_ADD_LIQUIDITY_FAILURE: RefCell<bool> = RefCell::new(false);
+  static INVALID_LIQUIDITY_OUTCOME: RefCell<bool> = RefCell::new(false);
   static LAST_DEX_ACTORS_TYPE: RefCell<Option<ActorType>> = RefCell::new(None);
   static MAX_CONSECUTIVE_FAILURES: RefCell<u32> = RefCell::new(3);
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
@@ -252,9 +254,11 @@ pub fn reset_mock_adapters() {
   FAIL_TRANSFER_TO.with(|v| *v.borrow_mut() = None);
   ASSET_MINIMUM_BALANCE.with(|v| *v.borrow_mut() = 1);
   OBSERVATIONS.with(|values| values.borrow_mut().clear());
+  OBSERVATION_REVISION_RACE_SOURCE.with(|source| *source.borrow_mut() = None);
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
   TEMPORARY_DEX_FAILURE.with(|v| *v.borrow_mut() = false);
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = false);
+  INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow_mut() = false);
   LAST_DEX_ACTORS_TYPE.with(|value| *value.borrow_mut() = None);
   MAX_CONSECUTIVE_FAILURES.with(|v| *v.borrow_mut() = 3);
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
@@ -275,9 +279,16 @@ pub fn staking_share_balance_reads() -> u32 {
   STAKING_SHARE_BALANCE_READS.with(|reads| *reads.borrow())
 }
 
+pub fn race_observation_source_revision_once(source: u64) {
+  OBSERVATION_REVISION_RACE_SOURCE.with(|value| *value.borrow_mut() = Some(source));
+}
+
 pub struct MockObservationProvider;
 impl crate::ObservationProvider<u32, u64> for MockObservationProvider {
   fn current(feed: &u32) -> crate::CanonicalObservationState {
+    if let Some(source) = OBSERVATION_REVISION_RACE_SOURCE.with(|value| value.borrow_mut().take()) {
+      crate::DependencyRevisions::<Test>::mutate(source, |state| state.revision += 1);
+    }
     match Self::observe(feed, 0, u32::MAX) {
       crate::ScalarObservationState::Fresh { value, .. } => {
         #[cfg(feature = "runtime-benchmarks")]
@@ -548,6 +559,10 @@ pub fn set_temporary_add_liquidity_failure(value: bool) {
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = value);
 }
 
+pub fn set_invalid_liquidity_outcome(value: bool) {
+  INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow_mut() = value);
+}
+
 pub fn last_dex_actor_type() -> Option<ActorType> {
   LAST_DEX_ACTORS_TYPE.with(|value| *value.borrow())
 }
@@ -564,6 +579,7 @@ pub fn set_fail_staking_after_burn(value: bool) {
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = value);
 }
 
+#[cfg(feature = "runtime-benchmarks")]
 pub fn set_staking_share_asset_available(value: bool) {
   STAKING_SHARE_ASSET_AVAILABLE.with(|v| *v.borrow_mut() = value);
 }
@@ -769,6 +785,9 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
         "MinimumLpOutputNotMet",
       )));
     }
+    if INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow()) {
+      return Ok((amount_a.saturating_add(1), amount_b, lp_minted));
+    }
     Ok((amount_a, amount_b, lp_minted))
   }
 
@@ -791,6 +810,9 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
     }
     if half < min_amount_a || half < min_amount_b {
       return Err(DispatchError::Other("MinimumLiquidityOutputNotMet").into());
+    }
+    if INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow()) {
+      return Ok((min_amount_a.saturating_sub(1), half));
     }
     Ok((half, half))
   }
@@ -832,6 +854,9 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
         ),
       );
     });
+    if INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow()) {
+      return Ok((max_amount_a.saturating_add(1), amount));
+    }
     Ok((amount, amount))
   }
 }
@@ -1277,7 +1302,9 @@ pub struct TestBlockResourceBudget;
 impl Get<crate::BlockResourceBudget> for TestBlockResourceBudget {
   fn get() -> crate::BlockResourceBudget {
     crate::BlockResourceBudget::new(
-      Weight::from_parts(1_000_000_000_000, 5_000_000),
+      // Synthetic tests admit the fixed hook plus both mandatory deadline frontiers and one
+      // maximum canonical Step; production runtimes derive their own measured budget.
+      Weight::from_parts(1_000_000_000_000, 50_000_000),
       Weight::zero(),
     )
     .unwrap_or_else(|_| crate::BlockResourceBudget::fail_closed(Weight::zero()))
@@ -1332,10 +1359,21 @@ impl crate::adapters::SovereignAccountPolicy<AccountId> for MockSovereignAccount
 
 pub struct MockAdmissionCertificateAuthority;
 
+const ADMISSION_SEMANTICS_VERSION_KEY: &[u8] = b"mock-admission-semantics-version";
+
+#[cfg(feature = "runtime-benchmarks")]
+pub fn set_admission_semantics_version(version: u32) {
+  polkadot_sdk::sp_io::storage::set(ADMISSION_SEMANTICS_VERSION_KEY, &version.encode());
+}
+
 impl crate::AdmissionCertificateAuthorityProvider for MockAdmissionCertificateAuthority {
   fn current() -> Option<crate::AdmissionCertificateAuthority> {
+    let runtime_actor_semantics_version =
+      polkadot_sdk::sp_io::storage::get(ADMISSION_SEMANTICS_VERSION_KEY)
+        .and_then(|encoded| u32::decode(&mut &encoded[..]).ok())
+        .unwrap_or(1);
     Some(crate::AdmissionCertificateAuthority {
-      runtime_actor_semantics_version: 1,
+      runtime_actor_semantics_version,
       production_weight_identity:
         crate::AdmissionCertificateAuthority::compose_production_weight_identity([41; 32], [42; 32]),
       body_geometry_version: 1,
@@ -1373,9 +1411,7 @@ impl crate::StepControlWeightProvider<crate::StepOf<Test>> for MockStepControlWe
         .saturating_add(u64::from(context.cursor))
         .saturating_add(u64::from(context.opening_tail_chunks))
         .saturating_add(u64::from(context.predicate_evaluation_units))
-        .saturating_add(u64::from(context.opening_snapshot_entries))
-        .saturating_add(u64::from(context.opening_predicate_results))
-        .saturating_add(u64::from(context.funding_snapshot_entries)),
+        .saturating_add(u64::from(context.opening_snapshot_entries)),
       100_022u64.saturating_add(u64::from(context.steps_in_fragment)),
     ))
   }
@@ -1467,7 +1503,6 @@ impl pallet_deos_actors::Config for Test {
   type MaxContractSteps = ConstU32<12>;
   type MaxFundingTrackedAssets = ConstU32<10>;
   type MaxOpeningSnapshotEntries = ConstU32<24>;
-  type MaxOpeningPredicateResults = ConstU32<48>;
   type MaxPreconditionClauses = ConstU32<4>;
   type MaxPredicatesPerClause = ConstU32<4>;
   type MaxPredicatesPerStep = ConstU32<4>;

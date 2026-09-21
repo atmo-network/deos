@@ -256,11 +256,10 @@ impl pallet_deos_actors::ActorEligibilityApi<Block, primitives::OracleFeedId, Bl
             Actors::actor_eligibility(actor_id)
         }
 
-        fn materialization_faults() -> pallet_deos_actors::MaterializationFaults<primitives::OracleFeedId, BlockNumber> {
+        fn materialization_faults() -> pallet_deos_actors::MaterializationFaults<primitives::OracleFeedId> {
             pallet_deos_actors::MaterializationFaults {
                 crossing: Actors::crossing_worker_fault(),
                 fanout: Actors::observation_fanout_worker_fault(),
-                wakeup: Actors::wakeup_worker_fault(),
             }
         }
 

@@ -33,14 +33,7 @@ export type ActorAuthoringAsset =
 
 export type ActorAuthoringAmount =
   | { type: 'Fixed'; value: string }
-  | {
-      type:
-        | 'PercentageOfCurrent'
-        | 'PercentageAtOpening'
-        | 'PercentageOfLastFunding';
-      parts: number;
-    }
-  | { type: 'AllAvailable' };
+  | { type: 'Percent'; parts: number };
 
 export type ActorAuthoringObservationFeed = {
   assetIn: ActorAuthoringAsset;
@@ -171,10 +164,7 @@ export const ACTORS_AUTHORING_CONDITION_TYPES = [
   'ObservationNotEquals',
 ] as const satisfies readonly ActorAuthoringPredicate['type'][];
 
-export type ActorAuthoringTimedPredicate = {
-  timing: 'Opening' | 'Current';
-  predicate: ActorAuthoringPredicate;
-};
+export type ActorAuthoringTimedPredicate = ActorAuthoringPredicate;
 
 export type ActorAuthoringPrecondition = {
   clauses: ActorAuthoringTimedPredicate[][];
@@ -478,9 +468,7 @@ function validateAmount(
         });
       }
       return;
-    case 'PercentageOfCurrent':
-    case 'PercentageAtOpening':
-    case 'PercentageOfLastFunding':
+    case 'Percent':
       validatePerbill(amount.parts, `${path}.parts`, issues);
       if (amount.parts === 0) {
         issues.push({
@@ -488,8 +476,6 @@ function validateAmount(
           message: 'Percentage amount must be nonzero',
         });
       }
-      return;
-    case 'AllAvailable':
       return;
   }
 }
@@ -1036,16 +1022,10 @@ export function validateActorAuthoringContract(
           message: `A precondition clause supports at most ${limits.maxPredicatesPerClause} predicates`,
         });
       }
-      clause.forEach((timed, predicateIndex) => {
-        if (timed.timing !== 'Opening' && timed.timing !== 'Current') {
-          issues.push({
-            path: `${path}.precondition.clauses[${clauseIndex}][${predicateIndex}].timing`,
-            message: 'Predicate timing must be Opening or Current',
-          });
-        }
+      clause.forEach((predicate, predicateIndex) => {
         validatePredicate(
-          timed.predicate,
-          `${path}.precondition.clauses[${clauseIndex}][${predicateIndex}].predicate`,
+          predicate,
+          `${path}.precondition.clauses[${clauseIndex}][${predicateIndex}]`,
           issues,
         );
       });
@@ -1153,12 +1133,8 @@ function lowerAmount(amount: ActorAuthoringAmount) {
   switch (amount.type) {
     case 'Fixed':
       return runtimeVariant('Fixed', BigInt(amount.value));
-    case 'PercentageOfCurrent':
-    case 'PercentageAtOpening':
-    case 'PercentageOfLastFunding':
+    case 'Percent':
       return runtimeVariant(amount.type, amount.parts);
-    case 'AllAvailable':
-      return runtimeVariant('AllAvailable');
   }
 }
 
@@ -1420,10 +1396,7 @@ export function lowerActorAuthoringContract(
         step.precondition === null
           ? undefined
           : step.precondition.clauses.map((clause) =>
-              clause.map((timed) => ({
-                timing: runtimeVariant(timed.timing),
-                predicate: lowerPredicate(timed.predicate),
-              })),
+              clause.map(lowerPredicate),
             ),
       task: lowerTask(step.task),
       on_error:

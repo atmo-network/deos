@@ -1,0 +1,7 @@
+# block	expected_actor	action
+1	120	admit
+2	121	refuse_ref_time
+2	121	refuse_proof_size
+2	121	admit
+3	122	admit
+4	120	admit

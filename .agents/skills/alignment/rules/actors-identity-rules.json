@@ -15,7 +15,7 @@
       "scope": "active Actors code, clients, and non-normative documentation",
       "kind": "regex-any-case-insensitive",
       "patterns": [
-        "PercentageOfCurrentBalance",
+        "PercentBalance",
         "PercentageAtCycleStart",
         "funding[_ -]?batch",
         "User[ /-]+System FIFO lanes",

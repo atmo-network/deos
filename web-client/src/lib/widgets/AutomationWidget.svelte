@@ -71,7 +71,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
   const automationProvenance = fromClientBoundedProjection(
     true,
-    'automationWidget <- bounded Actors control locator/cell projection + Actors.ActorContractHead + Actors.ActorRunHead + Actors.ActorFunding + System.Account + ActorEligibilityApi',
+    'automationWidget <- bounded Actors control locator/cell projection + Actors.ActorContractHead + Actors.ActorRunHead + System.Account + ActorEligibilityApi',
   ).provenance;
 
   function syncViewport() {
@@ -624,18 +624,6 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                       : 'not queued'}
                     valueClass="text-(--mono-text)"
                   />
-                  <DetailRow
-                    label="Funding"
-                    value={actor.fundingAccumulated.length > 0
-                      ? actor.fundingAccumulated
-                          .map(
-                            ([asset, amount]) =>
-                              `${fmt(toFloat(amount))} ${asset}`,
-                          )
-                          .join(' · ')
-                      : 'none'}
-                    valueClass="text-(--mono-text)"
-                  />
                 </div>
               {:else}
                 <div class="grid gap-1 text-[10px] text-(--mono-muted)">
@@ -684,18 +672,6 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                     value={actor.queueTicket != null
                       ? `ticket #${actor.queueTicket}`
                       : 'not queued'}
-                    valueClass="text-(--mono-text)"
-                  />
-                  <DetailRow
-                    label="Funding"
-                    value={actor.fundingAccumulated.length > 0
-                      ? actor.fundingAccumulated
-                          .map(
-                            ([asset, amount]) =>
-                              `${fmt(toFloat(amount))} ${asset}`,
-                          )
-                          .join(' · ')
-                      : 'none'}
                     valueClass="text-(--mono-text)"
                   />
                   <DetailRow
@@ -851,7 +827,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
         <div class="grid gap-2">
           {#if draft.steps.length === 0}
             <Notice variant="muted">
-              Opening-only Contract: the Trigger completes a bounded lifecycle
+              Zero-Step Contract: the Trigger completes a bounded lifecycle
               without an Action.
             </Notice>
           {/if}

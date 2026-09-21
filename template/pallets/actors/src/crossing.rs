@@ -42,11 +42,10 @@ pub(crate) struct CrossingCohortSnapshot<FeedId, MaxCandidates: Get<u32>> {
   pub candidates: BoundedVec<CrossingCandidateAuthority<FeedId>, MaxCandidates>,
 }
 
-pub(crate) struct CrossingCohortPreflight<T: Config> {
+pub(crate) struct CrossingCohortPreflight {
   pub plan: CrossingWorkPlan,
   pub admitted_candidates: u32,
   pub placed_immediate_fifo: Option<bool>,
-  pub queue_candidates: Vec<(ActorId, ActorHotStateOf<T>)>,
 }
 
 /// `(tail_page, available_suffix_members)` granted after the bounded tail-page probe.
@@ -60,12 +59,10 @@ struct CrossingPlacedCohortAuthority<T: Config> {
     BoundedVec<CrossingCandidateAuthority<T::ObservationFeedId>, T::MaxCrossingActorsPerBlock>,
   crossings: BoundedVec<ObservationCrossing<T::ObservationFeedId>, T::MaxCrossingActorsPerBlock>,
   tail_refill: Option<CrossingCohortSnapshot<T::ObservationFeedId, T::CrossingPageSize>>,
-  queue_plan: crate::scheduler::QueueAppendPlan<T>,
 }
 
 impl<T: Config> CrossingPlacedCohortAuthority<T> {
   fn is_coherent(&self) -> bool {
-    let _queue_authority = &self.queue_plan;
     self.candidates.len() >= 2
       && self.candidates.len() == self.crossings.len()
       && self.cursor.revision == self.transition.revision
@@ -244,8 +241,7 @@ impl<T: Config> Pallet<T> {
           {
             return Err(invalid());
           }
-          let crate::LoadedActorStateOf::Active(actor) =
-            Self::load_frame_actor_state(member.actor_id)
+          let crate::LoadedActorStateOf::Active(actor) = Self::load_actor_state(member.actor_id)
           else {
             return Err(invalid());
           };
@@ -309,9 +305,13 @@ impl<T: Config> Pallet<T> {
     if actual_user_feed_counts != expected_user_feed_counts {
       return Err(invalid());
     }
-    let control_entries = Self::frame_control_entries().ok_or_else(&invalid)?;
-    for (actor_id, _, _) in control_entries {
-      let crate::LoadedActorStateOf::Active(state) = Self::load_frame_actor_state(actor_id) else {
+    for (actor_id, semantic_state) in
+      ActorSemanticStates::<T>::iter(/* deos-bypass: bounded-iter */)
+    {
+      let ActorSemanticState::Active(_) = semantic_state else {
+        continue;
+      };
+      let crate::LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
         return Err(invalid());
       };
       let hot = state.hot;
@@ -608,8 +608,16 @@ impl<T: Config> Pallet<T> {
     phase: CrossingPhase,
     admission_identity: [u8; 32],
   ) -> DispatchResult {
-    let locator =
+    let mut locator =
       CrossingMemberships::<T>::get(actor_id).ok_or(Error::<T>::CrossingIndexInvariant)?;
+    // A canonical Contract replacement rotates the generation-bound process identity, so the
+    // compiled Crossing membership and its locator must follow the authoritative semantic
+    // generation. Otherwise a later homogeneous cohort commit would mutate the stale generation
+    // and fail closed as `Stale`.
+    let generation = match ActorSemanticStates::<T>::get(actor_id) {
+      Some(ActorSemanticState::Active(record)) => record.generation,
+      _ => locator.generation,
+    };
     let counterpart_threshold = match phase {
       CrossingPhase::Armed => crossing.rearm_threshold,
       CrossingPhase::WaitingForRearm => crossing.threshold,
@@ -628,9 +636,13 @@ impl<T: Config> Pallet<T> {
         );
         member.counterpart_threshold = counterpart_threshold;
         member.admission_identity = admission_identity;
+        member.generation = generation;
         Ok(())
       },
-    )
+    )?;
+    locator.generation = generation;
+    CrossingMemberships::<T>::insert(actor_id, locator);
+    Ok(())
   }
 
   fn remove_crossing_member(
@@ -783,40 +795,59 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  fn move_crossing_membership_with_authority(
-    actor_id: ActorId,
+  fn move_crossing_membership_with_canonical_authority(
+    actor: ActorRef,
     crossing: ObservationCrossing<T::ObservationFeedId>,
     next_phase: CrossingPhase,
     locator: CrossingMembershipLocator<T::ObservationFeedId>,
+    state: &mut ActiveActorStateOf<T>,
   ) -> DispatchResult {
-    let (identity, _, admission) =
-      Self::load_control_authority_with_authority(actor_id).ok_or(Error::<T>::ActorInvariant)?;
+    ensure!(
+      actor.generation == locator.generation,
+      Error::<T>::ActorInvariant
+    );
+    let admission =
+      Self::build_admission_certificate(&state.contract).ok_or(Error::<T>::ActorInvariant)?;
+    let expected = ActorSemanticState::Active(ActorSemanticRecord {
+      generation: actor.generation,
+      identity: state.identity.clone(),
+      hot: state.hot.clone(),
+      admission: admission.clone(),
+    });
     Self::move_crossing_membership_index_with_authority(
-      actor_id,
+      actor.actor_id,
       crossing,
       next_phase,
       locator,
-      identity.actor_class.actor_type(),
+      state.identity.actor_class.actor_type(),
       admission.admission_identity,
     )?;
-    Self::try_mutate_control_hot_with_authority(
-      actor_id,
-      Error::<T>::ActorInvariant,
-      |hot| -> DispatchResult {
-        let TriggerRuntimeState::ObservationCrossing {
-          installed_at_revision,
-          ..
-        } = hot.trigger_runtime_state
-        else {
-          return Err(Error::<T>::ActorInvariant.into());
-        };
-        hot.trigger_runtime_state = TriggerRuntimeState::ObservationCrossing {
-          phase: next_phase,
-          installed_at_revision,
-        };
-        Ok(())
+    let TriggerRuntimeState::ObservationCrossing {
+      installed_at_revision,
+      ..
+    } = state.hot.trigger_runtime_state
+    else {
+      return Err(Error::<T>::ActorInvariant.into());
+    };
+    state.hot.trigger_runtime_state = TriggerRuntimeState::ObservationCrossing {
+      phase: next_phase,
+      installed_at_revision,
+    };
+    let replacement = ActorSemanticState::Active(ActorSemanticRecord {
+      generation: actor.generation,
+      identity: state.identity.clone(),
+      hot: state.hot.clone(),
+      admission,
+    });
+    Self::mutate_actor_semantic_state(
+      actor.actor_id,
+      ActorSemanticMutation::Replace {
+        expected,
+        replacement,
       },
     )
+    .map(|_| ())
+    .map_err(|_| Error::<T>::ActorInvariant.into())
   }
 
   fn move_crossing_membership_index_with_authority(
@@ -884,8 +915,8 @@ impl<T: Config> Pallet<T> {
     next_phase: CrossingPhase,
     locator: CrossingMembershipLocator<T::ObservationFeedId>,
   ) -> Result<bool, DispatchError> {
-    let original_hot = Self::load_frame_control_authority(actor_id)
-      .map(|(_, _, hot, _)| hot)
+    let original_hot = Self::load_control_authority_with_authority(actor_id)
+      .map(|(_, hot, _)| hot)
       .ok_or(Error::<T>::ActorInvariant)?;
     let (expected_key, _) = Self::crossing_obligation(&crossing, next_phase);
     polkadot_sdk::frame_support::storage::with_transaction(|| {
@@ -894,8 +925,8 @@ impl<T: Config> Pallet<T> {
       {
         return TransactionOutcome::Rollback(Err(error));
       }
-      let preserved = Self::load_frame_control_authority(actor_id)
-        .is_some_and(|(_, _, hot, _)| hot == original_hot)
+      let preserved = Self::load_control_authority_with_authority(actor_id)
+        .is_some_and(|(_, hot, _)| hot == original_hot)
         && CrossingMemberships::<T>::get(actor_id).is_some_and(|moved| moved.key == expected_key);
       TransactionOutcome::Rollback(Ok(preserved))
     })
@@ -934,11 +965,11 @@ impl<T: Config> Pallet<T> {
     tail_crossing: ObservationCrossing<T::ObservationFeedId>,
     first_locator: CrossingMembershipLocator<T::ObservationFeedId>,
   ) -> Result<bool, DispatchError> {
-    let first_hot = Self::load_frame_control_authority(first)
-      .map(|(_, _, hot, _)| hot)
+    let first_hot = Self::load_control_authority_with_authority(first)
+      .map(|(_, hot, _)| hot)
       .ok_or(Error::<T>::ActorInvariant)?;
-    let tail_hot = Self::load_frame_control_authority(tail)
-      .map(|(_, _, hot, _)| hot)
+    let tail_hot = Self::load_control_authority_with_authority(tail)
+      .map(|(_, hot, _)| hot)
       .ok_or(Error::<T>::ActorInvariant)?;
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       if let Err(error) = Self::move_crossing_membership_fixture_without_hot(
@@ -963,13 +994,17 @@ impl<T: Config> Pallet<T> {
       let split = CrossingMemberships::<T>::get(first)
         .zip(CrossingMemberships::<T>::get(tail))
         .is_some_and(|(first_moved, tail_moved)| first_moved.key != tail_moved.key)
-        && Self::load_frame_control_authority(first).is_some_and(|(_, _, hot, _)| hot == first_hot)
-        && Self::load_frame_control_authority(tail).is_some_and(|(_, _, hot, _)| hot == tail_hot);
+        && Self::load_control_authority_with_authority(first)
+          .is_some_and(|(_, hot, _)| hot == first_hot)
+        && Self::load_control_authority_with_authority(tail)
+          .is_some_and(|(_, hot, _)| hot == tail_hot);
       TransactionOutcome::Rollback(Ok(split))
     })
   }
 
   fn commit_placed_pair_authority(authority: CrossingPlacedCohortAuthority<T>) -> DispatchResult {
+    use crate::weights::WeightInfo as _;
+
     ensure!(
       authority.candidates.len() == 2,
       Error::<T>::CrossingIndexInvariant
@@ -978,11 +1013,20 @@ impl<T: Config> Pallet<T> {
     let tail = authority.candidates[1];
     let first_crossing = authority.crossings[0].clone();
     let tail_crossing = authority.crossings[1].clone();
-    Self::move_crossing_membership_with_authority(
-      first.member.actor_id,
+    let LoadedActorStateOf::Active(mut first_loaded) =
+      Self::load_actor_state(first.member.actor_id)
+    else {
+      return Err(Error::<T>::ActorInvariant.into());
+    };
+    Self::move_crossing_membership_with_canonical_authority(
+      ActorRef {
+        actor_id: first.member.actor_id,
+        generation: first.member.generation,
+      },
       first_crossing,
       CrossingPhase::WaitingForRearm,
       first.locator,
+      &mut first_loaded,
     )?;
     let derived_tail = CrossingMemberships::<T>::get(tail.member.actor_id)
       .ok_or(Error::<T>::CrossingIndexInvariant)?;
@@ -993,13 +1037,44 @@ impl<T: Config> Pallet<T> {
         && derived_tail.generation == tail.member.generation,
       Error::<T>::CrossingIndexInvariant
     );
-    Self::move_crossing_membership_with_authority(
-      tail.member.actor_id,
+    let LoadedActorStateOf::Active(mut tail_loaded) = Self::load_actor_state(tail.member.actor_id)
+    else {
+      return Err(Error::<T>::ActorInvariant.into());
+    };
+    Self::move_crossing_membership_with_canonical_authority(
+      ActorRef {
+        actor_id: tail.member.actor_id,
+        generation: tail.member.generation,
+      },
       tail_crossing,
       CrossingPhase::WaitingForRearm,
       derived_tail,
+      &mut tail_loaded,
     )?;
-    Self::commit_paged_enqueue(authority.queue_plan).map_err(|_| Error::<T>::ActorInvariant)?;
+    for (candidate, loaded) in [(first, first_loaded), (tail, tail_loaded)] {
+      let actor_type = loaded.identity.actor_class.actor_type();
+      let sovereign_account = loaded.identity.sovereign_account.clone();
+      let breakdown = Self::trigger_fee_for_weight(
+        actor_type,
+        TriggerFamily::ObservationCrossing,
+        T::WeightInfo::observation_crossing_trigger_occurrence(),
+      );
+      ensure!(
+        Self::commit_canonical_trigger_occurrence_with_authority(
+          ActorRef {
+            actor_id: candidate.member.actor_id,
+            generation: candidate.member.generation,
+          },
+          actor_type,
+          &sovereign_account,
+          breakdown,
+          loaded,
+          polkadot_sdk::frame_system::Pallet::<T>::block_number(),
+        )? == crate::scheduler::ActivationOutcome::Latched,
+        Error::<T>::ActorInvariant
+      );
+      IndexedTriggerDetectionDisabled::<T>::insert(candidate.member.actor_id, ());
+    }
     Ok(())
   }
 
@@ -1009,11 +1084,11 @@ impl<T: Config> Pallet<T> {
     tail: ActorId,
     first_locator: CrossingMembershipLocator<T::ObservationFeedId>,
   ) -> Result<bool, DispatchError> {
-    let mut first_hot = Self::load_frame_control_authority(first)
-      .map(|(_, _, hot, _)| hot)
+    let mut first_hot = Self::load_control_authority_with_authority(first)
+      .map(|(_, hot, _)| hot)
       .ok_or(Error::<T>::ActorInvariant)?;
-    let mut tail_hot = Self::load_frame_control_authority(tail)
-      .map(|(_, _, hot, _)| hot)
+    let mut tail_hot = Self::load_control_authority_with_authority(tail)
+      .map(|(_, hot, _)| hot)
       .ok_or(Error::<T>::ActorInvariant)?;
     for hot in [&mut first_hot, &mut tail_hot] {
       let TriggerRuntimeState::ObservationCrossing {
@@ -1080,17 +1155,16 @@ impl<T: Config> Pallet<T> {
           },
         },
       ],
-      alloc::vec![(first, first_hot), (tail, tail_hot)],
     )?;
-    Self::test_reset_queue_append_commits();
+    let _ = (&first_hot, &tail_hot);
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       if let Err(error) = Self::commit_placed_pair_authority(authority) {
         return TransactionOutcome::Rollback(Err(error));
       }
       let committed = [first, tail].into_iter().all(|actor_id| {
-        Self::load_frame_control_authority(actor_id).is_some_and(|(_, _, hot, _)| {
+        Self::load_control_authority_with_authority(actor_id).is_some_and(|(_, hot, _)| {
           hot.pending_signal
-            && hot.queue_ticket.is_some()
+            && IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id)
             && matches!(
               hot.trigger_runtime_state,
               TriggerRuntimeState::ObservationCrossing {
@@ -1099,7 +1173,7 @@ impl<T: Config> Pallet<T> {
               }
             )
         })
-      }) && Self::test_queue_append_commits() == 1;
+      });
       TransactionOutcome::Rollback(Ok(committed))
     })
   }
@@ -1301,7 +1375,7 @@ impl<T: Config> Pallet<T> {
     contract: ActorContractOf<T>,
     _transition: CrossingTransitionObligation,
   ) -> Result<(CrossingWorkPlan, bool, Option<ActorHotStateOf<T>>), DispatchError> {
-    let mut loaded = match Self::load_actor_state_with_authority(actor_id) {
+    let loaded = match Self::load_actor_state(actor_id) {
       LoadedActorStateOf::Active(state) => state,
       _ => return Err(Error::<T>::ActorInvariant.into()),
     };
@@ -1309,36 +1383,21 @@ impl<T: Config> Pallet<T> {
       loaded.hot == hot && loaded.contract == contract,
       Error::<T>::ActorInvariant
     );
-    let TriggerRuntimeState::ObservationCrossing {
-      installed_at_revision,
-      ..
-    } = loaded.hot.trigger_runtime_state
-    else {
-      return Err(Error::<T>::ActorInvariant.into());
-    };
-    loaded.hot.trigger_runtime_state = TriggerRuntimeState::ObservationCrossing {
-      phase: CrossingPhase::WaitingForRearm,
-      installed_at_revision,
-    };
-    let activation = Self::preflight_activation_loaded(actor_id, loaded)
-      .map_err(|_| Error::<T>::ActorInvariant)?;
-    if activation.terminal_reason.is_some() || ActorReadyTail::<T>::get() == u64::MAX {
-      Ok((CrossingWorkPlan::FireCohortClosed, false, None))
-    } else if activation.already_pending {
-      Ok((CrossingWorkPlan::FireCohortCoalesced, false, None))
-    } else {
-      let immediate_fifo = matches!(
-        activation.action,
-        crate::scheduler::ActivationAction::PrimeSchedule(Ok(
-          crate::scheduler::PrimeSchedulePlan::Enqueue
-        ))
-      );
-      let queue_hot = immediate_fifo.then_some(activation.prospective_hot);
-      Ok((
-        CrossingWorkPlan::FireCohortPlaced,
-        immediate_fifo,
-        queue_hot,
-      ))
+    let process = ActorProcesses::<T>::get(actor_id).ok_or(Error::<T>::ActorInvariant)?;
+    let plan = plan_canonical_occurrence(
+      loaded.hot.cycle_state,
+      loaded.hot.pending_signal,
+      process,
+      polkadot_sdk::frame_system::Pallet::<T>::block_number(),
+    )
+    .map_err(|_| Error::<T>::ActorInvariant)?;
+    match plan.map(|plan| plan.publication) {
+      Some(CanonicalOccurrencePublication::PublishPending { .. }) => {
+        Ok((CrossingWorkPlan::FireCohortPlaced, true, None))
+      }
+      Some(CanonicalOccurrencePublication::PreserveResidence) | None => {
+        Ok((CrossingWorkPlan::FireCohortCoalesced, false, None))
+      }
     }
   }
 
@@ -1447,28 +1506,12 @@ impl<T: Config> Pallet<T> {
     if !fire_classification.resolves_fire() {
       return Ok(Some((CrossingWorkPlan::FireCohortPending, false, None)));
     }
-    let classification = Self::classify_observation_activation_compact(&state)
-      .map_err(|_| Error::<T>::ActorInvariant)?;
-    if classification.terminal_reason.is_some() || ActorReadyTail::<T>::get() == u64::MAX {
-      return Ok(Some((CrossingWorkPlan::FireCohortClosed, false, None)));
-    }
-    if state.hot.pending_signal {
-      return Ok(Some((CrossingWorkPlan::FireCohortCoalesced, false, None)));
-    }
-    if classification.execution_phase != crate::ActorExecutionPhase::Ready {
-      return Ok(None);
-    }
-    let mut queue_hot = state.hot;
-    queue_hot.pending_signal = true;
-    queue_hot.trigger_runtime_state = TriggerRuntimeState::ObservationCrossing {
-      phase: CrossingPhase::WaitingForRearm,
-      installed_at_revision,
+    let LoadedActorStateOf::Active(loaded) = Self::load_actor_state(member.actor_id) else {
+      return Err(Error::<T>::ActorInvariant.into());
     };
-    Ok(Some((
-      CrossingWorkPlan::FireCohortPlaced,
-      true,
-      Some(queue_hot),
-    )))
+    ensure!(loaded.hot == state.hot, Error::<T>::ActorInvariant);
+    Self::classify_fire_activation(member.actor_id, state.hot, loaded.contract, transition)
+      .map(Some)
   }
 
   pub(crate) fn preflight_crossing_cohort(
@@ -1476,13 +1519,12 @@ impl<T: Config> Pallet<T> {
     transition: CrossingTransitionObligation,
     fire_classification: CrossingFireClassification,
     expected_plan: Option<CrossingWorkPlan>,
-  ) -> Result<CrossingCohortPreflight<T>, DispatchError> {
+  ) -> Result<CrossingCohortPreflight, DispatchError> {
     let mut plan = expected_plan;
     let mut placed_immediate_fifo = None;
-    let mut queue_candidates = Vec::new();
     let mut admitted_candidates = 0u32;
     for authority in snapshot.candidates.iter(/* deos-bypass: bounded-iter */) {
-      let (candidate_immediate_fifo, queue_hot, truncate_after_candidate) = {
+      let (candidate_immediate_fifo, _queue_hot, truncate_after_candidate) = {
         let compact =
           Self::classify_crossing_idle_candidate(authority, transition, fire_classification)?;
         if compact.is_none() && admitted_candidates > 0 {
@@ -1508,9 +1550,6 @@ impl<T: Config> Pallet<T> {
           break;
         }
         placed_immediate_fifo = Some(candidate_immediate_fifo);
-        if let Some(hot) = queue_hot {
-          queue_candidates.push((authority.member.actor_id, hot));
-        }
       }
       admitted_candidates = admitted_candidates
         .checked_add(1)
@@ -1523,7 +1562,6 @@ impl<T: Config> Pallet<T> {
       plan: plan.ok_or(Error::<T>::CrossingIndexInvariant)?,
       admitted_candidates,
       placed_immediate_fifo,
-      queue_candidates,
     })
   }
 
@@ -1532,12 +1570,8 @@ impl<T: Config> Pallet<T> {
     transition: CrossingTransitionObligation,
     cursor: CrossingRangeCursor,
     candidates: Vec<CrossingCandidateAuthority<T::ObservationFeedId>>,
-    queue_candidates: Vec<(ActorId, ActorHotStateOf<T>)>,
   ) -> Result<CrossingPlacedCohortAuthority<T>, DispatchError> {
-    ensure!(
-      candidates.len() >= 2 && queue_candidates.len() == candidates.len(),
-      Error::<T>::CrossingIndexInvariant
-    );
+    ensure!(candidates.len() >= 2, Error::<T>::CrossingIndexInvariant);
     let candidates: BoundedVec<_, T::MaxCrossingActorsPerBlock> = candidates
       .try_into()
       .map_err(|_| Error::<T>::CrossingIndexInvariant)?;
@@ -1556,8 +1590,6 @@ impl<T: Config> Pallet<T> {
         .try_push(crossing)
         .map_err(|_| Error::<T>::CrossingIndexInvariant)?;
     }
-    let queue_plan = Self::preflight_paged_enqueue_cohort_with_authority(queue_candidates)
-      .map_err(|_| Error::<T>::CrossingIndexInvariant)?;
     let authority = CrossingPlacedCohortAuthority {
       feed,
       transition,
@@ -1565,7 +1597,6 @@ impl<T: Config> Pallet<T> {
       candidates,
       crossings,
       tail_refill: None,
-      queue_plan,
     };
     ensure!(authority.is_coherent(), Error::<T>::CrossingIndexInvariant);
     Ok(authority)
@@ -1633,34 +1664,57 @@ impl<T: Config> Pallet<T> {
             generation: candidate.member.generation,
           },
         );
-        Self::try_mutate_control_hot_with_authority(
+        let LoadedActorStateOf::Active(mut loaded) =
+          Self::load_actor_state(candidate.member.actor_id)
+        else {
+          return Err(Error::<T>::ActorInvariant.into());
+        };
+        let admission =
+          Self::build_admission_certificate(&loaded.contract).ok_or(Error::<T>::ActorInvariant)?;
+        let expected = ActorSemanticState::Active(ActorSemanticRecord {
+          generation: candidate.member.generation,
+          identity: loaded.identity.clone(),
+          hot: loaded.hot.clone(),
+          admission: admission.clone(),
+        });
+        let TriggerRuntimeState::ObservationCrossing {
+          installed_at_revision,
+          ..
+        } = loaded.hot.trigger_runtime_state
+        else {
+          return Err(Error::<T>::ActorInvariant.into());
+        };
+        loaded.hot.trigger_runtime_state = TriggerRuntimeState::ObservationCrossing {
+          phase: CrossingPhase::WaitingForRearm,
+          installed_at_revision,
+        };
+        let replacement = ActorSemanticState::Active(ActorSemanticRecord {
+          generation: candidate.member.generation,
+          identity: loaded.identity,
+          hot: loaded.hot,
+          admission,
+        });
+        Self::mutate_actor_semantic_state(
           candidate.member.actor_id,
-          Error::<T>::ActorInvariant,
-          |hot| -> DispatchResult {
-            let TriggerRuntimeState::ObservationCrossing {
-              installed_at_revision,
-              ..
-            } = hot.trigger_runtime_state
-            else {
-              return Err(Error::<T>::ActorInvariant.into());
-            };
-            hot.trigger_runtime_state = TriggerRuntimeState::ObservationCrossing {
-              phase: CrossingPhase::WaitingForRearm,
-              installed_at_revision,
-            };
-            Ok(())
+          ActorSemanticMutation::Replace {
+            expected,
+            replacement,
           },
-        )?;
+        )
+        .map_err(|_| Error::<T>::ActorInvariant)?;
         state.member_count = state
           .member_count
           .checked_add(1)
           .ok_or(Error::<T>::CrossingIndexCapacityExceeded)?;
         user_count = user_count.saturating_add(u32::from(matches!(
-          Self::load_control_authority_with_authority(candidate.member.actor_id,)
-            .ok_or(Error::<T>::ActorInvariant)?
-            .0
-            .actor_class,
-          ActorClass::User { .. }
+          Self::load_actor_state(candidate.member.actor_id),
+          LoadedActorStateOf::Active(ActiveActorState {
+            identity: ActorIdentity {
+              actor_class: ActorClass::User { .. },
+              ..
+            },
+            ..
+          })
         )));
         processed[index] = true;
       }
@@ -1690,6 +1744,7 @@ impl<T: Config> Pallet<T> {
   fn commit_non_tail_placed_cohort_authority(
     mut authority: CrossingPlacedCohortAuthority<T>,
   ) -> DispatchResult {
+    use crate::weights::WeightInfo as _;
     let tail_refill = authority
       .tail_refill
       .take()
@@ -1733,15 +1788,12 @@ impl<T: Config> Pallet<T> {
       .candidates
       .iter(/* deos-bypass: bounded-iter */)
       .try_fold(0u32, |users, candidate| -> Result<u32, DispatchError> {
-        let is_user = matches!(
-          Self::load_control_authority_with_authority(
-            candidate.member.actor_id,
-          )
-          .ok_or(Error::<T>::ActorInvariant)?
-          .0
-          .actor_class,
-          ActorClass::User { .. }
-        );
+        let LoadedActorStateOf::Active(loaded) =
+          Self::load_actor_state(candidate.member.actor_id)
+        else {
+          return Err(Error::<T>::ActorInvariant.into());
+        };
+        let is_user = matches!(loaded.identity.actor_class, ActorClass::User { .. });
         Ok(users.saturating_add(u32::from(is_user)))
       })?;
     CrossingUserFeedMembershipCount::<T>::try_mutate(source.key.feed, |users| -> DispatchResult {
@@ -1751,13 +1803,42 @@ impl<T: Config> Pallet<T> {
       Ok(())
     })?;
     Self::insert_crossing_destination_cohort(&authority.candidates, &authority.crossings)?;
-    Self::commit_paged_enqueue(authority.queue_plan).map_err(|_| Error::<T>::ActorInvariant)?;
+    for candidate in &authority.candidates {
+      let LoadedActorStateOf::Active(loaded) = Self::load_actor_state(candidate.member.actor_id)
+      else {
+        return Err(Error::<T>::ActorInvariant.into());
+      };
+      let actor_type = loaded.identity.actor_class.actor_type();
+      let sovereign_account = loaded.identity.sovereign_account.clone();
+      let breakdown = Self::trigger_fee_for_weight(
+        actor_type,
+        TriggerFamily::ObservationCrossing,
+        T::WeightInfo::observation_crossing_trigger_occurrence(),
+      );
+      ensure!(
+        Self::commit_canonical_trigger_occurrence_with_authority(
+          ActorRef {
+            actor_id: candidate.member.actor_id,
+            generation: candidate.member.generation,
+          },
+          actor_type,
+          &sovereign_account,
+          breakdown,
+          loaded,
+          polkadot_sdk::frame_system::Pallet::<T>::block_number(),
+        )? == crate::scheduler::ActivationOutcome::Latched,
+        Error::<T>::ActorInvariant
+      );
+      IndexedTriggerDetectionDisabled::<T>::insert(candidate.member.actor_id, ());
+    }
     Ok(())
   }
 
   fn commit_tail_page_placed_cohort_authority(
     authority: CrossingPlacedCohortAuthority<T>,
   ) -> DispatchResult {
+    use crate::weights::WeightInfo as _;
+
     let key = authority.candidates[0].locator.key;
     let state = CrossingLeafStates::<T>::get(key).ok_or(Error::<T>::CrossingIndexInvariant)?;
     let page = CrossingMemberPages::<T>::get(key, authority.cursor.page)
@@ -1795,11 +1876,20 @@ impl<T: Config> Pallet<T> {
         locator == candidate.locator,
         Error::<T>::CrossingIndexInvariant
       );
-      Self::move_crossing_membership_with_authority(
-        candidate.member.actor_id,
+      let LoadedActorStateOf::Active(mut loaded) =
+        Self::load_actor_state(candidate.member.actor_id)
+      else {
+        return Err(Error::<T>::ActorInvariant.into());
+      };
+      Self::move_crossing_membership_with_canonical_authority(
+        ActorRef {
+          actor_id: candidate.member.actor_id,
+          generation: candidate.member.generation,
+        },
         crossing.clone(),
         CrossingPhase::WaitingForRearm,
         locator,
+        &mut loaded,
       )?;
     }
     if !remainder.entries.is_empty() {
@@ -1820,7 +1910,34 @@ impl<T: Config> Pallet<T> {
       }
       CrossingMemberPages::<T>::insert(key, authority.cursor.page, remainder);
     }
-    Self::commit_paged_enqueue(authority.queue_plan).map_err(|_| Error::<T>::ActorInvariant)?;
+    for candidate in &authority.candidates {
+      let LoadedActorStateOf::Active(loaded) = Self::load_actor_state(candidate.member.actor_id)
+      else {
+        return Err(Error::<T>::ActorInvariant.into());
+      };
+      let actor_type = loaded.identity.actor_class.actor_type();
+      let sovereign_account = loaded.identity.sovereign_account.clone();
+      let breakdown = Self::trigger_fee_for_weight(
+        actor_type,
+        TriggerFamily::ObservationCrossing,
+        T::WeightInfo::observation_crossing_trigger_occurrence(),
+      );
+      ensure!(
+        Self::commit_canonical_trigger_occurrence_with_authority(
+          ActorRef {
+            actor_id: candidate.member.actor_id,
+            generation: candidate.member.generation,
+          },
+          actor_type,
+          &sovereign_account,
+          breakdown,
+          loaded,
+          polkadot_sdk::frame_system::Pallet::<T>::block_number(),
+        )? == crate::scheduler::ActivationOutcome::Latched,
+        Error::<T>::ActorInvariant
+      );
+      IndexedTriggerDetectionDisabled::<T>::insert(candidate.member.actor_id, ());
+    }
     Ok(())
   }
 
@@ -1830,6 +1947,11 @@ impl<T: Config> Pallet<T> {
     transition: CrossingTransitionObligation,
     fixture_fault: PlacedCohortFixtureFault,
   ) -> Result<usize, DispatchError> {
+    let candidate_actors = snapshot
+      .candidates
+      .iter(/* deos-bypass: bounded-iter */)
+      .map(|candidate| candidate.member.actor_id)
+      .collect::<Vec<_>>();
     let preflight = Self::preflight_crossing_cohort(
       snapshot,
       transition,
@@ -1854,14 +1976,12 @@ impl<T: Config> Pallet<T> {
         exhausted: false,
       },
       snapshot.candidates.clone().into_inner(),
-      preflight.queue_candidates,
     )?;
     let count = authority.candidates.len();
     let malformed_actor = authority
       .candidates
       .get(2)
       .map(|candidate| candidate.member.actor_id);
-    Self::test_reset_queue_append_commits();
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       if fixture_fault.malforms_later_locator() {
         let Some(actor_id) = malformed_actor else {
@@ -1875,7 +1995,10 @@ impl<T: Config> Pallet<T> {
       }
       match Self::commit_tail_page_placed_cohort_authority(authority) {
         Ok(())
-          if Self::test_queue_append_commits() == 1 && !fixture_fault.malforms_later_locator() =>
+          if !fixture_fault.malforms_later_locator()
+            && candidate_actors
+              .iter(/* deos-bypass: bounded-iter */)
+              .all(|actor_id| IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id)) =>
         {
           TransactionOutcome::Rollback(Ok(count))
         }
@@ -2026,7 +2149,6 @@ impl<T: Config> Pallet<T> {
         exhausted: false,
       },
       source.candidates.clone().into_inner(),
-      preflight.queue_candidates,
     )?;
     authority.tail_refill = Some(CrossingCohortSnapshot {
       key: tail_refill.key,
@@ -2054,18 +2176,19 @@ impl<T: Config> Pallet<T> {
       });
       match result {
         Ok(())
-          if Self::test_queue_append_commits() == 1
-            && Self::test_crossing_cursor_commits() == 1
+          if Self::test_crossing_cursor_commits() == 1
             && source
               .candidates
               .iter(/* deos-bypass: bounded-iter */)
               .all(|candidate| {
               CrossingMemberships::<T>::get(candidate.member.actor_id)
                 .is_some_and(|locator| locator.key != source.key)
-                && Self::load_frame_control_authority(candidate.member.actor_id).is_some_and(
-                  |(_, _, hot, _)| {
+                && Self::load_control_authority_with_authority(candidate.member.actor_id)
+                  .is_some_and(|(_, hot, _)| {
                     hot.pending_signal
-                      && hot.queue_ticket.is_some()
+                      && IndexedTriggerDetectionDisabled::<T>::contains_key(
+                        candidate.member.actor_id,
+                      )
                       && matches!(
                         hot.trigger_runtime_state,
                         TriggerRuntimeState::ObservationCrossing {
@@ -2073,8 +2196,7 @@ impl<T: Config> Pallet<T> {
                           ..
                         }
                       )
-                  },
-                )
+                  })
             }) =>
         {
           TransactionOutcome::Rollback(Ok(count))
@@ -2257,14 +2379,11 @@ impl<T: Config> Pallet<T> {
     let second_plan = second_preflight.plan;
     let pair_has_homogeneous_immediate_fifo = first_preflight.placed_immediate_fifo == Some(true)
       && second_preflight.placed_immediate_fifo == Some(true);
-    let mut queue_candidates = first_preflight.queue_candidates;
-    queue_candidates.extend(second_preflight.queue_candidates);
     let pair_authority = Self::build_placed_cohort_authority(
       feed,
       transition,
       cursor,
       alloc::vec![snapshot.candidates[0], second_snapshot.candidates[0]],
-      queue_candidates,
     )
     .ok();
     Ok(match (first_plan, second_plan) {
@@ -2502,9 +2621,10 @@ impl<T: Config> Pallet<T> {
   ) -> Result<Option<crate::TriggerFeeBreakdown<T::Balance>>, DispatchError> {
     use crate::weights::WeightInfo as _;
 
-    let (identity, _, _) =
-      Self::load_control_authority_with_authority(actor_id).ok_or(Error::<T>::ActorInvariant)?;
-    let actor_type = identity.actor_class.actor_type();
+    let LoadedActorStateOf::Active(loaded) = Self::load_actor_state(actor_id) else {
+      return Err(Error::<T>::ActorInvariant.into());
+    };
+    let actor_type = loaded.identity.actor_class.actor_type();
     let breakdown = Self::trigger_fee_for_weight(
       actor_type,
       TriggerFamily::ObservationCrossing,
@@ -2512,7 +2632,7 @@ impl<T: Config> Pallet<T> {
     );
     Self::try_charge_automatic_trigger_occurrence(
       actor_type,
-      &identity.sovereign_account,
+      &loaded.identity.sovereign_account,
       breakdown,
     )
     .map(|charged| charged.then_some(breakdown))
@@ -2654,13 +2774,11 @@ impl<T: Config> Pallet<T> {
       Self::advance_crossing_pending_feed(feed)?;
       return Ok(CrossingWorkOutcome::new(true, 1, 1, 1, 1));
     }
-    let LoadedActorStateOf::Active(loaded) =
-      Self::load_actor_state_for_frame_control(member.actor_id)
-    else {
+    let LoadedActorStateOf::Active(mut loaded) = Self::load_actor_state(member.actor_id) else {
       return Err(Error::<T>::ActorInvariant.into());
     };
-    let hot = loaded.hot;
-    let contract = loaded.contract;
+    let hot = loaded.hot.clone();
+    let contract = loaded.contract.clone();
     let TriggerRuntimeState::ObservationCrossing {
       phase,
       installed_at_revision,
@@ -2699,41 +2817,63 @@ impl<T: Config> Pallet<T> {
     } else {
       None
     };
-    Self::move_crossing_membership_with_authority(member.actor_id, crossing, next_phase, locator)?;
+    let actor = ActorRef {
+      actor_id: member.actor_id,
+      generation: member.generation,
+    };
+    Self::move_crossing_membership_with_canonical_authority(
+      actor,
+      crossing,
+      next_phase,
+      locator,
+      &mut loaded,
+    )?;
     let mut activation = None;
     if let Some(fire_plan) = fire_plan {
-      if fire_plan == CrossingWorkPlan::FireCohortClosed {
-        activation =
-          Some(Self::request_activation(member.actor_id).map_err(Self::activation_failure_error)?);
-      } else if fire_plan != CrossingWorkPlan::FireCohortCoalesced
-        && let Some(breakdown) = Self::charge_crossing_fire_occurrence(member.actor_id)?
-      {
-        let activated =
-          Self::request_activation(member.actor_id).map_err(Self::activation_failure_error)?;
-        ensure!(
-          matches!(
-            activated,
-            ActivationOutcome::Latched | ActivationOutcome::Coalesced
-          ),
-          Error::<T>::CrossingIndexInvariant
+      if fire_plan != CrossingWorkPlan::FireCohortCoalesced {
+        use crate::weights::WeightInfo as _;
+
+        let actor_type = loaded.identity.actor_class.actor_type();
+        let sovereign_account = loaded.identity.sovereign_account.clone();
+        let breakdown = Self::trigger_fee_for_weight(
+          actor_type,
+          TriggerFamily::ObservationCrossing,
+          T::WeightInfo::observation_crossing_trigger_occurrence(),
         );
-        IndexedTriggerDetectionDisabled::<T>::insert(member.actor_id, ());
-        Self::deposit_crossing_fire_occurrence(member.actor_id, breakdown);
-        activation = Some(activated);
-      }
-      if activation == Some(ActivationOutcome::Closed)
-        && CrossingFeedMembershipCount::<T>::get(feed) == 0
-      {
-        // Closing the final member clears this feed's queue, cursor, and pending
-        // link. Report possible outer work conservatively; the next bounded
-        // unit observes the canonical pending-list state without recreating it.
-        return Ok(CrossingWorkOutcome::new(true, 1, 1, 1, 1).with_activation(true));
+        if Self::trigger_occurrence_capacity_sufficient(actor_type, &sovereign_account, breakdown)?
+        {
+          match Self::commit_canonical_trigger_occurrence_with_authority(
+            actor,
+            actor_type,
+            &sovereign_account,
+            breakdown,
+            loaded,
+            polkadot_sdk::frame_system::Pallet::<T>::block_number(),
+          ) {
+            Ok(activated) => {
+              ensure!(
+                activated == ActivationOutcome::Latched,
+                Error::<T>::CrossingIndexInvariant
+              );
+              IndexedTriggerDetectionDisabled::<T>::insert(member.actor_id, ());
+              activation = Some(activated);
+            }
+            // A detected occurrence whose fee transfer cannot complete advances the certified
+            // traversal without readiness, matching the automatic-trigger contract: the atomic
+            // commit restored the pre-activation root, so the phase move simply persists.
+            Err(error) if error == Error::<T>::InsufficientFee.into() => {}
+            Err(error) => return Err(error),
+          }
+        }
       }
     }
     Self::persist_crossing_cursor_after_movement(feed, &transition, cursor, key, threshold)?;
     let outcome = CrossingWorkOutcome::new(true, 1, 1, 1, 1);
     Ok(match activation {
-      Some(activated) => outcome.with_activation(activated == ActivationOutcome::Closed),
+      // A canonical fire publishes exactly one latched occurrence through the canonical Trigger
+      // owner; the retired terminal-cohort close branch and its separate final-member membership
+      // cleanup were unreachable legacy producer paths that fresh-genesis publication never built.
+      Some(_) => outcome.with_activation(false),
       None if transition_kind == CrossingTransition::Fire => outcome.with_canonical_probe(),
       None => outcome,
     })
@@ -2792,8 +2932,7 @@ impl<T: Config> Pallet<T> {
       | CrossingWorkPlan::RearmCohort
       | CrossingWorkPlan::FireCohortPending
       | CrossingWorkPlan::FireCohortCoalesced
-      | CrossingWorkPlan::FireCohortPlaced
-      | CrossingWorkPlan::FireCohortClosed => (1, 1, 1, 1),
+      | CrossingWorkPlan::FireCohortPlaced => (1, 1, 1, 1),
     }
   }
 
@@ -2848,7 +2987,7 @@ impl<T: Config> Pallet<T> {
       CrossingWorkPlan::FireCohortPlacedBatch => placed_pair,
       CrossingWorkPlan::FireCohortCoalescedPair => coalesced_pair,
       CrossingWorkPlan::FireCohortCoalesced => coalesced,
-      CrossingWorkPlan::FireCohortClosed | CrossingWorkPlan::StructuralFault => terminal,
+      CrossingWorkPlan::StructuralFault => terminal,
     }
   }
 
@@ -2903,14 +3042,11 @@ impl<T: Config> Pallet<T> {
         && tail_preflight.placed_immediate_fifo == Some(true),
       Error::<T>::CrossingIndexInvariant
     );
-    let mut queue_candidates = first_preflight.queue_candidates;
-    queue_candidates.extend(tail_preflight.queue_candidates);
     Self::build_placed_cohort_authority(
       feed,
       transition,
       cursor,
       alloc::vec![first.candidates[0], tail.candidates[0]],
-      queue_candidates,
     )
   }
 
@@ -2959,7 +3095,6 @@ impl<T: Config> Pallet<T> {
                 transition,
                 cursor,
                 snapshot.candidates.into_inner(),
-                preflight.queue_candidates,
               )?;
               if cursor.page != state.tail_page {
                 if let Ok(tail_refill) =
@@ -2991,7 +3126,9 @@ impl<T: Config> Pallet<T> {
       .current_threshold
       .ok_or(Error::<T>::CrossingIndexInvariant)?;
     let key = authority.candidates[0].locator.key;
-    Self::charge_crossing_placed_cohort(&authority)?;
+    if authority.tail_refill.is_some() {
+      Self::charge_crossing_placed_cohort(&authority)?;
+    }
     if authority.tail_refill.is_some() {
       Self::commit_non_tail_placed_cohort_authority(authority)?;
     } else if count == 2 {

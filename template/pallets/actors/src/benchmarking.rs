@@ -63,6 +63,75 @@ mod benches {
   const CROSSING_NON_TAIL_BENCHMARK_MAX: u32 = 64;
   const CROSSING_TRIMMED_BENCHMARK_TAIL: u32 = CROSSING_NON_TAIL_BENCHMARK_MAX + 2;
 
+  fn prepare_due_retry_deadline<T: Config>(
+    key: WakeupKey<BlockNumberFor<T>>,
+  ) -> Result<(ActorRef, BlockNumberFor<T>), BenchmarkError> {
+    let now = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let owner: T::AccountId = account("due-retry-deadline", 0, 0);
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner,
+      Mutability::Mutable,
+      system_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        make_inert_contract_steps::<T>(),
+      ),
+    )?;
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<T>::get(actor_id).expect("benchmark Actor owns semantic state")
+    else {
+      panic!("benchmark Actor is active")
+    };
+    let actor = ActorRef {
+      actor_id,
+      generation: record.generation,
+    };
+    ActorControlLocators::<T>::remove(actor_id);
+    ActorUnsignaledControlCells::<T>::remove(actor_id);
+    ActorProcesses::<T>::remove(actor_id);
+    Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Live, 1u32.into())
+      .expect("benchmark Actor enters canonical Service");
+    let destination = Pallet::<T>::plan_deadline_destination(actor, key)
+      .expect("benchmark deadline destination exists");
+    Pallet::<T>::transfer_service_member_to_deadline(actor, destination)
+      .expect("benchmark Actor enters canonical deadline");
+    Ok((actor, now))
+  }
+
+  fn benchmark_service_process<T: Config>(
+    actor: ActorRef,
+    kind: ServiceResidenceKind,
+    last_attempted: Option<BlockNumberFor<T>>,
+  ) {
+    ActorProcesses::<T>::insert(
+      actor.actor_id,
+      ActorProcess {
+        generation: actor.generation,
+        last_attempted,
+        status: ProcessStatus::Serving,
+        residence: Some(ProcessResidence::Service(kind)),
+      },
+    );
+  }
+
+  fn benchmark_insert_service_member<T: Config>(
+    actor: ActorRef,
+    kind: ServiceResidenceKind,
+    now: BlockNumberFor<T>,
+  ) {
+    benchmark_service_process::<T>(actor, kind, None);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = Pallet::<T>::insert_service_member(actor, kind, now);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("benchmark service member is inserted");
+  }
+
   fn control_named_cell<T: Config>(actor_id: ActorId) -> ActorControlCellOf<T> {
     let owner: T::AccountId = account("control-cell", actor_id as u32, 0);
     ActorControlCell {
@@ -88,11 +157,17 @@ mod benches {
         schedule_anchor: 0u32.into(),
         last_cycle_block: None,
       },
+      pipeline_service_identity: pipeline_service_identity([3u8; 32]),
       cursor: 0,
       eligible_at: Some(1u32.into()),
       admission: ActorAdmissionCertificate::<ActorAdmissionResourcesOf<T>>::new(
         [1u8; 32],
         [2u8; 32],
+        ActorWakeQualification {
+          family: TriggerFamily::Manual,
+          selector_commitment: [5u8; 32],
+          schedule_commitment: [6u8; 32],
+        },
         1,
         [3u8; 32],
         1,
@@ -212,7 +287,7 @@ mod benches {
   }
 
   fn packed_predicate_clauses<T: Config>(
-    predicates: Vec<TimedPredicate<Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>>>,
+    predicates: Vec<Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>>,
     width: u32,
   ) -> PreconditionOf<T> {
     assert!(width > 0 && width <= T::MaxPredicatesPerClause::get());
@@ -233,7 +308,7 @@ mod benches {
       task: ActorTask::Transfer {
         to: recipient,
         asset: T::FeeNativeAssetId::get(),
-        amount: AmountResolution::AllAvailable,
+        amount: AmountResolution::Percent(Perbill::one()),
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
@@ -246,7 +321,7 @@ mod benches {
       task: ActorTask::Transfer {
         to: recipient,
         asset: T::FeeNativeAssetId::get(),
-        amount: AmountResolution::AllAvailable,
+        amount: AmountResolution::Percent(Perbill::one()),
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
@@ -278,7 +353,7 @@ mod benches {
         task: ActorTask::Transfer {
           to: account("admitted-contract-filler", index as u32, 0),
           asset: T::FeeNativeAssetId::get(),
-          amount: AmountResolution::AllAvailable,
+          amount: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       };
@@ -307,7 +382,7 @@ mod benches {
       task: ActorTask::Transfer {
         to: recipient,
         asset: T::FeeNativeAssetId::get(),
-        amount: AmountResolution::PercentageOfLastFunding(polkadot_sdk::sp_runtime::Perbill::one()),
+        amount: AmountResolution::Percent(polkadot_sdk::sp_runtime::Perbill::one()),
       },
       on_error: StepErrorPolicy::AbortCycle,
     }])
@@ -409,7 +484,72 @@ mod benches {
   }
 
   fn benchmark_fixture_hot<T: Config>(actor_id: ActorId) -> Option<ActorHotStateOf<T>> {
-    Pallet::<T>::load_frame_control_authority(actor_id).map(|(_, _, hot, _)| hot)
+    Pallet::<T>::load_frame_control_authority(actor_id)
+      .map(|(_, _, hot, _)| hot)
+      .or_else(|| benchmark_fixture_semantic_record::<T>(actor_id).map(|record| record.hot))
+  }
+
+  /// Canonically published Actors own identity/hot/admission in the semantic record and no legacy
+  /// control cell, so the fixture accessors read that owner when no pre-cutover primary exists.
+  fn benchmark_fixture_semantic_record<T: Config>(
+    actor_id: ActorId,
+  ) -> Option<crate::ActorSemanticRecordOf<T>> {
+    match ActorSemanticStates::<T>::get(actor_id) {
+      Some(ActorSemanticState::Active(record)) => Some(record),
+      _ => None,
+    }
+  }
+
+  fn benchmark_fixture_semantic_hot<T: Config>(actor_id: ActorId) -> Option<ActorHotStateOf<T>> {
+    ActorSemanticStates::<T>::get(actor_id).and_then(|state| match state {
+      ActorSemanticState::Active(record) => Some(record.hot),
+      ActorSemanticState::Dormant(_) => None,
+    })
+  }
+
+  /// Latches one canonical `false -> true` occurrence for the Actor's declared Trigger family
+  /// through the production Trigger owner, recording that family and charging the generic
+  /// trigger probe fee so every benchmark fixture stays affordable.
+  fn benchmark_latch_canonical_occurrence<T: Config>(actor_id: ActorId) {
+    use crate::weights::WeightInfo as _;
+
+    let ActorSemanticState::Active(record) = ActorSemanticStates::<T>::get(actor_id)
+      .expect("benchmark occurrence Actor owns semantic state")
+    else {
+      panic!("benchmark occurrence Actor is active")
+    };
+    let LoadedActorStateOf::Active(state) = Pallet::<T>::load_actor_state(actor_id) else {
+      panic!("benchmark occurrence Actor loads from canonical authority")
+    };
+    let actor_type = state.identity.actor_class.actor_type();
+    let sovereign_account = state.identity.sovereign_account.clone();
+    let trigger_family = state.contract.trigger.family();
+    // The generic trigger probe keeps the fixture affordable for every family, matching the
+    // canonical latch used by the pallet witnesses; the recorded family stays trigger-accurate.
+    let breakdown = Pallet::<T>::trigger_fee_for_weight(
+      actor_type,
+      trigger_family,
+      T::WeightInfo::manual_trigger(),
+    );
+    assert_eq!(
+      Pallet::<T>::commit_canonical_trigger_occurrence_with_authority(
+        ActorRef {
+          actor_id,
+          generation: record.generation,
+        },
+        actor_type,
+        &sovereign_account,
+        breakdown,
+        state,
+        frame_system::Pallet::<T>::block_number(),
+      )
+      .expect("benchmark occurrence latches canonically"),
+      crate::scheduler::ActivationOutcome::Latched
+    );
+  }
+
+  fn benchmark_latch_canonical_crossing<T: Config>(actor_id: ActorId) {
+    benchmark_latch_canonical_occurrence::<T>(actor_id);
   }
 
   fn benchmark_fixture_scalar_hot<T: Config>(actor_id: ActorId) -> Option<ActorHotStateOf<T>> {
@@ -455,12 +595,23 @@ mod benches {
       }
       hot.queue_ticket = None;
     }
-    Pallet::<T>::update_existing_frame_control_hot(actor_id, &hot)
-      .expect("benchmark fixture updates the existing primary");
+    if ActorControlLocators::<T>::contains_key(actor_id) {
+      Pallet::<T>::update_existing_frame_control_hot(actor_id, &hot)
+        .expect("benchmark fixture updates the existing primary");
+    } else {
+      ActorSemanticStates::<T>::mutate(actor_id, |stored| {
+        let Some(ActorSemanticState::Active(record)) = stored else {
+          panic!("benchmark fixture canonical authority exists")
+        };
+        record.hot = hot;
+      });
+    }
   }
 
   fn benchmark_fixture_identity<T: Config>(actor_id: ActorId) -> Option<ActorIdentityOf<T>> {
-    Pallet::<T>::load_frame_control_authority(actor_id).map(|(_, identity, _, _)| identity)
+    Pallet::<T>::load_frame_control_authority(actor_id)
+      .map(|(_, identity, _, _)| identity)
+      .or_else(|| benchmark_fixture_semantic_record::<T>(actor_id).map(|record| record.identity))
   }
 
   fn benchmark_fixture_scalar_identity<T: Config>(actor_id: ActorId) -> Option<ActorIdentityOf<T>> {
@@ -471,31 +622,40 @@ mod benches {
     Pallet::<T>::actor_identity(actor_id).is_some()
   }
 
-  fn benchmark_fixture_mutate_identity<T: Config>(
-    actor_id: ActorId,
-    mutate: impl FnOnce(&mut ActorIdentityOf<T>),
-  ) {
-    let mut identity = benchmark_fixture_scalar_identity::<T>(actor_id)
-      .expect("benchmark fixture identity authority exists");
-    mutate(&mut identity);
-    if ActorControlLocators::<T>::contains_key(actor_id) {
-      Pallet::<T>::update_existing_frame_control_identity(actor_id, &identity)
-        .expect("benchmark fixture updates active identity");
-    } else {
-      ActorIdentities::<T>::insert(actor_id, identity);
-    }
-  }
-
   fn benchmark_fixture_admission<T: Config>(
     actor_id: ActorId,
   ) -> Option<ActorAdmissionCertificateOf<T>> {
-    Pallet::<T>::load_frame_control_authority(actor_id).map(|(_, _, _, admission)| admission)
+    Pallet::<T>::load_frame_control_authority(actor_id)
+      .map(|(_, _, _, admission)| admission)
+      .or_else(|| benchmark_fixture_semantic_record::<T>(actor_id).map(|record| record.admission))
   }
 
   fn benchmark_fixture_scalar_admission<T: Config>(
     actor_id: ActorId,
   ) -> Option<ActorAdmissionCertificateOf<T>> {
     benchmark_fixture_admission::<T>(actor_id)
+  }
+
+  /// Resolves the cursor and current-Step resource envelope for a benchmark Actor from its legacy
+  /// primary when one exists, otherwise from its canonical semantic authority. Canonically
+  /// published Actors own no legacy primary cell, but the retired paged-FIFO benchmark fixtures
+  /// still measure pre-cutover substrate operations, so they must be able to observe an Actor that
+  /// was created through the public canonical path.
+  fn benchmark_fixture_service_cursor_and_resources<T: Config>(
+    actor_id: ActorId,
+    state: &ActiveActorStateOf<T>,
+  ) -> (u32, ActorStepResourceEnvelope) {
+    if let Some((_, cell)) = Pallet::<T>::actor_control_cell(actor_id) {
+      return (cell.cursor, cell.resources);
+    }
+    let cursor = state.run_state.as_ref().map_or(0, |run| run.cursor);
+    let resources = Pallet::<T>::derive_step_resource_envelopes(&state.contract)
+      .and_then(|envelopes| envelopes.first().copied())
+      .unwrap_or(ActorStepResourceEnvelope {
+        control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+        effect: Weight::zero(),
+      });
+    (cursor, resources)
   }
 
   fn benchmark_fixture_align_primary_control<T: Config>(actor_id: ActorId) {
@@ -508,22 +668,6 @@ mod benches {
     assert!(Pallet::<T>::store_frame_control_authority(
       actor_id, location, identity, hot, admission,
     ));
-  }
-
-  fn benchmark_fixture_publish_trigger_waiting<T: Config>(
-    actor_id: ActorId,
-    wakeup_tick: SchedulerTick,
-  ) {
-    let mut cell = Pallet::<T>::remove_primary_control_cell_inner(actor_id)
-      .expect("benchmark temporal source primary exists");
-    cell.cursor = ActorRunStateStore::<T>::get(actor_id).map_or(0, |run| run.cursor);
-    cell.eligible_at = None;
-    Pallet::<T>::control_append_waiting(
-      cell,
-      WakeupKey::Tick(wakeup_tick),
-      crate::scheduler::ActorWaitingAuthority::Trigger,
-    )
-    .expect("benchmark temporal Waiting placement fits");
   }
 
   fn benchmark_fixture_schedule_service_waiting<T: Config>(
@@ -539,21 +683,22 @@ mod benches {
   ) -> impl FnOnce() {
     let (state, admission, _) = Pallet::<T>::load_frame_actor_service_state(actor_id)
       .expect("benchmark consumed source service authority exists");
-    let (_, cell) =
-      Pallet::<T>::actor_control_cell(actor_id).expect("benchmark consumed source primary exists");
+    let (cursor, resources) = benchmark_fixture_service_cursor_and_resources::<T>(actor_id, &state);
     let mut hot = state.hot;
     hot.pending_signal = true;
-    Pallet::<T>::remove_primary_control_cell_inner(actor_id)
-      .expect("benchmark service source is consumed before Waiting publication");
+    if ActorControlLocators::<T>::contains_key(actor_id) {
+      Pallet::<T>::remove_primary_control_cell_inner(actor_id)
+        .expect("benchmark service source is consumed before Waiting publication");
+    }
     move || {
       Pallet::<T>::try_wakeup_substrate_schedule_transition_with_authority(
         actor_id,
         WakeupKey::Block(wakeup_block),
         hot,
         &state.identity,
-        cell.cursor,
+        cursor,
         &admission,
-        cell.resources,
+        resources,
       )
       .expect("benchmark consumed service Waiting placement fits")
     }
@@ -565,8 +710,7 @@ mod benches {
   ) -> impl FnOnce() {
     let (state, admission, _) = Pallet::<T>::load_frame_actor_service_state(actor_id)
       .expect("benchmark source service authority exists");
-    let (_, cell) =
-      Pallet::<T>::actor_control_cell(actor_id).expect("benchmark source primary exists");
+    let (cursor, resources) = benchmark_fixture_service_cursor_and_resources::<T>(actor_id, &state);
     let mut hot = state.hot;
     hot.pending_signal = true;
     move || {
@@ -575,9 +719,9 @@ mod benches {
         WakeupKey::Block(wakeup_block),
         hot,
         &state.identity,
-        cell.cursor,
+        cursor,
         &admission,
-        cell.resources,
+        resources,
       )
       .expect("benchmark latched service Waiting placement fits")
     }
@@ -618,91 +762,12 @@ mod benches {
     ActorReadyTail::<T>::put(ticket);
   }
 
-  fn benchmark_fixture_ready_page_len<T: Config>(page_id: QueuePageId) -> Option<usize> {
-    ActorReadyFrameChunks::<T>::get(page_id).map(|page| page.len())
-  }
-
-  fn benchmark_fixture_contains_ready_page<T: Config>(page_id: QueuePageId) -> bool {
-    ActorReadyFrameChunks::<T>::contains_key(page_id)
-  }
-
-  fn benchmark_fixture_ready_enqueue<T: Config>(actor_id: ActorId) -> bool {
-    let Some((state, admission, _)) = Pallet::<T>::load_frame_actor_service_state(actor_id) else {
-      return false;
-    };
-    let Some((_, cell)) = Pallet::<T>::actor_control_cell(actor_id) else {
-      return false;
-    };
-    let mut hot = state.hot;
-    if hot.cycle_state == CycleState::Idle {
-      hot.pending_signal = true;
-    }
-    Pallet::<T>::preflight_paged_enqueue_authority(
-      actor_id,
-      hot,
-      &state.identity,
-      state.run_state.as_ref(),
-      &admission,
-      cell.resources,
-    )
-    .and_then(Pallet::<T>::commit_paged_enqueue)
-    .is_ok()
-  }
-
-  fn benchmark_fixture_prepare_consumed_ready_enqueue<T: Config>(
-    actor_id: ActorId,
-  ) -> impl FnOnce() -> bool {
-    let (state, admission, _) = Pallet::<T>::load_frame_actor_service_state(actor_id)
-      .expect("benchmark destination authority exists");
-    let (_, cell) =
-      Pallet::<T>::actor_control_cell(actor_id).expect("benchmark destination primary exists");
-    let mut hot = state.hot;
-    if hot.cycle_state == CycleState::Idle {
-      hot.pending_signal = true;
-    }
-    Pallet::<T>::remove_primary_control_cell_inner(actor_id)
-      .expect("benchmark destination source is consumed before measurement");
-    move || {
-      Pallet::<T>::preflight_paged_enqueue_authority(
-        actor_id,
-        hot,
-        &state.identity,
-        state.run_state.as_ref(),
-        &admission,
-        cell.resources,
-      )
-      .and_then(Pallet::<T>::commit_paged_enqueue)
-      .is_ok()
-    }
-  }
-
-  #[inline(always)]
-  fn benchmark_fixture_ready_consume_head<T: Config>(ticket: QueueTicket) -> bool {
-    Pallet::<T>::paged_consume_head(ticket)
-  }
-
-  #[inline(always)]
-  fn benchmark_fixture_ready_consume_loaded_head<T: Config>(
-    position: QueueTicket,
-    actor_id: ActorId,
-    ticket: QueueTicket,
-    hot: ActorHotStateOf<T>,
-  ) -> bool {
-    Pallet::<T>::paged_consume_loaded_head_at(position, actor_id, ticket, hot).is_ok()
-  }
-
   #[inline(always)]
   fn benchmark_fixture_ready_drain_tombstones<T: Config>(
     cutoff: QueueTicket,
     scan_limit: u32,
   ) -> Result<QueueDrainStats, EnqueueOutcome> {
     Pallet::<T>::paged_drain_tombstones(cutoff, scan_limit)
-  }
-
-  #[inline(always)]
-  fn benchmark_fixture_ready_head_entry<T: Config>()
-  -> Option<(QueueTicket, QueueEntry<BlockNumberFor<T>>)> {
-    Pallet::<T>::paged_head_entry()
   }
 
   fn benchmark_fixture_ready_head<T: Config>() -> u64 {
@@ -747,20 +812,6 @@ mod benches {
     ActorReadyHead::<T>::put(0);
     ActorReadyTail::<T>::put(u64::from(capacity));
     ActorReadyOccupancy::<T>::put(0);
-  }
-
-  fn benchmark_fixture_reset_ready_queue<T: Config>() {
-    let ids = ActorControlLocators::<T>::iter()
-      .filter_map(|(id, location)| {
-        matches!(location, ActorControlLocation::Ready { .. }).then_some(id)
-      })
-      .collect::<alloc::vec::Vec<_>>();
-    for id in ids {
-      assert!(Pallet::<T>::paged_invalidate(id).is_some());
-    }
-    let tail = ActorReadyTail::<T>::get();
-    let _ = ActorReadyFrameChunks::<T>::clear(u32::MAX, None);
-    benchmark_fixture_set_ready_queue_state::<T>(tail, tail, 0);
   }
 
   fn seed_actor_for_cycle<T: Config>(actor_id: ActorId) {
@@ -817,6 +868,9 @@ mod benches {
     actor_id
   }
 
+  // Semantic-cutover branch: active creation with populated Contract geometry and an initially
+  // non-Live current-state detector residence. The cutover benchmark must Publish semantic state
+  // but must not charge service-ring publication for this branch.
   #[benchmark]
   fn create_user_actor() {
     let caller: T::AccountId = whitelisted_caller();
@@ -877,6 +931,9 @@ mod benches {
     assert!(CrossingMemberships::<T>::contains_key(actor_id));
   }
 
+  // Semantic-cutover branch: System active creation shares the populated, initially non-Live
+  // publication shape while retaining its distinct custody and identity accounting: Publish active
+  // semantic state; no service publication.
   #[benchmark]
   fn create_system_actor() {
     let owner: T::AccountId = whitelisted_caller();
@@ -1020,6 +1077,8 @@ mod benches {
     assert_eq!(leaf.page_count, 2);
   }
 
+  // Semantic-cutover branch: dormant creation uses Publish identity-only semantic state and no
+  // process/service residence. This remains distinct from an active zero-Step Contract.
   #[benchmark]
   fn create_dormant_system_actor() {
     let owner: T::AccountId = whitelisted_caller();
@@ -1033,6 +1092,8 @@ mod benches {
     assert!(!Pallet::<T>::active_actor_exists(actor_id));
   }
 
+  // Semantic-cutover branch: activation must Replace dormant with active semantic state and the
+  // initial non-Live detector residence in one transaction; no service publication.
   #[benchmark]
   fn activate_actor() {
     let owner: T::AccountId = whitelisted_caller();
@@ -1065,6 +1126,8 @@ mod benches {
     assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
   }
 
+  // Semantic-cutover branch: deactivation must Replace active with identity-only dormant semantic
+  // state after removing process/service authority; terminal finalization instead removes the record.
   #[benchmark]
   fn deactivate_actor() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     frame_system::Pallet::<T>::set_block_number(0u32.into());
@@ -1110,16 +1173,14 @@ mod benches {
       Pallet::<T>::crossing_work_unit().expect("Crossing transition materializes");
     }
     assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| hot.pending_signal));
-    let (_, ready) = Pallet::<T>::actor_control_cell(actor_id)
-      .expect("Crossing occurrence retains canonical Ready authority");
-    let eligible_at = ready
-      .eligible_at
-      .expect("Ready authority has an eligibility boundary");
+    let eligible_at = ServiceNodes::<T>::get(actor_id)
+      .expect("Crossing occurrence retains canonical Service authority")
+      .eligible_from;
     frame_system::Pallet::<T>::set_block_number(
       frame_system::Pallet::<T>::block_number().max(eligible_at),
     );
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("real Crossing Ready fixture passes full state audit");
+    Pallet::<T>::do_try_state().expect("real Crossing Service fixture passes full state audit");
     Pallet::<T>::execute_cycle(Weight::MAX);
     assert_reachable_retry::<T>(actor_id);
     assert!(
@@ -1217,9 +1278,17 @@ mod benches {
       Pallet::<T>::notify_address_event(actor_id, T::FeeNativeAssetId::get(), One::one(), &caller)
         .expect("matched AddressEvent occurrence commits");
     }
-    let hot = benchmark_fixture_hot::<T>(actor_id).expect("AddressEvent Actor remains active");
-    assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some());
+    let semantic = ActorSemanticStates::<T>::get(actor_id)
+      .and_then(|state| match state {
+        ActorSemanticState::Active(record) => Some(record),
+        ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("AddressEvent semantic authority remains active");
+    assert!(semantic.hot.pending_signal);
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
   }
 
   /// Measures the exact lifecycle-only cleanup selected when an Idle User cannot admit a paid
@@ -1246,7 +1315,7 @@ mod benches {
     )
     .expect("apoptosis benchmark Actor exists");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    Pallet::<T>::request_activation(actor_id).expect("apoptosis readiness must latch");
+    benchmark_latch_canonical_occurrence::<T>(actor_id);
     let instance = Pallet::<T>::active_actor_view(actor_id).expect("active Actor view exists");
     assert_eq!(instance.cycle_state, CycleState::Idle);
     assert!(instance.pending_signal);
@@ -1284,12 +1353,6 @@ mod benches {
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     open_reachable_retry::<T>(actor_id, retry_funding);
     assert_reachable_retry::<T>(actor_id);
-    frame_system::Pallet::<T>::set_block_number(
-      frame_system::Pallet::<T>::block_number().saturating_add(One::one()),
-    );
-    publish_zero_step_observation::<T>(feed, 1);
-    assert!(CrossingTransitionQueues::<T>::contains_key(feed));
-    assert!(!CrossingRangeCursors::<T>::contains_key(feed));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("reachable close premeasurement state is valid");
     #[extrinsic_call]
@@ -1302,8 +1365,6 @@ mod benches {
     );
     assert!(!CrossingMemberships::<T>::contains_key(actor_id));
     assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
-    assert!(!CrossingTransitionQueues::<T>::contains_key(feed));
-    assert!(!CrossingRangeCursors::<T>::contains_key(feed));
     assert!(!CrossingPendingFeeds::<T>::contains_key(feed));
     assert!(!ActorRunStateStore::<T>::contains_key(actor_id));
     assert!(!ActorControlLocators::<T>::contains_key(actor_id));
@@ -1318,14 +1379,12 @@ mod benches {
   }
 
   fn prepare_user_retry_opening_partition<T: Config>(
-    opening_amounts: u32,
     opening_predicates: u32,
   ) -> Result<ActorId, polkadot_sdk::frame_benchmarking::BenchmarkError> {
     let owner: T::AccountId = account("close-owner", 0, 0);
     ensure_creation_balance::<T>(&owner);
     let owner_slot = prefill_reachable_owner_slots::<T>(&owner);
-    let (steps, funding) =
-      retry_contract_with_opening_partition::<T>(opening_amounts, opening_predicates)?;
+    let (steps, funding) = retry_contract_with_opening_partition::<T>(opening_predicates)?;
     let feed = observation_feed_pool::<T>(1)[0];
     prefund_user_sovereign::<T>(&owner, owner_slot, &steps);
     Pallet::<T>::create_user_actor_at_slot(
@@ -1344,21 +1403,18 @@ mod benches {
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     open_reachable_retry::<T>(actor_id, funding);
     let run = ActorRunStateStore::<T>::get(actor_id).unwrap();
-    assert_eq!(run.opening_snapshot.len() as u32, opening_amounts);
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      opening_predicates
-    );
+    assert!(run.opening_snapshot.is_empty());
     Ok(actor_id)
   }
 
-  /// Maximum Step count with independent Opening captures; other positions retain Current reads.
+  /// Maximum Step count with independently selected Opening predicate results.
+  // Busy Crossing fires coalesce without a second Cycle; retain this diagnostic only for
+  // canonical close cleanup at the current traversal frontier.
   #[benchmark(pov_mode = Measured)]
   fn close_actor_opening_partition(
-    o: Linear<0, { T::MaxContractSteps::get() * 2 }>,
     p: Linear<0, { T::MaxContractSteps::get() * benchmark_predicate_capacity::<T>() }>,
   ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let actor_id = prepare_user_retry_opening_partition::<T>(o, p)?;
+    let actor_id = prepare_user_retry_opening_partition::<T>(p)?;
     let contract = Pallet::<T>::load_actor_contract(actor_id).unwrap();
     let Trigger::ObservationCrossing { feed, .. } = contract.trigger else {
       panic!("partition fixture owns a Crossing Trigger")
@@ -1396,7 +1452,10 @@ mod benches {
         "real transition changes the suspended Actor detector phase"
       );
     }
-    assert!(benchmark_fixture_hot::<T>(actor_id).unwrap().pending_signal);
+    // Canonical crossing coalesces a fire observed while the Actor is suspended on retry: the
+    // phase advances to WaitingForRearm without requesting a second Cycle or charging a fee
+    // (`busy_crossing_fire_and_rearm_preserve_canonical_residence_without_future_pipeline`).
+    assert!(!benchmark_fixture_hot::<T>(actor_id).unwrap().pending_signal);
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id).unwrap().encode(),
       retained_run
@@ -1434,10 +1493,10 @@ mod benches {
     let cursor_before = CrossingRangeCursors::<T>::get(feed).unwrap();
     assert_eq!(cursor_before.current_threshold, Some(source.key.threshold));
     assert_eq!(cursor_before.traversal, source.key.traversal);
-    assert!((source.page, source.offset) < (cursor_before.page, cursor_before.offset));
+    assert!((source.page, source.offset) <= (cursor_before.page, cursor_before.offset));
     let leaf = CrossingLeafStates::<T>::get(source.key).unwrap();
     assert_eq!(leaf.page_count, 2);
-    assert_eq!(leaf.member_count, 2 * page_size - (candidates - 1));
+    assert_eq!(leaf.member_count, 2 * page_size - candidates);
     let tail = CrossingMemberPages::<T>::get(source.key, leaf.tail_page).unwrap();
     assert!(
       (leaf.tail_page, tail.entries.len() as u32 - 1) >= (cursor_before.page, cursor_before.offset)
@@ -1448,16 +1507,13 @@ mod benches {
       ActorRunStateStore::<T>::get(actor_id).unwrap().encode(),
       retained_run
     );
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Waiting { .. })
-    ));
+    assert!(DeadlineHandles::<T>::contains_key(actor_id));
     assert!(
       ActorRunStateStore::<T>::get(actor_id).unwrap().eligible_at
         > frame_system::Pallet::<T>::block_number()
     );
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("joint retry, deferred latch and real cursor are coherent");
+    Pallet::<T>::do_try_state().expect("joint retry, coalesced fire and real cursor are coherent");
     let native = T::FeeNativeAssetId::get();
     let custody = T::AssetOps::balance(&identity.sovereign_account, native);
     let sink = T::AssetOps::balance(&T::FeeSink::get(), native);
@@ -1474,16 +1530,12 @@ mod benches {
       actor_id
     ));
     let moved = CrossingMemberships::<T>::get(moved_actor).unwrap();
-    assert_eq!((moved.page, moved.offset), (0, 0));
-    let mut expected_cursor = cursor_before;
-    expected_cursor.page = moved.page;
-    expected_cursor.offset = moved.offset;
-    assert_eq!(CrossingRangeCursors::<T>::get(feed), Some(expected_cursor));
+    assert_eq!(CrossingRangeCursors::<T>::get(feed), Some(cursor_before));
     assert_eq!(
       CrossingLeafStates::<T>::get(source.key)
         .unwrap()
         .member_count,
-      leaf.member_count - 1
+      leaf.member_count
     );
     assert!(
       ActorContractTailChunks::<T>::iter_prefix(actor_id)
@@ -1576,7 +1628,8 @@ mod benches {
     assert_full_waiting_heap_close::<T>(&fixture);
   }
 
-  // Diagnostic removal branch: delete the last page while the Crossing leaf survives.
+  // Opening may compact the suspended target back into the detector head; retain this diagnostic
+  // for canonical member cleanup rather than claiming a reachable tail-page deletion.
   #[benchmark]
   fn close_actor_crossing_page() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     let owner: T::AccountId = account("close-owner", 0, 0);
@@ -1602,18 +1655,14 @@ mod benches {
     )
     .expect("page-removal User setup must succeed");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    let pause_at = frame_system::Pallet::<T>::block_number().saturating_add(One::one());
-    frame_system::Pallet::<T>::set_block_number(pause_at);
-    Pallet::<T>::pause_actor(RawOrigin::Signed(owner.clone()).into(), actor_id)
-      .expect("target pauses before its real occurrence");
     open_reachable_retry::<T>(actor_id, retry_funding);
     assert_reachable_retry::<T>(actor_id);
     frame_system::Pallet::<T>::set_block_number(
       frame_system::Pallet::<T>::block_number().saturating_add(One::one()),
     );
     let removed = CrossingMemberships::<T>::get(actor_id).expect("tail-page membership exists");
-    assert_eq!(removed.page, 1);
-    let leaf = CrossingLeafStates::<T>::get(removed.key).expect("full guard leaf survives Opening");
+    assert_eq!(removed.page, 0);
+    let leaf = CrossingLeafStates::<T>::get(removed.key).expect("guard leaf survives Opening");
     assert_eq!(leaf.page_count, 2);
     assert_eq!(leaf.member_count, T::CrossingPageSize::get() + 1);
     #[cfg(feature = "try-runtime")]
@@ -1624,7 +1673,6 @@ mod benches {
         .expect("page-removal Crossing close must succeed");
     }
     assert!(!CrossingMemberships::<T>::contains_key(actor_id));
-    assert!(!CrossingMemberPages::<T>::contains_key(removed.key, 1));
     let leaf = CrossingLeafStates::<T>::get(removed.key).expect("surviving leaf exists");
     assert_eq!(leaf.tail_page, 0);
     assert_eq!(leaf.page_count, 1);
@@ -1872,11 +1920,8 @@ mod benches {
         "host cannot represent the nonempty funding-prune ObservationChange profile",
       ));
     }
-    let opening_legs = T::MaxContractSteps::get()
-      .saturating_mul(2)
-      .saturating_sub(1);
     let (owner, actor_id, replacement, old_feed) =
-      prepare_reachable_update::<T>(opening_legs, TriggerFamily::ObservationChange)?;
+      prepare_reachable_update::<T>(TriggerFamily::ObservationChange)?;
     let expected = replacement.clone();
     #[block]
     {
@@ -1890,11 +1935,8 @@ mod benches {
   // Production Weight selection remains open until the extra diagnostic is measured in Wasm.
   #[benchmark]
   fn update_contract() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let opening_legs = T::MaxContractSteps::get()
-      .saturating_mul(2)
-      .saturating_sub(T::MaxFundingTrackedAssets::get());
     let (owner, actor_id, replacement, old_feed) =
-      prepare_reachable_update::<T>(opening_legs, TriggerFamily::ObservationCrossing)?;
+      prepare_reachable_update::<T>(TriggerFamily::ObservationCrossing)?;
     let expected = replacement.clone();
     #[block]
     {
@@ -1906,14 +1948,6 @@ mod benches {
 
   #[benchmark(extra)]
   fn update_contract_reachable_allocation(
-    o: Linear<
-      {
-        T::MaxContractSteps::get()
-          .saturating_mul(2)
-          .saturating_sub(T::MaxFundingTrackedAssets::get())
-      },
-      { T::MaxContractSteps::get().saturating_mul(2) },
-    >,
     t: Linear<0, 1>,
   ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     let family = if t == 0 {
@@ -1921,7 +1955,7 @@ mod benches {
     } else {
       TriggerFamily::ObservationChange
     };
-    let (owner, actor_id, replacement, old_feed) = prepare_reachable_update::<T>(o, family)?;
+    let (owner, actor_id, replacement, old_feed) = prepare_reachable_update::<T>(family)?;
     let expected = replacement.clone();
     #[block]
     {
@@ -1984,18 +2018,162 @@ mod benches {
   }
 
   #[benchmark]
-  fn record_wakeup_worker_fault() {
-    let fault = WakeupWorkerFault {
-      key: WakeupKey::Tick(u64::MAX),
-      page: u64::MAX,
-      class: CrossingWorkerFaultClass::Other,
+  fn process_due_observation_availability_review() -> Result<(), BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let owner_account: T::AccountId = account("due-observation-review", 0, 0);
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner_account,
+      Mutability::Mutable,
+      system_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        make_inert_contract_steps::<T>(),
+      ),
+    )?;
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<T>::get(actor_id).expect("benchmark Actor owns semantic state")
+    else {
+      panic!("benchmark Actor is active")
     };
+    let actor = ActorRef {
+      actor_id,
+      generation: record.generation,
+    };
+    ActorControlLocators::<T>::remove(actor_id);
+    ActorUnsignaledControlCells::<T>::remove(actor_id);
+    ActorProcesses::<T>::remove(actor_id);
+    Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Live, 1u32.into())
+      .expect("benchmark Actor enters canonical Service");
+    let feed = T::BenchmarkHelper::setup_observation_feeds(1)?
+      .into_iter()
+      .next()
+      .expect("one benchmark observation feed exists");
+    let source = 1;
+    let CanonicalObservationState::Available { revision, .. } =
+      T::ObservationProvider::current(&feed)
+    else {
+      panic!("benchmark observation feed is available")
+    };
+    T::BenchmarkHelper::deactivate_observation_feed(feed)?;
+    assert!(matches!(
+      T::ObservationProvider::current(&feed),
+      CanonicalObservationState::Unavailable
+    ));
+    ObservationDependencySources::<T>::insert(feed, source);
+    DependencySourceObservations::<T>::insert(source, feed);
+    DependencyRevisions::<T>::mutate(source, |state| state.revision = revision);
+    let owner = PendingCheckOwner {
+      actor,
+      plan_revision: 1,
+    };
+    let evidence = ParkEvidence {
+      plan_identity: record.admission.admission_identity,
+      reason: ParkNegativeReason::SourceUnavailable,
+      review_at: Some(2u32.into()),
+    };
+    Pallet::<T>::transfer_service_member_to_park(
+      actor,
+      ServiceResidenceKind::Live,
+      owner.plan_revision,
+      evidence.reason,
+      evidence.review_at,
+      &[DependencyPlanSource {
+        source,
+        observed_revision: revision,
+      }],
+      Some(WakeupKey::Block(2u32.into())),
+    )
+    .expect("benchmark Actor enters canonical Park");
+    assert_eq!(
+      DeadlineHandles::<T>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(2u32.into()))
+    );
+    frame_system::Pallet::<T>::set_block_number(2u32.into());
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+
     #[block]
     {
-      assert!(Pallet::<T>::record_wakeup_worker_fault(&mut meter, fault));
+      Pallet::<T>::process_next_due_block_observation_availability_review(
+        &mut meter,
+        ServiceResidenceKind::Live,
+        2u32.into(),
+        Some(WakeupKey::Block(3u32.into())),
+      )
+      .expect("unavailable indexed observation re-arms benchmark Actor");
     }
-    assert_eq!(WakeupWorkerFaultState::<T>::get(), Some(fault));
+
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    assert_eq!(
+      DependencyTimedReviews::<T>::get(actor_id).map(|review| review.deadline),
+      Some(WakeupKey::Block(3u32.into()))
+    );
+    assert_eq!(
+      DeadlineHandles::<T>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(3u32.into()))
+    );
+    Ok(())
+  }
+
+  #[benchmark]
+  fn classify_due_block_deadline() -> Result<(), BenchmarkError> {
+    let now = 2u32.into();
+    let (actor, _) = prepare_due_retry_deadline::<T>(WakeupKey::Block(now))?;
+
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::classify_next_due_block_deadline(now),
+        Ok(DueBlockDeadlineBranch::Retry(actor))
+      );
+    }
+    assert!(DeadlineHandles::<T>::contains_key(actor.actor_id));
+    Ok(())
+  }
+
+  #[benchmark]
+  fn classify_due_tick_deadline() -> Result<(), BenchmarkError> {
+    clear_host_genesis_wakeup_placements::<T>();
+    let retained_trigger_deadlines = TriggerDeadlineHandles::<T>::iter()
+      .map(|(_, handle)| handle.actor)
+      .collect::<alloc::vec::Vec<_>>();
+    for retained in retained_trigger_deadlines {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::remove_trigger_deadline_member(retained);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("host genesis canonical Trigger deadline is removable");
+    }
+    let now_tick = 0;
+    let (actor, _) = prepare_due_retry_deadline::<T>(WakeupKey::Tick(now_tick))?;
+
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::classify_next_due_tick_deadline(now_tick),
+        Ok(DueBlockDeadlineBranch::Retry(actor))
+      );
+    }
+    assert!(DeadlineHandles::<T>::contains_key(actor.actor_id));
+    Ok(())
+  }
+
+  #[benchmark]
+  fn return_due_block_deadline_to_service() -> Result<(), BenchmarkError> {
+    let now = 2u32.into();
+    let (actor, _) = prepare_due_retry_deadline::<T>(WakeupKey::Block(now))?;
+
+    #[block]
+    {
+      Pallet::<T>::return_due_deadline_member_to_service(actor, ServiceResidenceKind::Live, now)
+        .expect("due retry returns to canonical Service");
+    }
+    assert!(!DeadlineHandles::<T>::contains_key(actor.actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
+    Ok(())
   }
 
   #[benchmark]
@@ -2028,18 +2206,6 @@ mod benches {
     #[extrinsic_call]
     clear_observation_fanout_worker_fault(RawOrigin::Root);
     assert!(ObservationFanoutWorkerFaultState::<T>::get().is_none());
-  }
-
-  #[benchmark]
-  fn clear_wakeup_worker_fault() {
-    WakeupWorkerFaultState::<T>::put(WakeupWorkerFault {
-      key: WakeupKey::Block(1u32.into()),
-      page: 0,
-      class: CrossingWorkerFaultClass::Invariant,
-    });
-    #[extrinsic_call]
-    clear_wakeup_worker_fault(RawOrigin::Root);
-    assert!(WakeupWorkerFaultState::<T>::get().is_none());
   }
 
   #[benchmark]
@@ -2083,10 +2249,11 @@ mod benches {
       let actor_id = NextActorId::<T>::get().saturating_sub(1);
       // Permissionless sweep no longer predicts economic affordability. Use the canonical
       // nonce terminal so every requested live Actor still exercises bounded close cleanup.
-      benchmark_fixture_mutate_identity::<T>(actor_id, |identity| {
+      Pallet::<T>::try_mutate_control_identity(actor_id, Error::<T>::ActorNotFound, |identity| {
         identity.cycle_nonce = u64::MAX;
-      });
-      benchmark_fixture_align_primary_control::<T>(actor_id);
+        Ok(())
+      })
+      .expect("sweep terminal fixture mutates canonical identity coherently");
       actor_ids
         .try_push(actor_id)
         .expect("benchmark n must fit MaxSweepBatch");
@@ -2161,7 +2328,7 @@ mod benches {
       T::AssetOps::transfer(&caller, &recipient, native, amount)
         .expect("ingress-aware transfer must succeed");
     }
-    assert!(benchmark_fixture_hot::<T>(target_id).is_some_and(|hot| hot.wakeup_pointer.is_some()));
+    assert_canonical_ingress_readiness::<T>(target_id);
   }
 
   #[benchmark]
@@ -2192,7 +2359,7 @@ mod benches {
     {
       T::AssetOps::mint(&recipient, native, amount).expect("ingress-aware mint must succeed");
     }
-    assert!(benchmark_fixture_hot::<T>(target_id).is_some_and(|hot| hot.wakeup_pointer.is_some()));
+    assert_canonical_ingress_readiness::<T>(target_id);
   }
 
   #[benchmark]
@@ -2219,16 +2386,7 @@ mod benches {
         }
       })
       .collect::<alloc::vec::Vec<_>>();
-    let precondition = packed_predicate_clauses::<T>(
-      predicates
-        .into_iter()
-        .map(|predicate| TimedPredicate {
-          timing: ObservationTiming::Current,
-          predicate,
-        })
-        .collect(),
-      T::MaxPredicatesPerClause::get(),
-    );
+    let precondition = packed_predicate_clauses::<T>(predicates, T::MaxPredicatesPerClause::get());
     #[block]
     {
       assert_eq!(
@@ -2262,16 +2420,7 @@ mod benches {
         max_age_blocks: 100,
       })
       .collect::<alloc::vec::Vec<_>>();
-    let precondition = packed_predicate_clauses::<T>(
-      predicates
-        .into_iter()
-        .map(|predicate| TimedPredicate {
-          timing: ObservationTiming::Current,
-          predicate,
-        })
-        .collect(),
-      T::MaxPredicatesPerClause::get(),
-    );
+    let precondition = packed_predicate_clauses::<T>(predicates, T::MaxPredicatesPerClause::get());
     #[block]
     {
       let _ = Pallet::<T>::evaluate_precondition(&precondition, &actor, T::Balance::zero());
@@ -2333,9 +2482,7 @@ mod benches {
       }
     }
     for (target_id, _) in targets {
-      assert!(
-        benchmark_fixture_hot::<T>(target_id).is_some_and(|hot| hot.wakeup_pointer.is_some())
-      );
+      assert_canonical_ingress_readiness::<T>(target_id);
     }
   }
 
@@ -2351,7 +2498,7 @@ mod benches {
       T::BenchmarkHelper::run_xcm_asset_deposit(&recipient, &source, amount)
         .expect("Actors-aware XCM deposit must succeed");
     }
-    assert!(benchmark_fixture_hot::<T>(target_id).is_some_and(|hot| hot.wakeup_pointer.is_some()));
+    assert_canonical_ingress_readiness::<T>(target_id);
   }
 
   #[benchmark]
@@ -2495,9 +2642,10 @@ mod benches {
     frame_system::Pallet::<T>::set_block_number(1u32.into());
     Pallet::<T>::manual_trigger(RawOrigin::Signed(caller).into(), actor_id)
       .expect("manual_trigger must succeed in setup");
+    frame_system::Pallet::<T>::set_block_number(2u32.into());
     #[block]
     {
-      let _ = Pallet::<T>::on_idle(1u32.into(), Weight::MAX);
+      let _ = Pallet::<T>::on_idle(2u32.into(), Weight::MAX);
     }
     let inst =
       Pallet::<T>::active_actor_view(actor_id).expect("actor must survive benchmark cycle");
@@ -2559,6 +2707,7 @@ mod benches {
       contract
         .body_commitment()
         .expect("bounded benchmark body commitment"),
+      contract.trigger.wake_qualification(&contract.window),
       1,
       [2u8; 32],
       1,
@@ -2754,54 +2903,53 @@ mod benches {
   }
 
   fn fund_reachable_update_assets<T: Config>(actor_id: ActorId, amount: T::Balance) {
-    fund_reachable_assets_except::<T>(actor_id, amount, None);
+    let _ = fund_reachable_assets_except::<T>(actor_id, amount, None);
   }
 
   fn fund_reachable_assets_except<T: Config>(
     actor_id: ActorId,
     amount: T::Balance,
     excluded: Option<T::AssetId>,
-  ) {
+  ) -> Vec<T::AssetId> {
     let identity = Pallet::<T>::actor_identity(actor_id).expect("update Actor identity exists");
-    let funding = ActorFunding::<T>::get(actor_id).expect("update funding exists");
-    T::BenchmarkHelper::enable_asset_ops_ingress();
-    for asset in &funding.funding_tracked_assets {
-      if excluded == Some(*asset) {
-        continue;
+    let contract = Pallet::<T>::load_actor_contract(actor_id).expect("update Contract exists");
+    let mut assets = Vec::new();
+    let mut include = |asset: T::AssetId| {
+      if excluded != Some(asset) && !assets.contains(&asset) {
+        assets.push(asset);
       }
-      T::AssetOps::mint(&identity.owner, *asset, amount.saturating_mul(2u32.into()))
-        .expect("authorized funding source has transferable custody");
-      T::BenchmarkHelper::transfer_signed(
-        &identity.owner,
-        &identity.sovereign_account,
-        *asset,
-        amount,
-      )
-      .expect("real owner ingress accumulates tracked funding");
+    };
+    for step in &contract.steps {
+      match step.task {
+        ActorTask::Transfer { asset, .. }
+        | ActorTask::SplitTransfer { asset, .. }
+        | ActorTask::Burn { asset, .. }
+        | ActorTask::Stake { asset, .. } => include(asset),
+        ActorTask::SwapIn { asset_in, .. } | ActorTask::SwapOut { asset_in, .. } => {
+          include(asset_in)
+        }
+        ActorTask::AddLiquidity {
+          asset_a, asset_b, ..
+        }
+        | ActorTask::DonateLiquidity {
+          asset_a, asset_b, ..
+        } => {
+          include(asset_a);
+          include(asset_b);
+        }
+        ActorTask::RemoveLiquidity { lp_asset, .. } => include(lp_asset),
+        ActorTask::Mint { .. } | ActorTask::Unstake { .. } | ActorTask::StopCycle => {}
+      }
     }
-    let accumulated = ActorFunding::<T>::get(actor_id).expect("funded Actor exists");
-    assert_eq!(
-      accumulated.funding_accumulated.len(),
-      funding
-        .funding_tracked_assets
-        .iter()
-        .filter(|asset| excluded != Some(**asset))
-        .count()
-    );
-    assert!(
-      funding
-        .funding_tracked_assets
-        .iter()
-        .all(|asset| if excluded == Some(*asset) {
-          !accumulated.funding_accumulated.contains_key(asset)
-        } else {
-          accumulated.funding_accumulated.get(asset) == Some(&amount)
-        })
-    );
+    for asset in &assets {
+      let reachable_amount = amount.max(T::AssetOps::minimum_balance(*asset));
+      T::AssetOps::mint(&identity.sovereign_account, *asset, reachable_amount)
+        .expect("reachable authored step has sovereign custody at its runtime minimum");
+    }
+    assets
   }
 
   fn prepare_reachable_update<T: Config>(
-    opening_legs: u32,
     family: TriggerFamily,
   ) -> Result<
     (
@@ -2814,7 +2962,7 @@ mod benches {
   > {
     let caller: T::AccountId = whitelisted_caller();
     ensure_creation_balance::<T>(&caller);
-    let (steps, liquidity_funding) = reachable_retry_contract_allocation::<T>(opening_legs, 0)?;
+    let (steps, liquidity_funding) = reachable_retry_contract_allocation::<T>()?;
     let feeds = observation_feed_pool::<T>(if family == TriggerFamily::ObservationChange {
       5
     } else {
@@ -2854,62 +3002,29 @@ mod benches {
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let funding_amount = liquidity_funding.2.min(liquidity_funding.3);
     assert!(!funding_amount.is_zero());
-    fund_reachable_update_assets::<T>(actor_id, funding_amount);
+    let _ = fund_reachable_assets_except::<T>(actor_id, funding_amount, Some(liquidity_funding.0));
     open_reachable_retry::<T>(actor_id, liquidity_funding);
     let state = Pallet::<T>::active_actor_state(actor_id).expect("update Run is live");
+    assert!(
+      !IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id),
+      "suspended update Actor has rearmed indexed detection"
+    );
     let run = state.run_state.as_ref().expect("real update Run exists");
     assert_eq!(
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.funding_snapshot.len(),
-      state.funding.funding_tracked_assets.len()
-    );
-    assert!(
-      run
-        .funding_snapshot
-        .values()
-        .all(|amount| *amount == funding_amount)
-    );
-    assert!(state.funding.funding_accumulated.is_empty());
     let retained_run = run.encode();
-    // A second paid family occurrence establishes the real deferred latch of the active Run.
-    match family {
-      TriggerFamily::ObservationCrossing => {
-        for rearm in [true, false] {
-          frame_system::Pallet::<T>::set_block_number(
-            frame_system::Pallet::<T>::block_number().saturating_add(One::one()),
-          );
-          if rearm {
-            publish_observation_at_most::<T>(old_feed, 1);
-          } else {
-            assert!(publish_zero_step_observation::<T>(old_feed, 1_000) >= 4);
-          }
-          while CrossingPendingFeedListState::<T>::get().count > 0 {
-            Pallet::<T>::crossing_work_unit()
-              .expect("real deferred Crossing occurrence materializes");
-          }
-        }
-      }
-      TriggerFamily::ObservationChange => {
-        Pallet::<T>::note_observation_changed(old_feed, 3)
-          .expect("deferred observation occurrence is admitted");
-        while DirtyObservationListState::<T>::get().count > 0 {
-          Pallet::<T>::do_fanout_dirty_observation_page()
-            .expect("deferred observation occurrence materializes");
-        }
-      }
-      _ => unreachable!(),
-    }
+    // Indexed occurrences during a live Run are ignored; the removed funding accumulator must not
+    // manufacture a deferred latch for this update fixture.
     assert!(
-      benchmark_fixture_hot::<T>(actor_id)
-        .expect("deferred Actor exists")
+      !benchmark_fixture_hot::<T>(actor_id)
+        .expect("update Actor exists")
         .pending_signal
     );
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id)
-        .expect("deferred Run remains live")
+        .expect("update Run remains live")
         .encode(),
       retained_run
     );
@@ -2965,13 +3080,10 @@ mod benches {
     );
     assert!(!ActorRunStateStore::<T>::contains_key(actor_id));
     assert!(
-      benchmark_fixture_hot::<T>(actor_id)
+      !benchmark_fixture_hot::<T>(actor_id)
         .expect("updated Actor is active")
         .pending_signal
     );
-    let funding = ActorFunding::<T>::get(actor_id).expect("updated funding exists");
-    assert!(funding.funding_tracked_assets.is_empty());
-    assert!(funding.funding_accumulated.is_empty());
     assert_max_contract_geometry::<T>(actor_id);
     match expected.trigger {
       Trigger::ObservationCrossing { threshold, .. } => {
@@ -2998,10 +3110,7 @@ mod benches {
     Pallet::<T>::do_try_state().expect("Contract replacement preserves full state invariants");
   }
 
-  fn reachable_retry_contract_allocation<T: Config>(
-    opening_legs: u32,
-    opening_start: u32,
-  ) -> Result<
+  fn reachable_retry_contract_allocation<T: Config>() -> Result<
     (
       ContractSteps<T>,
       (T::AssetId, T::AssetId, T::Balance, T::Balance),
@@ -3009,35 +3118,27 @@ mod benches {
     polkadot_sdk::frame_benchmarking::BenchmarkError,
   > {
     let (mut steps, liquidity_funding) = retry_contract_with_opening_partition::<T>(
-      T::MaxContractSteps::get() * 2,
       T::MaxContractSteps::get() * benchmark_predicate_capacity::<T>(),
     )?;
-    let leg_count = T::MaxContractSteps::get()
-      .checked_mul(2)
-      .expect("host amount surface bound fits");
-    assert!(opening_legs <= leg_count);
-    assert!(opening_start < leg_count);
-    for (index, step) in steps.iter_mut().enumerate() {
+    for step in &mut steps {
       let ActorTask::AddLiquidity {
         amount_a, amount_b, ..
       } = &mut step.task
       else {
         panic!("reachable retry allocation requires the admitted two-leg Contract");
       };
-      for (offset, amount) in [amount_a, amount_b].into_iter().enumerate() {
-        let position = ((index * 2 + offset) as u32 + leg_count - opening_start) % leg_count;
-        if position >= opening_legs {
-          *amount = AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50));
-        }
-      }
+      *amount_a = AmountResolution::Percent(Perbill::from_percent(50));
+      *amount_b = AmountResolution::Percent(Perbill::from_percent(50));
     }
+    let ActorTask::AddLiquidity { amount_a, .. } = &mut steps[0].task else {
+      unreachable!("reachable retry head is a liquidity task")
+    };
+    *amount_a = AmountResolution::Fixed(liquidity_funding.2);
     retain_admitted_contract_geometry::<T>(ActorType::System, &mut steps, &[0])?;
     Ok((steps, liquidity_funding))
   }
 
   fn create_reachable_manual_retry<T: Config>(
-    opening_legs: u32,
-    opening_start: u32,
     cooldown_blocks: u32,
   ) -> Result<
     (ActorId, (T::AssetId, T::AssetId, T::Balance, T::Balance)),
@@ -3045,7 +3146,7 @@ mod benches {
   > {
     let owner: T::AccountId = account("manual-retry-owner", 0, 0);
     ensure_creation_balance::<T>(&owner);
-    let (steps, funding) = reachable_retry_contract_allocation::<T>(opening_legs, opening_start)?;
+    let (steps, funding) = reachable_retry_contract_allocation::<T>()?;
     let mut contract = system_contract::<T>(
       Schedule {
         trigger: Trigger::Manual,
@@ -3067,56 +3168,37 @@ mod benches {
     Ok((actor_id, funding))
   }
 
-  fn prepare_reachable_suspended_head<T: Config>(
-    opening_legs: u32,
-    opening_start: u32,
-  ) -> Result<(ActorId, ActorStepTicketOf<T>), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let (actor_id, funding) = create_reachable_manual_retry::<T>(opening_legs, opening_start, 100)?;
-    open_reachable_retry::<T>(actor_id, funding);
-    let run = ActorRunStateStore::<T>::get(actor_id).expect("real retry Run exists");
-    let retained_run = run.encode();
-    frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    let stats = Pallet::<T>::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter);
-    assert!(stats.ready_entries >= 1);
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
-    assert_eq!(
-      ActorRunStateStore::<T>::get(actor_id)
-        .expect("due Run remains")
-        .encode(),
-      retained_run
-    );
-    let state =
-      Pallet::<T>::active_actor_state(actor_id).expect("due Actor has canonical authority");
-    let Some(ActorControlLocation::Ready { ticket }) = ActorControlLocators::<T>::get(actor_id)
-    else {
-      panic!("actual due wakeup must publish a Ready ticket");
-    };
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).expect("Ready control cell exists");
-    let ticket = Pallet::<T>::build_actor_step_ticket(
-      actor_id,
-      ticket,
-      run.eligible_at,
-      &state.identity,
-      &state.hot,
-      state.run_state.as_ref(),
-      &cell.admission,
-    )
-    .expect("canonical due authority produces the measured Step ticket");
+  fn prepare_reachable_suspended_head<T: Config>()
+  -> Result<(ActorId, ActorStepTicketOf<T>), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    // A maximum-geometry retry Contract whose tail amount sources stay at Percent(1%) suspends at
+    // cursor 0 on the canonical B+1 opening; the inner fixture returns the due retry to its
+    // Pending Service residence exactly as the production block deadline frontier would.
+    let tail_legs = T::MaxContractSteps::get()
+      .saturating_sub(1)
+      .saturating_mul(2);
+    let (actor_id, skip) = prepare_reachable_suspended_head_inner::<T>(tail_legs, 0, 0, None)?;
+    assert!(skip.is_none());
+    let state = Pallet::<T>::active_actor_state(actor_id)
+      .expect("suspended head retains canonical authority");
     assert_eq!(state.hot.cycle_state, CycleState::Suspended);
-    assert_eq!(
-      run.opening_snapshot.len(),
-      Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
-    assert_eq!(
-      run.funding_snapshot.len(),
-      state.funding.funding_tracked_assets.len()
-    );
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    let run = state.run_state.expect("suspended head retains Run");
+    let admission =
+      benchmark_fixture_admission::<T>(actor_id).expect("suspended head owns admission");
+    let ticket = ActorStepTicket {
+      actor_id,
+      cycle_nonce: run.cycle_nonce,
+      cursor: run.cursor,
+      ticket: 0,
+      eligible_at: run.eligible_at,
+      contract_commitment: ActorContractCommitment {
+        semantic_contract_id: admission.semantic_contract_id,
+        body_commitment: admission.body_commitment,
+      },
+    };
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("real due Ready fixture passes full state audit");
+    Pallet::<T>::do_try_state().expect("canonical suspended head passes full state audit");
     Ok((actor_id, ticket))
   }
 
@@ -3301,12 +3383,21 @@ mod benches {
     T::BenchmarkHelper::finalize_scheduler_clock()?;
     T::BenchmarkHelper::advance_to_scheduler_tick(first)?;
     let now = frame_system::Pallet::<T>::block_number();
+    let now_tick = Pallet::<T>::current_scheduler_tick().expect("ordinary due host clock");
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    Pallet::<T>::drain_overdue_wakeups_cursor(now, &mut meter);
-    let (location, cell) =
-      Pallet::<T>::actor_control_cell(actor_id).expect("due Cadenced target is Ready");
-    assert!(matches!(location, ActorControlLocation::Ready { .. }));
-    assert!(cell.hot.pending_signal && cell.hot.trigger_wakeup_pointer.is_none());
+    Pallet::<T>::service_due_deadline_frontiers(
+      &mut meter,
+      ServiceResidenceKind::Live,
+      now,
+      now_tick,
+      None,
+      None,
+    )
+    .expect("complete canonical temporal envelope remains admitted");
+    let hot = Pallet::<T>::actor_hot(actor_id).expect("due Cadenced target remains active");
+    assert!(hot.pending_signal && hot.trigger_wakeup_pointer.is_none());
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
     let service_due = now.saturating_add(2u32.into());
     benchmark_fixture_prepare_consumed_service_waiting::<T>(actor_id, service_due)();
     let block_location = ActorControlLocators::<T>::get(actor_id)
@@ -3376,12 +3467,23 @@ mod benches {
 
     frame_system::Pallet::<T>::set_block_number(second.eligible_at);
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    let stats = Pallet::<T>::drain_overdue_wakeups_cursor(second.eligible_at, &mut meter);
-    assert_eq!(stats.ready_entries, 1);
-    let (location, ready) =
-      Pallet::<T>::actor_control_cell(actor_id).expect("due maximal-cell target is Ready");
-    assert!(matches!(location, ActorControlLocation::Ready { .. }));
-    assert!(ready.hot.wakeup_pointer.is_none() && ready.hot.trigger_wakeup_pointer.is_some());
+    let pass = Pallet::<T>::service_due_deadline_frontiers(
+      &mut meter,
+      ServiceResidenceKind::Live,
+      second.eligible_at,
+      0,
+      None,
+      None,
+    )
+    .expect("complete canonical deadline envelope remains admitted");
+    assert!(matches!(
+      pass.block,
+      Ok(DueBlockDeadlineMutation::RetryReturned(returned)) if returned.actor_id == actor_id
+    ));
+    let ready = Pallet::<T>::actor_hot(actor_id).expect("due maximal-cell target remains active");
+    assert!(ready.wakeup_pointer.is_none() && ready.trigger_wakeup_pointer.is_some());
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
 
     let due = second.eligible_at.saturating_add(2u32.into());
     let active_room = Pallet::<T>::effective_active_actor_limit()
@@ -3600,10 +3702,7 @@ mod benches {
     }
     let mut steps = inert_contract_steps_of_len::<T>(2);
     steps[0].precondition = Some(packed_predicate_clauses::<T>(
-      vec![TimedPredicate {
-        timing: ObservationTiming::Current,
-        predicate: Predicate::BlockNumberBelow { threshold: 0 },
-      }],
+      vec![Predicate::BlockNumberBelow { threshold: 0 }],
       1,
     ));
     let actor_id = create(32, 100, steps);
@@ -3613,16 +3712,23 @@ mod benches {
       .tick;
     T::BenchmarkHelper::finalize_scheduler_clock()?;
     T::BenchmarkHelper::advance_to_scheduler_tick(first)?;
+    let now = frame_system::Pallet::<T>::block_number();
+    let now_tick = Pallet::<T>::current_scheduler_tick().expect("ordinary due host clock");
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    Pallet::<T>::drain_overdue_wakeups_cursor(
-      frame_system::Pallet::<T>::block_number(),
+    Pallet::<T>::service_due_deadline_frontiers(
       &mut meter,
-    );
-    let (location, cell) = Pallet::<T>::actor_control_cell(actor_id).expect("due target exists");
-    assert!(matches!(location, ActorControlLocation::Ready { .. }));
-    frame_system::Pallet::<T>::set_block_number(
-      frame_system::Pallet::<T>::block_number().max(cell.eligible_at.unwrap()),
-    );
+      ServiceResidenceKind::Live,
+      now,
+      now_tick,
+      None,
+      None,
+    )
+    .expect("complete canonical temporal envelope remains admitted");
+    let ready = Pallet::<T>::actor_hot(actor_id).expect("due target remains active");
+    assert!(ready.pending_signal && ready.trigger_wakeup_pointer.is_none());
+    let service = ServiceNodes::<T>::get(actor_id).expect("due target owns canonical Service");
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    frame_system::Pallet::<T>::set_block_number(now.max(service.eligible_from));
     Pallet::<T>::execute_cycle(Weight::MAX);
     let run = Pallet::<T>::actor_run_state(actor_id).expect("real Opening retains its suffix");
     assert_eq!(run.cursor, 1);
@@ -3722,7 +3828,6 @@ mod benches {
     assert!(!ActorRunHeads::<T>::contains_key(fixture.actor_id));
     assert!(!ActorRunPayloads::<T>::contains_key(fixture.actor_id));
     assert!(!ActorContractHeads::<T>::contains_key(fixture.actor_id));
-    assert!(!ActorFunding::<T>::contains_key(fixture.actor_id));
     assert!(!ActorStateHolds::<T>::contains_key(fixture.actor_id));
     assert!(
       ActorContractTailChunks::<T>::iter_prefix(fixture.actor_id)
@@ -3949,8 +4054,7 @@ mod benches {
           .collect::<Vec<_>>()
       }
       Trigger::ObservationChange { feed } => {
-        Pallet::<T>::note_observation_changed(feed, 2)
-          .expect("real observation occurrence is admitted");
+        publish_zero_step_observation::<T>(feed, 1_000);
         while DirtyObservationListState::<T>::get().count > 0 {
           Pallet::<T>::do_fanout_dirty_observation_page()
             .expect("observation occurrence materializes");
@@ -3978,6 +4082,19 @@ mod benches {
         {
           break;
         }
+        // Canonical publication serves the fired cohort no earlier than the next block, so
+        // advance to the guards' earliest eligibility before draining the service ring.
+        let guard_eligible_from = occurrence_cohort
+          .iter()
+          .filter(|id| **id != actor_id)
+          .filter_map(|id| ServiceNodes::<T>::get(*id).map(|node| node.eligible_from))
+          .max();
+        if let Some(next) = guard_eligible_from {
+          let current = frame_system::Pallet::<T>::block_number();
+          if next > current {
+            frame_system::Pallet::<T>::set_block_number(next);
+          }
+        }
         Pallet::<T>::execute_cycle(Weight::MAX);
       }
       assert!(
@@ -3990,11 +4107,9 @@ mod benches {
       Pallet::<T>::resume_actor(RawOrigin::Signed(identity.owner.clone()).into(), actor_id)
         .expect("target resumes its retained occurrence through the public lifecycle");
     }
-    let (_, ready) = Pallet::<T>::actor_control_cell(actor_id)
-      .expect("real occurrence retains canonical control authority");
-    let eligible_at = ready
-      .eligible_at
-      .expect("latched service has an eligibility boundary");
+    let eligible_at = ServiceNodes::<T>::get(actor_id)
+      .expect("latched occurrence owns one canonical service member")
+      .eligible_from;
     frame_system::Pallet::<T>::set_block_number(now.max(eligible_at));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real close occurrence preserves canonical state");
@@ -4005,22 +4120,18 @@ mod benches {
       }
       if benchmark_fixture_hot::<T>(actor_id)
         .is_some_and(|hot| hot.cycle_state == CycleState::Suspended)
-        && matches!(
-          ActorControlLocators::<T>::get(actor_id),
-          Some(ActorControlLocation::Waiting { .. })
-        )
+        && !ServiceNodes::<T>::contains_key(actor_id)
+        && DeadlineHandles::<T>::contains_key(actor_id)
         && occurrence_cohort
           .iter()
           .all(|id| benchmark_fixture_hot::<T>(*id).is_some_and(|hot| !hot.pending_signal))
       {
         break;
       }
-      if let Some((ActorControlLocation::Ready { .. }, cell)) =
-        Pallet::<T>::actor_control_cell(actor_id)
-      {
+      if let Some(node) = ServiceNodes::<T>::get(actor_id) {
         let current = frame_system::Pallet::<T>::block_number();
-        if let Some(next) = cell.eligible_at.filter(|next| *next > current) {
-          frame_system::Pallet::<T>::set_block_number(next);
+        if node.eligible_from > current {
+          frame_system::Pallet::<T>::set_block_number(node.eligible_from);
         }
       }
     }
@@ -4041,75 +4152,34 @@ mod benches {
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert!(state.funding.funding_tracked_assets.is_empty());
-    assert!(run.funding_snapshot.is_empty());
   }
 
   fn assert_contract_derived_retry<T: Config>(actor_id: ActorId) {
     let state = Pallet::<T>::active_actor_state(actor_id).expect("retry Actor remains active");
     assert_eq!(state.hot.cycle_state, CycleState::Suspended);
     assert!(!state.hot.pending_signal);
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Waiting { .. })
-    ));
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
     let contract =
       Pallet::<T>::load_actor_contract(actor_id).expect("retry Contract remains admitted");
     let surfaces = Pallet::<T>::opening_surfaces(&contract.steps, 0);
     let run = state.run_state.as_ref().expect("Opening published the Run");
+    let handle = DeadlineHandles::<T>::get(actor_id)
+      .expect("suspended retry owns one canonical deadline residence");
+    assert_eq!(handle.key, WakeupKey::Block(run.eligible_at));
     assert_eq!(run.cursor, 0);
     assert!(matches!(
       run.last_step_outcome,
-      Some(StepOutcome::Failed(TaskFailure {
-        retry: RetryClass::Temporary,
-        ..
-      }))
+      Some(StepOutcome::FundingUnavailable)
+        | Some(StepOutcome::Failed(TaskFailure {
+          retry: RetryClass::Temporary,
+          ..
+        }))
     ));
     assert_eq!(run.opening_snapshot.len(), surfaces.len());
     assert!(
       surfaces
         .iter()
         .all(|surface| run.opening_snapshot.contains_key(surface))
-    );
-    assert_eq!(
-      run.opening_predicate_results.len(),
-      contract
-        .steps
-        .iter()
-        .filter_map(|step| step.precondition.as_ref())
-        .flat_map(|precondition| precondition.clauses.iter())
-        .flat_map(|clause| clause.iter())
-        .filter(|predicate| predicate.timing == ObservationTiming::Opening)
-        .count()
-    );
-    assert!(
-      run
-        .opening_predicate_results
-        .iter()
-        .all(|result| *result == Ok(true))
-    );
-    assert_eq!(
-      run.funding_snapshot.len(),
-      state.funding.funding_tracked_assets.len()
-    );
-    assert!(
-      state
-        .funding
-        .funding_tracked_assets
-        .iter()
-        .all(|asset| run.funding_snapshot.contains_key(asset))
     );
     assert_max_contract_geometry::<T>(actor_id);
     #[cfg(feature = "try-runtime")]
@@ -4124,7 +4194,6 @@ mod benches {
     polkadot_sdk::frame_benchmarking::BenchmarkError,
   > {
     let (mut steps, funding) = retry_contract_with_opening_partition::<T>(
-      T::MaxContractSteps::get() * 2,
       T::MaxContractSteps::get() * benchmark_predicate_capacity::<T>(),
     )?;
     retain_admitted_contract_geometry::<T>(ActorType::System, &mut steps, &[0])?;
@@ -4132,7 +4201,6 @@ mod benches {
   }
 
   fn retry_contract_with_opening_partition<T: Config>(
-    opening_amounts: u32,
     opening_predicates: u32,
   ) -> Result<
     (
@@ -4143,7 +4211,6 @@ mod benches {
   > {
     let step_count = T::MaxContractSteps::get();
     let predicates_per_step = benchmark_predicate_capacity::<T>();
-    assert!(opening_amounts <= step_count * 2);
     assert!(opening_predicates <= step_count * predicates_per_step);
     if step_count < 2
       || predicates_per_step == 0
@@ -4169,31 +4236,17 @@ mod benches {
     let mut contract_steps = ContractSteps::<T>::default();
     for (step_index, pair) in assets.chunks_exact(2).enumerate() {
       let predicates = (0..predicates_per_step)
-        .map(|index| TimedPredicate {
-          timing: if step_index as u32 * predicates_per_step + index < opening_predicates {
-            ObservationTiming::Opening
-          } else {
-            ObservationTiming::Current
-          },
-          predicate: Predicate::BalanceBelow {
-            asset: pair[index as usize % 2],
-            threshold: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
-              .saturating_sub(index.saturated_into()),
-          },
+        .map(|index| Predicate::BalanceBelow {
+          asset: pair[index as usize % 2],
+          threshold: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
+            .saturating_sub(index.saturated_into()),
         })
         .collect();
-      let amount = |position: u32| {
-        if step_index as u32 * 2 + position < opening_amounts {
-          AmountResolution::PercentageAtOpening(Perbill::from_percent(50))
-        } else {
-          AmountResolution::PercentageOfCurrent(Perbill::from_percent(50))
-        }
-      };
       let task = ActorTask::AddLiquidity {
         asset_a: pair[0],
         asset_b: pair[1],
-        amount_a: amount(0),
-        amount_b: amount(1),
+        amount_a: AmountResolution::Percent(Perbill::from_percent(50)),
+        amount_b: AmountResolution::Percent(Perbill::from_percent(50)),
         min_lp_out: if step_index == 0 {
           <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
         } else {
@@ -4218,9 +4271,8 @@ mod benches {
         .expect("Crossing retry Contract fits");
     }
     // The funded first attempt rejects its output bound transactionally and enters service Waiting.
-    // Amount and predicate prefixes independently select immutable captures.
-    let surfaces = Pallet::<T>::opening_surfaces(&contract_steps, 0);
-    assert_eq!(surfaces.len() as u32, opening_amounts);
+    // Only Opening predicates retain immutable cycle captures.
+    assert!(Pallet::<T>::opening_surfaces(&contract_steps, 0).is_empty());
     Ok((contract_steps, (asset_a, asset_b, amount_a, amount_b)))
   }
 
@@ -4231,15 +4283,45 @@ mod benches {
     ActorAdmissionCertificateOf<T>,
     LoadedActorStepOf<T>,
   ) {
+    let node = ServiceNodes::<T>::get(actor_id)
+      .expect("benchmark frame retains canonical Service residence");
+    let now = frame_system::Pallet::<T>::block_number()
+      .max(node.last_considered.saturating_add(1u32.into()));
+    frame_system::Pallet::<T>::set_block_number(now);
     let (state, admission, loaded_step) = Pallet::<T>::load_frame_actor_service_state(actor_id)
       .expect("benchmark frame service state is coherent");
-    Pallet::<T>::remove_primary_control_cell_inner(actor_id)
-      .expect("benchmark frame source primary is consumed");
+    // The canonical Service round is the sole ordinary drain: opening the round commits the
+    // block frontier that the measured attempt observes, replacing the retired legacy primary
+    // control-cell consumption.
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Pallet::<T>::begin_service_round(now)
+        .expect("effectful benchmark frame canonical round begins");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
     (
       state,
       admission,
       loaded_step.expect("benchmark frame current Step exists"),
     )
+  }
+
+  /// Returns one canonically suspended retry to its `Pending` Service residence at `due`. The
+  /// production block deadline frontier performs exactly this branch through the shared deadline
+  /// owner; the retired legacy waiting cursor never observes the canonical `DeadlineHandles`
+  /// member a canonically published retry registers.
+  fn service_canonical_suspended_retry<T: Config>(actor_id: ActorId, due: BlockNumberFor<T>) {
+    assert!(
+      DeadlineHandles::<T>::contains_key(actor_id),
+      "a canonically suspended retry owns one DeadlineHandles member"
+    );
+    let actor =
+      Pallet::<T>::load_actor_ref(actor_id).expect("suspended retry has a live reference");
+    Pallet::<T>::return_due_deadline_member_to_service(actor, ServiceResidenceKind::Live, due)
+      .expect("canonical due retry returns to Service residence");
+    assert!(
+      ServiceNodes::<T>::contains_key(actor_id),
+      "the returned retry owns one Service ring member"
+    );
   }
 
   fn install_wakeup_cursor_page<T: Config>(page_id: WakeupPageId, len: u32) {
@@ -4455,6 +4537,23 @@ mod benches {
     }
   }
 
+  fn assert_canonical_ingress_readiness<T: Config>(actor_id: ActorId) {
+    let hot = benchmark_fixture_hot::<T>(actor_id).expect("ingress target remains active");
+    assert!(hot.pending_signal);
+    assert!(hot.queue_ticket.is_none() && hot.wakeup_pointer.is_none());
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    let node = ServiceNodes::<T>::get(actor_id)
+      .expect("ingress readiness publishes one canonical Service member");
+    assert_eq!(
+      node.eligible_from,
+      frame_system::Pallet::<T>::block_number().saturating_add(One::one())
+    );
+    assert!(matches!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    ));
+  }
+
   fn prepare_saturated_address_actor<T: Config>(
     seed: u32,
     matched_source: Option<T::AccountId>,
@@ -4480,13 +4579,6 @@ mod benches {
     contract.funding = FundingSourcePolicy::AnyVerifiedIngress;
     Pallet::<T>::store_actor_contract(actor_id, contract)
       .expect("benchmark ingress Contract remains admitted");
-    ActorFunding::<T>::mutate(actor_id, |maybe| {
-      let funding = maybe.as_mut().expect("benchmark actor funding exists");
-      funding
-        .funding_accumulated
-        .try_insert(T::FeeNativeAssetId::get(), One::one())
-        .expect("tracked funding accumulator fits");
-    });
     install_saturated_tombstone_queue::<T>();
     (actor_id, recipient)
   }
@@ -4569,6 +4661,275 @@ mod benches {
   }
 
   #[benchmark]
+  fn service_member_publish_empty() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    let actor = ActorRef {
+      actor_id: 8_998,
+      generation: 1,
+    };
+    #[block]
+    {
+      Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Live, now)
+        .expect("empty service-ring publication succeeds");
+    }
+    assert_eq!(ServiceHeader::<T>::get().count, 1);
+    assert!(ActorProcesses::<T>::contains_key(actor.actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
+  }
+
+  #[benchmark]
+  fn service_member_publish_populated() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    let retained = ActorRef {
+      actor_id: 8_999,
+      generation: 1,
+    };
+    let actor = ActorRef {
+      actor_id: 9_000,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(retained, ServiceResidenceKind::Live, now);
+    #[block]
+    {
+      Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Pending, now)
+        .expect("populated service-ring publication succeeds");
+    }
+    assert_eq!(ServiceHeader::<T>::get().count, 2);
+    assert!(ActorProcesses::<T>::contains_key(actor.actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
+  }
+
+  #[benchmark]
+  fn service_member_retire_singleton() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    let actor = ActorRef {
+      actor_id: 9_001,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(actor, ServiceResidenceKind::Live, now);
+    #[block]
+    {
+      Pallet::<T>::retire_service_member(actor, CloseReason::OwnerInitiated)
+        .expect("singleton service member retirement succeeds");
+    }
+    assert_eq!(ServiceHeader::<T>::get().count, 0);
+    assert!(!ServiceNodes::<T>::contains_key(actor.actor_id));
+  }
+
+  #[benchmark]
+  fn service_member_retire_pair_cursor() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    let actor = ActorRef {
+      actor_id: 9_002,
+      generation: 1,
+    };
+    let retained = ActorRef {
+      actor_id: 9_003,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(actor, ServiceResidenceKind::Live, now);
+    benchmark_insert_service_member::<T>(retained, ServiceResidenceKind::Pending, now);
+    #[block]
+    {
+      Pallet::<T>::retire_service_member(actor, CloseReason::OwnerInitiated)
+        .expect("pair cursor service member retirement succeeds");
+    }
+    assert_eq!(ServiceHeader::<T>::get().cursor, Some(retained));
+    assert_eq!(ServiceHeader::<T>::get().count, 1);
+  }
+
+  #[benchmark]
+  fn service_member_retire_interior() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    let first = ActorRef {
+      actor_id: 9_004,
+      generation: 1,
+    };
+    let actor = ActorRef {
+      actor_id: 9_005,
+      generation: 1,
+    };
+    let last = ActorRef {
+      actor_id: 9_006,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(first, ServiceResidenceKind::Live, now);
+    benchmark_insert_service_member::<T>(actor, ServiceResidenceKind::Live, now);
+    benchmark_insert_service_member::<T>(last, ServiceResidenceKind::Pending, now);
+    #[block]
+    {
+      Pallet::<T>::retire_service_member(actor, CloseReason::OwnerInitiated)
+        .expect("interior service member retirement succeeds");
+    }
+    assert_eq!(ServiceHeader::<T>::get().cursor, Some(first));
+    assert_eq!(ServiceHeader::<T>::get().count, 2);
+    assert_eq!(
+      ServiceNodes::<T>::get(first.actor_id).expect("first").next,
+      last
+    );
+    assert_eq!(
+      ServiceNodes::<T>::get(last.actor_id)
+        .expect("last")
+        .previous,
+      first
+    );
+  }
+
+  #[benchmark]
+  fn service_member_insert_populated() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    let retained = ActorRef {
+      actor_id: 9_000,
+      generation: 1,
+    };
+    let actor = ActorRef {
+      actor_id: 9_001,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(retained, ServiceResidenceKind::Live, now);
+    benchmark_service_process::<T>(actor, ServiceResidenceKind::Pending, None);
+    #[block]
+    {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::insert_service_member(actor, ServiceResidenceKind::Pending, now);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("populated service-ring insertion succeeds");
+    }
+    assert_eq!(ServiceHeader::<T>::get().count, 2);
+    assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
+  }
+
+  #[benchmark]
+  fn service_round_begin_populated() {
+    let admitted_at: BlockNumberFor<T> = 1u32.into();
+    let now: BlockNumberFor<T> = 2u32.into();
+    let actor = ActorRef {
+      actor_id: 9_002,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(actor, ServiceResidenceKind::Live, admitted_at);
+    #[block]
+    {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::begin_service_round(now);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("populated service round begins");
+    }
+    assert_eq!(ServiceHeader::<T>::get().round_block, Some(now));
+  }
+
+  #[benchmark]
+  fn service_round_probe_eligible() {
+    let admitted_at: BlockNumberFor<T> = 1u32.into();
+    let now: BlockNumberFor<T> = 2u32.into();
+    let actor = ActorRef {
+      actor_id: 9_003,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(actor, ServiceResidenceKind::Live, admitted_at);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = Pallet::<T>::begin_service_round(now);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("benchmark service round begins");
+    #[block]
+    {
+      let encounter = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::consider_service_head(now);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("eligible service head is probed");
+      core::hint::black_box(encounter);
+    }
+  }
+
+  #[benchmark]
+  fn service_round_admit_eligible() {
+    let admitted_at: BlockNumberFor<T> = 1u32.into();
+    let now: BlockNumberFor<T> = 2u32.into();
+    let actor = ActorRef {
+      actor_id: 9_004,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(actor, ServiceResidenceKind::Live, admitted_at);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = Pallet::<T>::begin_service_round(now);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("benchmark service round begins");
+    #[block]
+    {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::advance_service_head(actor, now);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("eligible service head is admitted");
+    }
+    assert_eq!(
+      ActorProcesses::<T>::get(actor.actor_id).and_then(|process| process.last_attempted),
+      Some(now)
+    );
+  }
+
+  #[benchmark]
+  fn dependency_publication_begun_empty_source_list() {
+    let source = 9_100;
+    #[block]
+    {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::publish_dependency_event_with_source_retention(source);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("empty-list publication retains its source");
+    }
+    assert_eq!(DependencyScanSourceListState::<T>::get().count, 1);
+    assert!(DependencyScanSourceNodes::<T>::contains_key(source));
+  }
+
+  #[benchmark]
+  fn dependency_publication_begun_populated_source_list() {
+    let retained_source = 9_101;
+    let source = 9_102;
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = Pallet::<T>::publish_dependency_event_with_source_retention(retained_source);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("fixture source is retained");
+    #[block]
+    {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::publish_dependency_event_with_source_retention(source);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("populated-list publication retains its source");
+    }
+    assert_eq!(DependencyScanSourceListState::<T>::get().count, 2);
+    assert!(DependencyScanSourceNodes::<T>::contains_key(source));
+  }
+
+  #[benchmark]
+  fn dependency_publication_coalesced_active_source() {
+    let source = 9_103;
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = Pallet::<T>::publish_dependency_event_with_source_retention(source);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("fixture source is retained");
+    #[block]
+    {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::publish_dependency_event_with_source_retention(source);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("coalesced publication preserves retained source");
+    }
+    assert_eq!(DependencyScanSourceListState::<T>::get().count, 1);
+    assert!(DependencyScanSourceNodes::<T>::contains_key(source));
+  }
+
+  #[benchmark]
   fn materialization_coordinator_base() {
     MaterializationFamilyCursor::<T>::put(0);
     let now = frame_system::Pallet::<T>::block_number();
@@ -4576,9 +4937,8 @@ mod benches {
     {
       core::hint::black_box(Pallet::<T>::materialization_family_has_work(0, now));
       core::hint::black_box(Pallet::<T>::materialization_family_has_work(1, now));
-      core::hint::black_box(Pallet::<T>::materialization_family_has_work(2, now));
       let cursor = MaterializationFamilyCursor::<T>::get();
-      MaterializationFamilyCursor::<T>::put(cursor.saturating_add(1) % 3);
+      MaterializationFamilyCursor::<T>::put(cursor.saturating_add(1) % 2);
     }
     assert_eq!(MaterializationFamilyCursor::<T>::get(), 1);
   }
@@ -4912,9 +5272,6 @@ mod benches {
     let actor_id = bench_create_system_with_plan::<T>(2_999, inert_contract_steps_of_len::<T>(1));
     let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
     install_chunked_contract::<T>(actor_id, &contract);
-    benchmark_fixture_mutate_hot::<T>(actor_id, |hot| {
-      hot.queue_ticket = Some(9);
-    });
     let identity = benchmark_fixture_identity::<T>(actor_id).expect("benchmark identity exists");
     let certificate =
       benchmark_fixture_admission::<T>(actor_id).expect("benchmark admission certificate exists");
@@ -4922,7 +5279,7 @@ mod benches {
       actor_id,
       cycle_nonce: identity.cycle_nonce.saturating_add(1),
       cursor: 0,
-      ticket: 9,
+      ticket: 0,
       eligible_at: now,
       contract_commitment: ActorContractCommitment {
         semantic_contract_id: certificate.semantic_contract_id,
@@ -4942,10 +5299,7 @@ mod benches {
   fn current_step_plan_suspended_head()
   -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     // Funding-heavy host-feasible corner; frontier cases verify reachability, not a Weight envelope.
-    let opening_legs = T::MaxContractSteps::get()
-      .saturating_mul(2)
-      .saturating_sub(T::MaxFundingTrackedAssets::get());
-    let (actor_id, ticket) = prepare_reachable_suspended_head::<T>(opening_legs, 0)?;
+    let (actor_id, ticket) = prepare_reachable_suspended_head::<T>()?;
     let retained = ActorRunStateStore::<T>::get(actor_id)
       .expect("due Run exists")
       .encode();
@@ -5033,128 +5387,6 @@ mod benches {
     Ok(())
   }
 
-  fn prepare_opening_snapshot_assets<T: Config>(e: u32) -> (T::AccountId, Vec<T::AssetId>) {
-    let actor: T::AccountId = account("opening_snapshot_actor", 0, 0);
-    let assets: Vec<_> =
-      T::BenchmarkHelper::setup_max_encoded_predicate_assets(&actor, e.max(2) + 1)
-        .expect("maximum encoded Opening assets exist")
-        .into_iter()
-        .filter(|asset| *asset != T::FeeNativeAssetId::get())
-        .take(e.max(2) as usize)
-        .collect();
-    assert_eq!(assets.len() as u32, e.max(2));
-    assert_eq!(
-      assets
-        .iter()
-        .collect::<alloc::collections::BTreeSet<_>>()
-        .len(),
-      assets.len()
-    );
-    for asset in assets.iter().take(e as usize) {
-      let minimum = T::AssetOps::minimum_balance(*asset);
-      let amount = minimum
-        .checked_add(&One::one())
-        .expect("funded capture amount fits");
-      T::AssetOps::mint(&actor, *asset, amount).expect("Opening capture asset is funded");
-      assert!(T::AssetOps::balance(&actor, *asset) > minimum);
-    }
-    (actor, assets)
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn opening_snapshot_capture(
-    e: Linear<
-      1,
-      { T::MaxOpeningSnapshotEntries::get().min(T::MaxContractSteps::get().saturating_mul(2)) },
-    >,
-  ) {
-    let (actor, assets) = prepare_opening_snapshot_assets::<T>(e);
-    let mut steps = ContractSteps::<T>::default();
-    for index in 0..T::MaxContractSteps::get() {
-      let asset_a = assets[(index * 2).min(e - 1) as usize];
-      let asset_b = if e == 1 {
-        assets[1]
-      } else {
-        assets[if index * 2 + 1 < e {
-          index * 2 + 1
-        } else {
-          e - 2
-        } as usize]
-      };
-      assert_ne!(asset_a, asset_b);
-      steps
-        .try_push(Step {
-          precondition: None,
-          task: ActorTask::AddLiquidity {
-            asset_a,
-            asset_b,
-            amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
-            amount_b: if e == 1 {
-              AmountResolution::Fixed(One::one())
-            } else {
-              AmountResolution::PercentageAtOpening(Perbill::one())
-            },
-            min_lp_out: One::one(),
-          },
-          on_error: StepErrorPolicy::AbortCycle,
-        })
-        .expect("benchmark Opening Step fits");
-    }
-    let snapshot;
-    #[block]
-    {
-      snapshot =
-        Pallet::<T>::capture_opening_snapshot(ActorType::System, &actor, &steps, Zero::zero());
-      core::hint::black_box(&snapshot);
-    }
-    assert_eq!(
-      u32::try_from(snapshot.len()).expect("snapshot count fits"),
-      e
-    );
-    for asset in assets.iter().take(e as usize) {
-      let expected =
-        T::AssetOps::balance(&actor, *asset).saturating_sub(T::AssetOps::minimum_balance(*asset));
-      assert!(!expected.is_zero());
-      assert_eq!(
-        snapshot.get(&OpeningSurface::PreservableAsset(*asset)),
-        Some(&expected)
-      );
-    }
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn opening_target_snapshot_capture(
-    e: Linear<1, { T::MaxOpeningSnapshotEntries::get().min(T::MaxContractSteps::get()) }>,
-  ) {
-    let (actor, assets) = prepare_opening_snapshot_assets::<T>(e);
-    let steps: ContractSteps<T> = (0..T::MaxContractSteps::get())
-      .map(|index| Step {
-        precondition: None,
-        task: ActorTask::Mint {
-          asset: assets[index.min(e - 1) as usize],
-          amount: AmountResolution::PercentageAtOpening(Perbill::one()),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      })
-      .collect::<Vec<_>>()
-      .try_into()
-      .expect("full target-surface Contract fits");
-    let snapshot;
-    #[block]
-    {
-      snapshot =
-        Pallet::<T>::capture_opening_snapshot(ActorType::System, &actor, &steps, Zero::zero());
-      core::hint::black_box(&snapshot);
-    }
-    assert_eq!(snapshot.len() as u32, e);
-    for asset in assets.iter().take(e as usize) {
-      assert_eq!(
-        snapshot.get(&OpeningSurface::TargetAsset(*asset)),
-        Some(&T::AssetOps::balance(&actor, *asset)),
-      );
-    }
-  }
-
   #[benchmark(extra, pov_mode = Measured)]
   fn opening_staking_snapshot_capture(
     e: Linear<1, { T::MaxOpeningSnapshotEntries::get().min(T::MaxContractSteps::get()) }>,
@@ -5175,7 +5407,7 @@ mod benches {
         precondition: None,
         task: ActorTask::Unstake {
           asset: positions[index.min(e - 1) as usize].0,
-          shares: AmountResolution::PercentageAtOpening(Perbill::one()),
+          shares: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       })
@@ -5240,14 +5472,14 @@ mod benches {
           ActorTask::AddLiquidity {
             asset_a: native,
             asset_b: other,
-            amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
+            amount_a: AmountResolution::Percent(Perbill::one()),
             amount_b: AmountResolution::Fixed(One::one()),
             min_lp_out: One::one(),
           }
         } else {
           ActorTask::SwapOut {
             asset_out: native,
-            amount_out: AmountResolution::PercentageAtOpening(Perbill::one()),
+            amount_out: AmountResolution::Percent(Perbill::one()),
             asset_in: other,
             input_limit: InputLimit::Absolute(One::one()),
             slippage_tolerance: Perbill::zero(),
@@ -5358,21 +5590,21 @@ mod benches {
             } else {
               count - 2
             } as usize],
-            amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
+            amount_a: AmountResolution::Percent(Perbill::one()),
             amount_b: if count == 1 {
               AmountResolution::Fixed(One::one())
             } else {
-              AmountResolution::PercentageAtOpening(Perbill::one())
+              AmountResolution::Percent(Perbill::one())
             },
             min_lp_out: One::one(),
           },
           1 => ActorTask::Mint {
             asset: assets[index.min(count - 1) as usize],
-            amount: AmountResolution::PercentageAtOpening(Perbill::one()),
+            amount: AmountResolution::Percent(Perbill::one()),
           },
           _ => ActorTask::Unstake {
             asset: assets[index.min(count - 1) as usize],
-            shares: AmountResolution::PercentageAtOpening(Perbill::one()),
+            shares: AmountResolution::Percent(Perbill::one()),
           },
         },
         on_error: StepErrorPolicy::AbortCycle,
@@ -5502,9 +5734,9 @@ mod benches {
         task: ActorTask::AddLiquidity {
           asset_a: pair[0],
           asset_b: other,
-          amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
+          amount_a: AmountResolution::Percent(Perbill::one()),
           amount_b: if pair.len() == 2 {
-            AmountResolution::PercentageAtOpening(Perbill::one())
+            AmountResolution::Percent(Perbill::one())
           } else {
             AmountResolution::Fixed(One::one())
           },
@@ -5523,7 +5755,7 @@ mod benches {
         precondition: None,
         task: ActorTask::Mint {
           asset: *asset,
-          amount: AmountResolution::PercentageAtOpening(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       });
@@ -5536,7 +5768,7 @@ mod benches {
         precondition: None,
         task: ActorTask::Unstake {
           asset,
-          shares: AmountResolution::PercentageAtOpening(Perbill::one()),
+          shares: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       });
@@ -5590,45 +5822,12 @@ mod benches {
     Ok(())
   }
 
-  #[benchmark(pov_mode = Measured)]
-  fn opening_share_mixed_capture(
-    e: Linear<
-      1,
-      {
-        T::MaxOpeningSnapshotEntries::get().min(
-          T::MaxContractSteps::get()
-            .saturating_mul(2)
-            .saturating_sub(1),
-        )
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let (actor, steps, expected) = prepare_mixed_opening_snapshot::<T>(e - 1, 0, 1, true)?;
-    let snapshot;
-    #[block]
-    {
-      snapshot =
-        Pallet::<T>::capture_opening_snapshot(ActorType::System, &actor, &steps, Zero::zero());
-      core::hint::black_box(&snapshot);
-    }
-    assert_eq!(snapshot.len() as u32, e);
-    assert_eq!(snapshot, expected);
-    Ok(())
-  }
-
-  fn opening_predicate_capture_steps<T: Config>(
+  fn predicate_steps<T: Config>(
     predicates: Vec<Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>>,
   ) -> ContractSteps<T> {
     let mut steps = ContractSteps::<T>::default();
     for chunk in predicates.chunks(benchmark_predicate_capacity::<T>() as usize) {
-      let predicates = chunk
-        .iter()
-        .cloned()
-        .map(|predicate| TimedPredicate {
-          timing: ObservationTiming::Opening,
-          predicate,
-        })
-        .collect();
+      let predicates = chunk.iter().cloned().collect();
       steps
         .try_push(Step {
           precondition: Some(packed_predicate_clauses::<T>(
@@ -5641,99 +5840,6 @@ mod benches {
         .expect("benchmark predicate Step fits");
     }
     steps
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn opening_predicate_traversal() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let (actor, steps) = prepare_full_opening_predicate_capture::<T>(0, 0, false)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert!(results.is_empty());
-    Ok(())
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn opening_predicate_capture(
-    p: Linear<
-      0,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host has no representable predicate capacity for this benchmark",
-      ));
-    }
-    let observations = u32::from(p >= 2);
-    let (actor, steps) =
-      prepare_full_opening_predicate_capture::<T>(p - observations, observations, false)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(u32::try_from(results.len()).expect("result count fits"), p);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_observation_capture(
-    p: Linear<
-      1,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    if benchmark_predicate_capacity::<T>() == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host has no representable predicate capacity for this benchmark",
-      ));
-    }
-    let actor: T::AccountId = account("opening_predicate_actor", 0, 0);
-    let feeds = T::BenchmarkHelper::setup_max_encoded_observation_feeds(p)
-      .expect("maximum-encoded Opening observation feeds are published");
-    assert_eq!(feeds.len() as u32, p);
-    assert_eq!(
-      feeds
-        .iter()
-        .collect::<alloc::collections::BTreeSet<_>>()
-        .len() as u32,
-      p
-    );
-    let steps = opening_predicate_capture_steps::<T>(
-      feeds
-        .into_iter()
-        .map(|feed| Predicate::ObservationAbove {
-          feed,
-          threshold: 0,
-          max_age_blocks: 100,
-        })
-        .collect(),
-    );
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, p);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
   }
 
   fn prepare_observation_read_state<T: Config>(
@@ -5783,179 +5889,7 @@ mod benches {
     Ok((feeds, state == BenchmarkObservationReadState::Fresh))
   }
 
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_observation_read_state(
-    p: Linear<
-      1,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(1)
-      },
-    >,
-    s: Linear<0, 4>,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent Opening predicates",
-      ));
-    }
-    let max_age_blocks = 100;
-    let (feeds, expected) = prepare_observation_read_state::<T>(p, s, max_age_blocks)?;
-    let actor: T::AccountId = account("opening_predicate_actor", 0, 0);
-    let steps = opening_predicate_capture_steps::<T>(
-      feeds
-        .into_iter()
-        .map(|feed| Predicate::ObservationAbove {
-          feed,
-          threshold: 0,
-          max_age_blocks,
-        })
-        .collect(),
-    );
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, p);
-    assert!(results.iter().all(|result| *result == Ok(expected)));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_mixed_predicate_capture(
-    p: Linear<
-      2,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(2)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum < 2 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent mixed Opening predicates",
-      ));
-    }
-    let actor: T::AccountId = account("opening_predicate_actor", 0, 0);
-    let native = T::FeeNativeAssetId::get();
-    let non_native = T::BenchmarkHelper::setup_predicate_assets(&actor, 2)?
-      .into_iter()
-      .find(|asset| *asset != native)
-      .expect("mixed capture has a non-native asset");
-    let assets = if p == 2 {
-      vec![non_native]
-    } else {
-      vec![native, non_native]
-    };
-    let mut predicates = Vec::with_capacity(p as usize);
-    for asset in assets {
-      let amount = T::AssetOps::minimum_balance(asset)
-        .checked_add(&One::one())
-        .expect("mixed capture funding fits");
-      T::AssetOps::mint(&actor, asset, amount).expect("mixed capture asset is funded");
-      predicates.push(Predicate::BalanceAbove {
-        asset,
-        threshold: Zero::zero(),
-      });
-    }
-    let observation_count = p - predicates.len() as u32;
-    let feeds = T::BenchmarkHelper::setup_max_encoded_observation_feeds(observation_count)?;
-    assert_eq!(feeds.len() as u32, observation_count);
-    assert_eq!(
-      feeds
-        .iter()
-        .collect::<alloc::collections::BTreeSet<_>>()
-        .len() as u32,
-      observation_count
-    );
-    predicates.extend(feeds.into_iter().map(|feed| Predicate::ObservationAbove {
-      feed,
-      threshold: 0,
-      max_age_blocks: 100,
-    }));
-    let steps = opening_predicate_capture_steps::<T>(predicates);
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, p);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_asset_heavy_predicate_capture(
-    p: Linear<
-      2,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(2)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum < 2 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent mixed Opening predicates",
-      ));
-    }
-    let actor: T::AccountId = account("opening_predicate_actor", 0, 0);
-    let assets = T::BenchmarkHelper::setup_max_encoded_predicate_assets(&actor, (p - 1).max(2))?;
-    let assets: Vec<_> = assets
-      .into_iter()
-      .filter(|asset| p != 2 || *asset != T::FeeNativeAssetId::get())
-      .collect();
-    assert_eq!(assets.len() as u32, p - 1);
-    assert_eq!(
-      assets
-        .iter()
-        .collect::<alloc::collections::BTreeSet<_>>()
-        .len(),
-      assets.len()
-    );
-    let mut predicates = Vec::with_capacity(p as usize);
-    for asset in assets {
-      let amount = T::AssetOps::minimum_balance(asset)
-        .checked_add(&One::one())
-        .expect("asset-heavy capture funding fits");
-      T::AssetOps::mint(&actor, asset, amount).expect("asset-heavy capture asset is funded");
-      predicates.push(Predicate::BalanceAbove {
-        asset,
-        threshold: Zero::zero(),
-      });
-    }
-    let feeds = T::BenchmarkHelper::setup_max_encoded_observation_feeds(1)?;
-    assert_eq!(feeds.len(), 1);
-    predicates.push(Predicate::ObservationAbove {
-      feed: feeds[0],
-      threshold: 0,
-      max_age_blocks: 100,
-    });
-    let steps = opening_predicate_capture_steps::<T>(predicates);
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, p);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  fn prepare_max_encoded_opening_predicates<T: Config>(
+  fn prepare_max_encoded_predicates<T: Config>(
     balances: u32,
     observations: u32,
     include_native: bool,
@@ -6015,59 +5949,7 @@ mod benches {
         max_age_blocks: 100,
       }));
     }
-    Ok((actor, opening_predicate_capture_steps::<T>(predicates)))
-  }
-
-  fn prepare_full_opening_predicate_capture<T: Config>(
-    balances: u32,
-    observations: u32,
-    include_native: bool,
-  ) -> Result<(T::AccountId, ContractSteps<T>), polkadot_sdk::frame_benchmarking::BenchmarkError>
-  {
-    let per_step = benchmark_predicate_capacity::<T>();
-    let clause_count = T::MaxPreconditionClauses::get().min(per_step) as usize;
-    if clause_count == 0 || T::MaxContractSteps::get() == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent predicate traversal",
-      ));
-    }
-    let (actor, opening_steps) =
-      prepare_max_encoded_opening_predicates::<T>(balances, observations, include_native)?;
-    let mut predicates = opening_steps
-      .iter()
-      .filter_map(|step| step.precondition.as_ref())
-      .flat_map(|precondition| precondition.clauses.iter().flat_map(|clause| clause.iter()))
-      .cloned()
-      .collect::<Vec<_>>();
-    predicates.resize(
-      T::MaxContractSteps::get().saturating_mul(per_step) as usize,
-      TimedPredicate {
-        timing: ObservationTiming::Current,
-        predicate: Predicate::BlockNumberAbove { threshold: 0 },
-      },
-    );
-    let mut steps = ContractSteps::<T>::default();
-    for chunk in predicates.chunks(per_step as usize) {
-      let mut clauses = vec![Vec::new(); clause_count];
-      for (index, predicate) in chunk.iter().enumerate() {
-        clauses[index % clause_count].push(*predicate);
-      }
-      let clauses = clauses
-        .into_iter()
-        .map(|clause| clause.try_into().expect("balanced predicate clause fits"))
-        .collect::<Vec<_>>()
-        .try_into()
-        .expect("maximum predicate clause count fits");
-      steps
-        .try_push(Step {
-          precondition: Some(Precondition { clauses }),
-          task: ActorTask::StopCycle,
-          on_error: StepErrorPolicy::AbortCycle,
-        })
-        .expect("full predicate traversal fits Contract");
-    }
-    assert_eq!(steps.len() as u32, T::MaxContractSteps::get());
-    Ok((actor, steps))
+    Ok((actor, predicate_steps::<T>(predicates)))
   }
 
   fn prepare_max_encoded_step_precondition<T: Config>(
@@ -6085,7 +5967,7 @@ mod benches {
       ));
     }
     let (actor, steps) =
-      prepare_max_encoded_opening_predicates::<T>(balances, observations, include_native)?;
+      prepare_max_encoded_predicates::<T>(balances, observations, include_native)?;
     assert_eq!(steps.len(), 1);
     let predicates = steps[0]
       .precondition
@@ -6095,10 +5977,6 @@ mod benches {
       .iter()
       .flat_map(|clause| clause.iter())
       .cloned()
-      .map(|mut predicate| {
-        predicate.timing = ObservationTiming::Current;
-        predicate
-      })
       .collect();
     let precondition = packed_predicate_clauses::<T>(
       predicates,
@@ -6196,23 +6074,23 @@ mod benches {
 
   #[benchmark(extra, pov_mode = Measured)]
   fn predicate_result_branch(
-    r: Linear<0, 2>,
+    r: Linear<0, 1>,
   ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     let count = benchmark_predicate_capacity::<T>();
-    if count < 2 || (r == 2 && count > T::MaxOpeningPredicateResults::get()) {
+    if count < 2 {
       return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
         "host cannot represent predicate result branch",
       ));
     }
     let (actor, mut precondition) =
       prepare_max_encoded_step_precondition::<T>(count - 1, 1, false)?;
-    for timed in precondition
-      .clauses
-      .iter_mut()
-      .flat_map(|clause| clause.iter_mut())
-    {
-      if r == 1 {
-        match &mut timed.predicate {
+    if r == 1 {
+      for predicate in precondition
+        .clauses
+        .iter_mut()
+        .flat_map(|clause| clause.iter_mut())
+      {
+        match predicate {
           Predicate::BalanceAbove { asset, threshold } => {
             *threshold = T::AssetOps::balance(&actor, *asset);
           }
@@ -6223,41 +6101,15 @@ mod benches {
             ));
           }
         }
-      } else if r == 2 {
-        timed.timing = ObservationTiming::Opening;
       }
     }
-    let opening_results: OpeningPredicateResultsOf<T> = if r == 2 {
-      vec![Err(PredicateError::InvalidObservation); T::MaxOpeningPredicateResults::get() as usize]
-        .try_into()
-        .expect("maximum Opening result vector fits")
-    } else {
-      Default::default()
-    };
-    let mut index = if r == 2 {
-      opening_results.len() - count as usize
-    } else {
-      0
-    };
     let result;
     #[block]
     {
-      result = Pallet::<T>::evaluate_step_precondition(
-        Some(&precondition),
-        &actor,
-        Zero::zero(),
-        &opening_results,
-        &mut index,
-      );
+      result = Pallet::<T>::evaluate_precondition(&precondition, &actor, Zero::zero());
       core::hint::black_box(&result);
     }
-    let expected = match r {
-      0 => Ok(true),
-      1 => Ok(false),
-      _ => Err(Error::<T>::InvalidPredicate.into()),
-    };
-    assert_eq!(result, expected);
-    assert_eq!(index, opening_results.len());
+    assert_eq!(result, if r == 0 { Ok(true) } else { Ok(false) });
     Ok(())
   }
 
@@ -6279,13 +6131,10 @@ mod benches {
       .cloned()
       .collect();
     let (feeds, fresh) = prepare_observation_read_state::<T>(1, s, 100)?;
-    predicates.push(TimedPredicate {
-      timing: ObservationTiming::Current,
-      predicate: Predicate::ObservationAbove {
-        feed: feeds[0],
-        threshold: 0,
-        max_age_blocks: 100,
-      },
+    predicates.push(Predicate::ObservationAbove {
+      feed: feeds[0],
+      threshold: 0,
+      max_age_blocks: 100,
     });
     let precondition = packed_predicate_clauses::<T>(
       predicates,
@@ -6299,210 +6148,6 @@ mod benches {
       core::hint::black_box(&result);
     }
     assert_eq!(result, Ok(expected));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn predicate_cached_evaluation(
-    o: Linear<0, { benchmark_predicate_capacity::<T>().max(1) }>,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let count = benchmark_predicate_capacity::<T>();
-    if o > T::MaxOpeningPredicateResults::get() {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot retain requested Opening results",
-      ));
-    }
-    let (actor, mut precondition) = prepare_max_encoded_step_precondition::<T>(count, 0, false)?;
-    for timed in precondition
-      .clauses
-      .iter_mut()
-      .flat_map(|clause| clause.iter_mut())
-      .take(o as usize)
-    {
-      timed.timing = ObservationTiming::Opening;
-    }
-    let opening_results: OpeningPredicateResultsOf<T> =
-      vec![Ok(true); T::MaxOpeningPredicateResults::get() as usize]
-        .try_into()
-        .expect("maximum Opening result vector fits");
-    let mut index = opening_results.len() - o as usize;
-    let result;
-    #[block]
-    {
-      result = Pallet::<T>::evaluate_step_precondition(
-        Some(&precondition),
-        &actor,
-        Zero::zero(),
-        &opening_results,
-        &mut index,
-      );
-      core::hint::black_box(&result);
-    }
-    assert_eq!(result, Ok(true));
-    assert_eq!(index, opening_results.len());
-    Ok(())
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn opening_max_encoded_balance_capture(
-    p: Linear<
-      0,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent Opening predicates",
-      ));
-    }
-    let (actor, steps) = prepare_full_opening_predicate_capture::<T>(p, 0, false)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, p);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn opening_observation_heavy_capture(
-    o: Linear<
-      1,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .saturating_sub(1)
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum < 2 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent mixed Opening predicates",
-      ));
-    }
-    let (actor, steps) = prepare_full_opening_predicate_capture::<T>(1, o, false)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, o + 1);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_predicate_composition(
-    c: Linear<
-      0,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .saturating_add(1)
-          .saturating_pow(2)
-          .saturating_sub(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    let total = (0..=maximum)
-      .find(|total| c < total.saturating_add(1).saturating_pow(2))
-      .ok_or(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "Opening composition index exceeds the host domain",
-      ))?;
-    let offset = c - total * total;
-    let include_native = offset > total;
-    let balances = if include_native {
-      offset - total - 1
-    } else {
-      offset
-    };
-    let observations = total - balances - u32::from(include_native);
-    let (actor, steps) =
-      prepare_full_opening_predicate_capture::<T>(balances, observations, include_native)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, total);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_predicate_allocation(
-    b: Linear<
-      0,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent Opening predicates",
-      ));
-    }
-    let (actor, steps) = prepare_max_encoded_opening_predicates::<T>(b, maximum - b, false)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, maximum);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_predicate_native_allocation(
-    b: Linear<
-      0,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .saturating_sub(1)
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum < 2 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent mixed Opening predicates",
-      ));
-    }
-    let (actor, steps) = prepare_max_encoded_opening_predicates::<T>(b, maximum - 1 - b, true)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, maximum);
-    assert!(results.iter().all(|result| *result == Ok(true)));
     Ok(())
   }
 
@@ -6542,38 +6187,26 @@ mod benches {
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert!(run.funding_snapshot.is_empty());
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    let (location, cell) =
-      Pallet::<T>::actor_control_cell(actor_id).expect("real Ready authority exists");
-    let ActorControlLocation::Ready { ticket } = location else {
-      panic!("Q1 continuation must have a real Ready ticket");
-    };
-    let context = Pallet::<T>::step_control_weight_context(step_count, cursor, 0, 0, 0, 0)
+    // A canonically published Actor owns no legacy Ready primary, so its current-Step ticket is the
+    // generation-bound canonical successor derived from the persisted Run and admission.
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    let admission =
+      benchmark_fixture_admission::<T>(actor_id).expect("real canonical admission exists");
+    let context = Pallet::<T>::step_control_weight_context(step_count, cursor, 0, 0)
       .expect("tail context exists");
     assert_eq!(context.steps_in_fragment, s);
-    let ticket = Pallet::<T>::build_actor_step_ticket(
+    let ticket = ActorStepTicket {
       actor_id,
-      ticket,
-      run.eligible_at,
-      &state.identity,
-      &state.hot,
-      Some(run),
-      &cell.admission,
-    )
-    .expect("real Ready authority builds a ticket");
+      cycle_nonce: run.cycle_nonce,
+      cursor: run.cursor,
+      ticket: 0,
+      eligible_at: run.eligible_at,
+      contract_commitment: ActorContractCommitment {
+        semantic_contract_id: admission.semantic_contract_id,
+        body_commitment: admission.body_commitment,
+      },
+    };
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real Running tail passes full premeasurement audit");
     Ok((actor_id, ticket))
@@ -6643,12 +6276,9 @@ mod benches {
       Some(packed_predicate_clauses::<T>(
         assets
           .into_iter()
-          .map(|asset| TimedPredicate {
-            timing: ObservationTiming::Current,
-            predicate: Predicate::BalanceAbove {
-              asset,
-              threshold: One::one(),
-            },
+          .map(|asset| Predicate::BalanceAbove {
+            asset,
+            threshold: One::one(),
           })
           .collect(),
         p.div_ceil(T::MaxPreconditionClauses::get()).max(1),
@@ -6665,7 +6295,7 @@ mod benches {
       RunningInnerBranch::Progress => ActorTask::Transfer {
         to: account("running-zero-recipient", 0, 0),
         asset: zero_asset,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+        amount: AmountResolution::Percent(Perbill::from_percent(50)),
       },
     };
     let actor_id = prepare_reachable_running_with_cooldown::<T>(
@@ -6695,41 +6325,20 @@ mod benches {
       .expect("real Running payload exists");
     assert_eq!(state.hot.cycle_state, CycleState::Running);
     assert_eq!(run.cursor, cursor);
-    let opening_before_cursor: u32 = state.contract.steps[..cursor as usize]
-      .iter()
-      .map(|step| {
-        step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count)
-      })
-      .sum();
-    assert_eq!(run.opening_predicate_cursor, opening_before_cursor);
     assert_eq!(
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert!(run.funding_snapshot.is_empty());
-    assert!(state.funding.funding_tracked_assets.is_empty());
-    assert!(state.funding.funding_accumulated.is_empty());
-    frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
-    let context = Pallet::<T>::step_control_weight_context(step_count, cursor, p, 0, 0, 0)
+    let node = ServiceNodes::<T>::get(actor_id)
+      .expect("reachable Running actor retains canonical Service residence");
+    let service_at = run
+      .eligible_at
+      .max(node.eligible_from)
+      .max(node.last_considered.saturating_add(1u32.into()))
+      .max(frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()));
+    frame_system::Pallet::<T>::set_block_number(service_at);
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    let context = Pallet::<T>::step_control_weight_context(step_count, cursor, p, 0)
       .expect("real tail context exists");
     assert_eq!(context.steps_in_fragment, s);
     #[cfg(feature = "try-runtime")]
@@ -6743,42 +6352,66 @@ mod benches {
     state: ActiveActorStateOf<T>,
     admission: ActorAdmissionCertificateOf<T>,
     loaded_step: LoadedActorStepOf<T>,
-    now: BlockNumberFor<T>,
+    _now: BlockNumberFor<T>,
   ) -> Weight {
-    let ticket = Pallet::<T>::build_actor_step_ticket(
-      actor_id,
-      state
-        .hot
-        .queue_ticket
-        .expect("real consumed Ready ticket exists"),
-      now,
-      &state.identity,
-      &state.hot,
-      state.run_state.as_ref(),
-      &admission,
-    )
-    .expect("real Running Step ticket builds");
+    let now = frame_system::Pallet::<T>::block_number();
+    let retry_deadline = if let StepErrorPolicy::RetryLater { max_attempts } =
+      loaded_step.step.on_error
+    {
+      let attempted = state.run_state.as_ref().map_or(1, |run| {
+        run.unsuccessful_attempts_at_cursor.saturating_add(1)
+      });
+      if attempted < max_attempts {
+        let eligible_at = Pallet::<T>::suspension_eligible_at(
+          state.contract.cooldown_blocks,
+          state.contract.window,
+          now,
+          attempted,
+        )
+        .expect("retry eligibility is representable");
+        (now.checked_add(&One::one()) != Some(eligible_at)).then_some(WakeupKey::Block(eligible_at))
+      } else {
+        None
+      }
+    } else {
+      None
+    };
     let maximum_fee = Pallet::<T>::maximum_current_action_fee(
       state.identity.actor_class.actor_type(),
       &loaded_step.step,
       loaded_step.resources,
     )
     .expect("current Action fee matches production");
-    let plan = Pallet::<T>::build_current_step_plan(
+    let plan = Pallet::<T>::build_canonical_current_step_plan(
       actor_id,
       state.identity.clone(),
       state.hot.clone(),
       state.run_state.clone(),
-      state.funding.clone(),
       admission.clone(),
-      ticket,
       loaded_step,
       maximum_fee,
     )
     .expect("real carried Running plan builds");
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("real Running Actor reference exists");
+    let (semantic, kind) = Pallet::<T>::load_service_actor_semantic_state_with_kind(actor)
+      .expect("real Running canonical Service residence exists");
+    assert_eq!(semantic.identity, state.identity);
+    assert_eq!(semantic.hot, state.hot);
+    assert_eq!(semantic.admission, admission);
     polkadot_sdk::frame_support::storage::with_transaction(|| {
-      let result =
-        Pallet::<T>::execute_current_step_and_place(actor_id, &state, plan, &admission, now);
+      assert_eq!(
+        Pallet::<T>::consider_service_head(now).expect("real Service head is coherent"),
+        ServiceRoundEncounter::Eligible(actor)
+      );
+      let result = Pallet::<T>::execute_effectful_step_on_service_with_deadline(
+        actor,
+        kind,
+        state,
+        plan,
+        &admission,
+        now,
+        retry_deadline,
+      );
       match result {
         Ok(evidence) => {
           let effect_weight = evidence.actual_effect_weight;
@@ -6801,9 +6434,10 @@ mod benches {
   fn assert_reachable_running_inner<T: Config>(
     actor_id: ActorId,
     cursor: u32,
-    now: BlockNumberFor<T>,
+    _now: BlockNumberFor<T>,
     branch: RunningInnerBranch,
   ) {
+    let now = frame_system::Pallet::<T>::block_number();
     let state = Pallet::<T>::active_actor_state(actor_id).expect("real successor authority exists");
     assert_eq!(state.identity.actor_class.actor_type(), ActorType::User);
     let hold = ActorStateHolds::<T>::get(actor_id).expect("User state hold remains owned");
@@ -6836,8 +6470,9 @@ mod benches {
         };
         assert!(T::AssetOps::balance(&state.identity.sovereign_account, asset).is_zero());
         assert!(T::AssetOps::balance(to, asset).is_zero());
-        assert_eq!(benchmark_fixture_ready_occupancy::<T>(), 1);
-        assert!(state.hot.queue_ticket.is_some());
+        assert_eq!(ServiceHeader::<T>::get().count, 1);
+        assert!(ServiceNodes::<T>::contains_key(actor_id));
+        assert!(state.hot.queue_ticket.is_none());
       }
     }
     #[cfg(feature = "try-runtime")]
@@ -6857,7 +6492,6 @@ mod benches {
     if step_count == 0
       || step_count > T::MaxContractSteps::get()
       || step_count.saturating_mul(2) > T::MaxOpeningSnapshotEntries::get()
-      || step_count.saturating_mul(predicates_per_step) > T::MaxOpeningPredicateResults::get()
       || predicates_per_step == 0
       || predicates_per_step != T::MaxPredicatesPerStep::get()
     {
@@ -6883,12 +6517,9 @@ mod benches {
     let mut steps = ContractSteps::<T>::default();
     for pair in assets.chunks_exact(assets_per_step as usize) {
       let predicates = (0..predicates_per_step)
-        .map(|index| TimedPredicate {
-          timing: ObservationTiming::Opening,
-          predicate: Predicate::BalanceAbove {
-            asset: pair[2 + index as usize],
-            threshold: index.saturating_add(1).saturated_into(),
-          },
+        .map(|index| Predicate::BalanceAbove {
+          asset: pair[2 + index as usize],
+          threshold: index.saturating_add(1).saturated_into(),
         })
         .collect();
       steps
@@ -6900,8 +6531,8 @@ mod benches {
           task: ActorTask::AddLiquidity {
             asset_a: pair[0],
             asset_b: pair[1],
-            amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
-            amount_b: AmountResolution::PercentageAtOpening(Perbill::one()),
+            amount_a: AmountResolution::Percent(Perbill::one()),
+            amount_b: AmountResolution::Percent(Perbill::one()),
             min_lp_out: One::one(),
           },
           on_error: StepErrorPolicy::AbortCycle,
@@ -7004,25 +6635,16 @@ mod benches {
         };
         step.precondition = Some(packed_predicate_clauses::<T>(
           (0..benchmark_predicate_capacity::<T>())
-            .map(|index| TimedPredicate {
-              timing: ObservationTiming::Opening,
-              predicate: Predicate::BalanceBelow {
-                asset: if index % 2 == 0 { asset_a } else { asset_b },
-                threshold: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
-                  .saturating_sub(index.saturated_into()),
-              },
+            .map(|index| Predicate::BalanceBelow {
+              asset: if index % 2 == 0 { asset_a } else { asset_b },
+              threshold: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
+                .saturating_sub(index.saturated_into()),
             })
             .collect(),
           T::MaxPredicatesPerClause::get(),
         ));
       }
     }
-    let funding_count =
-      if matches!(profile, ReachableOpeningProfile::Predicated) || terminal_predicates {
-        0
-      } else {
-        (2 * (count - 1)).min(T::MaxFundingTrackedAssets::get().saturating_sub(u32::from(failed)))
-      };
     if !matches!(profile, ReachableOpeningProfile::Predicated) {
       let ActorTask::AddLiquidity {
         asset_a, asset_b, ..
@@ -7049,7 +6671,7 @@ mod benches {
         task: if let Some((position, _)) = missing_receipt {
           ActorTask::Unstake {
             asset: position,
-            shares: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+            shares: AmountResolution::Percent(Perbill::from_percent(50)),
           }
         } else if complete {
           ActorTask::StopCycle
@@ -7060,9 +6682,9 @@ mod benches {
             amount: if retry {
               AmountResolution::Fixed(One::one())
             } else if matches!(profile, ReachableOpeningProfile::UserPaged) {
-              AmountResolution::PercentageAtOpening(Perbill::from_percent(50))
+              AmountResolution::Percent(Perbill::from_percent(50))
             } else {
-              AmountResolution::PercentageOfCurrent(Perbill::from_percent(50))
+              AmountResolution::Percent(Perbill::from_percent(50))
             },
           }
         },
@@ -7074,7 +6696,7 @@ mod benches {
           StepErrorPolicy::AbortCycle
         },
       };
-      for (index, step) in steps.iter_mut().skip(1).enumerate() {
+      for step in steps.iter_mut().skip(1) {
         if terminal_predicates {
           continue;
         }
@@ -7085,13 +6707,8 @@ mod benches {
         else {
           unreachable!()
         };
-        for (offset, amount) in [amount_a, amount_b].into_iter().enumerate() {
-          *amount = if ((2 * index + offset) as u32) < funding_count {
-            AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50))
-          } else {
-            AmountResolution::PercentageOfCurrent(Perbill::from_percent(50))
-          };
-        }
+        *amount_a = AmountResolution::Percent(Perbill::from_percent(50));
+        *amount_b = AmountResolution::Percent(Perbill::from_percent(50));
       }
     }
     let actor_type = if matches!(
@@ -7105,6 +6722,10 @@ mod benches {
       ActorType::System
     };
     retain_admitted_contract_geometry::<T>(actor_type, &mut steps, &[0])?;
+    let excluded_asset = match steps[0].task {
+      ActorTask::Transfer { asset, .. } => Some(asset),
+      _ => None,
+    };
     let mut contract = user_contract::<T>(
       Schedule {
         trigger: Trigger::Manual,
@@ -7166,17 +6787,16 @@ mod benches {
     let identity = Pallet::<T>::actor_identity(actor_id).expect("real Opening identity exists");
     let funding_amount: T::Balance = 1_000_000_000_000u128.saturated_into();
     assert!(!funding_amount.is_zero());
-    fund_reachable_assets_except::<T>(
-      actor_id,
-      funding_amount,
-      missing_receipt.map(|(_, receipt)| receipt),
-    );
-    let funding = ActorFunding::<T>::get(actor_id).expect("real Opening funding exists");
+    let funded_assets = fund_reachable_assets_except::<T>(actor_id, funding_amount, excluded_asset);
     assert_eq!(
-      funding.funding_tracked_assets.len() as u32,
-      funding_count + u32::from(failed)
+      funded_assets.len(),
+      funded_assets
+        .iter()
+        .copied()
+        .collect::<alloc::collections::BTreeSet<_>>()
+        .len(),
+      "reachable funding uses one mint per distinct spend asset"
     );
-    assert_eq!(funding.funding_accumulated.len() as u32, funding_count);
     if actor_type == ActorType::User {
       T::AssetOps::mint(
         &identity.sovereign_account,
@@ -7195,29 +6815,16 @@ mod benches {
     }
     assert_eq!(state.hot.cycle_state, CycleState::Idle);
     assert!(state.hot.pending_signal && state.run_state.is_none());
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).expect("Idle Ready cell exists");
+    // A fresh occurrence publishes one canonical Pending Service member for the following block,
+    // so the fixture advances to that eligible block instead of reading a retired legacy primary
+    // control cell.
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
     frame_system::Pallet::<T>::set_block_number(
-      cell.eligible_at.expect("Opening eligibility exists"),
+      frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()),
     );
     let surfaces = Pallet::<T>::opening_surfaces(&state.contract.steps, 0);
     assert!(surfaces.len() as u32 <= T::MaxOpeningSnapshotEntries::get());
     assert_eq!(state.contract.steps.len() as u32, count);
-    let opening_results: u32 = state
-      .contract
-      .steps
-      .iter()
-      .map(|step| {
-        step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count)
-      })
-      .sum();
-    assert!(opening_results <= T::MaxOpeningPredicateResults::get());
     assert_eq!(
       count.saturating_sub(1).div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
       tail_chunks
@@ -7229,7 +6836,7 @@ mod benches {
     assert_eq!(
       predicate_units,
       if matches!(profile, ReachableOpeningProfile::Predicated) || terminal_predicates {
-        2 * benchmark_predicate_capacity::<T>()
+        benchmark_predicate_capacity::<T>()
       } else {
         0
       }
@@ -7280,56 +6887,25 @@ mod benches {
       Some(frame_system::Pallet::<T>::block_number())
     );
     let opening = Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len() as u32;
-    let results: u32 = state
-      .contract
-      .steps
-      .iter()
-      .map(|step| {
-        step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count)
-      })
-      .sum();
-    let funding = state.funding.funding_tracked_assets.len() as u32;
     let skip = match profile {
       ReachableOpeningProfile::Predicated => StepSkippedReason::PreconditionFalse,
-      ReachableOpeningProfile::Minimal | ReachableOpeningProfile::UserPaged => {
-        StepSkippedReason::ResolutionSkipped
-      }
+      ReachableOpeningProfile::Minimal
+      | ReachableOpeningProfile::UserPaged
+      | ReachableOpeningProfile::FailedMin
+      | ReachableOpeningProfile::FailedMax => StepSkippedReason::ResolutionSkipped,
       _ => unreachable!("terminal Opening profiles are checked separately"),
     };
     assert_eq!(run.opening_snapshot.len() as u32, opening);
-    assert_eq!(run.opening_predicate_results.len() as u32, results);
-    assert_eq!(run.funding_snapshot.len() as u32, funding);
     let surfaces = Pallet::<T>::opening_surfaces(&state.contract.steps, 0);
     assert!(
       surfaces
         .iter()
         .all(|surface| run.opening_snapshot.contains_key(surface))
     );
-    assert!(
-      run
-        .opening_predicate_results
-        .iter()
-        .all(|result| *result == Ok(false))
-    );
-    assert!(
-      run
-        .funding_snapshot
-        .values()
-        .all(|amount| *amount == 1_000_000_000_000u128.saturated_into())
-    );
-    assert!(state.funding.funding_accumulated.is_empty());
-    assert!(
-      run
-        .funding_snapshot
-        .keys()
-        .all(|asset| state.funding.funding_tracked_assets.contains(asset))
-    );
     assert_eq!(run.last_step_outcome, Some(StepOutcome::Skipped(skip)));
-    assert_eq!(benchmark_fixture_ready_occupancy::<T>(), 1);
-    assert!(state.hot.queue_ticket.is_some());
+    assert_eq!(ServiceHeader::<T>::get().count, 1);
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    assert!(state.hot.queue_ticket.is_none());
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real Opening successor passes full audit");
   }
@@ -7345,18 +6921,7 @@ mod benches {
       profile,
       ReachableOpeningProfile::FailedMin | ReachableOpeningProfile::FailedMax
     );
-    let funding = state
-      .funding
-      .funding_tracked_assets
-      .len()
-      .saturating_sub(usize::from(failed)) as u32;
-    assert_eq!(
-      state.funding.funding_tracked_assets.len() as u32,
-      funding + u32::from(failed)
-    );
-    assert!(state.funding.funding_accumulated.is_empty());
     assert!(!state.hot.pending_signal);
-    assert_eq!(benchmark_fixture_ready_occupancy::<T>(), 0);
     let now = frame_system::Pallet::<T>::block_number();
     if failed {
       assert_eq!(state.hot.cycle_state, CycleState::Idle);
@@ -7364,23 +6929,8 @@ mod benches {
       assert_eq!(state.hot.unsuccessful_attempt_streak, 1);
       assert!(state.run_state.is_none());
       assert!(state.hot.queue_ticket.is_none() && state.hot.wakeup_pointer.is_none());
-      assert!(matches!(
-        ActorControlLocators::<T>::get(actor_id),
-        Some(ActorControlLocation::Unsignaled)
-      ));
-      let failure: <T as frame_system::Config>::RuntimeEvent = Event::<T>::StepFailed {
-        actor_id,
-        cycle_nonce: 1,
-        step_index: 0,
-        retry_class: RetryClass::Permanent,
-        error: Error::<T>::InvalidAmountResolution.into(),
-      }
-      .into();
-      assert!(
-        frame_system::Pallet::<T>::events()
-          .iter()
-          .any(|record| record.event == failure)
-      );
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(ServiceNodes::<T>::contains_key(actor_id));
       let ActorTask::Unstake { asset, .. } = state.contract.steps[0].task else {
         unreachable!()
       };
@@ -7407,32 +6957,12 @@ mod benches {
           .iter()
           .any(|record| record.event == stopped)
       );
-      let receipt: <T as frame_system::Config>::RuntimeEvent = Event::<T>::ActionFeeCharged {
-        actor_id,
-        cycle_nonce: 1,
-        step_index: 0,
-        actual_effect_weight: T::TaskEffectWeight::actual_effect_weight(
-          &ActorTask::StopCycle,
-          TaskEffectExecution::Invoked,
-        )
-        .expect("StopCycle has host effect evidence"),
-        fee: Zero::zero(),
-      }
-      .into();
-      assert_eq!(
-        frame_system::Pallet::<T>::events()
-          .iter()
-          .filter(|record| record.event == receipt)
-          .count(),
-        usize::from(matches!(profile, ReachableOpeningProfile::CompleteMax)),
-        "only the predicated completion profile includes invocation-receipt deposition"
-      );
+      // StopCycle completion is identified by CycleStopped and deliberately emits no
+      // ActionFeeCharged receipt because it is a control-only terminal task.
       assert!(state.run_state.is_none());
       assert!(state.hot.queue_ticket.is_none() && state.hot.wakeup_pointer.is_none());
-      assert!(matches!(
-        ActorControlLocators::<T>::get(actor_id),
-        Some(ActorControlLocation::Unsignaled)
-      ));
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(ServiceNodes::<T>::contains_key(actor_id));
     } else {
       assert_eq!(state.hot.cycle_state, CycleState::Suspended);
       let run = state.run_state.as_ref().expect("real retry Run persists");
@@ -7444,43 +6974,13 @@ mod benches {
       let due = Pallet::<T>::suspension_eligible_at(2, None, now, 1)
         .expect("retry eligibility is representable");
       assert_eq!(run.eligible_at, due);
-      assert!(
-        matches!(ActorControlLocators::<T>::get(actor_id), Some(ActorControlLocation::Waiting { key: WakeupKey::Block(at), .. }) if at == due)
-      );
+      assert!(!ServiceNodes::<T>::contains_key(actor_id));
+      let handle = DeadlineHandles::<T>::get(actor_id)
+        .expect("retry suspends into a canonical deadline residence");
+      assert_eq!(handle.key, WakeupKey::Block(due));
       assert_eq!(
         run.opening_snapshot.len(),
         Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-      );
-      assert_eq!(
-        run.opening_predicate_results.len() as u32,
-        state
-          .contract
-          .steps
-          .iter()
-          .map(|step| step
-            .precondition
-            .as_ref()
-            .map_or(0, Precondition::opening_predicate_count))
-          .sum::<u32>()
-      );
-      assert!(
-        run
-          .opening_predicate_results
-          .iter()
-          .all(|result| *result == Ok(true))
-      );
-      assert_eq!(run.funding_snapshot.len() as u32, funding);
-      assert!(
-        run
-          .funding_snapshot
-          .keys()
-          .all(|asset| state.funding.funding_tracked_assets.contains(asset))
-      );
-      assert!(
-        run
-          .funding_snapshot
-          .values()
-          .all(|amount| *amount == 1_000_000_000_000u128.saturated_into())
       );
       let ActorTask::Transfer { asset, ref to, .. } = state.contract.steps[0].task else {
         unreachable!()
@@ -7495,7 +6995,6 @@ mod benches {
   struct ReachableSuspendedSkip<T: Config> {
     actor_id: ActorId,
     cursor: u32,
-    ready_others: u32,
     owner: T::AccountId,
     frozen_asset: T::AssetId,
     balances: [(T::AssetId, T::Balance); 2],
@@ -7503,7 +7002,7 @@ mod benches {
   }
 
   // A terminal head has no tail. For the other branches, `n` allocates the tail's
-  // two-leg amount sources between Opening and LastFunding; it is not a free Run axis.
+  // two-leg current-read amount sources; it is not a free Run axis.
   fn prepare_reachable_suspended_head_inner<T: Config>(
     n: u32,
     current: u32,
@@ -7555,7 +7054,7 @@ mod benches {
       };
       for (offset, amount) in [amount_a, amount_b].into_iter().enumerate() {
         if (index * 2 + offset) as u32 >= n {
-          *amount = AmountResolution::PercentageOfLastFunding(Perbill::one());
+          *amount = AmountResolution::Percent(Perbill::one());
         }
       }
     }
@@ -7581,16 +7080,9 @@ mod benches {
             .iter()
             .skip(1)
             .enumerate()
-            .map(|(index, asset)| TimedPredicate {
-              timing: if (index as u32) < opening {
-                ObservationTiming::Opening
-              } else {
-                ObservationTiming::Current
-              },
-              predicate: Predicate::BalanceBelow {
-                asset: *asset,
-                threshold: One::one(),
-              },
+            .map(|(_index, asset)| Predicate::BalanceBelow {
+              asset: *asset,
+              threshold: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value(),
             })
             .collect(),
           T::MaxPredicatesPerClause::get(),
@@ -7600,8 +7092,8 @@ mod benches {
         ActorTask::AddLiquidity {
           asset_a,
           asset_b,
-          amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
-          amount_b: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+          amount_a: AmountResolution::Percent(Perbill::from_percent(50)),
+          amount_b: AmountResolution::Percent(Perbill::from_percent(50)),
           min_lp_out: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value(),
         }
       } else {
@@ -7636,13 +7128,13 @@ mod benches {
     let actor = Pallet::<T>::actor_identity(actor_id)
       .expect("head identity exists")
       .sovereign_account;
-    fund_reachable_update_assets::<T>(actor_id, 10u32.into());
-    assert!(
-      auxiliary
-        .iter()
-        .all(|asset| T::AssetOps::balance(&actor, *asset).is_zero())
-    );
-    let mut skip = if let Some((asset_a, asset_b, amount_a, amount_b)) = liquidity {
+    let excluded_asset = liquidity.is_none().then_some(auxiliary[0]);
+    let _ = fund_reachable_assets_except::<T>(actor_id, 10u32.into(), excluded_asset);
+    assert!(auxiliary.iter().all(|asset| {
+      T::AssetOps::balance(&actor, *asset)
+        < <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
+    }));
+    let skip = if let Some((asset_a, asset_b, amount_a, amount_b)) = liquidity {
       let frozen_asset = [asset_a, asset_b]
         .into_iter()
         .find(|asset| *asset != T::FeeNativeAssetId::get())
@@ -7659,7 +7151,6 @@ mod benches {
       Some(ReachableSuspendedSkip {
         actor_id,
         cursor: 0,
-        ready_others: 0,
         owner: owner.clone(),
         frozen_asset,
         balances: [
@@ -7673,6 +7164,11 @@ mod benches {
     };
     Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
       .expect("real head occurrence admits Opening");
+    // Canonical publication serves the Manual latch one block later; the Opening attempt there
+    // fails and suspends into a canonical deadline residence.
+    frame_system::Pallet::<T>::set_block_number(
+      frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()),
+    );
     Pallet::<T>::execute_cycle(Weight::MAX);
     let state = Pallet::<T>::active_actor_state(actor_id).expect("Opening retains Actor");
     let run = state.run_state.expect("real failure retains Run");
@@ -7684,30 +7180,6 @@ mod benches {
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.funding_snapshot.len(),
-      state.funding.funding_tracked_assets.len()
-    );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert!(
-      run
-        .opening_predicate_results
-        .iter()
-        .take(opening as usize)
-        .all(|result| *result == Ok(true))
-    );
-    assert!(state.funding.funding_accumulated.is_empty());
     if let Some(fixture) = &skip {
       assert_eq!(run.suspension, Some(SuspensionReason::Temporary));
       T::BenchmarkHelper::set_asset_account_frozen(
@@ -7724,18 +7196,7 @@ mod benches {
       assert_eq!(run.last_step_outcome, Some(StepOutcome::FundingUnavailable));
     }
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    Pallet::<T>::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter);
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
-    if let Some(fixture) = &mut skip {
-      // Host asset bootstrap may create other due Actors. Preserve their real topology.
-      fixture.ready_others = benchmark_fixture_ready_occupancy::<T>()
-        .checked_sub(1)
-        .expect("target owns one live Ready slot");
-    }
+    service_canonical_suspended_retry::<T>(actor_id, run.eligible_at);
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id)
         .expect("due Run persists")
@@ -7754,21 +7215,20 @@ mod benches {
     let after = ActorRunStateStore::<T>::get(actor_id).expect("retry retains Run");
     assert_eq!(after.cursor, 0);
     assert_eq!(after.unsuccessful_attempts_at_cursor, 2);
-    assert_eq!(after.last_attempt_block, before.eligible_at);
+    assert_eq!(
+      after.last_attempt_block,
+      before.eligible_at.saturating_add(1u32.into())
+    );
     assert_eq!(after.last_committed_step_block, None);
     assert_eq!(
       after.last_step_outcome,
       Some(StepOutcome::FundingUnavailable)
     );
     assert_eq!(after.opening_snapshot, before.opening_snapshot);
-    assert_eq!(
-      after.opening_predicate_results,
-      before.opening_predicate_results
-    );
-    assert_eq!(after.funding_snapshot, before.funding_snapshot);
-    assert!(
-      matches!(ActorControlLocators::<T>::get(actor_id), Some(ActorControlLocation::Waiting { key: WakeupKey::Block(at), .. }) if at == after.eligible_at)
-    );
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    let handle = DeadlineHandles::<T>::get(actor_id)
+      .expect("head retry suspends into a canonical deadline residence");
+    assert_eq!(handle.key, WakeupKey::Block(after.eligible_at));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("head retry successor passes full audit");
   }
@@ -7836,12 +7296,9 @@ mod benches {
       Some(packed_predicate_clauses::<T>(
         assets
           .iter()
-          .map(|asset| TimedPredicate {
-            timing: ObservationTiming::Current,
-            predicate: Predicate::BalanceBelow {
-              asset: *asset,
-              threshold: One::one(),
-            },
+          .map(|asset| Predicate::BalanceBelow {
+            asset: *asset,
+            threshold: One::one(),
           })
           .collect(),
         p.div_ceil(T::MaxPreconditionClauses::get()).max(1),
@@ -7857,8 +7314,8 @@ mod benches {
           task: ActorTask::AddLiquidity {
             asset_a,
             asset_b,
-            amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_parts(1)),
-            amount_b: AmountResolution::PercentageOfCurrent(Perbill::from_parts(1)),
+            amount_a: AmountResolution::Percent(Perbill::from_percent(50)),
+            amount_b: AmountResolution::Percent(Perbill::from_percent(50)),
             min_lp_out: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value(),
           },
           on_error: StepErrorPolicy::RetryLater {
@@ -7922,51 +7379,19 @@ mod benches {
         ..
       }))
     ));
-    assert!(
-      matches!(ActorControlLocators::<T>::get(actor_id), Some(ActorControlLocation::Waiting { key: WakeupKey::Block(at), .. }) if at == run.eligible_at)
-    );
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    let handle = DeadlineHandles::<T>::get(actor_id)
+      .expect("skip source suspends into a canonical deadline residence");
+    assert_eq!(handle.key, WakeupKey::Block(run.eligible_at));
     assert_eq!(
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert_eq!(
-      run.opening_predicate_cursor,
-      state.contract.steps[..cursor as usize]
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert!(
-      run
-        .opening_predicate_results
-        .iter()
-        .all(|result| *result == Ok(false))
-    );
-    assert!(
-      run.funding_snapshot.is_empty()
-        && state.funding.funding_tracked_assets.is_empty()
-        && state.funding.funding_accumulated.is_empty()
-    );
     for (asset, balance) in balances {
       assert_eq!(T::AssetOps::balance(&sovereign, asset), balance);
     }
-    let context = Pallet::<T>::step_control_weight_context(count, cursor, p, 0, 0, 0)
-      .expect("tail context exists");
+    let context =
+      Pallet::<T>::step_control_weight_context(count, cursor, p, 0).expect("tail context exists");
     assert_eq!(context.steps_in_fragment, s);
     assert_eq!(context.predicate_evaluation_units, p);
     let retained = run.encode();
@@ -7979,29 +7404,18 @@ mod benches {
     )?;
     assert!(T::AssetOps::balance(&sovereign, frozen_asset).is_zero());
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    assert_eq!(
-      Pallet::<T>::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter).ready_entries,
-      1
-    );
+    service_canonical_suspended_retry::<T>(actor_id, run.eligible_at);
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id)
         .expect("due Run retained")
         .encode(),
       retained
     );
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real frozen due source passes full audit");
     Ok(ReachableSuspendedSkip {
       actor_id,
       cursor,
-      ready_others: benchmark_fixture_ready_occupancy::<T>()
-        .checked_sub(1)
-        .expect("target owns one live Ready slot"),
       owner,
       frozen_asset,
       balances,
@@ -8012,7 +7426,6 @@ mod benches {
   struct ReachableSuspendedSuccess<T: Config> {
     actor_id: ActorId,
     cursor: u32,
-    ready_others: u32,
     asset: T::AssetId,
     amount: T::Balance,
     recipient: T::AccountId,
@@ -8070,12 +7483,9 @@ mod benches {
       packed_predicate_clauses::<T>(
         assets
           .into_iter()
-          .map(|candidate| TimedPredicate {
-            timing: ObservationTiming::Current,
-            predicate: Predicate::BalanceBelow {
-              asset: candidate,
-              threshold: One::one(),
-            },
+          .map(|candidate| Predicate::BalanceBelow {
+            asset: candidate,
+            threshold: One::one(),
           })
           .collect(),
         p.div_ceil(T::MaxPreconditionClauses::get()).max(1),
@@ -8114,10 +7524,7 @@ mod benches {
     assert_reachable_suspended_tail_retry_state::<T>(actor_id, cursor, 1);
     let run = ActorRunStateStore::<T>::get(actor_id).expect("suspension persists");
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    assert!(
-      Pallet::<T>::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter).ready_entries >= 1
-    );
+    service_canonical_suspended_retry::<T>(actor_id, run.eligible_at);
     let sovereign = Pallet::<T>::actor_identity(actor_id)
       .expect("Suspended identity exists")
       .sovereign_account;
@@ -8127,7 +7534,6 @@ mod benches {
     Ok(ReachableSuspendedSuccess {
       actor_id,
       cursor,
-      ready_others: benchmark_fixture_ready_occupancy::<T>().saturating_sub(1),
       asset,
       amount,
       recipient,
@@ -8136,9 +7542,10 @@ mod benches {
 
   fn assert_reachable_suspended_tail_success<T: Config>(
     fixture: ReachableSuspendedSuccess<T>,
-    now: BlockNumberFor<T>,
+    _now: BlockNumberFor<T>,
     branch: RunningInnerBranch,
   ) {
+    let now = frame_system::Pallet::<T>::block_number();
     let state = Pallet::<T>::active_actor_state(fixture.actor_id)
       .expect("successful retry retains active authority");
     assert_eq!(
@@ -8150,10 +7557,8 @@ mod benches {
         assert!(state.run_state.is_none());
         assert_eq!(state.identity.cycle_nonce, 1);
         assert_eq!(state.hot.cycle_state, CycleState::Idle);
-        assert_eq!(
-          benchmark_fixture_ready_occupancy::<T>(),
-          fixture.ready_others
-        );
+        assert!(ServiceNodes::<T>::contains_key(fixture.actor_id));
+        assert!(!ActorControlLocators::<T>::contains_key(fixture.actor_id));
       }
       RunningInnerBranch::Progress => {
         let run = state
@@ -8164,21 +7569,35 @@ mod benches {
         assert_eq!(run.cursor, fixture.cursor + 1);
         assert_eq!(run.last_committed_step_block, Some(now));
         assert_eq!(run.last_step_outcome, Some(StepOutcome::Executed));
-        assert_eq!(
-          benchmark_fixture_ready_occupancy::<T>(),
-          fixture.ready_others + 1
-        );
+        assert!(ServiceNodes::<T>::contains_key(fixture.actor_id));
+        assert!(!ActorControlLocators::<T>::contains_key(fixture.actor_id));
       }
     }
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("successful Suspended tail preserves full state audit");
+    // Explicit fixture teardown after the measured-transition assertions: the harness restarts each
+    // parameter sample from its captured state, so this setup must return the minted retry funding
+    // and the transferred value to a custody-neutral balance.
+    T::AssetOps::burn(
+      &fixture.recipient,
+      fixture.asset,
+      T::AssetOps::balance(&fixture.recipient, fixture.asset),
+    )
+    .expect("fixture-only recipient teardown succeeds");
+    T::AssetOps::burn(
+      &state.identity.sovereign_account,
+      fixture.asset,
+      T::AssetOps::balance(&state.identity.sovereign_account, fixture.asset),
+    )
+    .expect("fixture-only sovereign teardown succeeds");
   }
 
   fn assert_reachable_suspended_tail_skip<T: Config>(
     fixture: ReachableSuspendedSkip<T>,
-    now: BlockNumberFor<T>,
+    _now: BlockNumberFor<T>,
     branch: RunningInnerBranch,
   ) {
+    let now = frame_system::Pallet::<T>::block_number();
     let state =
       Pallet::<T>::active_actor_state(fixture.actor_id).expect("skip successor remains active");
     assert!(frame_system::Pallet::<T>::events().iter().any(|record| {
@@ -8197,14 +7616,8 @@ mod benches {
         assert!(state.run_state.is_none());
         assert_eq!(state.identity.cycle_nonce, 1);
         assert_eq!(state.hot.cycle_state, CycleState::Idle);
-        assert_eq!(
-          ActorControlLocators::<T>::get(fixture.actor_id),
-          Some(ActorControlLocation::Unsignaled)
-        );
-        assert_eq!(
-          benchmark_fixture_ready_occupancy::<T>(),
-          fixture.ready_others
-        );
+        assert!(ServiceNodes::<T>::contains_key(fixture.actor_id));
+        assert!(!ActorControlLocators::<T>::contains_key(fixture.actor_id));
       }
       RunningInnerBranch::Progress => {
         let run = state.run_state.as_ref().expect("progress retains real Run");
@@ -8218,14 +7631,8 @@ mod benches {
         );
         assert_eq!(run.unsuccessful_attempts_at_cursor, 0);
         assert!(run.suspension.is_none());
-        assert_eq!(
-          benchmark_fixture_ready_occupancy::<T>(),
-          fixture.ready_others + 1
-        );
-        assert!(matches!(
-          ActorControlLocators::<T>::get(fixture.actor_id),
-          Some(ActorControlLocation::Ready { .. })
-        ));
+        assert!(ServiceNodes::<T>::contains_key(fixture.actor_id));
+        assert!(!ActorControlLocators::<T>::contains_key(fixture.actor_id));
       }
     }
     #[cfg(feature = "try-runtime")]
@@ -8298,12 +7705,9 @@ mod benches {
       Some(packed_predicate_clauses::<T>(
         assets
           .into_iter()
-          .map(|asset| TimedPredicate {
-            timing: ObservationTiming::Current,
-            predicate: Predicate::BalanceBelow {
-              asset,
-              threshold: One::one(),
-            },
+          .map(|asset| Predicate::BalanceBelow {
+            asset,
+            threshold: One::one(),
           })
           .collect(),
         p.div_ceil(T::MaxPreconditionClauses::get()).max(1),
@@ -8346,8 +7750,8 @@ mod benches {
         .map_or(0, Precondition::evaluation_units),
       p
     );
-    let context = Pallet::<T>::step_control_weight_context(count, cursor, p, 0, 0, 0)
-      .expect("tail context exists");
+    let context =
+      Pallet::<T>::step_control_weight_context(count, cursor, p, 0).expect("tail context exists");
     assert_eq!(context.steps_in_fragment, s);
     assert_eq!(context.predicate_evaluation_units, p);
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
@@ -8356,25 +7760,15 @@ mod benches {
     let run = ActorRunStateStore::<T>::get(actor_id).expect("first real retry persists");
     let retained = run.encode();
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    let drained = Pallet::<T>::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter);
-    assert!(drained.ready_entries >= 1);
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
+    service_canonical_suspended_retry::<T>(actor_id, run.eligible_at);
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id)
         .expect("due retry Run persists")
         .encode(),
       retained
     );
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("real due retry Ready source passes full audit");
+    Pallet::<T>::do_try_state().expect("real due retry source passes full audit");
     Ok((actor_id, cursor))
   }
 
@@ -8398,55 +7792,24 @@ mod benches {
     let due =
       Pallet::<T>::suspension_eligible_at(2, None, now, attempts).expect("retry due boundary fits");
     assert_eq!(run.eligible_at, due);
-    assert!(
-      matches!(ActorControlLocators::<T>::get(actor_id), Some(ActorControlLocation::Waiting { key: WakeupKey::Block(at), .. }) if at == due)
-    );
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    let handle = DeadlineHandles::<T>::get(actor_id)
+      .expect("retry suspends into a canonical deadline residence");
+    assert_eq!(handle.key, WakeupKey::Block(due));
     assert_eq!(
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert_eq!(
-      run.opening_predicate_cursor,
-      state.contract.steps[..cursor as usize]
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert!(
-      run
-        .opening_predicate_results
-        .iter()
-        .all(|result| *result == Ok(false))
-    );
-    assert!(
-      run.funding_snapshot.is_empty()
-        && state.funding.funding_accumulated.is_empty()
-        && state.funding.funding_tracked_assets.is_empty()
     );
     let ActorTask::Transfer { asset, ref to, .. } = state.contract.steps[cursor as usize].task
     else {
       unreachable!()
     };
-    assert!(T::AssetOps::balance(&state.identity.sovereign_account, asset).is_zero());
+    // The authored Transfer has not moved value: the retry step failed for funding, so the
+    // recipient retains zero. The sovereign may legitimately hold a minimum balance when the
+    // chosen asset doubles as an authored liquidity leg, so only the recipient is pinned here.
     assert!(T::AssetOps::balance(to, asset).is_zero());
-    assert_eq!(benchmark_fixture_ready_occupancy::<T>(), 0);
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("real Suspended Waiting retry passes full audit");
+    Pallet::<T>::do_try_state().expect("real Suspended retry passes full audit");
   }
 
   fn prepare_reachable_running_with_step<T: Config>(
@@ -8481,8 +7844,8 @@ mod benches {
           .expect("Opening predicates exist")
           .clauses
         {
-          for timed in clause {
-            if let Predicate::BalanceAbove { asset, threshold } = &mut timed.predicate {
+          for predicate in clause {
+            if let Predicate::BalanceAbove { asset, threshold } = predicate {
               if *asset == T::FeeNativeAssetId::get() {
                 *threshold = <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
                   .saturating_sub(*threshold);
@@ -8503,35 +7866,23 @@ mod benches {
     }
     retain_admitted_contract_geometry::<T>(actor_type, &mut steps, &protected)?;
     let surfaces = Pallet::<T>::opening_surfaces(&steps, 0);
-    let opening_predicates = steps
-      .iter()
-      .filter_map(|step| step.precondition.as_ref())
-      .flat_map(|precondition| precondition.clauses.iter())
-      .flat_map(|clause| clause.iter())
-      .filter(|timed| timed.timing == ObservationTiming::Opening)
-      .count() as u32;
     assert!(steps.iter().all(|step| matches!(
       &step.task,
       ActorTask::AddLiquidity {
-        amount_a: AmountResolution::PercentageAtOpening(_),
-        amount_b: AmountResolution::PercentageAtOpening(_),
-        ..
-      } | ActorTask::AddLiquidity {
-        amount_a: AmountResolution::PercentageOfCurrent(_),
-        amount_b: AmountResolution::PercentageOfCurrent(_),
+        amount_a: AmountResolution::Percent(_),
+        amount_b: AmountResolution::Percent(_),
         ..
       } | ActorTask::StopCycle
         | ActorTask::Transfer {
-          amount: AmountResolution::PercentageOfCurrent(_),
+          amount: AmountResolution::Percent(_),
           ..
         }
         | ActorTask::Transfer {
-          amount: AmountResolution::Fixed(_) | AmountResolution::AllAvailable,
+          amount: AmountResolution::Fixed(_),
           ..
         }
     )));
     assert!(surfaces.len() as u32 <= T::MaxOpeningSnapshotEntries::get());
-    assert!(opening_predicates <= T::MaxOpeningPredicateResults::get());
     let schedule = Schedule {
       trigger: Trigger::manual(),
       cooldown_blocks,
@@ -8570,7 +7921,10 @@ mod benches {
     }
     Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
       .expect("real Manual occurrence latches the actor");
-    // Normal Q1 service consumes only Step 0 at this block; false predicates invoke no Task.
+    // Canonical publication serves the occurrence one block after the Manual latch. Normal Q1
+    // service then consumes only Step 0 at that block; false predicates invoke no Task.
+    let admitted = now.saturating_add(1u32.into());
+    frame_system::Pallet::<T>::set_block_number(admitted);
     Pallet::<T>::execute_cycle(Weight::MAX);
     let state = Pallet::<T>::active_actor_state(actor_id).expect("reachable actor remains active");
     assert_eq!(state.hot.cycle_state, CycleState::Running);
@@ -8579,7 +7933,7 @@ mod benches {
       .as_ref()
       .expect("Opening published a real Run");
     assert_eq!(run.cursor, 1);
-    assert_eq!(run.last_committed_step_block, Some(now));
+    assert_eq!(run.last_committed_step_block, Some(admitted));
     assert_eq!(run.cycle_nonce, state.identity.cycle_nonce + 1);
     assert_eq!(run.opening_snapshot.len(), surfaces.len());
     assert!(
@@ -8587,13 +7941,6 @@ mod benches {
         .iter()
         .all(|surface| run.opening_snapshot.contains_key(surface))
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      opening_predicates
-    );
-    assert!(state.funding.funding_tracked_assets.is_empty());
-    assert!(state.funding.funding_accumulated.is_empty());
-    assert!(run.funding_snapshot.is_empty());
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("reachable probe fixture passes full state audit");
     Ok(actor_id)
@@ -8608,18 +7955,6 @@ mod benches {
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
     #[block]
     {
       core::hint::black_box(
@@ -8633,77 +7968,6 @@ mod benches {
     ));
     Ok(())
   }
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_paged_append_existing_page() {
-    let page_size = 32u32;
-    assert!(
-      page_size >= 2,
-      "benchmark requires a non-trivial queue page"
-    );
-    for i in 0..page_size.saturating_sub(1) {
-      let actor_id = bench_create_system_manual::<T>(31_000_000u32.saturating_add(i));
-      assert!(benchmark_fixture_ready_enqueue::<T>(actor_id));
-    }
-    let actor_id = bench_create_system_manual::<T>(32_000_000);
-    let append = benchmark_fixture_prepare_consumed_ready_enqueue::<T>(actor_id);
-    #[block]
-    {
-      assert!(append());
-    }
-    assert_eq!(benchmark_fixture_ready_tail::<T>(), u64::from(page_size));
-    assert_eq!(
-      benchmark_fixture_scalar_hot::<T>(actor_id).and_then(|hot| hot.queue_ticket),
-      Some(u64::from(page_size - 1))
-    );
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_paged_append_new_page() {
-    let page_size = 32u32;
-    for i in 0..page_size {
-      let actor_id = bench_create_system_manual::<T>(33_000_000u32.saturating_add(i));
-      assert!(benchmark_fixture_ready_enqueue::<T>(actor_id));
-    }
-    let actor_id = bench_create_system_manual::<T>(34_000_000);
-    let append = benchmark_fixture_prepare_consumed_ready_enqueue::<T>(actor_id);
-    #[block]
-    {
-      assert!(append());
-    }
-    assert_eq!(
-      benchmark_fixture_ready_tail::<T>(),
-      u64::from(page_size).saturating_add(1)
-    );
-    assert_eq!(benchmark_fixture_ready_page_len::<T>(1), Some(32));
-    let page = ActorReadyFrameChunks::<T>::get(1).expect("new Ready page exists");
-    assert_eq!(page[0].as_ref().map(|cell| cell.actor_id), Some(actor_id));
-    assert!(page[1..].iter().all(Option::is_none));
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_append_existing_page() {
-    let page_size = 32u32;
-    assert!(
-      page_size >= 2,
-      "benchmark requires a non-trivial wakeup page"
-    );
-    let wakeup_block = 100u32.into();
-    for i in 0..page_size.saturating_sub(1) {
-      let actor_id = bench_create_system_manual::<T>(41_000_000u32.saturating_add(i));
-      benchmark_fixture_schedule_service_waiting::<T>(actor_id, wakeup_block);
-    }
-    let actor_id = bench_create_system_manual::<T>(42_000_000);
-    let append = benchmark_fixture_prepare_service_waiting::<T>(actor_id, wakeup_block);
-    #[block]
-    {
-      append();
-    }
-    let pointer = benchmark_fixture_scalar_hot::<T>(actor_id)
-      .and_then(|hot| hot.wakeup_pointer)
-      .expect("benchmark wakeup pointer must exist");
-    assert_eq!((pointer.page_id, pointer.slot), (0, page_size - 1));
-  }
-
   #[benchmark(pov_mode = Measured)]
   fn scheduler_wakeup_append_new_page() {
     let page_size = 32u32;
@@ -8750,179 +8014,6 @@ mod benches {
   }
 
   #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_replace_exact() {
-    let actor_id = bench_create_system_manual::<T>(45_000_000);
-    let old_block = 100u32.into();
-    let replacement_block = 200u32.into();
-    benchmark_fixture_schedule_service_waiting::<T>(actor_id, old_block);
-    #[block]
-    {
-      assert!(Pallet::<T>::wakeup_substrate_schedule(
-        actor_id,
-        replacement_block
-      ));
-    }
-    let pointer = benchmark_fixture_scalar_hot::<T>(actor_id)
-      .and_then(|hot| hot.wakeup_pointer)
-      .expect("replacement wakeup pointer must exist");
-    assert_eq!(
-      (pointer.block, pointer.page_id, pointer.slot),
-      (WakeupKey::Block(replacement_block), 0, 0)
-    );
-    assert!(!ActorWaitingOccupancies::<T>::contains_key(
-      WakeupKey::Block(old_block)
-    ));
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_invalidate_middle_page() {
-    let page_size = 32u32;
-    let wakeup_block = 100u32.into();
-    let count = page_size.saturating_mul(2).saturating_add(1);
-    let mut actors = alloc::vec::Vec::with_capacity(count as usize);
-    for i in 0..count {
-      let actor_id = bench_create_system_manual::<T>(46_000_000u32.saturating_add(i));
-      benchmark_fixture_schedule_service_waiting::<T>(actor_id, wakeup_block);
-      actors.push(actor_id);
-    }
-    let middle_start = page_size as usize;
-    let middle_end = middle_start.saturating_add(page_size as usize);
-    for actor_id in &actors[middle_start..middle_end.saturating_sub(1)] {
-      assert!(Pallet::<T>::wakeup_substrate_invalidate(*actor_id).is_some());
-    }
-    let actor_id = actors[middle_end - 1];
-    #[block]
-    {
-      assert!(Pallet::<T>::wakeup_substrate_invalidate(actor_id).is_some());
-    }
-    assert!(!ActorWaitingFrameChunks::<T>::contains_key((
-      WakeupKey::Block(wakeup_block),
-      1
-    )));
-    assert_eq!(
-      ActorWaitingFrameChunks::<T>::get((WakeupKey::Block(wakeup_block), 0))
-        .and_then(|page| page.next_page),
-      Some(2)
-    );
-    assert_eq!(
-      ActorWaitingFrameChunks::<T>::get((WakeupKey::Block(wakeup_block), 2))
-        .and_then(|page| page.previous_page),
-      Some(0)
-    );
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_drain_partial_page() {
-    let page_size = 32u32;
-    assert!(page_size >= 2, "benchmark requires a partial page");
-    let wakeup_block = 100u32.into();
-    for i in 0..page_size {
-      let actor_id = bench_create_system_manual::<T>(47_000_000u32.saturating_add(i));
-      benchmark_fixture_schedule_service_waiting::<T>(actor_id, wakeup_block);
-    }
-    let scan_limit = page_size / 2;
-    #[block]
-    {
-      let (ready, stats) = Pallet::<T>::wakeup_substrate_drain_block(wakeup_block, scan_limit);
-      assert_eq!(ready.len(), scan_limit as usize);
-      assert_eq!(stats.entries_scanned, scan_limit);
-      assert_eq!(stats.pages_deleted, 0);
-    }
-    assert_eq!(
-      ActorWaitingFrameChunks::<T>::get((WakeupKey::Block(wakeup_block), 0))
-        .map(|page| page.scan_slot),
-      Some(scan_limit)
-    );
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_drain_full_page() {
-    let page_size = 32u32;
-    let wakeup_block = 100u32.into();
-    for i in 0..page_size {
-      let actor_id = bench_create_system_manual::<T>(48_000_000u32.saturating_add(i));
-      benchmark_fixture_schedule_service_waiting::<T>(actor_id, wakeup_block);
-    }
-    #[block]
-    {
-      let (ready, stats) = Pallet::<T>::wakeup_substrate_drain_block(wakeup_block, page_size);
-      assert_eq!(ready.len(), page_size as usize);
-      assert_eq!(stats.entries_scanned, page_size);
-      assert_eq!(stats.pages_deleted, 1);
-    }
-    assert!(!ActorWaitingOccupancies::<T>::contains_key(
-      WakeupKey::Block(wakeup_block)
-    ));
-    assert!(!ActorWaitingFrameChunks::<T>::contains_key((
-      WakeupKey::Block(wakeup_block),
-      0
-    )));
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_drain_dense_boundary() {
-    let page_size = 32u32;
-    let count = page_size.saturating_add(1);
-    assert!(
-      count <= T::MaxWakeupsPerBlock::get(),
-      "benchmark requires one boundary-crossing drain"
-    );
-    let wakeup_block = 100u32.into();
-    for i in 0..count {
-      let actor_id = bench_create_system_manual::<T>(49_000_000u32.saturating_add(i));
-      benchmark_fixture_schedule_service_waiting::<T>(actor_id, wakeup_block);
-    }
-    #[block]
-    {
-      let (ready, stats) = Pallet::<T>::wakeup_substrate_drain_block(wakeup_block, count);
-      assert_eq!(ready.len(), count as usize);
-      assert_eq!(stats.entries_scanned, count);
-      assert_eq!(stats.pages_touched, 2);
-      assert_eq!(stats.pages_deleted, 2);
-    }
-    assert!(!ActorWaitingOccupancies::<T>::contains_key(
-      WakeupKey::Block(wakeup_block)
-    ));
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_drain_stale_page() {
-    let page_size = 32u32;
-    let wakeup_block = 100u32.into();
-    for i in 0..page_size {
-      let actor_id = bench_create_system_manual::<T>(50_000_000u32.saturating_add(i));
-      benchmark_fixture_schedule_service_waiting::<T>(actor_id, wakeup_block);
-      let (location, cell) =
-        Pallet::<T>::actor_control_cell(actor_id).expect("benchmark Waiting primary exists");
-      let ActorControlLocation::Waiting { key, page, slot } = location else {
-        panic!("benchmark service primary is Waiting");
-      };
-      // Explicit orphan corruption exercises stale-reference removal, not normal close.
-      ActorWaitingFrameChunks::<T>::mutate((key, page), |stored| {
-        stored
-          .as_mut()
-          .expect("benchmark Waiting page exists")
-          .entries[slot as usize] = Some(ActorWaitingEntry::Reference(ActorWakeupReference {
-          actor_id,
-          admission_identity: cell.admission.admission_identity,
-        }));
-      });
-      ActorControlLocators::<T>::remove(actor_id);
-    }
-    #[block]
-    {
-      let (ready, stats) = Pallet::<T>::wakeup_substrate_drain_block(wakeup_block, page_size);
-      assert!(ready.is_empty());
-      assert_eq!(stats.entries_scanned, page_size);
-      assert_eq!(stats.stale_entries, page_size);
-      assert_eq!(stats.pages_deleted, 1);
-    }
-    assert!(!ActorWaitingOccupancies::<T>::contains_key(
-      WakeupKey::Block(wakeup_block)
-    ));
-  }
-
-  #[benchmark(pov_mode = Measured)]
   fn scheduler_wakeup_cursor_insert() {
     clear_host_genesis_wakeup_placements::<T>();
     let inserted_block: BlockNumberFor<T> = 1u32.into();
@@ -8965,27 +8056,6 @@ mod benches {
     }
     assert_eq!(WakeupCursorLen::<T>::get(WakeupClock::Block), max_active);
     assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(inserted_block));
-    assert_wakeup_cursor_page_indices::<T>();
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_cursor_pop_min() {
-    clear_host_genesis_wakeup_placements::<T>();
-    let cursor_len = T::MaxActiveActors::get();
-    let expected_min = prepare_wakeup_cursor_repair::<T>(0);
-    #[block]
-    {
-      assert_eq!(Pallet::<T>::wakeup_cursor_pop_min(), Some(expected_min));
-    }
-    assert_eq!(
-      WakeupCursorLen::<T>::get(WakeupClock::Block),
-      cursor_len.saturating_sub(1)
-    );
-    assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(1_000_001u32.into()));
-    assert_eq!(
-      ActorWaitingCursorIndices::<T>::get(WakeupKey::Block(expected_min)),
-      None
-    );
     assert_wakeup_cursor_page_indices::<T>();
   }
 
@@ -9052,49 +8122,6 @@ mod benches {
     Ok(())
   }
 
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_cursor_worker_partial() {
-    clear_host_genesis_wakeup_placements::<T>();
-    let first = bench_create_system_manual::<T>(34_100_000);
-    let second = bench_create_system_manual::<T>(34_100_001);
-    for actor_id in [first, second] {
-      let mut contract =
-        Pallet::<T>::load_actor_contract(actor_id).expect("benchmark actor contract exists");
-      contract.trigger = Trigger::Cadenced { every_ticks: 1 };
-      Pallet::<T>::store_actor_contract(actor_id, contract)
-        .expect("benchmark cadence Contract remains admitted");
-      benchmark_fixture_mutate_hot::<T>(actor_id, |hot| {
-        hot.trigger_runtime_state = TriggerRuntimeState::Cadenced { anchor_tick: None };
-      });
-      Pallet::<T>::benchmark_defer_tick_wakeup(actor_id, 0)
-        .expect("benchmark bootstrap wakeup fits");
-    }
-    let limit = T::WeightInfo::scheduler_wakeup_cursor_worker_future()
-      .saturating_mul(2)
-      .saturating_add(Pallet::<T>::wakeup_cursor_drain_unit_weight_upper(
-        crate::scheduler::WakeupBucketDisposition::Retain,
-      ));
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(limit);
-    #[block]
-    {
-      let stats = Pallet::<T>::drain_overdue_wakeups_cursor(10u32.into(), &mut meter);
-      assert_eq!(stats.entries_scanned, 1);
-      assert_eq!(stats.ready_entries, 1);
-    }
-    assert_eq!(
-      ActorWaitingOccupancies::<T>::try_get(WakeupKey::Tick(0)).ok(),
-      Some(1)
-    );
-    let rearmed_tick = benchmark_fixture_hot::<T>(first)
-      .and_then(|hot| hot.trigger_runtime_state.temporal_anchor_tick())
-      .and_then(|anchor| anchor.checked_add(1))
-      .expect("benchmark cadence re-anchors");
-    assert_eq!(
-      ActorWaitingOccupancies::<T>::try_get(WakeupKey::Tick(rearmed_tick)).ok(),
-      Some(1)
-    );
-  }
-
   /// Measures one due User AtTime occurrence independently from timestamp inherent work:
   /// one-shot consumption, exact Trigger collection, and canonical readiness placement.
   #[benchmark(pov_mode = Measured)]
@@ -9119,22 +8146,17 @@ mod benches {
     .expect("AtTime benchmark Actor exists");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     seed_actor_for_cycle::<T>(actor_id);
-    Pallet::<T>::trigger_wakeup_substrate_invalidate_inner(actor_id)
-      .expect("initial AtTime pointer is coherent")
-      .expect("initial AtTime pointer exists");
-    benchmark_fixture_mutate_hot::<T>(actor_id, |hot| {
-      hot.trigger_runtime_state = TriggerRuntimeState::AtTime {
+    ActorSemanticStates::<T>::mutate(actor_id, |stored| {
+      let Some(ActorSemanticState::Active(record)) = stored else {
+        panic!("AtTime semantic authority exists");
+      };
+      record.hot.trigger_runtime_state = TriggerRuntimeState::AtTime {
         anchor_tick: Some(0),
         consumed: false,
       };
     });
-    Pallet::<T>::benchmark_defer_tick_wakeup(actor_id, 1).expect("due AtTime occurrence fits");
-    benchmark_fixture_publish_trigger_waiting::<T>(actor_id, 1);
-    let (mut ready, stats) = Pallet::<T>::wakeup_substrate_drain_key(WakeupKey::Tick(1), 1);
-    assert_eq!(stats.entries_scanned, 1);
-    let (_, state, admission, loaded_step) = ready
-      .pop()
-      .expect("due AtTime source authority is consumed");
+    let (state, admission, loaded_step) = Pallet::<T>::load_frame_actor_service_state(actor_id)
+      .expect("due AtTime semantic authority is loaded");
     #[block]
     {
       assert_eq!(
@@ -9148,14 +8170,22 @@ mod benches {
         Ok(false)
       );
     }
-    let actor = Pallet::<T>::active_actor_view(actor_id).expect("AtTime Actor remains active");
-    assert!(actor.pending_signal);
-    assert!(actor.queue_ticket.is_some());
-    assert!(actor.trigger_wakeup_pointer.is_none());
-    assert!(matches!(
-      actor.trigger_runtime_state,
-      TriggerRuntimeState::AtTime { consumed: true, .. }
-    ));
+    assert!(
+      benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
+        hot.pending_signal
+          && hot.trigger_wakeup_pointer.is_none()
+          && matches!(
+            hot.trigger_runtime_state,
+            TriggerRuntimeState::AtTime { consumed: true, .. }
+          )
+      })
+    );
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
   }
 
   /// Measures one due User Cadenced occurrence independently from timestamp inherent work:
@@ -9182,185 +8212,62 @@ mod benches {
     .expect("Cadenced benchmark Actor exists");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     seed_actor_for_cycle::<T>(actor_id);
-    Pallet::<T>::trigger_wakeup_substrate_invalidate_inner(actor_id)
-      .expect("initial Cadenced pointer is coherent")
-      .expect("initial Cadenced pointer exists");
-    benchmark_fixture_mutate_hot::<T>(actor_id, |hot| {
-      hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
-        anchor_tick: Some(0),
-      };
-    });
-    Pallet::<T>::benchmark_defer_tick_wakeup(actor_id, 0).expect("due Cadenced occurrence fits");
-    benchmark_fixture_publish_trigger_waiting::<T>(actor_id, 0);
-    let (mut ready, stats) = Pallet::<T>::wakeup_substrate_drain_key(WakeupKey::Tick(0), 1);
-    assert_eq!(stats.entries_scanned, 1);
-    let (_, state, admission, loaded_step) = ready
-      .pop()
-      .expect("due Cadenced source authority is consumed");
+    let due = benchmark_fixture_semantic_hot::<T>(actor_id)
+      .and_then(|hot| hot.trigger_wakeup_pointer)
+      .expect("Cadenced source owns its canonical trigger deadline")
+      .tick;
+    T::BenchmarkHelper::advance_to_scheduler_tick(due)
+      .expect("host reaches the canonical Cadenced due tick");
+    let Some(ActorSemanticState::Active(mut semantic)) = ActorSemanticStates::<T>::get(actor_id)
+    else {
+      panic!("Cadenced semantic authority exists");
+    };
+    let actor = ActorRef {
+      actor_id,
+      generation: semantic.generation,
+    };
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = Pallet::<T>::remove_trigger_deadline_member(actor).map(|_| {
+        semantic.hot.trigger_wakeup_pointer = None;
+        ActorSemanticStates::<T>::insert(actor_id, ActorSemanticState::Active(semantic));
+      });
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("due Cadenced trigger deadline is consumed");
+    let (state, admission, loaded_step) = Pallet::<T>::load_frame_actor_service_state(actor_id)
+      .expect("due Cadenced semantic authority is loaded");
     #[block]
     {
-      assert_eq!(
-        Pallet::<T>::process_due_temporal_occurrence_loaded(
+      let result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::process_due_temporal_occurrence_loaded(
           actor_id,
           state,
           admission,
           loaded_step,
-          0,
-        ),
-        Ok(false)
-      );
-    }
-    let actor = Pallet::<T>::active_actor_view(actor_id).expect("Cadenced Actor remains active");
-    assert!(actor.pending_signal);
-    assert!(actor.queue_ticket.is_some());
-    assert!(actor.trigger_wakeup_pointer.is_none());
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_cursor_worker_remove() {
-    clear_host_genesis_wakeup_placements::<T>();
-    let cursor_len = T::MaxActiveActors::get();
-    let wakeup_block: BlockNumberFor<T> = 1_000_000u32.into();
-    let actor_id = bench_create_system_manual::<T>(34_200_000);
-    benchmark_fixture_schedule_service_waiting::<T>(actor_id, wakeup_block);
-    assert_eq!(prepare_wakeup_cursor_repair::<T>(0), wakeup_block);
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    #[block]
-    {
-      let stats = Pallet::<T>::drain_overdue_wakeups_cursor(wakeup_block, &mut meter);
-      assert_eq!(stats.entries_scanned, 1);
-      assert_eq!(stats.ready_entries, 1);
-    }
-    assert_eq!(
-      WakeupCursorLen::<T>::get(WakeupClock::Block),
-      cursor_len.saturating_sub(1)
-    );
-    assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(1_000_001u32.into()));
-    assert!(!ActorWaitingOccupancies::<T>::contains_key(
-      WakeupKey::Block(wakeup_block)
-    ));
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_cursor_worker_future() {
-    clear_host_genesis_wakeup_placements::<T>();
-    let wakeup_block: BlockNumberFor<T> = 1_000_000u32.into();
-    let actor_id = bench_create_system_manual::<T>(34_300_000);
-    benchmark_fixture_schedule_service_waiting::<T>(actor_id, wakeup_block);
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    #[block]
-    {
-      let stats = Pallet::<T>::drain_overdue_wakeups_cursor(10u32.into(), &mut meter);
-      assert_eq!(stats.entries_scanned, 0);
-    }
-    assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(wakeup_block));
-    assert!(
-      benchmark_fixture_scalar_hot::<T>(actor_id)
-        .and_then(|hot| hot.wakeup_pointer)
-        .is_some()
-    );
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_paged_consume_preserve_page() {
-    let first = bench_create_system_manual::<T>(35_000_000);
-    let second = bench_create_system_manual::<T>(35_000_001);
-    assert!(benchmark_fixture_ready_enqueue::<T>(first));
-    assert!(benchmark_fixture_ready_enqueue::<T>(second));
-    let hot = benchmark_fixture_hot::<T>(first).expect("benchmark loaded source exists");
-    #[block]
-    {
-      assert!(benchmark_fixture_ready_consume_loaded_head::<T>(
-        0, first, 0, hot,
-      ));
-    }
-    assert_eq!(benchmark_fixture_ready_head::<T>(), 1);
-    assert!(benchmark_fixture_contains_ready_page::<T>(0));
-    assert!(!ActorControlLocators::<T>::contains_key(first));
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_paged_consume_delete_page() {
-    let actor_id = bench_create_system_manual::<T>(36_000_000);
-    assert!(benchmark_fixture_ready_enqueue::<T>(actor_id));
-    let hot = benchmark_fixture_hot::<T>(actor_id).expect("benchmark loaded source exists");
-    #[block]
-    {
-      assert!(benchmark_fixture_ready_consume_loaded_head::<T>(
-        0, actor_id, 0, hot,
-      ));
-    }
-    assert_eq!(benchmark_fixture_ready_head::<T>(), 1);
-    assert_eq!(benchmark_fixture_ready_tail::<T>(), 1);
-    assert!(!benchmark_fixture_contains_ready_page::<T>(0));
-    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_paged_tombstone_drain(n: Linear<1, 10_000>) {
-    let bounded = n.min(T::MaxQueueLength::get());
-    let head = ActorReadyTail::<T>::get();
-    let tail = head
-      .checked_add(u64::from(bounded))
-      .expect("bounded fixture span");
-    for page_id in head / 32..tail.div_ceil(32) {
-      ActorReadyFrameChunks::<T>::insert(
-        page_id,
-        ActorControlChunkOf::<T>::try_from(vec![None; 32]).expect("fixed Ready chunk"),
-      );
-    }
-    benchmark_fixture_set_ready_queue_state::<T>(head, tail, 0);
-    #[block]
-    {
-      core::hint::black_box(
-        benchmark_fixture_ready_drain_tombstones::<T>(tail, bounded)
-          .expect("benchmark queue topology is valid"),
-      );
-    }
-    assert_eq!(benchmark_fixture_ready_head::<T>(), tail);
-    assert_eq!(benchmark_fixture_ready_tail::<T>(), tail);
-    assert_eq!(benchmark_fixture_ready_occupancy::<T>(), 0);
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_paged_mixed_scan(n: Linear<1, 10_000>) {
-    let bounded = n.min(T::MaxQueueLength::get());
-    let head = ActorReadyTail::<T>::get();
-    let tail = head
-      .checked_add(u64::from(bounded))
-      .expect("bounded fixture span");
-    for offset in 0..bounded {
-      let ticket = head + u64::from(offset);
-      if offset % 2 == 1 {
-        let actor_id = bench_create_system_manual::<T>(39_000_000u32.saturating_add(offset));
-        assert!(benchmark_fixture_ready_enqueue::<T>(actor_id));
-      } else {
-        let page_id = ticket / 32;
-        if !ActorReadyFrameChunks::<T>::contains_key(page_id) {
-          ActorReadyFrameChunks::<T>::insert(
-            page_id,
-            ActorControlChunkOf::<T>::try_from(vec![None; 32]).expect("fixed Ready chunk"),
-          );
-        }
-        ActorReadyTail::<T>::put(ticket + 1);
-      }
-    }
-    assert_eq!(ActorReadyTail::<T>::get(), tail);
-    #[block]
-    {
-      while benchmark_fixture_ready_head::<T>() < tail {
-        core::hint::black_box(
-          benchmark_fixture_ready_drain_tombstones::<T>(tail, bounded)
-            .expect("benchmark mixed queue topology is valid"),
+          due,
         );
-        if let Some((_, entry)) = benchmark_fixture_ready_head_entry::<T>() {
-          assert!(benchmark_fixture_ready_consume_head::<T>(entry.ticket));
-        }
-      }
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      });
+      assert_eq!(result, Ok(false));
     }
-    assert_eq!(benchmark_fixture_ready_head::<T>(), tail);
-    assert_eq!(benchmark_fixture_ready_tail::<T>(), tail);
-    assert_eq!(benchmark_fixture_ready_occupancy::<T>(), 0);
+    assert!(
+      benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
+        hot.pending_signal
+          && hot.trigger_wakeup_pointer.is_none()
+          && matches!(
+            hot.trigger_runtime_state,
+            TriggerRuntimeState::Cadenced {
+              anchor_tick: Some(_)
+            }
+          )
+      })
+    );
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
   }
 
   fn prepare_zero_step_opening<T: Config>(actor_type: ActorType) -> ActorId {
@@ -9407,10 +8314,13 @@ mod benches {
     }
     Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
       .expect("real Manual occurrence publishes zero-Step readiness");
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).expect("zero-Step Ready cell exists");
-    assert!(cell.hot.pending_signal);
+    // A fresh occurrence publishes one Pending Service member for the following block, so the
+    // fixture advances to that eligible block instead of reading a retired legacy primary cell.
+    let (state, _, step) = Pallet::<T>::load_frame_actor_service_state(actor_id)
+      .expect("zero-Step canonical publication is coherent");
+    assert!(step.is_none() && state.hot.pending_signal);
     frame_system::Pallet::<T>::set_block_number(
-      cell.eligible_at.expect("zero-Step eligibility exists"),
+      frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()),
     );
     actor_id
   }
@@ -9421,8 +8331,11 @@ mod benches {
     let (state, admission, step) =
       Pallet::<T>::load_frame_actor_service_state(actor_id).expect("zero-Step frame is coherent");
     assert!(step.is_none() && state.contract.steps.is_empty());
-    Pallet::<T>::remove_primary_control_cell_inner(actor_id)
-      .expect("zero-Step primary is consumed outside the inner measurement");
+    let now = frame_system::Pallet::<T>::block_number();
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Pallet::<T>::begin_service_round(now).expect("zero-Step canonical round begins");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
     (state, admission)
   }
 
@@ -9432,8 +8345,13 @@ mod benches {
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
   ) {
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("zero-Step Actor reference exists");
+    let (_, kind) = Pallet::<T>::load_service_actor_semantic_state_with_kind(actor)
+      .expect("zero-Step canonical Service residence exists");
     polkadot_sdk::frame_support::storage::with_transaction(|| {
-      match Pallet::<T>::execute_zero_step_from_consumed_fixture(actor_id, state, admission, now) {
+      match Pallet::<T>::execute_zero_step_on_service(actor, kind, state, admission, now, None)
+        .map(|_| ())
+      {
         Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
           (),
           AttemptTransactionError,
@@ -9535,13 +8453,10 @@ mod benches {
     .unwrap();
     let follower = NextActorId::<T>::get().saturating_sub(1);
     Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), follower).unwrap();
-    frame_system::Pallet::<T>::set_block_number(
-      Pallet::<T>::actor_control_cell(follower)
-        .unwrap()
-        .1
-        .eligible_at
-        .unwrap(),
-    );
+    let eligible_from = ServiceNodes::<T>::get(follower)
+      .expect("Manual follower owns canonical Service readiness")
+      .eligible_from;
+    frame_system::Pallet::<T>::set_block_number(eligible_from);
     follower
   }
 
@@ -9558,7 +8473,13 @@ mod benches {
     ));
     let state = Pallet::<T>::active_actor_state(actor_id).unwrap();
     let encoded_state = state.encode();
-    let head = ActorReadyHead::<T>::get();
+    let service_header = ServiceHeader::<T>::get();
+    let source_service = ServiceNodes::<T>::get(actor_id)
+      .expect("Crossing source owns canonical Service residence")
+      .encode();
+    let follower_service = ServiceNodes::<T>::get(follower)
+      .expect("follower owns canonical Service residence")
+      .encode();
     let events = frame_system::Pallet::<T>::events().encode();
     let membership = CrossingMemberships::<T>::get(actor_id);
     let holds = ActorStateHolds::<T>::get(actor_id);
@@ -9575,8 +8496,22 @@ mod benches {
       Pallet::<T>::active_actor_state(actor_id).unwrap().encode(),
       encoded_state
     );
-    assert_eq!(ActorReadyHead::<T>::get(), head);
-    assert_eq!(ActorReadyOccupancy::<T>::get(), 2);
+    let retained_header = ServiceHeader::<T>::get();
+    assert_eq!(retained_header.cursor, service_header.cursor);
+    assert_eq!(retained_header.count, service_header.count);
+    assert_eq!(
+      retained_header.round_block,
+      Some(frame_system::Pallet::<T>::block_number())
+    );
+    assert_eq!(
+      ServiceNodes::<T>::get(actor_id).map(|node| node.encode()),
+      Some(source_service)
+    );
+    assert_eq!(
+      ServiceNodes::<T>::get(follower).map(|node| node.encode()),
+      Some(follower_service)
+    );
+    assert_eq!(ActorReadyOccupancy::<T>::get(), 0);
     assert_eq!(
       benchmark_fixture_identity::<T>(follower)
         .unwrap()
@@ -9596,6 +8531,9 @@ mod benches {
       before.sink_balance
     );
     Pallet::<T>::close_actor(RawOrigin::Signed(state.identity.owner).into(), actor_id).unwrap();
+    frame_system::Pallet::<T>::set_block_number(
+      frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()),
+    );
     Pallet::<T>::execute_cycle(Weight::MAX);
     assert!(benchmark_fixture_identity::<T>(actor_id).is_none());
     assert!(!ActorStateHolds::<T>::contains_key(actor_id));
@@ -9605,7 +8543,9 @@ mod benches {
         .cycle_nonce,
       1
     );
-    assert_eq!(ActorReadyHead::<T>::get(), ActorReadyTail::<T>::get());
+    assert_eq!(ServiceHeader::<T>::get().count, 1);
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    assert!(ServiceNodes::<T>::contains_key(follower));
     assert_eq!(
       T::AssetOps::balance(&before.payer, native),
       before.payer_balance
@@ -9736,7 +8676,6 @@ mod benches {
     assert!(benchmark_fixture_hot::<T>(actor_id).is_none());
     assert!(!ActorContractHeads::<T>::contains_key(actor_id));
     assert!(!ActorStateHolds::<T>::contains_key(actor_id));
-    assert!(!ActorFunding::<T>::contains_key(actor_id));
     assert!(
       ActorContractTailChunks::<T>::iter_prefix(actor_id)
         .next()
@@ -9956,7 +8895,6 @@ mod benches {
     assert!(benchmark_fixture_hot::<T>(actor_id).is_none());
     assert!(!ActorContractHeads::<T>::contains_key(actor_id));
     assert!(!ActorStateHolds::<T>::contains_key(actor_id));
-    assert!(!ActorFunding::<T>::contains_key(actor_id));
     assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
     assert!(!ActorWaitingOccupancies::<T>::contains_key(key));
     assert_eq!(
@@ -10030,18 +8968,26 @@ mod benches {
     let tick = benchmark_fixture_hot::<T>(actor_id)
       .unwrap()
       .trigger_wakeup_pointer
-      .expect("creation installed a temporal primary")
+      .expect("creation installed a canonical temporal deadline")
       .tick;
     T::BenchmarkHelper::advance_to_scheduler_tick(tick).expect("host clock reaches the due tick");
     assert!(Pallet::<T>::current_scheduler_tick().unwrap() >= tick);
     let now = frame_system::Pallet::<T>::block_number();
+    let now_tick = Pallet::<T>::current_scheduler_tick().expect("scheduler clock is available");
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    Pallet::<T>::drain_overdue_wakeups_cursor(now, &mut meter);
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).expect("due Actor is Ready");
-    assert!(cell.hot.pending_signal && cell.hot.trigger_wakeup_pointer.is_none());
-    frame_system::Pallet::<T>::set_block_number(
-      cell.eligible_at.expect("Ready eligibility exists"),
-    );
+    Pallet::<T>::service_due_deadline_frontiers(
+      &mut meter,
+      ServiceResidenceKind::Live,
+      now,
+      now_tick,
+      Some(WakeupKey::Block(now.saturating_add(1u32.into()))),
+      Some(WakeupKey::Tick(now_tick.saturating_add(1))),
+    )
+    .expect("canonical temporal frontier publishes due readiness");
+    let (state, _, step) = Pallet::<T>::load_frame_actor_service_state(actor_id)
+      .expect("temporal canonical publication is coherent");
+    assert!(step.is_none() && state.hot.pending_signal);
+    frame_system::Pallet::<T>::set_block_number(now.saturating_add(1u32.into()));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("ordinary temporal readiness and holds are coherent");
     actor_id
@@ -10084,10 +9030,15 @@ mod benches {
     T::BenchmarkHelper::finalize_scheduler_clock().unwrap();
     T::BenchmarkHelper::advance_to_scheduler_tick(next_tick).unwrap();
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    Pallet::<T>::drain_overdue_wakeups_cursor(
-      frame_system::Pallet::<T>::block_number(),
+    Pallet::<T>::service_due_deadline_frontiers(
       &mut meter,
-    );
+      ServiceResidenceKind::Live,
+      frame_system::Pallet::<T>::block_number(),
+      next_tick,
+      None,
+      None,
+    )
+    .expect("complete canonical temporal envelope remains admitted");
     assert_eq!(benchmark_fixture_hot::<T>(actor_id).unwrap(), hot);
     assert_eq!(
       benchmark_fixture_identity::<T>(actor_id)
@@ -10163,14 +9114,12 @@ mod benches {
         .trigger_wakeup_pointer
         .expect("Cadenced successor has a temporal pointer");
       assert!(pointer.tick > Pallet::<T>::current_scheduler_tick().unwrap());
-      assert!(Pallet::<T>::wakeup_page_entry_matches(
-        WakeupPointer {
-          block: WakeupKey::Tick(pointer.tick),
-          page_id: pointer.page_id,
-          slot: pointer.slot,
-        },
-        actor_id
-      ));
+      let handle = TriggerDeadlineHandles::<T>::get(actor_id)
+        .expect("Cadenced successor owns a canonical deadline member");
+      assert_eq!(handle.actor.actor_id, actor_id);
+      assert_eq!(handle.key, WakeupKey::Tick(pointer.tick));
+      assert_eq!(handle.page, pointer.page_id);
+      assert_eq!(handle.slot, pointer.slot as u8);
     }
     let receipt: <T as frame_system::Config>::RuntimeEvent =
       Event::<T>::PipelineFeeCharged { actor_id, fee }.into();
@@ -10451,11 +9400,13 @@ mod benches {
       );
       assert!(IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id));
     }
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id)
-      .expect("published observation creates Ready primary");
-    assert!(cell.hot.pending_signal);
+    // A canonical observation publishes one Pending Service member at B+1, so the fixture
+    // advances to that canonical eligibility instead of reading a retired legacy primary cell.
+    let eligible_from = ServiceNodes::<T>::get(actor_id)
+      .expect("published observation creates a canonical Pending Service member")
+      .eligible_from;
     frame_system::Pallet::<T>::set_block_number(
-      cell.eligible_at.expect("Ready eligibility exists"),
+      frame_system::Pallet::<T>::block_number().max(eligible_from),
     );
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("published observation readiness is coherent");
@@ -11599,8 +10550,7 @@ mod benches {
     let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).unwrap();
     assert!(cell.hot.pending_signal);
     frame_system::Pallet::<T>::set_block_number(cell.eligible_at.unwrap());
-    let funding = ActorFunding::<T>::get(actor_id).unwrap();
-    assert!(funding.funding_tracked_assets.is_empty() && funding.funding_accumulated.is_empty());
+    assert!(T::AssetOps::balance(&sovereign, asset) >= ingress);
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("maximum-header readiness and window are coherent");
     let before = user_pipeline_accounting::<T>(actor_id);
@@ -11656,13 +10606,10 @@ mod benches {
     assert!(predicates > 0 && predicates <= T::MaxPreconditionClauses::get());
     let precondition = packed_predicate_clauses::<T>(
       (0..predicates)
-        .map(|index| TimedPredicate {
-          timing: ObservationTiming::Current,
-          predicate: Predicate::ObservationAbove {
-            feed,
-            threshold: u128::from(index) + 1,
-            max_age_blocks: 1,
-          },
+        .map(|index| Predicate::ObservationAbove {
+          feed,
+          threshold: u128::from(index) + 1,
+          max_age_blocks: 1,
         })
         .collect(),
       1,
@@ -11844,143 +10791,29 @@ mod benches {
     )
     .expect("ordinary temporal control Contract is admitted");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).expect("created control cell");
-    assert!(cell.hot.wakeup_pointer.is_none() && cell.hot.trigger_wakeup_pointer.is_some());
-    assert!(cell.hot.terminal_at.is_none() && cell.eligible_at.is_none());
-    assert!(cell.hot.last_cycle_block.is_none());
-    report_temporal_control_cell::<T>(actor_id, "created");
-    let tick = cell.hot.trigger_wakeup_pointer.unwrap().tick;
+    let hot = Pallet::<T>::actor_hot(actor_id).expect("created temporal Actor remains active");
+    assert!(hot.wakeup_pointer.is_none() && hot.trigger_wakeup_pointer.is_some());
+    assert!(hot.terminal_at.is_none() && hot.last_cycle_block.is_none());
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    let tick = hot.trigger_wakeup_pointer.unwrap().tick;
     T::BenchmarkHelper::advance_to_scheduler_tick(tick).expect("ordinary due host clock");
     let now = frame_system::Pallet::<T>::block_number();
+    let now_tick = Pallet::<T>::current_scheduler_tick().expect("ordinary due host clock");
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    Pallet::<T>::drain_overdue_wakeups_cursor(now, &mut meter);
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).expect("latched temporal cell");
-    assert!(cell.hot.pending_signal && cell.hot.trigger_wakeup_pointer.is_none());
-    frame_system::Pallet::<T>::set_block_number(cell.eligible_at.expect("ordinary eligibility"));
+    Pallet::<T>::service_due_deadline_frontiers(
+      &mut meter,
+      ServiceResidenceKind::Live,
+      now,
+      now_tick,
+      None,
+      None,
+    )
+    .expect("complete canonical temporal envelope remains admitted");
+    let hot = Pallet::<T>::actor_hot(actor_id).expect("latched temporal Actor remains active");
+    assert!(hot.pending_signal && hot.trigger_wakeup_pointer.is_none());
+    let service = ServiceNodes::<T>::get(actor_id).expect("latched temporal Actor owns Service");
+    frame_system::Pallet::<T>::set_block_number(service.eligible_from);
     actor_id
-  }
-
-  fn report_temporal_control_cell<T: Config>(actor_id: ActorId, phase: &str) {
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).expect("stored control cell");
-    let authority = T::AdmissionCertificateAuthority::current().expect("host authority");
-    assert_eq!(
-      cell.admission.maximum_lifecycle_weight,
-      authority.maximum_lifecycle_weight
-    );
-    frame::log::info!(
-      "Temporal control cell {}: total={}, nominal={}, identity={}, hot={}, cursor={}, eligible={}, certificate={}, resources={}; lifecycle={:?}, control={:?}, effect={:?}; Weight bytes={}/{}/{}; service={:?}",
-      phase,
-      cell.encoded_size(),
-      ActorControlCellOf::<T>::max_encoded_len(),
-      cell.identity.encoded_size(),
-      cell.hot.encoded_size(),
-      cell.cursor.encoded_size(),
-      cell.eligible_at.encoded_size(),
-      cell.admission.encoded_size(),
-      cell.resources.encoded_size(),
-      cell.admission.maximum_lifecycle_weight,
-      cell.resources.control,
-      cell.resources.effect,
-      cell.admission.maximum_lifecycle_weight.encoded_size(),
-      cell.resources.control.encoded_size(),
-      cell.resources.effect.encoded_size(),
-      Pallet::<T>::guaranteed_actor_service_weight(),
-    );
-    #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("ordinary temporal cell reconciles");
-  }
-
-  fn assert_temporal_control_cell<T: Config>(actor_id: ActorId, at_time: bool) {
-    let (location, cell) =
-      Pallet::<T>::actor_control_cell(actor_id).expect("suspended control cell");
-    assert!(matches!(
-      location,
-      ActorControlLocation::Waiting {
-        key: WakeupKey::Block(_),
-        ..
-      }
-    ));
-    assert_eq!(cell.hot.cycle_state, CycleState::Suspended);
-    assert!(cell.hot.wakeup_pointer.is_some() && cell.hot.terminal_at.is_none());
-    assert!(cell.hot.last_cycle_block.is_some() && cell.eligible_at.is_some());
-    assert_eq!(cell.hot.trigger_wakeup_pointer.is_none(), at_time);
-    let run = ActorRunStateStore::<T>::get(actor_id).expect("ordinary Temporary retry Run");
-    assert_eq!(run.cursor, 0);
-    assert_eq!(run.unsuccessful_attempts_at_cursor, 2);
-    assert_eq!(run.last_step_outcome, Some(StepOutcome::FundingUnavailable));
-    report_temporal_control_cell::<T>(actor_id, "suspended");
-    if !at_time {
-      let mut contract = Pallet::<T>::actor_contract(actor_id).expect("retained temporal Contract");
-      contract.trigger = Trigger::at_time(100);
-      let now = frame_system::Pallet::<T>::block_number();
-      frame_system::Pallet::<T>::set_block_number(now.saturating_add(1u32.into()));
-      contract.cooldown_blocks = 1;
-      polkadot_sdk::frame_support::assert_noop!(
-        Pallet::<T>::update_contract(RawOrigin::Root.into(), actor_id, contract.clone()),
-        Error::<T>::InvalidTriggerConfiguration
-      );
-      contract.cooldown_blocks = 0;
-      contract.window = Some(ScheduleWindow {
-        start: now,
-        end: now.saturating_add(T::MinWindowLength::get()),
-      });
-      polkadot_sdk::frame_support::assert_noop!(
-        Pallet::<T>::update_contract(RawOrigin::Root.into(), actor_id, contract.clone()),
-        Error::<T>::InvalidScheduleWindow
-      );
-      contract.window = None;
-      Pallet::<T>::update_contract(RawOrigin::Root.into(), actor_id, contract)
-        .expect("ordinary AtTime replacement cancels the old Run");
-      let (_, replaced) = Pallet::<T>::actor_control_cell(actor_id).expect("replaced AtTime cell");
-      assert_eq!(replaced.hot.cycle_state, CycleState::Idle);
-      assert_eq!(replaced.hot.last_cycle_block, cell.hot.last_cycle_block);
-      assert!(replaced.hot.wakeup_pointer.is_none() && replaced.eligible_at.is_none());
-      assert!(replaced.hot.terminal_at.is_none() && replaced.hot.trigger_wakeup_pointer.is_some());
-      assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
-      report_temporal_control_cell::<T>(actor_id, "replaced AtTime");
-    }
-  }
-
-  // These diagnostics construct two logical blocks; their timings are not production Weight.
-  #[benchmark(extra, pov_mode = Measured)]
-  fn control_cell_cadenced_reachability() {
-    let actor_id = prepare_temporal_control_cell::<T>(false);
-    #[block]
-    {
-      Pallet::<T>::execute_cycle(Weight::MAX);
-      let run = ActorRunStateStore::<T>::get(actor_id).expect("first retry");
-      frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-      Pallet::<T>::execute_cycle(Weight::MAX);
-    }
-    assert_temporal_control_cell::<T>(actor_id, false);
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn control_cell_at_time_reachability() {
-    let actor_id = prepare_temporal_control_cell::<T>(true);
-    #[block]
-    {
-      Pallet::<T>::execute_cycle(Weight::MAX);
-      let run = ActorRunStateStore::<T>::get(actor_id).expect("first retry");
-      frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-      Pallet::<T>::execute_cycle(Weight::MAX);
-    }
-    assert_temporal_control_cell::<T>(actor_id, true);
-  }
-
-  #[cfg(test)]
-  #[test]
-  fn temporal_control_cell_public_reachability() {
-    for at_time in [false, true] {
-      new_test_ext().execute_with(|| {
-        let actor_id = prepare_temporal_control_cell::<Test>(at_time);
-        Pallet::<Test>::execute_cycle(Weight::MAX);
-        let run = ActorRunStateStore::<Test>::get(actor_id).expect("first retry");
-        frame_system::Pallet::<Test>::set_block_number(run.eligible_at);
-        Pallet::<Test>::execute_cycle(Weight::MAX);
-        assert_temporal_control_cell::<Test>(actor_id, at_time);
-      });
-    }
   }
 
   /// Full User FIFO Opening at maximum Contract length, one zero-balance Opening surface and
@@ -12020,10 +10853,7 @@ mod benches {
       hold_before.breakdown.detector
     );
     assert_eq!(hold_after.breakdown.run, hold_before.breakdown.run);
-    assert!(
-      hold_after.breakdown.funding < hold_before.breakdown.funding,
-      "Opening independently reconciles consumed funding geometry"
-    );
+    assert_eq!(hold_after, hold_before);
     assert_reachable_opening::<T>(actor_id, count, ReachableOpeningProfile::UserPaged);
     Ok(())
   }
@@ -12352,8 +11182,8 @@ mod benches {
     Ok(())
   }
 
-  /// True Opening predicates and two tail-Step Opening legs precede an unfunded fixed Transfer.
-  /// This reachable retry corner has no LastFunding legs and does not establish envelope dominance.
+  /// True current predicates and two tail-Step current-Available legs precede an unfunded fixed Transfer.
+  /// This reachable retry corner does not establish envelope dominance.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_inner_opening_retry_max(
     t: Linear<
@@ -12454,7 +11284,14 @@ mod benches {
       effect_weight =
         execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
     }
-    assert_eq!(effect_weight, Weight::zero());
+    assert_eq!(
+      effect_weight,
+      T::TaskEffectWeight::actual_effect_weight(
+        &ActorTask::StopCycle,
+        TaskEffectExecution::Invoked,
+      )
+      .expect("StopCycle has host effect evidence")
+    );
     assert_user_pipeline_accounting::<T>(actor_id, accounting_before);
     assert_reachable_opening::<T>(
       actor_id,
@@ -12489,7 +11326,7 @@ mod benches {
     };
     assert_eq!(sources.len() as u32, T::MaxWhitelistSize::get());
     assert!(sources.contains(&state_before.identity.owner));
-    let mut hold_before = ActorStateHolds::<T>::get(actor_id).expect("User hold exists");
+    let hold_before = ActorStateHolds::<T>::get(actor_id).expect("User hold exists");
     let now = frame_system::Pallet::<T>::block_number();
     let (state, admission, loaded_step) =
       benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
@@ -12500,7 +11337,14 @@ mod benches {
       effect_weight =
         execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
     }
-    assert_eq!(effect_weight, Weight::zero());
+    assert_eq!(
+      effect_weight,
+      T::TaskEffectWeight::actual_effect_weight(
+        &ActorTask::StopCycle,
+        TaskEffectExecution::Invoked,
+      )
+      .expect("StopCycle has host effect evidence")
+    );
     assert_user_pipeline_accounting::<T>(actor_id, accounting_before);
     assert_reachable_opening::<T>(
       actor_id,
@@ -12508,12 +11352,7 @@ mod benches {
       ReachableOpeningProfile::UserCompleteHeaderMax,
     );
     let hold_after = ActorStateHolds::<T>::get(actor_id).expect("User hold survives completion");
-    assert!(hold_after.breakdown.funding < hold_before.breakdown.funding);
-    hold_before.breakdown.funding = hold_after.breakdown.funding;
-    assert_eq!(
-      hold_after, hold_before,
-      "only consumed funding changes the hold"
-    );
+    assert_eq!(hold_after, hold_before);
     Ok(())
   }
 
@@ -12534,7 +11373,7 @@ mod benches {
     let (actor_id, count) =
       prepare_reachable_opening::<T>(t, ReachableOpeningProfile::UserCompleteMin)?;
     let accounting_before = user_pipeline_accounting::<T>(actor_id);
-    let mut hold_before = ActorStateHolds::<T>::get(actor_id).expect("User hold exists");
+    let hold_before = ActorStateHolds::<T>::get(actor_id).expect("User hold exists");
     let now = frame_system::Pallet::<T>::block_number();
     let (state, admission, loaded_step) =
       benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
@@ -12549,12 +11388,7 @@ mod benches {
     assert_user_pipeline_accounting::<T>(actor_id, accounting_before);
     assert_reachable_opening::<T>(actor_id, count, ReachableOpeningProfile::UserCompleteMin);
     let hold_after = ActorStateHolds::<T>::get(actor_id).expect("User hold survives completion");
-    assert!(hold_after.breakdown.funding < hold_before.breakdown.funding);
-    hold_before.breakdown.funding = hold_after.breakdown.funding;
-    assert_eq!(
-      hold_after, hold_before,
-      "only consumed funding changes the hold"
-    );
+    assert_eq!(hold_after, hold_before);
     Ok(())
   }
 
@@ -12585,8 +11419,8 @@ mod benches {
     Ok(())
   }
 
-  /// True Opening predicates on every Step and two Opening legs per tail Step precede StopCycle.
-  /// No LastFunding payload, retained Run, or successor placement is claimed by this corner.
+  /// True current predicates on every Step and two current-Available legs per tail Step precede StopCycle.
+  /// No retained Run or successor placement is claimed by this corner.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_inner_opening_complete_max(
     t: Linear<
@@ -12611,8 +11445,8 @@ mod benches {
     Ok(())
   }
 
-  /// Pure-Opening progress after canonical frame loading and source consumption. Two Opening legs
-  /// and full Opening predicates per Step imply zero LastFunding legs in this declared corner.
+  /// Current-read progress after canonical frame loading and source consumption. Two current-Available
+  /// legs and full current predicates per Step define this declared corner.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_inner_opening_progress_max(
     t: Linear<
@@ -12993,108 +11827,386 @@ mod benches {
     Ok(())
   }
 
-  /// Measures actual scheduler admission and complete execution for up to 1,000
-  /// minimal one-step System actors. `Weight::MAX` exposes the full production-Wasm
-  /// cost curve; separate guaranteed-budget stress evidence determines how many
-  /// executions the reference block budget actually admits. Setup writes the split actor stores and canonical paged FIFO outside
-  /// the measured block so the result isolates queue scanning, admission,
-  /// execution, and consumption rather than actor creation.
+  /// Measures one complete canonical resident Service turn at an interior Running cursor. The
+  /// current Transfer resolves to zero and therefore advances without an effect, membership
+  /// mutation, or successor publication. The outer owner includes round selection, current-Step
+  /// loading and execution, cursor persistence, User fee/hold reconciliation, and actual-resource
+  /// settlement rather than measuring only the inner Step atom.
   #[benchmark(pov_mode = Measured)]
-  fn scheduler_paged_execute_cheap(n: Linear<1, 1_000>) {
-    benchmark_fixture_reset_ready_queue::<T>();
-    GlobalCircuitBreaker::<T>::put(false);
-    let bounded = n
-      .min(T::MaxExecutionsPerBlock::get())
-      .min(T::MaxQueueEntriesScannedPerBlock::get())
-      .min(T::MaxQueueLength::get());
-    assert!(bounded > 0, "runtime limits must admit at least one sample");
-    let mut actors = alloc::vec::Vec::with_capacity(bounded as usize);
-    for offset in 0..bounded {
-      let actor_id = bench_create_system_manual::<T>(41_000_000u32.saturating_add(offset));
-      Pallet::<T>::request_activation(actor_id).expect("cheap benchmark readiness must latch");
-      actors.push(actor_id);
-    }
-    let now: BlockNumberFor<T> = 1u32.into();
-    frame_system::Pallet::<T>::set_block_number(now);
+  fn scheduler_service_successful_interior()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, cursor) =
+      prepare_reachable_running_inner::<T>(2, 0, RunningInnerBranch::Progress)?;
+    let before = Pallet::<T>::active_actor_state(actor_id)
+      .expect("canonical successful-interior source exists");
+    let before_run = before.run_state.expect("interior source retains Run");
+    assert_eq!(before_run.cursor, cursor);
+    let before_node =
+      ServiceNodes::<T>::get(actor_id).expect("interior source is resident in canonical Service");
+    let before_hold =
+      ActorStateHolds::<T>::get(actor_id).expect("User interior source owns its state hold");
+    let before_members = ServiceNodes::<T>::iter_keys().count();
+    assert_eq!(before_members, 1);
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+
     #[block]
     {
       core::hint::black_box(Pallet::<T>::execute_cycle(Weight::MAX));
     }
-    let executed = actors
-      .iter()
-      .filter(|actor_id| {
-        benchmark_fixture_identity::<T>(**actor_id)
-          .is_some_and(|identity| identity.cycle_nonce == 1)
-      })
-      .count() as u32;
+
+    let after = Pallet::<T>::active_actor_state(actor_id)
+      .expect("successful interior turn retains Actor authority");
+    let after_run = after
+      .run_state
+      .expect("successful interior turn retains Run");
+    assert_eq!(after_run.cursor, cursor.saturating_add(1));
     assert_eq!(
-      executed, bounded,
-      "unbounded diagnostic budget completed only {executed} of {bounded} requested cheap actors"
+      after_run.last_committed_step_block,
+      Some(frame_system::Pallet::<T>::block_number())
     );
-    assert_eq!(
-      benchmark_fixture_ready_head::<T>(),
-      benchmark_fixture_ready_tail::<T>()
-    );
+    assert_eq!(ServiceNodes::<T>::iter_keys().count(), before_members);
+    let after_node = ServiceNodes::<T>::get(actor_id)
+      .expect("successful interior turn remains resident in canonical Service");
+    assert_eq!(after_node.previous, before_node.previous);
+    assert_eq!(after_node.next, before_node.next);
+    assert_eq!(ActorStateHolds::<T>::get(actor_id), Some(before_hold));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state()
+      .expect("successful interior complete owner preserves canonical state");
+    Ok(())
   }
 
-  /// Measures canonical FIFO execution over alternating System/User actors.
-  /// Setup materializes one ticket-ordered queue outside the measured block.
+  /// Measures one complete canonical Service turn whose first User Step cannot resolve its fixed
+  /// Transfer funding and therefore suspends into a non-adjacent Block Deadline. The outer owner
+  /// includes round selection, Opening, current-Step execution, Service removal, Deadline
+  /// insertion, and actual-resource settlement rather than measuring only the inner retry atom.
   #[benchmark(pov_mode = Measured)]
-  fn scheduler_paged_execute_cheap_mixed(n: Linear<2, 1_000>) {
-    benchmark_fixture_reset_ready_queue::<T>();
-    GlobalCircuitBreaker::<T>::put(false);
-    let bounded = n
-      .min(T::MaxExecutionsPerBlock::get())
-      .min(T::MaxQueueEntriesScannedPerBlock::get())
-      .min(T::MaxQueueLength::get());
-    assert!(
-      bounded >= 2,
-      "runtime limits must admit alternating actor classes"
-    );
+  fn scheduler_service_retry_to_deadline()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, _) = prepare_reachable_opening::<T>(0, ReachableOpeningProfile::RetryMin)?;
+    let before = Pallet::<T>::active_actor_state(actor_id).expect("canonical retry source exists");
+    assert_eq!(before.hot.cycle_state, CycleState::Idle);
+    assert!(before.run_state.is_none());
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert_eq!(before.identity.actor_class.actor_type(), ActorType::System);
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
 
-    let mut actors = alloc::vec::Vec::with_capacity(bounded as usize);
-    for offset in 0..bounded {
-      let actor_id = if offset % 2 == 0 {
-        bench_create_system_manual::<T>(43_000_000u32.saturating_add(offset))
-      } else {
-        let owner: T::AccountId = account("mixed_user_owner", offset, 0);
-        bench_create_user::<T>(owner)
-      };
-      Pallet::<T>::request_activation(actor_id).expect("mixed benchmark readiness must latch");
-      actors.push(actor_id);
-    }
-    let now: BlockNumberFor<T> = 1u32.into();
-    frame_system::Pallet::<T>::set_block_number(now);
     #[block]
     {
       core::hint::black_box(Pallet::<T>::execute_cycle(Weight::MAX));
     }
-    let executed = actors
-      .iter()
-      .filter(|actor_id| {
-        benchmark_fixture_identity::<T>(**actor_id)
-          .is_some_and(|identity| identity.cycle_nonce == 1)
-      })
-      .count() as u32;
-    // Whether User fee collection materializes a Fee Sink service obligation is host
-    // configuration, not a pallet guarantee. When the host does configure one, that obligation
-    // consumes a single pass slot ahead of the measured cohort while the post-cutoff ticket stays
-    // ordered behind it; a host without a Fee Sink runs the whole cohort.
-    let ceiling = bounded.min(T::MaxExecutionsPerBlock::get());
-    assert!(
-      executed == ceiling || executed == ceiling.saturating_sub(1),
-      "mixed canonical-FIFO cohort must reach the pass ceiling, minus at most one slot taken by a host Fee Sink service obligation"
+
+    let now = frame_system::Pallet::<T>::block_number();
+    let after =
+      Pallet::<T>::active_actor_state(actor_id).expect("retry turn retains Actor authority");
+    let run = after.run_state.expect("retry turn persists its Run");
+    assert_eq!(after.hot.cycle_state, CycleState::Suspended);
+    assert_eq!(after.identity.cycle_nonce, 0);
+    assert_eq!(run.cycle_nonce, 1);
+    assert_eq!(run.cursor, 0);
+    assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+    assert_eq!(run.last_attempt_block, now);
+    assert_eq!(run.last_step_outcome, Some(StepOutcome::FundingUnavailable));
+    assert_eq!(run.suspension, Some(SuspensionReason::FundingUnavailable));
+    let due = Pallet::<T>::suspension_eligible_at(2, None, now, 1)
+      .expect("retry eligibility is representable");
+    assert_eq!(run.eligible_at, due);
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    let handle = DeadlineHandles::<T>::get(actor_id)
+      .expect("retry turn owns one canonical Deadline residence");
+    assert_eq!(handle.key, WakeupKey::Block(due));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state()
+      .expect("retry-to-Deadline complete owner preserves canonical state");
+    Ok(())
+  }
+
+  /// Measures the conservative charged rollback boundary for one canonical resident Service
+  /// attempt. The fixture admits selector and loaded-state inspection, then denies the current
+  /// Step branch by one RefTime unit. The transaction restores the exact storage root while the
+  /// meter and resource ledger retain the legitimate inspection charge.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_service_late_refusal_rollback()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, _) = prepare_reachable_running_inner::<T>(2, 0, RunningInnerBranch::Progress)?;
+    let now = frame_system::Pallet::<T>::block_number();
+    let (_, _, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("canonical refusal source exposes its current Step");
+    let selector = T::WeightInfo::service_round_begin_populated()
+      .saturating_add(T::WeightInfo::service_round_probe_eligible());
+    let inspection = selector.saturating_add(T::WeightInfo::scheduler_actor_state_probe());
+    let suffix = T::WeightInfo::service_round_admit_eligible().max(
+      T::WeightInfo::service_member_retire_interior()
+        .max(T::WeightInfo::service_member_retire_pair_cursor())
+        .max(T::WeightInfo::service_member_retire_singleton()),
     );
-    let consumed = actors
-      .iter()
-      .filter(|actor_id| {
-        benchmark_fixture_hot::<T>(**actor_id).is_some_and(|hot| hot.queue_ticket.is_none())
-      })
-      .count() as u32;
+    let branch = loaded_step.resources.control.saturating_add(suffix);
+    let budget = T::BlockResourceBudget::get();
+    let limits = budget.limits();
+    let remaining = inspection
+      .saturating_add(branch)
+      .saturating_sub(Weight::from_parts(1, 0));
+    let consumed_before = limits.actor_control().saturating_sub(remaining);
+    let mut resource_state = BlockResourceState::new(now);
+    resource_state
+      .begin_prepass()
+      .expect("benchmark prepass opens");
+    resource_state
+      .open_external_phase()
+      .expect("benchmark external phase opens");
+    resource_state.begin_drain().expect("benchmark drain opens");
+    let mut prior = resource_state
+      .reserve(limits, BlockResourceDomain::ActorControl, consumed_before)
+      .expect("fixture leaves the exact late-refusal boundary");
+    resource_state
+      .settle(&mut prior, consumed_before)
+      .expect("fixture commits its prior control use");
+    let resource_before = resource_state;
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    let result;
+
+    #[block]
+    {
+      result = Pallet::<T>::service_canonical_round_head_with_resources(
+        &mut meter,
+        now,
+        &mut resource_state,
+        limits,
+        BlockResourceDomain::ActorDrainEffect,
+      );
+    }
+
+    assert_eq!(result, Err(ServiceRoundError::ResourceUnavailable));
+    assert_eq!(meter.consumed(), inspection);
     assert_eq!(
-      consumed, executed,
-      "every executed cohort actor must release its queue ticket"
+      resource_state.usage().actor_control_used(),
+      resource_before
+        .usage()
+        .actor_control_used()
+        .saturating_add(inspection)
     );
+    assert_eq!(resource_state.outstanding_reservations(), 0);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before
+    );
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("late refusal preserves canonical state");
+    Ok(())
+  }
+
+  /// Measures one complete canonical terminal Service owner for an exhausted User identity. The
+  /// measured pass classifies one legal Service resident, removes its publication, closes the
+  /// active identity, and releases its User state hold without executing an Action effect. Focused
+  /// scheduler tests own the one-unit-short retention boundary for this same branch.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_service_terminal_retain_close()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, _) =
+      prepare_reachable_opening::<T>(0, ReachableOpeningProfile::UserCompleteMin)?;
+    Pallet::<T>::try_mutate_control_identity(actor_id, Error::<T>::ActorNotFound, |identity| {
+      identity.cycle_nonce = u64::MAX;
+      Ok(())
+    })
+    .expect("terminal fixture mutates canonical identity coherently");
+    assert!(
+      ActorStateHolds::<T>::contains_key(actor_id),
+      "terminal User source owns its state hold"
+    );
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    assert!(ActorProcesses::<T>::contains_key(actor_id));
+    assert!(ActorContractHeads::<T>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::execute_cycle(Weight::MAX));
+    }
+
+    assert!(!Pallet::<T>::active_actor_exists(actor_id));
+    assert!(!ActorIdentities::<T>::contains_key(actor_id));
+    assert!(!ActorSemanticStates::<T>::contains_key(actor_id));
+    assert!(!ActorProcesses::<T>::contains_key(actor_id));
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorRunStateStore::<T>::contains_key(actor_id));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert!(!ActorContractHeads::<T>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("terminal close leaves no canonical orphan state");
+    Ok(())
+  }
+
+  /// Measures one complete canonical minimal-apoptosis Service owner. The legal pending User
+  /// source has paid its useful-readiness Trigger fee but is one native unit short of complete
+  /// Pipeline Machine admission. The measured pass removes Service publication and closes the
+  /// Actor without an Action effect, Pipeline fee, Deadline publication, or custody unwind.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_service_minimal_apoptosis()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let owner: T::AccountId = account("service-apoptosis-owner", 0, 0);
+    let recipient: T::AccountId = account("service-apoptosis-recipient", 0, 0);
+    let steps = make_contract_steps::<T>(recipient.clone());
+    let required = Pallet::<T>::user_pipeline_machine_capacity_requirement(&steps)
+      .expect("one-Step User Pipeline capacity is representable");
+    ensure_creation_balance::<T>(&owner);
+    prefund_active_user_creation::<T>(&owner, &steps);
+    Pallet::<T>::create_user_actor(
+      RawOrigin::Signed(owner.clone()).into(),
+      Mutability::Mutable,
+      user_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0u32.into(),
+        },
+        steps,
+      ),
+    )
+    .expect("minimal-apoptosis User Actor is admitted before readiness");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let identity =
+      Pallet::<T>::actor_identity(actor_id).expect("minimal-apoptosis User identity exists");
+    let native = T::FeeNativeAssetId::get();
+    assert_eq!(
+      T::AssetOps::balance(&identity.sovereign_account, native),
+      required
+    );
+    let trigger_fee = Pallet::<T>::trigger_fee_for_weight(
+      ActorType::User,
+      TriggerFamily::Manual,
+      T::WeightInfo::manual_trigger(),
+    )
+    .trigger_fee;
+    assert!(!trigger_fee.is_zero());
+    T::AssetOps::mint(
+      &identity.sovereign_account,
+      native,
+      trigger_fee.saturating_sub(One::one()),
+    )
+    .expect("one-unit-short Pipeline fixture funding succeeds");
+    Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
+      .expect("useful-readiness Trigger is paid and latched");
+    let balance_before = T::AssetOps::balance(&identity.sovereign_account, native);
+    let sink_before = T::AssetOps::balance(&T::FeeSink::get(), native);
+    let recipient_before = T::AssetOps::balance(&recipient, native);
+    assert_eq!(balance_before, required.saturating_sub(One::one()));
+    assert!(
+      !Pallet::<T>::pipeline_capacity_sufficient(
+        actor_id,
+        ActorType::User,
+        &identity.sovereign_account,
+      )
+      .expect("canonical User funding state is readable")
+    );
+    let node =
+      ServiceNodes::<T>::get(actor_id).expect("paid readiness publishes canonical pending Service");
+    frame_system::Pallet::<T>::set_block_number(node.eligible_from);
+    assert!(ActorStateHolds::<T>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::execute_cycle(Weight::MAX));
+    }
+
+    assert!(!Pallet::<T>::active_actor_exists(actor_id));
+    assert!(!ActorIdentities::<T>::contains_key(actor_id));
+    assert!(!ActorSemanticStates::<T>::contains_key(actor_id));
+    assert!(!ActorProcesses::<T>::contains_key(actor_id));
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorRunStateStore::<T>::contains_key(actor_id));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert!(!ActorContractHeads::<T>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert_eq!(
+      T::AssetOps::balance(&identity.sovereign_account, native),
+      balance_before,
+      "minimal apoptosis preserves sovereign custody"
+    );
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      sink_before
+    );
+    assert_eq!(T::AssetOps::balance(&recipient, native), recipient_before);
+    frame_system::Pallet::<T>::assert_has_event(
+      Event::<T>::ActorClosed {
+        actor_id,
+        reason: CloseReason::CycleAdmissionInsufficient,
+      }
+      .into(),
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("minimal apoptosis leaves no canonical orphan state");
+    Ok(())
+  }
+
+  /// Measures one complete canonical due-Deadline recovery pass. The fixture owns a legal
+  /// one-member Block deadline bucket and sleeping process; the outer owner includes the mandatory
+  /// two-clock envelope, Block frontier classification, Deadline removal, and B+1 Service
+  /// publication rather than measuring only the inner return atom. The independent Tick frontier
+  /// may also process host-genesis work when it is already due; only admission refusal is invalid.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_due_deadline_to_service()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, _) = prepare_reachable_opening::<T>(0, ReachableOpeningProfile::RetryMin)?;
+    Pallet::<T>::execute_cycle(Weight::MAX);
+    let actor =
+      Pallet::<T>::load_actor_ref(actor_id).expect("suspended retry retains live Actor authority");
+    let run = ActorRunStateStore::<T>::get(actor_id)
+      .expect("ordinary retry attempt publishes one suspended Run");
+    let now = run.eligible_at;
+    frame_system::Pallet::<T>::set_block_number(now);
+    let handle = DeadlineHandles::<T>::get(actor_id)
+      .expect("due retry owns one legal canonical Deadline member");
+    assert_eq!(handle.key, WakeupKey::Block(now));
+    assert!(ServiceNodes::<T>::get(actor_id).is_none());
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    let pass;
+
+    #[block]
+    {
+      pass = Pallet::<T>::service_due_deadline_frontiers(
+        &mut meter,
+        ServiceResidenceKind::Live,
+        now,
+        0,
+        None,
+        None,
+      )
+      .expect("complete deadline envelope is admitted");
+    }
+
+    assert!(matches!(
+      pass.block,
+      Ok(DueBlockDeadlineMutation::RetryReturned(returned)) if returned == actor
+    ));
+    assert!(!matches!(
+      pass.tick,
+      Err(DependencyReviewWorkerError::InsufficientWeight)
+    ));
+    assert!(!DeadlineHandles::<T>::contains_key(actor.actor_id));
+    let node =
+      ServiceNodes::<T>::get(actor.actor_id).expect("due retry returns to canonical Service");
+    assert_eq!(node.eligible_from, now.saturating_add(1u32.into()));
+    assert!(matches!(
+      ActorProcesses::<T>::get(actor.actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Live))
+    ));
+    assert!(!ActorControlLocators::<T>::contains_key(actor.actor_id));
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("due-Deadline complete owner preserves canonical state");
+    Ok(())
   }
 
   /// Diagnostic classifier for dense Running-capable Contract geometry. Each singleton component
@@ -13212,8 +12324,6 @@ mod benches {
     )?;
     assert_eq!(run.cursor, 1);
     assert!(run.opening_snapshot.is_empty());
-    assert!(run.opening_predicate_results.is_empty());
-    assert!(run.funding_snapshot.is_empty());
     assert!(matches!(
       ActorControlLocators::<T>::get(actor_id),
       Some(ActorControlLocation::Ready { .. })
@@ -13250,18 +12360,13 @@ mod benches {
         precondition: None,
         task: ActorTask::Unstake {
           asset: position,
-          shares: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+          shares: AmountResolution::Percent(Perbill::from_percent(50)),
         },
         on_error: StepErrorPolicy::AbortCycle,
       }),
       0,
     )?;
-    assert!(
-      ActorFunding::<T>::get(actor_id)
-        .expect("terminal-failure funding authority exists")
-        .funding_tracked_assets
-        .contains(&receipt)
-    );
+    assert!(T::StakingOps::share_asset(position).is_some_and(|asset| asset == receipt));
     T::BenchmarkHelper::remove_empty_staking_receipt(&owner, position).map_err(|_| {
       polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
         "host cannot remove the empty terminal-failure staking receipt",
@@ -13308,12 +12413,9 @@ mod benches {
         packed_predicate_clauses::<T>(
           assets
             .into_iter()
-            .map(|asset| TimedPredicate {
-              timing: ObservationTiming::Opening,
-              predicate: Predicate::BalanceBelow {
-                asset,
-                threshold: One::one(),
-              },
+            .map(|asset| Predicate::BalanceBelow {
+              asset,
+              threshold: One::one(),
             })
             .collect(),
           T::MaxPredicatesPerClause::get(),
@@ -13358,24 +12460,26 @@ mod benches {
     );
     if dense {
       assert_eq!(suspended.opening_snapshot.len() as u32, 4);
-      assert_eq!(
-        suspended.opening_predicate_results.len() as u32,
-        3 * benchmark_predicate_capacity::<T>()
-      );
     } else {
       assert!(suspended.opening_snapshot.is_empty());
-      assert!(suspended.opening_predicate_results.is_empty());
     }
     frame_system::Pallet::<T>::set_block_number(suspended.eligible_at);
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    assert!(
-      Pallet::<T>::drain_overdue_wakeups_cursor(suspended.eligible_at, &mut meter).ready_entries
-        >= 1
-    );
+    let pass = Pallet::<T>::service_due_deadline_frontiers(
+      &mut meter,
+      ServiceResidenceKind::Live,
+      suspended.eligible_at,
+      0,
+      None,
+      None,
+    )
+    .expect("complete canonical deadline envelope remains admitted");
     assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
+      pass.block,
+      Ok(DueBlockDeadlineMutation::RetryReturned(returned)) if returned.actor_id == actor_id
     ));
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
     Ok(actor_id)
   }
 
@@ -13402,10 +12506,6 @@ mod benches {
     let source = ActorRunStateStore::<T>::get(actor_id).expect("dense Running source exists");
     assert_eq!(source.cursor, 1);
     assert_eq!(source.opening_snapshot.len() as u32, 6);
-    assert_eq!(
-      source.opening_predicate_results.len() as u32,
-      3 * benchmark_predicate_capacity::<T>()
-    );
     let now = source.eligible_at;
     frame_system::Pallet::<T>::set_block_number(now);
     let (state, admission, loaded_step) =
@@ -13704,9 +12804,6 @@ mod benches {
   fn run_progress() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     let actor_id = prepare_reachable_running::<T>(T::MaxContractSteps::get())?;
     let state = ActorRunStateStore::<T>::get(actor_id).expect("real Running state exists");
-    let eligible_at = state.eligible_at;
-    let location = ActorControlLocators::<T>::get(actor_id);
-    assert!(matches!(location, Some(ActorControlLocation::Ready { .. })));
     let retained = state.encode();
     #[block]
     {
@@ -13723,12 +12820,8 @@ mod benches {
       benchmark_fixture_hot::<T>(actor_id)
         .is_some_and(|hot| hot.cycle_state == CycleState::Running)
     );
-    assert_eq!(ActorControlLocators::<T>::get(actor_id), location);
-    let pointer = benchmark_fixture_hot::<T>(actor_id)
-      .and_then(|hot| hot.wakeup_pointer)
-      .expect("Running temporal reference exists");
-    assert_eq!(pointer.block, WakeupKey::Block(eligible_at));
-    assert!(Pallet::<T>::wakeup_page_entry_matches(pointer, actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real Running persistence passes full state audit");
     Ok(())
@@ -13737,11 +12830,13 @@ mod benches {
   /// Measures persistence of a real suspension after due collection, not a new Task attempt.
   #[benchmark(pov_mode = Measured)]
   fn run_suspend() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let (actor_id, _) = prepare_reachable_suspended_head::<T>(T::MaxContractSteps::get() * 2, 0)?;
+    let (actor_id, _) = prepare_reachable_suspended_head::<T>()?;
     let state = ActorRunStateStore::<T>::get(actor_id).expect("real Suspended state exists");
     let eligible_at = state.eligible_at;
-    let location = ActorControlLocators::<T>::get(actor_id);
-    assert!(matches!(location, Some(ActorControlLocation::Ready { .. })));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    let node = ServiceNodes::<T>::get(actor_id)
+      .expect("a due canonical retry owns one Pending Service member");
+    assert_eq!(node.eligible_from, eligible_at.saturating_add(1u32.into()));
     let expected_event = Event::<T>::CycleSuspended {
       actor_id,
       cycle_nonce: state.cycle_nonce,
@@ -13768,12 +12863,11 @@ mod benches {
       benchmark_fixture_hot::<T>(actor_id)
         .is_some_and(|hot| hot.cycle_state == CycleState::Suspended)
     );
-    assert_eq!(ActorControlLocators::<T>::get(actor_id), location);
-    let pointer = benchmark_fixture_hot::<T>(actor_id)
-      .and_then(|hot| hot.wakeup_pointer)
-      .expect("Suspended temporal reference exists");
-    assert_eq!(pointer.block, WakeupKey::Block(eligible_at));
-    assert!(Pallet::<T>::wakeup_page_entry_matches(pointer, actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    let node = ServiceNodes::<T>::get(actor_id)
+      .expect("persisted suspension retains its Pending Service member");
+    assert_eq!(node.eligible_from, eligible_at.saturating_add(1u32.into()));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
     frame_system::Pallet::<T>::assert_last_event(expected_event.into());
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real suspension persistence passes full state audit");
@@ -13793,32 +12887,19 @@ mod benches {
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
     #[block]
     {
       Pallet::<T>::write_run_state(actor_id, None)
         .expect("benchmark completion must clear Actor run");
     }
     assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
-    let (_, completed) = Pallet::<T>::load_primary_control_cell(actor_id)
-      .expect("benchmark completed primary remains");
-    assert_eq!(completed.hot.cycle_state, CycleState::Idle);
-    assert_eq!(completed.identity.cycle_nonce, run.cycle_nonce);
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Unsignaled)
-    ));
+    let completed_identity =
+      benchmark_fixture_identity::<T>(actor_id).expect("completed Actor retains identity");
+    assert_eq!(completed_identity.cycle_nonce, run.cycle_nonce);
+    let completed = benchmark_fixture_hot::<T>(actor_id).expect("completed Actor retains hot");
+    assert_eq!(completed.cycle_state, CycleState::Idle);
+    assert!(completed.queue_ticket.is_none());
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("completed real Run passes full state audit");
     Ok(())
@@ -13831,46 +12912,23 @@ mod benches {
         "middle-page cancellation requires two nonterminal retries",
       ));
     }
-    let page_size = 32u32;
-    let (actor_id, funding) =
-      create_reachable_manual_retry::<T>(T::MaxContractSteps::get() * 2, 0, 0)?;
-    let second_attempt = frame_system::Pallet::<T>::block_number().saturating_add(2u32.into());
-    let wakeup_block = Pallet::<T>::suspension_eligible_at(0, None, second_attempt, 2)
-      .expect("second real retry target is representable");
-    for i in 0..page_size {
-      create_reachable_waiting_guard::<T>(i, wakeup_block);
-    }
-    let mut middle_fillers = alloc::vec::Vec::with_capacity(page_size.saturating_sub(1) as usize);
-    for i in 0..page_size.saturating_sub(1) {
-      let filler = create_reachable_waiting_guard::<T>(page_size + i, wakeup_block);
-      middle_fillers.push(filler);
-    }
+    let (actor_id, funding) = create_reachable_manual_retry::<T>(10)?;
     open_reachable_retry::<T>(actor_id, funding);
     assert_reachable_retry::<T>(actor_id);
     let run = ActorRunStateStore::<T>::get(actor_id).expect("real cancellation Run exists");
-    assert_eq!(run.unsuccessful_attempts_at_cursor, 2);
-    assert_eq!(run.eligible_at, wakeup_block);
-    create_reachable_waiting_guard::<T>(page_size * 2, wakeup_block);
-    for filler in middle_fillers {
-      Pallet::<T>::close_actor(RawOrigin::Root.into(), filler)
-        .expect("real guard close unlinks its Waiting entry");
-    }
+    assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+    assert!(DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
     let owner = Pallet::<T>::actor_identity(actor_id)
       .expect("target identity exists")
       .owner;
     Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
-      .expect("second real occurrence retains a deferred latch");
+      .expect("a live Run ignores a redundant Manual occurrence");
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id)
         .expect("deferred Run exists")
         .encode(),
       run.encode()
-    );
-    let middle = ActorWaitingFrameChunks::<T>::get((WakeupKey::Block(wakeup_block), 1))
-      .expect("cancel measures unlink of a live middle Waiting page");
-    assert_eq!(
-      (middle.previous_page, middle.next_page, middle.live_entries),
-      (Some(0), Some(2), 1)
     );
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real middle-page cancellation state is valid");
@@ -13880,14 +12938,13 @@ mod benches {
     assert!(
       Pallet::<T>::active_actor_view(actor_id).is_some_and(|actor| {
         actor.cycle_state == CycleState::Idle
-          && actor.pending_signal
-          && actor.queue_ticket.is_some()
+          && !actor.pending_signal
+          && actor.queue_ticket.is_none()
+          && actor.wakeup_pointer.is_none()
       })
     );
-    assert!(!ActorWaitingFrameChunks::<T>::contains_key((
-      WakeupKey::Block(wakeup_block),
-      1,
-    )));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real cancellation preserves canonical topology");
     Ok(())
@@ -13930,9 +12987,18 @@ mod benches {
         .expect("ObservationChange occurrence commits")
       );
     }
-    let hot = benchmark_fixture_hot::<T>(actor_id).expect("ObservationChange Actor remains active");
-    assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some());
+    let semantic = Pallet::<T>::load_canonical_actor_semantic_state(crate::ActorRef {
+      actor_id,
+      generation: 1,
+    })
+    .expect("ObservationChange canonical semantic state remains active");
+    assert!(semantic.0.hot.pending_signal);
+    assert_eq!(
+      crate::ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(crate::ProcessResidence::Service(
+        crate::ServiceResidenceKind::Pending,
+      ))
+    );
   }
 
   #[benchmark]
@@ -14018,7 +13084,11 @@ mod benches {
     assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
     assert_eq!(DirtyObservationListState::<T>::get().count, 2);
     for actor_id in actors {
-      assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| hot.pending_signal));
+      assert!(benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| hot.pending_signal));
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
     }
   }
 
@@ -14032,12 +13102,9 @@ mod benches {
     let mut actors = alloc::vec::Vec::new();
     for index in 0..T::ObservationPageSize::get() {
       let owner: T::AccountId = account("observation-wakeup", index, 0);
-      let actor_id = bench_create_user_observation_with_cooldown::<T>(owner, feed, 100);
-      benchmark_fixture_mutate_hot::<T>(actor_id, |hot| {
-        hot.last_cycle_block = Some(One::one());
-      });
-      benchmark_fixture_align_primary_control::<T>(actor_id);
-      actors.push(actor_id);
+      actors.push(bench_create_user_observation_with_cooldown::<T>(
+        owner, feed, 100,
+      ));
     }
     Pallet::<T>::note_observation_changed(feed, 1)
       .expect("observation change ingress must succeed");
@@ -14048,9 +13115,11 @@ mod benches {
     }
     assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
     for actor_id in actors {
-      assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| {
-        hot.pending_signal && hot.queue_ticket.is_none() && hot.wakeup_pointer.is_some()
-      }));
+      assert!(benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| hot.pending_signal));
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
     }
   }
 
@@ -14065,8 +13134,15 @@ mod benches {
     for index in 0..T::ObservationPageSize::get() {
       let owner: T::AccountId = account("observation-coalesced", index, 0);
       let actor_id = bench_create_user_observation_with_cooldown::<T>(owner, feed, 0);
-      Pallet::<T>::request_observation_activation_compact(actor_id, feed)
-        .expect("initial observation activation must succeed");
+      assert!(
+        Pallet::<T>::signal_observation_subscriber(
+          actor_id,
+          feed,
+          TriggerCauseProvenance::Deferred,
+          0,
+        )
+        .expect("initial observation activation must succeed")
+      );
       actors.push(actor_id);
     }
     Pallet::<T>::note_observation_changed(feed, 1)
@@ -14078,9 +13154,10 @@ mod benches {
     }
     assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
     for actor_id in actors {
-      assert!(
-        benchmark_fixture_hot::<T>(actor_id)
-          .is_some_and(|hot| { hot.pending_signal && hot.queue_ticket.is_some() })
+      assert!(benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| hot.pending_signal));
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
       );
     }
   }
@@ -14097,19 +13174,17 @@ mod benches {
     frame_system::Pallet::<T>::set_block_number(end.saturating_add(One::one()));
     Pallet::<T>::note_observation_changed(feed, 1)
       .expect("observation change ingress must succeed");
-    Pallet::<T>::do_fanout_dirty_observation_page()
-      .expect("ordinary turn must persist terminal branch");
-    assert!(
-      DirtyObservationFeeds::<T>::get(feed)
-        .is_some_and(|state| { state.next_subscriber_branch == ObservationFanoutBranch::Terminal })
-    );
     #[block]
     {
       Pallet::<T>::do_fanout_dirty_observation_page()
-        .expect("terminal observation fanout must succeed");
+        .expect("terminal observation fanout must publish canonical Service");
     }
-    assert!(benchmark_fixture_hot::<T>(actor_id).is_none());
     assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
+    assert!(benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| hot.pending_signal));
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
   }
 
   #[benchmark]
@@ -14136,9 +13211,11 @@ mod benches {
     }
     assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
     for actor_id in actors {
-      assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| {
-        hot.pending_signal && hot.queue_ticket.is_none() && hot.wakeup_pointer.is_some()
-      }));
+      assert!(benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| hot.pending_signal));
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
     }
   }
 
@@ -14210,9 +13287,15 @@ mod benches {
     {
       Pallet::<T>::crossing_work_unit().expect("Crossing occurrence commits");
     }
-    let hot = benchmark_fixture_hot::<T>(actor_id).expect("Crossing Actor remains active");
+    let hot = benchmark_fixture_semantic_hot::<T>(actor_id)
+      .expect("Crossing Actor remains canonically active");
     assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some());
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
   }
 
   #[benchmark]
@@ -14246,9 +13329,7 @@ mod benches {
     {
       assert!(matches!(
         Pallet::<T>::classify_crossing_work(),
-        CrossingWorkPlan::FireCohortPlaced
-          | CrossingWorkPlan::FireCohortCoalesced
-          | CrossingWorkPlan::FireCohortClosed
+        CrossingWorkPlan::FireCohortPlaced | CrossingWorkPlan::FireCohortCoalesced
       ));
     }
   }
@@ -14256,12 +13337,6 @@ mod benches {
   #[benchmark]
   fn crossing_fire_pair_probe() {
     let (feed, _) = prepare_crossing_work::<T>(2);
-    for index in 0..31 {
-      let owner: T::AccountId = account("crossing-pair-queue-boundary", index, 0);
-      let actor_id = bench_create_user_with_trigger::<T>(owner, Trigger::manual());
-      Pallet::<T>::request_activation(actor_id).expect("queue-boundary actor activation");
-    }
-    assert_eq!(benchmark_fixture_ready_occupancy::<T>(), 31);
     let second_owner: T::AccountId = account("crossing-pair-probe", 0, 0);
     let _ = bench_create_user_with_trigger::<T>(
       second_owner,
@@ -14419,7 +13494,7 @@ mod benches {
       ));
     }
     for actor_id in actors {
-      Pallet::<T>::request_activation(actor_id).expect("coalesced cohort activation");
+      benchmark_latch_canonical_crossing::<T>(actor_id);
     }
     let locator = CrossingMemberships::<T>::get(first).expect("first Crossing locator");
     let page = CrossingMemberPages::<T>::get(locator.key, locator.page)
@@ -14453,50 +13528,7 @@ mod benches {
     }
   }
 
-  #[benchmark]
-  fn crossing_terminal_cohort_preflight(c: Linear<1, { CROSSING_COHORT_BENCHMARK_MAX }>) {
-    let (feed, first) = prepare_crossing_work::<T>(2);
-    for index in 1..c {
-      let owner: T::AccountId = account("crossing-terminal-cohort", index, 0);
-      let _ = bench_create_user_with_trigger::<T>(
-        owner,
-        Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
-      );
-    }
-    benchmark_fixture_set_next_ready_ticket::<T>(u64::MAX);
-    let locator = CrossingMemberships::<T>::get(first).expect("first Crossing locator");
-    let page = CrossingMemberPages::<T>::get(locator.key, locator.page)
-      .expect("Crossing cohort source page");
-    let transition = CrossingTransitionObligation {
-      revision: 2,
-      previous: 0,
-      current: 2,
-      cause_provenance: TriggerCauseProvenance::Deferred,
-      cause_block: 0,
-    };
-    #[block]
-    {
-      let snapshot = Pallet::<T>::snapshot_crossing_source_prefix(
-        locator.key,
-        locator.page,
-        &page,
-        locator.offset,
-        c,
-      )
-      .expect("bounded cohort snapshot");
-      let preflight = Pallet::<T>::preflight_crossing_cohort(
-        &snapshot,
-        transition,
-        crate::crossing::CrossingFireClassification::Resolve,
-        Some(CrossingWorkPlan::FireCohortClosed),
-      )
-      .expect("homogeneous terminal preflight");
-      assert_eq!(preflight.plan, CrossingWorkPlan::FireCohortClosed);
-      assert_eq!(preflight.admitted_candidates, c);
-    }
-  }
-
-  #[benchmark]
+  #[benchmark(extra)]
   fn crossing_skip_cohort_preflight(c: Linear<1, { CROSSING_COHORT_BENCHMARK_MAX }>) {
     let (feed, first) = prepare_crossing_work::<T>(2);
     let mut actors = alloc::vec![first];
@@ -14652,7 +13684,7 @@ mod benches {
     }
   }
 
-  #[benchmark]
+  #[benchmark(extra)]
   fn crossing_skip_pair_probe() {
     let (feed, first_actor) = prepare_crossing_work::<T>(2);
     let second_owner: T::AccountId = account("crossing-skip-pair-probe", 0, 0);
@@ -14753,12 +13785,18 @@ mod benches {
       Pallet::<T>::crossing_work_unit().expect("Crossing rearm work must succeed");
     }
     assert!(matches!(
-      benchmark_fixture_hot::<T>(actor_id).map(|hot| hot.trigger_runtime_state),
+      benchmark_fixture_semantic_hot::<T>(actor_id).map(|hot| hot.trigger_runtime_state),
       Some(TriggerRuntimeState::ObservationCrossing {
         phase: CrossingPhase::Armed,
         ..
       })
     ));
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
   }
 
   #[benchmark]
@@ -14800,34 +13838,63 @@ mod benches {
     }
     for actor_id in [first_actor, second_actor] {
       assert!(matches!(
-        benchmark_fixture_hot::<T>(actor_id).map(|hot| hot.trigger_runtime_state),
+        benchmark_fixture_semantic_hot::<T>(actor_id).map(|hot| hot.trigger_runtime_state),
         Some(TriggerRuntimeState::ObservationCrossing {
           phase: CrossingPhase::Armed,
           ..
         })
       ));
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
     }
   }
 
   #[benchmark]
   fn crossing_coalesced_unit() {
-    let (_, actor_id) = prepare_crossing_work::<T>(2);
-    Pallet::<T>::request_activation(actor_id).expect("benchmark actor activation must succeed");
+    let (feed, actor_id) = prepare_crossing_work::<T>(2);
+    benchmark_latch_canonical_crossing::<T>(actor_id);
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::FireCohortCoalesced
+    );
     #[block]
     {
       Pallet::<T>::crossing_work_unit().expect("coalesced Crossing fire must succeed");
     }
-    assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| {
-      hot.pending_signal
-        && hot.queue_ticket.is_some()
-        && matches!(
-          hot.trigger_runtime_state,
-          TriggerRuntimeState::ObservationCrossing {
-            phase: CrossingPhase::WaitingForRearm,
-            ..
-          }
-        )
-    }));
+    assert!(
+      benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
+        hot.pending_signal
+          && matches!(
+            hot.trigger_runtime_state,
+            TriggerRuntimeState::ObservationCrossing {
+              phase: CrossingPhase::WaitingForRearm,
+              ..
+            }
+          )
+      })
+    );
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
   }
 
   #[benchmark]
@@ -14838,8 +13905,8 @@ mod benches {
       second_owner,
       Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
     );
-    Pallet::<T>::request_activation(first_actor).expect("first pair latch must succeed");
-    Pallet::<T>::request_activation(second_actor).expect("second pair latch must succeed");
+    benchmark_latch_canonical_crossing::<T>(first_actor);
+    benchmark_latch_canonical_crossing::<T>(second_actor);
     CrossingRangeCursors::<T>::insert(
       feed,
       CrossingRangeCursor {
@@ -14861,48 +13928,30 @@ mod benches {
       Pallet::<T>::crossing_pair_work_unit().expect("coalesced Crossing pair must succeed");
     }
     for actor_id in [first_actor, second_actor] {
-      assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| {
-        hot.pending_signal
-          && hot.queue_ticket.is_some()
-          && matches!(
-            hot.trigger_runtime_state,
-            TriggerRuntimeState::ObservationCrossing {
-              phase: CrossingPhase::WaitingForRearm,
-              ..
-            }
-          )
-      }));
+      assert!(
+        benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
+          hot.pending_signal
+            && matches!(
+              hot.trigger_runtime_state,
+              TriggerRuntimeState::ObservationCrossing {
+                phase: CrossingPhase::WaitingForRearm,
+                ..
+              }
+            )
+        })
+      );
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
     }
   }
 
   #[benchmark]
   fn crossing_placed_unit() {
-    let (_, actor_id) = prepare_crossing_work::<T>(2);
-    #[block]
-    {
-      Pallet::<T>::crossing_work_unit().expect("placed Crossing fire must succeed");
-    }
-    assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| {
-      hot.pending_signal
-        && hot.queue_ticket.is_some()
-        && matches!(
-          hot.trigger_runtime_state,
-          TriggerRuntimeState::ObservationCrossing {
-            phase: CrossingPhase::WaitingForRearm,
-            ..
-          }
-        )
-    }));
-  }
-
-  #[benchmark]
-  fn crossing_placed_pair_unit() {
-    let (feed, first_actor) = prepare_crossing_work::<T>(2);
-    let second_owner: T::AccountId = account("crossing-pair-unit", 0, 0);
-    let second_actor = bench_create_user_with_trigger::<T>(
-      second_owner,
-      Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
-    );
+    let (feed, actor_id) = prepare_crossing_work::<T>(2);
     CrossingRangeCursors::<T>::insert(
       feed,
       CrossingRangeCursor {
@@ -14915,14 +13964,17 @@ mod benches {
         exhausted: false,
       },
     );
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::FireCohortPlaced
+    );
     #[block]
     {
-      Pallet::<T>::crossing_placed_batch_work_unit(2).expect("placed Crossing pair must succeed");
+      Pallet::<T>::crossing_work_unit().expect("placed Crossing fire must succeed");
     }
-    for actor_id in [first_actor, second_actor] {
-      assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| {
+    assert!(
+      benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
         hot.pending_signal
-          && hot.queue_ticket.is_some()
           && matches!(
             hot.trigger_runtime_state,
             TriggerRuntimeState::ObservationCrossing {
@@ -14930,7 +13982,81 @@ mod benches {
               ..
             }
           )
-      }));
+      })
+    );
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
+  }
+
+  #[benchmark]
+  fn crossing_placed_pair_unit() {
+    let feed = T::BenchmarkHelper::setup_observation_feeds(1)
+      .expect("Crossing benchmark feed must be available")
+      .into_iter()
+      .next()
+      .expect("one Crossing benchmark feed is required");
+    let first_owner: T::AccountId = account("crossing-pair-unit", 0, 0);
+    let first_actor = bench_create_user_with_trigger::<T>(
+      first_owner,
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+    );
+    let second_owner: T::AccountId = account("crossing-pair-unit", 1, 0);
+    let second_actor = bench_create_user_with_trigger::<T>(
+      second_owner,
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+    );
+    Pallet::<T>::note_observation_transition(
+      feed,
+      ObservationTransition {
+        revision: 2,
+        previous: Some(1),
+        current: 2,
+      },
+    )
+    .expect("Crossing benchmark transition must be admitted");
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::FireCohortPlacedBatch
+    );
+    #[block]
+    {
+      Pallet::<T>::crossing_placed_batch_work_unit(2).expect("placed Crossing pair must succeed");
+    }
+    for actor_id in [first_actor, second_actor] {
+      assert!(
+        benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
+          hot.pending_signal
+            && matches!(
+              hot.trigger_runtime_state,
+              TriggerRuntimeState::ObservationCrossing {
+                phase: CrossingPhase::WaitingForRearm,
+                ..
+              }
+            )
+        })
+      );
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
     }
   }
 
@@ -14961,6 +14087,10 @@ mod benches {
         exhausted: false,
       },
     );
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::FireCohortPlacedBatch
+    );
     #[block]
     {
       Pallet::<T>::crossing_placed_batch_work_unit(CROSSING_COHORT_BENCHMARK_MAX)
@@ -14970,23 +14100,34 @@ mod benches {
       .into_iter()
       .take(CROSSING_COHORT_BENCHMARK_MAX as usize)
     {
-      assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| {
-        hot.pending_signal
-          && hot.queue_ticket.is_some()
-          && matches!(
-            hot.trigger_runtime_state,
-            TriggerRuntimeState::ObservationCrossing {
-              phase: CrossingPhase::WaitingForRearm,
-              ..
-            }
-          )
-      }));
+      assert!(
+        benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
+          hot.pending_signal
+            && matches!(
+              hot.trigger_runtime_state,
+              TriggerRuntimeState::ObservationCrossing {
+                phase: CrossingPhase::WaitingForRearm,
+                ..
+              }
+            )
+        })
+      );
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
     }
   }
 
   #[benchmark]
   fn crossing_placed_non_tail_emptied_unit() {
     let actors = prepare_non_tail_crossing_batch::<T>(CROSSING_NON_TAIL_BENCHMARK_MAX);
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::FireCohortPlaced
+    );
     #[block]
     {
       Pallet::<T>::crossing_placed_batch_work_unit(CROSSING_COHORT_BENCHMARK_MAX)
@@ -14997,15 +14138,33 @@ mod benches {
       .take(CROSSING_NON_TAIL_BENCHMARK_MAX as usize)
     {
       assert!(
-        benchmark_fixture_hot::<T>(actor_id)
-          .is_some_and(|hot| { hot.pending_signal && hot.queue_ticket.is_some() })
+        benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
+          hot.pending_signal
+            && matches!(
+              hot.trigger_runtime_state,
+              TriggerRuntimeState::ObservationCrossing {
+                phase: CrossingPhase::WaitingForRearm,
+                ..
+              }
+            )
+        })
       );
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
     }
   }
 
   #[benchmark]
   fn crossing_placed_non_tail_trimmed_unit() {
     let actors = prepare_non_tail_crossing_batch::<T>(CROSSING_TRIMMED_BENCHMARK_TAIL);
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::FireCohortPlaced
+    );
     #[block]
     {
       Pallet::<T>::crossing_placed_batch_work_unit(CROSSING_COHORT_BENCHMARK_MAX)
@@ -15016,13 +14175,27 @@ mod benches {
       .take(CROSSING_NON_TAIL_BENCHMARK_MAX as usize)
     {
       assert!(
-        benchmark_fixture_hot::<T>(actor_id)
-          .is_some_and(|hot| { hot.pending_signal && hot.queue_ticket.is_some() })
+        benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
+          hot.pending_signal
+            && matches!(
+              hot.trigger_runtime_state,
+              TriggerRuntimeState::ObservationCrossing {
+                phase: CrossingPhase::WaitingForRearm,
+                ..
+              }
+            )
+        })
       );
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
     }
   }
 
-  #[benchmark]
+  #[benchmark(extra)]
   fn crossing_skip_unit() {
     let (_, actor_id) = prepare_crossing_work::<T>(2);
     benchmark_fixture_mutate_hot::<T>(actor_id, |hot| {
@@ -15053,7 +14226,7 @@ mod benches {
     }));
   }
 
-  #[benchmark]
+  #[benchmark(extra)]
   fn crossing_skip_pair_unit() {
     let (feed, first_actor) = prepare_crossing_work::<T>(2);
     let second_owner: T::AccountId = account("crossing-skip-pair-unit", 0, 0);
@@ -15110,16 +14283,22 @@ mod benches {
   #[benchmark]
   fn crossing_actor_unit() {
     let (_, actor_id) = prepare_crossing_work::<T>(2);
-    benchmark_fixture_reset_ready_queue::<T>();
-    ActorReadyHead::<T>::put(u64::MAX);
-    benchmark_fixture_set_next_ready_ticket::<T>(u64::MAX);
+    let locator = CrossingMemberships::<T>::get(actor_id)
+      .expect("Crossing benchmark Actor owns one member locator");
+    CrossingMemberPages::<T>::mutate(locator.key, locator.page, |stored| {
+      stored
+        .as_mut()
+        .expect("Crossing benchmark member page exists")
+        .entries[locator.offset as usize]
+        .generation += 1;
+    });
+    let hot = benchmark_fixture_hot::<T>(actor_id).expect("Crossing Actor remains active");
     #[block]
     {
-      Pallet::<T>::crossing_work_unit()
-        .expect("matched Crossing actor terminal cleanup must succeed");
+      assert!(Pallet::<T>::crossing_work_unit().is_err());
     }
-    assert!(benchmark_fixture_hot::<T>(actor_id).is_none());
-    assert!(!CrossingMemberships::<T>::contains_key(actor_id));
+    assert_eq!(benchmark_fixture_hot::<T>(actor_id), Some(hot));
+    assert_eq!(CrossingMemberships::<T>::get(actor_id), Some(locator));
   }
 
   #[benchmark]
@@ -15181,11 +14360,8 @@ mod benches {
     open_reachable_retry::<T>(actor_id, funding);
     let run = ActorRunStateStore::<T>::get(actor_id).expect("real ingress retry Run exists");
     let retained_run = run.encode();
-    let location = ActorControlLocators::<T>::get(actor_id);
-    assert!(matches!(
-      location,
-      Some(ActorControlLocation::Waiting { .. })
-    ));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(DeadlineHandles::<T>::contains_key(actor_id));
     assert!(
       !benchmark_fixture_hot::<T>(actor_id)
         .expect("active ingress target")
@@ -15197,15 +14373,7 @@ mod benches {
       "tombstones cannot replace live Ready actors"
     );
     let native = T::FeeNativeAssetId::get();
-    let before_funding = ActorFunding::<T>::get(actor_id).expect("ingress funding exists");
-    assert!(before_funding.funding_tracked_assets.contains(&native));
-    let expected_funding = before_funding
-      .funding_accumulated
-      .get(&native)
-      .copied()
-      .unwrap_or_else(Zero::zero)
-      .checked_add(&One::one())
-      .expect("second ingress accumulator is representable");
+    let balance_before = T::AssetOps::balance(&recipient, native);
     install_saturated_tombstone_queue::<T>();
     T::BenchmarkHelper::setup_address_event_ingress(&recipient, &source, One::one())
       .expect("benchmark helper must prepare a matched producer event");
@@ -15217,18 +14385,13 @@ mod benches {
         One::one(),
       ));
     }
-    assert!(
-      benchmark_fixture_hot::<T>(actor_id)
-        .is_some_and(|hot| { hot.pending_signal && hot.wakeup_pointer.is_some() })
-    );
-    assert_eq!(ActorControlLocators::<T>::get(actor_id), location);
+    assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| !hot.pending_signal));
+    assert!(DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
     assert_eq!(
-      ActorFunding::<T>::get(actor_id)
-        .expect("latched funding remains")
-        .funding_accumulated
-        .get(&native)
-        .copied(),
-      Some(expected_funding)
+      T::AssetOps::balance(&recipient, native),
+      balance_before,
+      "the transaction extension observes ingress after the ledger mutation owner"
     );
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id)
@@ -15238,98 +14401,6 @@ mod benches {
     );
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real ingress retry latch passes state audit");
-    Ok(())
-  }
-
-  #[benchmark]
-  fn funding_snapshot_open(
-    a: Linear<
-      1,
-      {
-        T::MaxFundingTrackedAssets::get()
-          .min(T::MaxContractSteps::get().saturating_mul(2))
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    if T::MaxFundingTrackedAssets::get() == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent a nonempty funding snapshot",
-      ));
-    }
-    let owner: T::AccountId = whitelisted_caller();
-    ensure_creation_balance::<T>(&owner);
-    let assets = T::BenchmarkHelper::setup_predicate_assets(&owner, a)
-      .expect("funding assets exist in the host ledger");
-    assert_eq!(assets.len(), a as usize);
-    let mut steps = ContractSteps::<T>::default();
-    for pair in assets.chunks(2) {
-      let amount = AmountResolution::PercentageOfLastFunding(Perbill::one());
-      let task = if pair.len() == 1 {
-        ActorTask::Transfer {
-          to: account("funding-snapshot-recipient", 0, 0),
-          asset: pair[0],
-          amount,
-        }
-      } else {
-        ActorTask::AddLiquidity {
-          asset_a: pair[0],
-          asset_b: pair[1],
-          amount_a: amount,
-          amount_b: amount,
-          min_lp_out: One::one(),
-        }
-      };
-      steps
-        .try_push(Step {
-          precondition: None,
-          task,
-          on_error: StepErrorPolicy::AbortCycle,
-        })
-        .expect("reachable funding sources fit the authored Step bound");
-    }
-    prefund_active_user_creation::<T>(&owner, &steps);
-    Pallet::<T>::create_user_actor(
-      RawOrigin::Signed(owner).into(),
-      Mutability::Mutable,
-      user_contract::<T>(
-        Schedule {
-          trigger: Trigger::Manual,
-          cooldown_blocks: 0,
-        },
-        steps,
-      ),
-    )
-    .expect("funding snapshot Contract is admitted");
-    let actor_id = NextActorId::<T>::get() - 1;
-    let amount = assets
-      .iter()
-      .map(|asset| T::AssetOps::minimum_balance(*asset))
-      .max()
-      .expect("nonempty funding assets")
-      .checked_add(&One::one())
-      .expect("funding amount fits");
-    fund_reachable_update_assets::<T>(actor_id, amount);
-    #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("certified funding input is a reachable Actor state");
-    let snapshot;
-    // This measures accumulator consumption only; complete Opening owns hold reconciliation.
-    #[block]
-    {
-      snapshot = ActorFunding::<T>::mutate(actor_id, |maybe| {
-        maybe
-          .as_mut()
-          .map(|funding| core::mem::take(&mut funding.funding_accumulated))
-          .expect("benchmark actor funding exists")
-      });
-    }
-    assert_eq!(snapshot.len() as u32, a);
-    assert!(
-      ActorFunding::<T>::get(actor_id)
-        .expect("benchmark actor funding exists")
-        .funding_accumulated
-        .is_empty()
-    );
     Ok(())
   }
 
@@ -15381,7 +14452,7 @@ mod benches {
         task: ActorTask::Transfer {
           to: next_sov,
           asset: native,
-          amount: AmountResolution::PercentageOfCurrent(pct),
+          amount: AmountResolution::Percent(pct),
         },
         on_error: StepErrorPolicy::AbortCycle,
       }])
@@ -15861,12 +14932,11 @@ mod benches {
         let (state, admission, loaded_step) =
           Pallet::<T>::load_current_step_service_state(actor_id).unwrap_or_else(|| {
             panic!(
-              "Actor control completed User state remains coherent: actor={actor_id} identity={} hot={} contract={} admission={} funding={}",
+              "Actor control completed User state remains coherent: actor={actor_id} identity={} hot={} contract={} admission={}",
               ActorIdentities::<T>::contains_key(actor_id),
               benchmark_fixture_hot::<T>(actor_id).is_some(),
               ActorContractHeads::<T>::contains_key(actor_id),
               benchmark_fixture_admission::<T>(actor_id).is_some(),
-              ActorFunding::<T>::contains_key(actor_id),
             )
           });
         assert_eq!(state.identity.cycle_nonce, 1);
@@ -16012,18 +15082,16 @@ mod benches {
   #[test]
   fn reachable_retry_opening_partition_boundaries() {
     let steps = <<Test as Config>::MaxContractSteps as Get<u32>>::get();
-    for amounts in [0, 1, steps * 2] {
-      for predicates in [0, 1, steps * benchmark_predicate_capacity::<Test>()] {
-        new_test_ext().execute_with(|| {
-          let actor_id = prepare_user_retry_opening_partition::<Test>(amounts, predicates)
-            .expect("independent capture boundaries reach actual suspension");
-          let identity = benchmark_fixture_identity::<Test>(actor_id).unwrap();
-          Pallet::<Test>::close_actor(RawOrigin::Signed(identity.owner).into(), actor_id)
-            .expect("independent capture boundaries close");
-          #[cfg(feature = "try-runtime")]
-          Pallet::<Test>::do_try_state().expect("partition close leaves no orphan state");
-        });
-      }
+    for predicates in [0, 1, steps * benchmark_predicate_capacity::<Test>()] {
+      new_test_ext().execute_with(|| {
+        let actor_id = prepare_user_retry_opening_partition::<Test>(predicates)
+          .expect("Opening predicate boundaries reach actual suspension");
+        let identity = benchmark_fixture_identity::<Test>(actor_id).unwrap();
+        Pallet::<Test>::close_actor(RawOrigin::Signed(identity.owner).into(), actor_id)
+          .expect("Opening predicate boundaries close");
+        #[cfg(feature = "try-runtime")]
+        Pallet::<Test>::do_try_state().expect("partition close leaves no orphan state");
+      });
     }
   }
   #[cfg(test)]
@@ -16128,11 +15196,6 @@ mod benches {
                   let after =
                     ActorRunStateStore::<Test>::get(actor_id).expect("progress retains Run");
                   assert_eq!(after.opening_snapshot, before.opening_snapshot);
-                  assert_eq!(
-                    after.opening_predicate_results,
-                    before.opening_predicate_results
-                  );
-                  assert_eq!(after.funding_snapshot, before.funding_snapshot);
                 }
                 assert_reachable_suspended_tail_skip::<Test>(
                   skip.expect("freeze fixture exists"),
@@ -16160,238 +15223,26 @@ mod benches {
   #[cfg(test)]
   #[test]
   fn reachable_suspended_head_retry_payload_tradeoffs() {
-    type Helper = <Test as Config>::BenchmarkHelper;
-    type Assets = <Test as Config>::AssetOps;
-    let count = <<Test as Config>::MaxContractSteps as Get<u32>>::get();
-    let predicates = benchmark_predicate_capacity::<Test>();
-    let legs = count * 2;
-    let minimum =
-      legs.saturating_sub(<<Test as Config>::MaxFundingTrackedAssets as Get<u32>>::get());
-    for (opening_legs, opening_start) in [
-      (minimum, 0),
-      (minimum + 1, 0),
-      (legs - 1, 0),
-      (legs, 0),
-      (minimum, 2),
-      (minimum + 1, 2),
-      (legs - 2, 2),
-    ] {
-      new_test_ext().execute_with(|| {
-        let (actor_id, _) = prepare_reachable_suspended_head::<Test>(opening_legs, opening_start)
-          .expect("two-leg head reaches a real due retry");
-        let state = Pallet::<Test>::active_actor_state(actor_id).expect("due source exists");
-        let run = state.run_state.as_ref().expect("first failure retained Run");
-        assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
-        assert_eq!(run.opening_snapshot.len() as u32, opening_legs);
-        assert_eq!(run.funding_snapshot.len() as u32, legs - opening_legs);
-        assert_eq!(run.opening_predicate_results.len() as u32, count * predicates);
-        let ActorTask::AddLiquidity { asset_a, asset_b, amount_a, amount_b, .. } =
-          &state.contract.steps[0].task else { panic!("two-leg head remains authored") };
-        let (asset, amount) = if *asset_a != <Test as Config>::FeeNativeAssetId::get() {
-          (*asset_a, amount_a)
-        } else {
-          (*asset_b, amount_b)
-        };
-        assert_ne!(asset, <Test as Config>::FeeNativeAssetId::get());
-        assert_eq!(matches!(amount, AmountResolution::PercentageOfLastFunding(_)), opening_start == 2);
-        let frozen = match amount {
-          AmountResolution::PercentageAtOpening(pct) => pct.mul_floor(
-            *run.opening_snapshot.get(&OpeningSurface::PreservableAsset(asset))
-              .expect("head Opening amount is retained")),
-          AmountResolution::PercentageOfLastFunding(pct) => pct.mul_floor(
-            *run.funding_snapshot.get(&asset).expect("head funding amount is retained")),
-          _ => panic!("head amount is frozen by authored source"),
-        };
-        let actor = state.identity.sovereign_account;
-        let owner = state.identity.owner;
-        let remaining = Assets::minimum_balance(asset).max(1);
-        assert!(frozen > remaining);
-        let withdrawal = Assets::balance(&actor, asset).checked_sub(remaining)
-          .expect("first attempt retains funded head custody");
-        Assets::transfer(&actor, &owner, asset, withdrawal)
-          .expect("fixture ledger withdrawal leaves the minimum intact");
-        assert_eq!(Assets::balance(&actor, asset), remaining);
-        assert_eq!(ActorRunStateStore::<Test>::get(actor_id)
-          .expect("ledger withdrawal retains Run").encode(), run.encode());
-        let custody = (Assets::balance(&actor, asset), Assets::balance(&owner, asset));
-        let (source, admission, loaded_step) =
-          benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
-        assert_eq!(execute_reachable_step_inner::<Test>(
-          actor_id, source, admission, loaded_step, run.eligible_at,
-        ), Weight::zero());
-        let after = ActorRunStateStore::<Test>::get(actor_id).expect("second failure retains Run");
-        assert_eq!(after.cursor, 0);
-        assert_eq!(after.cycle_nonce, run.cycle_nonce);
-        assert_eq!(after.unsuccessful_attempts_at_cursor, 2);
-        assert_eq!(after.last_committed_step_block, None);
-        assert_eq!(after.last_attempt_block, run.eligible_at);
-        assert_eq!(after.last_step_outcome, Some(StepOutcome::FundingUnavailable));
-        assert_eq!(after.opening_snapshot, run.opening_snapshot);
-        assert_eq!(after.opening_predicate_results, run.opening_predicate_results);
-        assert_eq!(after.funding_snapshot, run.funding_snapshot);
-        assert!(after.eligible_at > run.eligible_at);
-        assert_eq!((Assets::balance(&actor, asset), Assets::balance(&owner, asset)), custody);
-        assert!(matches!(ActorControlLocators::<Test>::get(actor_id),
-          Some(ActorControlLocation::Waiting { key: WakeupKey::Block(at), .. }) if at == after.eligible_at));
-        #[cfg(feature = "try-runtime")]
-        Pallet::<Test>::do_try_state().expect("two-leg retry reconciles exact Waiting ownership");
-      });
-    }
-    let tail_legs = 2 * (count - 1);
-    let minimum_opening =
-      tail_legs.saturating_sub(<<Test as Config>::MaxFundingTrackedAssets as Get<u32>>::get());
-    for opening_legs in [
-      minimum_opening,
-      minimum_opening + 1,
-      tail_legs - 1,
-      tail_legs,
-    ] {
-      for head_predicates in 0..=predicates {
-        for head_opening in 0..=head_predicates {
-          new_test_ext().execute_with(|| {
-            frame_system::Pallet::<Test>::set_block_number(1);
-            GlobalCircuitBreaker::<Test>::put(false);
-            let owner = account("head-retry-owner", 0, 0);
-            ensure_creation_balance::<Test>(&owner);
-            let auxiliary_start = count * (2 + predicates);
-            let assets = Helper::setup_predicate_assets(&owner, auxiliary_start + 1 + predicates)
-              .expect("head and predicate assets exist beyond the distinct tail assets");
-            let retry_asset = assets[auxiliary_start as usize];
-            assert_ne!(retry_asset, <Test as Config>::FeeNativeAssetId::get());
-            let mut steps = make_reachable_opening_steps::<Test>(count)
-              .expect("reference host admits maximum Contract");
-            for (index, step) in steps.iter_mut().skip(1).enumerate() {
-              let ActorTask::AddLiquidity { amount_a, amount_b, .. } = &mut step.task else {
-                unreachable!()
-              };
-              for (offset, amount) in [amount_a, amount_b].into_iter().enumerate() {
-                if (index * 2 + offset) as u32 >= opening_legs {
-                  *amount = AmountResolution::PercentageOfLastFunding(Perbill::one());
-                }
-              }
-            }
-            steps[0] = Step {
-              precondition: (head_predicates > 0).then(|| packed_predicate_clauses::<Test>(
-                (0..head_predicates).map(|index| TimedPredicate {
-                  timing: if index < head_opening {
-                    ObservationTiming::Opening
-                  } else {
-                    ObservationTiming::Current
-                  },
-                  predicate: Predicate::BalanceBelow {
-                    asset: assets[(auxiliary_start + 1 + index) as usize],
-                    threshold: (index + 1).into(),
-                  },
-                }).collect(),
-                <<Test as Config>::MaxPredicatesPerClause as Get<u32>>::get(),
-              )),
-              task: ActorTask::Transfer {
-                to: account("head-retry-recipient", 0, 0),
-                asset: retry_asset,
-                amount: AmountResolution::Fixed(One::one()),
-              },
-              on_error: StepErrorPolicy::RetryLater {
-                max_attempts: <<Test as Config>::MaxRetryAttempts as Get<u32>>::get(),
-              },
-            };
-            Pallet::<Test>::create_system_actor(
-              RawOrigin::Root.into(),
-              owner,
-              Mutability::Mutable,
-              system_contract::<Test>(
-                Schedule { trigger: Trigger::manual(), cooldown_blocks: 2 },
-                steps,
-              ),
-            )
-            .expect("authored head and coupled tail are admitted");
-            let actor_id = NextActorId::<Test>::get() - 1;
-            fund_reachable_update_assets::<Test>(actor_id, 10);
-            Pallet::<Test>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
-              .expect("real occurrence admits Opening");
-            let (opening_state, _, opening_step) =
-              Pallet::<Test>::load_current_step_service_state(actor_id)
-                .expect("admitted Opening service state exists");
-            let reserved_control = opening_step.resources.control;
-            let opening_instance = Pallet::<Test>::derive_active_actor_view(
-              opening_state.identity, opening_state.hot, opening_state.contract,
-            );
-            let opening_context = Pallet::<Test>::execution_step_control_weight_context(
-              &opening_instance, None, &opening_step,
-            ).expect("Opening context retains admission geometry");
-            assert_eq!(opening_context.funding_snapshot_entries,
-              <<Test as Config>::MaxFundingTrackedAssets as Get<u32>>::get());
-            Pallet::<Test>::execute_cycle(Weight::MAX);
-            let state = Pallet::<Test>::active_actor_state(actor_id).expect("Opening retains Actor");
-            let run = state.run_state.expect("unfunded head publishes real retry");
-            assert_eq!(state.hot.cycle_state, CycleState::Suspended);
-            assert_eq!(state.identity.cycle_nonce, 0);
-            assert_eq!(run.cursor, 0);
-            assert_eq!(run.cycle_nonce, 1);
-            assert_eq!(run.last_committed_step_block, None);
-            assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
-            assert_eq!(run.last_step_outcome, Some(StepOutcome::FundingUnavailable));
-            assert_eq!(run.opening_snapshot.len() as u32, opening_legs);
-            assert_eq!(run.funding_snapshot.len() as u32, tail_legs - opening_legs);
-            assert_eq!(
-              run.opening_predicate_results.len() as u32,
-              (count - 1) * predicates + head_opening,
-            );
-            assert!(run.opening_predicate_results.iter()
-              .take(head_opening as usize).all(|value| *value == Ok(true)));
-            assert!(state.funding.funding_accumulated.is_empty());
-            let retained = run.encode();
-            frame_system::Pallet::<Test>::set_block_number(run.eligible_at);
-            let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-            let stats = Pallet::<Test>::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter);
-            assert_eq!(stats.ready_entries, 1);
-            assert_eq!(
-              ActorRunStateStore::<Test>::get(actor_id).expect("due Run persists").encode(),
-              retained,
-            );
-            #[cfg(feature = "try-runtime")]
-            Pallet::<Test>::do_try_state().expect("real head retry Ready source reconciles");
-            let (state, admission, loaded_step) =
-              benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
-            let instance = Pallet::<Test>::derive_active_actor_view(
-              state.identity.clone(), state.hot.clone(), state.contract.clone(),
-            );
-            let context = Pallet::<Test>::execution_step_control_weight_context(
-              &instance, state.run_state.as_ref(), &loaded_step,
-            ).expect("Suspended context uses retained Run geometry");
-            assert_eq!(context.funding_snapshot_entries, tail_legs - opening_legs);
-            assert_eq!(loaded_step.resources.control, reserved_control);
-            let actor = state.identity.sovereign_account;
-            let recipient = account("head-retry-recipient", 0, 0);
-            let custody: Vec<_> = assets.iter().map(|asset| (
-              Assets::balance(&actor, *asset), Assets::balance(&recipient, *asset),
-            )).collect();
-            assert_eq!(
-              loaded_step.step.precondition.as_ref().map_or(0, Precondition::evaluation_units),
-              head_predicates + head_opening,
-            );
-            let effect = execute_reachable_step_inner::<Test>(
-              actor_id, state, admission, loaded_step, run.eligible_at,
-            );
-            assert_eq!(effect, Weight::zero());
-            let after = ActorRunStateStore::<Test>::get(actor_id).expect("second retry retains Run");
-            assert_eq!(after.cursor, 0);
-            assert_eq!(after.cycle_nonce, run.cycle_nonce);
-            assert_eq!(after.last_committed_step_block, None);
-            assert_eq!(after.unsuccessful_attempts_at_cursor, 2);
-            assert_eq!(after.last_step_outcome, Some(StepOutcome::FundingUnavailable));
-            assert_eq!(after.opening_snapshot, run.opening_snapshot);
-            assert_eq!(after.opening_predicate_results, run.opening_predicate_results);
-            assert_eq!(after.funding_snapshot, run.funding_snapshot);
-            assert_eq!(assets.iter().map(|asset| (
-              Assets::balance(&actor, *asset), Assets::balance(&recipient, *asset),
-            )).collect::<Vec<_>>(), custody);
-            assert!(matches!(ActorControlLocators::<Test>::get(actor_id), Some(ActorControlLocation::Waiting { key: WakeupKey::Block(at), .. }) if at == after.eligible_at));
-            #[cfg(feature = "try-runtime")]
-            Pallet::<Test>::do_try_state().expect("second retry Waiting destination reconciles");
-          });
-        }
-      }
-    }
+    new_test_ext().execute_with(|| {
+      let (actor_id, _) = prepare_reachable_suspended_head::<Test>()
+        .expect("current-attempt head reaches a real due retry");
+      let state = Pallet::<Test>::active_actor_state(actor_id).expect("due source exists");
+      let run = state
+        .run_state
+        .as_ref()
+        .expect("first failure retained Run");
+      assert_eq!(run.cursor, 0);
+      assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+      assert_eq!(run.last_step_outcome, Some(StepOutcome::FundingUnavailable));
+      let ActorTask::Transfer { amount, .. } = &state.contract.steps[0].task else {
+        panic!("suspended head keeps its authored zero-resolution head")
+      };
+      assert!(matches!(amount, AmountResolution::Fixed(_)));
+      assert!(ServiceNodes::<Test>::contains_key(actor_id));
+      #[cfg(feature = "try-runtime")]
+      Pallet::<Test>::do_try_state()
+        .expect("current-attempt retry reconciles canonical Service ownership");
+    });
   }
   #[cfg(test)]
   #[test]
@@ -16471,52 +15322,18 @@ mod benches {
   }
   #[cfg(test)]
   #[test]
-  fn reachable_update_allocation_boundaries_match_authored_contract() {
-    let legs = <<Test as Config>::MaxContractSteps as Get<u32>>::get() * 2;
-    let minimum =
-      legs.saturating_sub(<<Test as Config>::MaxFundingTrackedAssets as Get<u32>>::get());
-    if minimum > 0 {
+  fn reachable_update_current_attempt_allocation_matches_authored_contract() {
+    for family in [
+      TriggerFamily::ObservationChange,
+      TriggerFamily::ObservationCrossing,
+    ] {
       new_test_ext().execute_with(|| {
-        let (steps, _) = reachable_retry_contract_allocation::<Test>(minimum - 1, 0)
-          .expect("the authored Contract fits Step and predicate storage bounds");
-        let next_actor = NextActorId::<Test>::get();
-        assert_eq!(
-          Pallet::<Test>::create_system_actor(
-            RawOrigin::Root.into(),
-            account("funding-bound-owner", 0, 0),
-            Mutability::Mutable,
-            system_contract::<Test>(
-              Schedule {
-                trigger: Trigger::Manual,
-                cooldown_blocks: 100
-              },
-              steps,
-            ),
-          ),
-          Err(Error::<Test>::TooManyContractSteps.into()),
-          "independent funding sources exceed the host bound by one",
-        );
-        assert_eq!(NextActorId::<Test>::get(), next_actor);
-        assert!(!ActorFunding::<Test>::contains_key(next_actor));
-        assert!(!ActorContractHeads::<Test>::contains_key(next_actor));
-        #[cfg(feature = "try-runtime")]
-        Pallet::<Test>::do_try_state().expect("rejected admission publishes no Actor state");
+        let (owner, actor_id, replacement, old_feed) = prepare_reachable_update::<Test>(family)
+          .expect("current-attempt allocation contract is admitted");
+        let expected = replacement.clone();
+        execute_reachable_update::<Test>(owner, actor_id, replacement);
+        assert_reachable_update::<Test>(actor_id, &expected, old_feed);
       });
-    }
-    for opening_legs in [minimum, minimum + (legs - minimum) / 2, legs] {
-      for family in [
-        TriggerFamily::ObservationCrossing,
-        TriggerFamily::ObservationChange,
-      ] {
-        new_test_ext().execute_with(|| {
-          let (owner, actor_id, replacement, old_feed) =
-            prepare_reachable_update::<Test>(opening_legs, family)
-              .expect("host-feasible allocation boundary is admitted");
-          let expected = replacement.clone();
-          execute_reachable_update::<Test>(owner, actor_id, replacement);
-          assert_reachable_update::<Test>(actor_id, &expected, old_feed);
-        });
-      }
     }
   }
   #[cfg(test)]
@@ -16567,7 +15384,7 @@ mod benches {
         steps[0].task = ActorTask::Transfer {
           to: account("cadence-noop-recipient", 0, 0),
           asset: <Test as Config>::FeeNativeAssetId::get(),
-          amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+          amount: AmountResolution::Percent(Perbill::from_percent(50)),
         };
         Pallet::<Test>::create_system_actor(
           RawOrigin::Root.into(),
@@ -16763,13 +15580,8 @@ mod benches {
         assert_eq!(source.cursor, 1);
         if dense {
           assert_eq!(source.opening_snapshot.len(), 6);
-          assert_eq!(
-            source.opening_predicate_results.len() as u32,
-            3 * benchmark_predicate_capacity::<Test>()
-          );
         } else {
           assert!(source.opening_snapshot.is_empty());
-          assert!(source.opening_predicate_results.is_empty());
         }
         let now = source.eligible_at;
         frame_system::Pallet::<Test>::set_block_number(now);

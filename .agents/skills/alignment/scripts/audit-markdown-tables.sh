@@ -7,10 +7,11 @@ usage() {
     cat <<'EOF'
 Usage: audit-markdown-tables.sh [MARKDOWN_FILE...]
 
-Checks repository-owned Markdown table rows for compact readable syntax:
-exactly one padding space inside every cell boundary, exactly three delimiter
-hyphens, and only optional alignment colons. Immutable bundled upstream
-references are excluded because their exact source bytes are authoritative.
+Checks repository-owned Markdown table rows outside fenced code blocks for
+compact readable syntax: exactly one padding space inside every cell boundary,
+exactly three delimiter hyphens, and only optional alignment colons. Immutable
+bundled upstream references are excluded because their exact source bytes are
+authoritative.
 
 With no file arguments, audits every existing tracked or unignored untracked
 Markdown file in the repository; paths deleted by the current diff are ignored.
@@ -81,6 +82,17 @@ run_audit() {
             path="$PROJECT_ROOT/$file"
         fi
         if ! awk -v display="$file" '
+            /^[[:space:]]*```/ {
+                if (fence == "") fence = "`"
+                else if (fence == "`") fence = ""
+                next
+            }
+            /^[[:space:]]*~~~/ {
+                if (fence == "") fence = "~"
+                else if (fence == "~") fence = ""
+                next
+            }
+            fence != "" { next }
             /^[[:space:]]*\|/ {
                 line = $0
                 if (line ~ /^[[:space:]]+\|/ || line !~ /^\| .* \|$/) {

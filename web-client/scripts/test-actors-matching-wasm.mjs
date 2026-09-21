@@ -38,23 +38,20 @@ const step = {
   precondition: [
     [
       {
-        timing: { type: 'Opening', value: undefined },
-        predicate: {
-          type: 'ObservationBelow',
-          value: {
-            feed: {
-              asset_in: { type: 'Native', value: undefined },
-              asset_out: { type: 'Local', value: 7 },
-              method: { type: 'PreExecutionSpot', value: undefined },
-              aggregation: {
-                type: 'Ema',
-                value: { half_life_blocks: 100 },
-              },
-              scale: 12,
+        type: 'ObservationBelow',
+        value: {
+          feed: {
+            asset_in: { type: 'Native', value: undefined },
+            asset_out: { type: 'Local', value: 7 },
+            method: { type: 'PreExecutionSpot', value: undefined },
+            aggregation: {
+              type: 'Ema',
+              value: { half_life_blocks: 100 },
             },
-            threshold: 1n,
-            max_age_blocks: 12,
+            scale: 12,
           },
+          threshold: 1n,
+          max_age_blocks: 12,
         },
       },
     ],

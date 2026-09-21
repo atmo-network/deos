@@ -394,18 +394,19 @@ impl<BlockNumber: Copy + PartialEq> BlockResourceState<BlockNumber> {
     Ok(reservation)
   }
 
-  /// Negative capacity probe only; real reservation retains phase and overflow handling.
-  pub(crate) fn capacity_exceeded(
-    &self,
+  /// Reserve mandatory Actor Control even after optional Actor work has halted. This is restricted
+  /// to block-protocol housekeeping/finalization; ordinary Actor admissions use `reserve` and
+  /// remain fail-closed while the halt latch is set.
+  pub(crate) fn reserve_mandatory_actor_control(
+    &mut self,
     limits: BlockResourceLimits,
-    domain: BlockResourceDomain,
     maximum: Weight,
-  ) -> bool {
-    let mut probe = *self;
-    matches!(
-      probe.reserve(limits, domain, maximum),
-      Err(BlockResourceError::LimitExceeded)
-    )
+  ) -> Result<BlockResourceReservation, BlockResourceError> {
+    let optional_actor_work_halted = self.optional_actor_work_halted;
+    self.optional_actor_work_halted = false;
+    let result = self.reserve(limits, BlockResourceDomain::ActorControl, maximum);
+    self.optional_actor_work_halted = optional_actor_work_halted;
+    result
   }
 
   pub fn reserve_actor_step(
@@ -1501,34 +1502,6 @@ mod tests {
       usage.reserve(limits(), BlockResourceDomain::ActorControl, weight(1, 0)),
       Err(BlockResourceError::ArithmeticOverflow)
     );
-  }
-
-  #[test]
-  fn capacity_probe_is_read_only_and_distinguishes_owner_errors() {
-    let domain = BlockResourceDomain::ActorDrainEffect;
-    let initial = BlockResourceState::new(1u64);
-    let mut active = initial;
-    active.phase = BlockResourcePhase::FreshDrain;
-    let mut halted = active;
-    halted.halt_optional_actor_work();
-    let mut overflow = active;
-    overflow.usage.actor_effect = Weight::MAX;
-    let mut reservation_overflow = active;
-    reservation_overflow.outstanding_reservations = u32::MAX;
-    for (state, maximum, exceeded) in [
-      (initial, Weight::MAX, false),
-      (active, Weight::zero(), false),
-      (active, weight(80, 80), false),
-      (active, weight(81, 0), true),
-      (active, weight(0, 81), true),
-      (halted, Weight::MAX, false),
-      (overflow, weight(1, 0), false),
-      (reservation_overflow, weight(1, 0), false),
-    ] {
-      let before = state;
-      assert_eq!(state.capacity_exceeded(limits(), domain, maximum), exceeded);
-      assert_eq!(state, before);
-    }
   }
 
   #[test]

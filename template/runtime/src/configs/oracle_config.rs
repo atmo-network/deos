@@ -1,8 +1,9 @@
 use crate::{AccountId, Oracle, Runtime, RuntimeOrigin};
 use pallet_deos_actors::{
-  ObservationTransition, ObservationTransitionIngress, TriggerCauseProvenance,
+  DependencyEventIngress, ObservationTransition, ObservationTransitionIngress,
+  TriggerCauseProvenance,
 };
-use pallet_oracle::{Aggregation, FeedConfig, FeedLifecycle, ZeroPolicy};
+use pallet_oracle::{Aggregation, FeedConfig, FeedLifecycle, FeedStateChange, ZeroPolicy};
 use polkadot_sdk::{
   frame_support::{ensure, parameter_types, transactional},
   frame_system::{EnsureRoot, EnsureSigned},
@@ -20,6 +21,77 @@ pub const DEOS_ROUTER_MAX_ORACLE_POOL_PAIRS: u32 = 500;
 
 /// Closed runtime inventory of publishers certified to create Actors observation ingress.
 pub const ACTORS_OBSERVATION_PUBLISHER_INVENTORY: &[&str] = &["DEOS Oracle::OnObservationChanged"];
+
+/// Collision-free production dependency identity retained until the generic Actors source key is
+/// widened from its inert scalar placeholder.
+#[allow(
+  dead_code,
+  reason = "inert dependency source schema awaits production cutover"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EventCompleteDependencySource {
+  OracleFeed(OracleFeedId),
+}
+
+#[allow(
+  dead_code,
+  reason = "inert dependency owner evidence awaits production cutover"
+)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum EventCompleteTransitionBoundary {
+  FunctionTransactional,
+}
+
+/// One finite Oracle state-transition owner that can invalidate a current-state dependency.
+#[allow(
+  dead_code,
+  reason = "inert dependency owner evidence awaits production cutover"
+)]
+pub struct EventCompleteTransitionOwner {
+  pub owner: &'static str,
+  pub mutation: &'static str,
+  pub boundary: EventCompleteTransitionBoundary,
+  pub source_schema: &'static str,
+  pub publication_point: &'static str,
+}
+
+/// Inert cutover inventory. Every row publishes `OracleFeed(feed)` exactly once after the named
+/// canonical mutation and before its success event, in the same transaction. Equal-value refresh
+/// is included because it advances `updated_at`; age expiry itself remains a timed-review cause.
+#[allow(
+  dead_code,
+  reason = "inert dependency owner evidence awaits production cutover"
+)]
+pub const EVENT_COMPLETE_TRANSITION_OWNERS: &[EventCompleteTransitionOwner] = &[
+  EventCompleteTransitionOwner {
+    owner: "register_feed",
+    mutation: "Feeds::insert",
+    boundary: EventCompleteTransitionBoundary::FunctionTransactional,
+    source_schema: "EventCompleteDependencySource::OracleFeed(feed)",
+    publication_point: "after Feeds insert, before FeedRegistered",
+  },
+  EventCompleteTransitionOwner {
+    owner: "set_lifecycle",
+    mutation: "Feeds::try_mutate",
+    boundary: EventCompleteTransitionBoundary::FunctionTransactional,
+    source_schema: "EventCompleteDependencySource::OracleFeed(feed)",
+    publication_point: "after lifecycle mutation, before caller success event",
+  },
+  EventCompleteTransitionOwner {
+    owner: "deactivate_feed",
+    mutation: "Feeds::try_mutate",
+    boundary: EventCompleteTransitionBoundary::FunctionTransactional,
+    source_schema: "EventCompleteDependencySource::OracleFeed(feed)",
+    publication_point: "after lifecycle mutation, before FeedDeactivated",
+  },
+  EventCompleteTransitionOwner {
+    owner: "publish_with_provenance",
+    mutation: "Observations::insert",
+    boundary: EventCompleteTransitionBoundary::FunctionTransactional,
+    source_schema: "EventCompleteDependencySource::OracleFeed(feed)",
+    publication_point: "after observation insert, before ObservationPublished/Refreshed",
+  },
+];
 
 pub const fn deos_router_pool_feed(asset_in: AssetKind, asset_out: AssetKind) -> OracleFeedId {
   OracleFeedId::directional_local_pool_price(
@@ -124,10 +196,19 @@ pub struct OraclePublicationBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
 impl pallet_oracle::PublicationBenchmarkHelper<OracleFeedId> for OraclePublicationBenchmarkHelper {
+  fn prepare_feed_state_hook(feed: OracleFeedId) -> DispatchResult {
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let outcome =
+        <crate::Actors as DependencyEventIngress<OracleFeedId>>::note_dependency_event(feed);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(outcome)
+    })
+  }
+
   fn prepare_changed_hook(
     feed: OracleFeedId,
     topology: pallet_oracle::ChangedHookBenchmarkTopology,
   ) -> DispatchResult {
+    Self::prepare_feed_state_hook(feed)?;
     if matches!(
       topology,
       pallet_oracle::ChangedHookBenchmarkTopology::PrimaryFirst
@@ -172,6 +253,7 @@ impl pallet_oracle::PublicationBenchmarkHelper<OracleFeedId> for OraclePublicati
   fn prepare_secondary_capacity_edge(
     feed: OracleFeedId,
   ) -> Result<(pallet_oracle::Revision, pallet_oracle::OracleValue, bool), DispatchError> {
+    Self::prepare_feed_state_hook(feed)?;
     pallet_deos_actors::CrossingFeedMembershipCount::<Runtime>::insert(feed, 1);
     let mut current = 1_000_000_000u128;
     <crate::Actors as ObservationTransitionIngress<OracleFeedId>>::note_observation_transition(
@@ -200,6 +282,15 @@ impl pallet_oracle::PublicationBenchmarkHelper<OracleFeedId> for OraclePublicati
       )?;
     }
     Ok((u64::from(capacity).saturating_add(1), current, true))
+  }
+}
+
+/// O(1) bridge from the complete Oracle state hook to Actors dependency publication.
+pub struct ActorFeedStateChangeIngress;
+
+impl pallet_oracle::OnFeedStateChanged<OracleFeedId> for ActorFeedStateChangeIngress {
+  fn on_feed_state_changed(feed: OracleFeedId, _: FeedStateChange) -> DispatchResult {
+    <crate::Actors as DependencyEventIngress<OracleFeedId>>::note_dependency_event(feed)
   }
 }
 
@@ -249,6 +340,7 @@ impl pallet_oracle::Config for Runtime {
   type Provenance = OracleProvenance;
   type RegisterOrigin = EnsureRoot<AccountId>;
   type PublishOrigin = EnsureSigned<AccountId>;
+  type OnFeedStateChanged = ActorFeedStateChangeIngress;
   type OnObservationChanged = ActorObservationChangeIngress;
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = OraclePublicationBenchmarkHelper;

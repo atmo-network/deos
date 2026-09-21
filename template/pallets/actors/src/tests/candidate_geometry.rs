@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
-  ActiveActorCount, ActorContractHeads, ActorIdentityCount, ActorStateHolds, QueueTicket,
+  ActiveActorCount, ActorContractHeads, ActorIdentityCount, ActorSemanticState,
+  ActorSemanticStates, ActorStateHolds, QueueTicket,
 };
 use codec::{Compact, Encode, MaxEncodedLen};
 use polkadot_sdk::sp_weights::Weight;
@@ -184,11 +185,17 @@ fn frame_cell(actor_id: ActorId, eligible_at: MockBlockNumber) -> C1Cell {
       schedule_anchor: 0,
       last_cycle_block: None,
     },
+    pipeline_service_identity: crate::pipeline_service_identity([3u8; 32]),
     cursor: 0,
     eligible_at: Some(eligible_at),
     admission: crate::ActorAdmissionCertificate::<crate::ActorAdmissionResourcesOf<Test>>::new(
       [1u8; 32],
       [2u8; 32],
+      crate::ActorWakeQualification {
+        family: crate::TriggerFamily::Manual,
+        selector_commitment: [5u8; 32],
+        schedule_commitment: [6u8; 32],
+      },
       1,
       [3u8; 32],
       1,
@@ -255,7 +262,7 @@ fn frame_install_direct_ready(step: StepOf<Test>, count: u32) -> Vec<ActorId> {
       Some(cell)
     );
   }
-  assert_eq!(ActorReadyOccupancy::<Test>::get(), count);
+  assert_eq!(crate::ActorReadyOccupancy::<Test>::get(), count);
   actor_ids
 }
 
@@ -320,7 +327,7 @@ fn frame_install_direct_zero_step_ready(
     Actors::actor_control_cell(actor_id).map(|(_, stored)| stored),
     Some(cell)
   );
-  assert_eq!(ActorReadyOccupancy::<Test>::get(), 1);
+  assert_eq!(crate::ActorReadyOccupancy::<Test>::get(), 1);
   (actor_id, queue_ticket)
 }
 
@@ -365,12 +372,6 @@ fn control_zero_step_user_opening_completes_without_action_or_scalar_owner() {
       Event::ActionFeeCharged { actor_id: id, .. } if *id == actor_id
     )));
     assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
-    assert!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("zero-Step funding remains")
-        .funding_accumulated
-        .is_empty()
-    );
     let (location, identity, hot, _) = Actors::load_frame_control_authority(actor_id)
       .expect("zero-Step output retains sole frame authority");
     assert_eq!(location, C1Location::Unsignaled);
@@ -425,7 +426,6 @@ fn control_zero_step_auto_close_removes_frame_authority_and_preserves_cycle_even
     )));
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorContractHeads::<Test>::contains_key(actor_id));
-    assert!(!ActorFunding::<Test>::contains_key(actor_id));
     assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
     assert!(!ActorStateHolds::<Test>::contains_key(actor_id));
     assert_eq!(ActiveActorCount::<Test>::get(), 0);
@@ -519,7 +519,6 @@ fn control_immutable_zero_step_at_time_closes_after_frame_owned_temporal_path() 
     )));
     assert_eq!(asset_balance(&sovereign, residual_asset), 919);
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
-    assert!(!ActorFunding::<Test>::contains_key(actor_id));
     assert!(!ActorStateHolds::<Test>::contains_key(actor_id));
     frame_assert_single_owner();
   });
@@ -761,9 +760,7 @@ fn control_zero_step_user_opening_matches_immutable_oracle_logical_authority_and
         hot.queue_ticket,
         hot.last_cycle_block,
         admission,
-        ActorFunding::<Test>::get(actor_id)
-          .expect("zero-Step differential funding remains")
-          .funding_accumulated,
+        native_balance(&sovereign),
         ActorRunStateStore::<Test>::contains_key(actor_id),
         event_counts,
       )
@@ -842,7 +839,7 @@ fn control_running_branch_snapshot(step_count: u32) -> Vec<Vec<u8>> {
       identity.encode(),
       hot.encode(),
       admission.encode(),
-      ActorFunding::<Test>::get(actor_id).encode(),
+      <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset).encode(),
       ActorRunStateStore::<Test>::get(actor_id).encode(),
       crate::ActorStateHolds::<Test>::get(actor_id)
         .map(|hold| hold.owner)
@@ -1429,24 +1426,29 @@ fn control_cadenced_suspended_primary_retains_lightweight_trigger_rearm() {
     System::reset_events();
     let (deferred_actor, deferred_location) =
       Actors::control_latch_due_temporal_reference(trigger_key, opening_block, 11)
-        .expect("due cadence latches while Suspended");
+        .expect("due cadence advances while Suspended");
     assert_eq!(deferred_actor, actor_id);
     assert_eq!(deferred_location, location);
     let deferred = crate::ActorReadyFrameChunks::<Test>::get(0)
       .and_then(|chunk| chunk.get(1).cloned().flatten())
-      .expect("Suspended primary survives deferred latch");
+      .expect("Suspended primary survives cadence advance");
     assert_eq!(deferred.hot.cycle_state, CycleState::Suspended);
-    assert!(deferred.hot.pending_signal);
+    assert!(!deferred.hot.pending_signal);
     assert_eq!(deferred.eligible_at, Some(8));
-    assert!(deferred.hot.trigger_wakeup_pointer.is_none());
-    assert_eq!(Actors::wakeup_cursor_peek_key(WakeupClock::Tick), None);
-    assert!(has_actor_event(|event| matches!(
+    assert_eq!(
+      deferred
+        .hot
+        .trigger_wakeup_pointer
+        .map(|pointer| pointer.tick),
+      Some(21)
+    );
+    assert_eq!(
+      Actors::wakeup_cursor_peek_key(WakeupClock::Tick),
+      Some(WakeupKey::Tick(21))
+    );
+    assert!(!has_actor_event(|event| matches!(
       event,
-      Event::TriggerOccurrenceProcessed {
-        actor_id: id,
-        trigger_family: TriggerFamily::Cadenced,
-        fee,
-      } if *id == actor_id && *fee == 0
+      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
     )));
 
     frame_system::Pallet::<Test>::set_block_number(8);
@@ -1530,7 +1532,6 @@ fn control_underfunded_at_time_closes_from_frame_authority_without_custody_movem
       actor_id
     ));
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
-    assert!(!ActorFunding::<Test>::contains_key(actor_id));
     assert!(!crate::ActorContractHeads::<Test>::contains_key(actor_id));
     assert!(!crate::ActorStateHolds::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
@@ -2093,7 +2094,7 @@ fn ordinary_fifo_preserves_ingress_latched_by_an_earlier_step() {
 }
 
 #[test]
-fn control_address_event_commits_funding_independently_and_latches_once() {
+fn control_address_event_latches_matching_ingress_once() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset_filter = AssetFilter::Whitelist(
@@ -2107,7 +2108,7 @@ fn control_address_event_commits_funding_independently_and_latches_once() {
       contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       })),
     );
     let sovereign = Actors::active_actor_view(actor_id)
@@ -2146,12 +2147,6 @@ fn control_address_event_commits_funding_independently_and_latches_once() {
       .expect("unmatched AddressEvent is a balance-only consequence"),
       None
     );
-    assert!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("unmatched AddressEvent funding state remains")
-        .funding_accumulated
-        .is_empty()
-    );
     assert!(fee_collections().is_empty());
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -2174,25 +2169,9 @@ fn control_address_event_commits_funding_independently_and_latches_once() {
     set_fail_fee_sink_transfer(false);
     clear_fee_collections();
     assert_eq!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("AddressEvent funding remains")
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&100)
-    );
-    assert_eq!(
       crate::ActorUnsignaledControlCells::<Test>::get(actor_id),
       Some(cell)
     );
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::FundingAccumulated {
-        actor_id: id,
-        asset: TestAsset::Native,
-        added: 100,
-        accumulated: 100,
-      } if *id == actor_id
-    )));
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
@@ -2209,13 +2188,6 @@ fn control_address_event_commits_funding_independently_and_latches_once() {
     .expect("funded AddressEvent transition commits")
     .expect("matched AddressEvent latches");
     assert_eq!(fee_collections(), vec![address_event_trigger_fee()]);
-    assert_eq!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("AddressEvent funding remains")
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&150)
-    );
     assert!(has_actor_event(|event| matches!(
       event,
       Event::TriggerOccurrenceProcessed {
@@ -2238,13 +2210,6 @@ fn control_address_event_commits_funding_independently_and_latches_once() {
       None
     );
     assert_eq!(fee_collections(), vec![address_event_trigger_fee()]);
-    assert_eq!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("coalesced AddressEvent funding remains")
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&175)
-    );
     let C1Location::Waiting { page, .. } = destination else {
       panic!("matched AddressEvent enters N+1 Waiting");
     };
@@ -2268,14 +2233,14 @@ fn control_address_event_commits_funding_independently_and_latches_once() {
 }
 
 #[test]
-fn control_address_event_due_while_running_accumulates_and_defers_in_place() {
+fn control_address_event_due_while_running_accumulates_without_deferred_cycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let steps = BoundedVec::try_from(vec![
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       }),
       make_step(Task::StopCycle),
     ])
@@ -2332,7 +2297,6 @@ fn control_address_event_due_while_running_accumulates_and_defers_in_place() {
     frame_system::Pallet::<Test>::set_block_number(2);
     Actors::execute_cycle_to_cutoff(Weight::MAX, (1).min(head_before_opening.saturating_add(1)));
     assert_eq!(Actors::queue_head().saturating_sub(head_before_opening), 1);
-    let running_location = C1Location::Ready { ticket: 1 };
     let running = crate::ActorReadyFrameChunks::<Test>::get(0)
       .and_then(|chunk| chunk.get(1).cloned().flatten())
       .expect("AddressEvent cycle owns one Running primary");
@@ -2340,12 +2304,6 @@ fn control_address_event_due_while_running_accumulates_and_defers_in_place() {
     assert!(!running.hot.pending_signal);
     assert_eq!(running.cursor, 1);
     assert_eq!(running.eligible_at, Some(3));
-    assert!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("Opening funding state remains")
-        .funding_accumulated
-        .is_empty()
-    );
 
     clear_fee_collections();
     assert_eq!(
@@ -2358,16 +2316,16 @@ fn control_address_event_due_while_running_accumulates_and_defers_in_place() {
         2,
       )
       .expect("busy AddressEvent transition commits"),
-      Some(running_location)
+      None
     );
-    assert_eq!(fee_collections(), vec![address_event_trigger_fee()]);
-    let deferred = crate::ActorReadyFrameChunks::<Test>::get(0)
+    assert!(fee_collections().is_empty());
+    let running = crate::ActorReadyFrameChunks::<Test>::get(0)
       .and_then(|chunk| chunk.get(1).cloned().flatten())
       .expect("busy AddressEvent preserves Running primary");
-    assert_eq!(deferred.hot.cycle_state, CycleState::Running);
-    assert!(deferred.hot.pending_signal);
-    assert_eq!(deferred.cursor, 1);
-    assert_eq!(deferred.eligible_at, Some(3));
+    assert_eq!(running.hot.cycle_state, CycleState::Running);
+    assert!(!running.hot.pending_signal);
+    assert_eq!(running.cursor, 1);
+    assert_eq!(running.eligible_at, Some(3));
     assert_eq!(
       Actors::control_apply_address_event(
         actor_id,
@@ -2377,17 +2335,10 @@ fn control_address_event_due_while_running_accumulates_and_defers_in_place() {
         Some(&provenance),
         2,
       )
-      .expect("latched AddressEvent still commits funding"),
+      .expect("busy AddressEvent still commits funding"),
       None
     );
-    assert_eq!(fee_collections(), vec![address_event_trigger_fee()]);
-    assert_eq!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("busy AddressEvent funding remains")
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&30)
-    );
+    assert!(fee_collections().is_empty());
 
     frame_system::Pallet::<Test>::set_block_number(3);
     let head_before_completion = Actors::queue_head();
@@ -2400,14 +2351,11 @@ fn control_address_event_due_while_running_accumulates_and_defers_in_place() {
       Actors::queue_head().saturating_sub(head_before_completion),
       1
     );
-    let next_opening = crate::ActorReadyFrameChunks::<Test>::get(0)
-      .and_then(|chunk| chunk.get(2).cloned().flatten())
-      .expect("AddressEvent deferred latch enters exact N+1");
-    assert_eq!(next_opening.hot.cycle_state, CycleState::Idle);
-    assert!(next_opening.hot.pending_signal);
-    assert_eq!(next_opening.cursor, 0);
-    assert_eq!(next_opening.eligible_at, Some(4));
-    assert!(next_opening.hot.trigger_wakeup_pointer.is_none());
+    let completed = crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
+      .expect("AddressEvent Cycle completes without deferred authority");
+    assert_eq!(completed.hot.cycle_state, CycleState::Idle);
+    assert!(!completed.hot.pending_signal);
+    assert!(completed.hot.wakeup_pointer.is_none());
     frame_assert_single_owner();
   });
 }
@@ -2868,64 +2816,6 @@ fn control_manual_trigger_boundary_matches_immutable_oracle_logical_fee_and_even
 }
 
 #[test]
-fn control_at_time_trigger_boundary_matches_immutable_oracle_logical_fee_and_event_authority() {
-  let execute = || {
-    new_test_ext().execute_with(|| {
-      frame_system::Pallet::<Test>::set_block_number(1);
-      let actor_id = create_user_with(
-        ALICE,
-        Mutability::Mutable,
-        at_time_schedule(1),
-        None,
-        contract_steps_with_step(make_step(Task::StopCycle)),
-      );
-      let sovereign = Actors::active_actor_view(actor_id)
-        .expect("AtTime differential Actor exists")
-        .sovereign_account;
-      let _ = <Test as crate::Config>::AssetOps::mint(
-        &sovereign,
-        <Test as crate::Config>::FeeNativeAssetId::get(),
-        u128::from(u64::MAX / 4),
-      );
-      let custody_before = native_balance(&sovereign);
-      clear_fee_collections();
-      System::reset_events();
-      frame_system::Pallet::<Test>::set_block_number(2);
-
-      let hot = {
-        let mut meter = WeightMeter::with_limit(Weight::MAX);
-        Actors::drain_overdue_wakeups_cursor(2, &mut meter);
-        Actors::actor_hot(actor_id).expect("reference AtTime differential hot state exists")
-      };
-      let trigger_events = System::events()
-        .iter()
-        .filter(|record| {
-          matches!(
-            &record.event,
-            RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
-              actor_id: id,
-              trigger_family: TriggerFamily::AtTime,
-              ..
-            }) if *id == actor_id
-          )
-        })
-        .count();
-      (
-        custody_before.saturating_sub(native_balance(&sovereign)),
-        fee_collections(),
-        hot.pending_signal,
-        hot.cycle_state,
-        hot.trigger_runtime_state,
-        trigger_events,
-      )
-    })
-  };
-
-  let baseline = execute();
-  emit_baseline_oracle("at_time_success", &baseline);
-}
-
-#[test]
 fn control_address_event_boundary_matches_immutable_oracle_logical_fee_funding_and_event_authority()
 {
   let execute = || {
@@ -2939,7 +2829,7 @@ fn control_address_event_boundary_matches_immutable_oracle_logical_fee_funding_a
         contract_steps_with_step(make_step(Task::Transfer {
           to: BOB,
           asset: TestAsset::Native,
-          amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
         })),
       );
       let sovereign = Actors::active_actor_view(actor_id)
@@ -2961,13 +2851,14 @@ fn control_address_event_boundary_matches_immutable_oracle_logical_fee_funding_a
           100,
           &ALICE,
         ));
-        Actors::actor_hot(actor_id).expect("reference AddressEvent differential hot state exists")
+        ActorSemanticStates::<Test>::get(actor_id)
+          .and_then(|state| match state {
+            ActorSemanticState::Active(record) => Some(record.hot),
+            ActorSemanticState::Dormant(_) => None,
+          })
+          .expect("reference AddressEvent differential semantic Hot state exists")
       };
-      let funding = ActorFunding::<Test>::get(actor_id)
-        .expect("AddressEvent differential funding exists")
-        .funding_accumulated
-        .get(&TestAsset::Native)
-        .copied();
+      let funding = native_balance(&sovereign);
       let funding_events = System::events()
         .iter()
         .filter(|record| {
@@ -3009,7 +2900,10 @@ fn control_address_event_boundary_matches_immutable_oracle_logical_fee_funding_a
   };
 
   let baseline = execute();
-  emit_baseline_oracle("address_event_success", &baseline);
+  assert_eq!(baseline.0, address_event_trigger_fee());
+  assert!(baseline.3);
+  assert_eq!(baseline.4, CycleState::Idle);
+  assert_eq!(baseline.7, 1);
 }
 
 #[test]
@@ -3043,8 +2937,12 @@ fn control_observation_change_boundary_matches_immutable_oracle_logical_fee_and_
       let hot = {
         assert_ok!(Actors::note_observation_changed(feed, 1));
         assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
-        Actors::actor_hot(actor_id)
-          .expect("reference ObservationChange differential hot state exists")
+        crate::ActorSemanticStates::<Test>::get(actor_id)
+          .and_then(|state| match state {
+            crate::ActorSemanticState::Active(record) => Some(record.hot),
+            crate::ActorSemanticState::Dormant(_) => None,
+          })
+          .expect("reference ObservationChange differential semantic Hot state exists")
       };
       let trigger_events = System::events()
         .iter()
@@ -3155,65 +3053,6 @@ fn control_observation_crossing_boundary_matches_immutable_oracle_fee_phase_and_
 }
 
 #[test]
-fn control_cadenced_trigger_boundary_matches_immutable_oracle_logical_fee_and_event_authority() {
-  let execute = || {
-    new_test_ext().execute_with(|| {
-      frame_system::Pallet::<Test>::set_block_number(1);
-      let actor_id = create_user_with(
-        ALICE,
-        Mutability::Mutable,
-        timer_schedule(5),
-        None,
-        contract_steps_with_step(make_step(Task::StopCycle)),
-      );
-      let sovereign = Actors::active_actor_view(actor_id)
-        .expect("Cadenced differential Actor exists")
-        .sovereign_account;
-      let _ = <Test as crate::Config>::AssetOps::mint(
-        &sovereign,
-        <Test as crate::Config>::FeeNativeAssetId::get(),
-        u128::from(u64::MAX / 4),
-      );
-      let custody_before = native_balance(&sovereign);
-      clear_fee_collections();
-      System::reset_events();
-      frame_system::Pallet::<Test>::set_block_number(6);
-
-      let hot = {
-        let mut meter = WeightMeter::with_limit(Weight::MAX);
-        Actors::drain_overdue_wakeups_cursor(6, &mut meter);
-        Actors::actor_hot(actor_id).expect("reference Cadenced differential hot state exists")
-      };
-      let trigger_events = System::events()
-        .iter()
-        .filter(|record| {
-          matches!(
-            &record.event,
-            RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
-              actor_id: id,
-              trigger_family: TriggerFamily::Cadenced,
-              ..
-            }) if *id == actor_id
-          )
-        })
-        .count();
-      (
-        custody_before.saturating_sub(native_balance(&sovereign)),
-        fee_collections(),
-        hot.pending_signal,
-        hot.cycle_state,
-        hot.trigger_runtime_state,
-        hot.trigger_wakeup_pointer.is_some(),
-        trigger_events,
-      )
-    })
-  };
-
-  let baseline = execute();
-  emit_baseline_oracle("cadenced_success", &baseline);
-}
-
-#[test]
 fn control_manual_collection_failure_matches_immutable_oracle_retained_logical_authority() {
   let execute = || {
     new_test_ext().execute_with(|| {
@@ -3271,67 +3110,6 @@ fn control_manual_collection_failure_matches_immutable_oracle_retained_logical_a
 }
 
 #[test]
-fn control_at_time_collection_failure_matches_immutable_oracle_retained_due_authority() {
-  let execute = || {
-    new_test_ext().execute_with(|| {
-      frame_system::Pallet::<Test>::set_block_number(1);
-      let actor_id = create_user_with(
-        ALICE,
-        Mutability::Mutable,
-        at_time_schedule(1),
-        None,
-        contract_steps_with_step(make_step(Task::StopCycle)),
-      );
-      let sovereign = Actors::active_actor_view(actor_id)
-        .expect("AtTime failure differential Actor exists")
-        .sovereign_account;
-      let _ = <Test as crate::Config>::AssetOps::mint(
-        &sovereign,
-        <Test as crate::Config>::FeeNativeAssetId::get(),
-        u128::from(u64::MAX / 4),
-      );
-      let custody_before = native_balance(&sovereign);
-      clear_fee_collections();
-      System::reset_events();
-      set_fail_fee_sink_transfer(true);
-      frame_system::Pallet::<Test>::set_block_number(2);
-      {
-        let mut meter = WeightMeter::with_limit(Weight::MAX);
-        Actors::drain_overdue_wakeups_cursor(2, &mut meter);
-      }
-      set_fail_fee_sink_transfer(false);
-      let hot =
-        { Actors::actor_hot(actor_id).expect("reference AtTime failure hot state remains") };
-      (
-        custody_before.saturating_sub(native_balance(&sovereign)),
-        fee_collections(),
-        hot.pending_signal,
-        hot.cycle_state,
-        hot.trigger_runtime_state,
-        hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
-        Actors::wakeup_cursor_peek_key(WakeupClock::Tick),
-        System::events()
-          .iter()
-          .filter(|record| {
-            matches!(
-              &record.event,
-              RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
-                actor_id: id,
-                trigger_family: TriggerFamily::AtTime,
-                ..
-              }) if *id == actor_id
-            )
-          })
-          .count(),
-      )
-    })
-  };
-
-  let baseline = execute();
-  emit_baseline_oracle("at_time_collection_failure", &baseline);
-}
-
-#[test]
 fn control_address_event_collection_failure_matches_immutable_oracle_independent_funding_authority()
 {
   let execute = || {
@@ -3345,7 +3123,7 @@ fn control_address_event_collection_failure_matches_immutable_oracle_independent
         contract_steps_with_step(make_step(Task::Transfer {
           to: BOB,
           asset: TestAsset::Native,
-          amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
         })),
       );
       let sovereign = Actors::active_actor_view(actor_id)
@@ -3369,13 +3147,13 @@ fn control_address_event_collection_failure_matches_immutable_oracle_independent
         ));
       }
       set_fail_fee_sink_transfer(false);
-      let hot =
-        { Actors::actor_hot(actor_id).expect("reference AddressEvent failure hot state remains") };
-      let funding = ActorFunding::<Test>::get(actor_id)
-        .expect("AddressEvent failure funding remains")
-        .funding_accumulated
-        .get(&TestAsset::Native)
-        .copied();
+      let hot = ActorSemanticStates::<Test>::get(actor_id)
+        .and_then(|state| match state {
+          ActorSemanticState::Active(record) => Some(record.hot),
+          ActorSemanticState::Dormant(_) => None,
+        })
+        .expect("reference AddressEvent failure semantic Hot state remains");
+      let funding = native_balance(&sovereign);
       let funding_events = System::events()
         .iter()
         .filter(|record| {
@@ -3417,7 +3195,10 @@ fn control_address_event_collection_failure_matches_immutable_oracle_independent
   };
 
   let baseline = execute();
-  emit_baseline_oracle("address_event_collection_failure", &baseline);
+  assert_eq!(baseline.0, 0);
+  assert!(!baseline.3);
+  assert_eq!(baseline.4, CycleState::Idle);
+  assert_eq!(baseline.7, 0);
 }
 
 #[test]
@@ -3452,9 +3233,12 @@ fn control_observation_change_collection_failure_matches_immutable_oracle_detect
         assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
       }
       set_fail_fee_sink_transfer(false);
-      let hot = {
-        Actors::actor_hot(actor_id).expect("reference ObservationChange failure hot state remains")
-      };
+      let hot = crate::ActorSemanticStates::<Test>::get(actor_id)
+        .and_then(|state| match state {
+          crate::ActorSemanticState::Active(record) => Some(record.hot),
+          crate::ActorSemanticState::Dormant(_) => None,
+        })
+        .expect("reference ObservationChange failure semantic Hot state remains");
       (
         custody_before.saturating_sub(native_balance(&sovereign)),
         fee_collections(),
@@ -3742,6 +3526,44 @@ fn control_ready_user_opening_projects_exact_scalar_authority_without_event_drif
 }
 
 #[test]
+fn control_projection_rejects_certificate_after_host_authority_changes() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      inert_contract_steps(),
+    );
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let (location, cell) = Actors::actor_control_cell(actor_id).expect("stored Ready authority");
+    assert!(
+      Actors::project_control_cell(&cell, location).is_some(),
+      "certificate is authoritative before the host version changes"
+    );
+
+    set_admission_semantics_version(2);
+
+    assert!(
+      cell.admission.has_valid_identity(),
+      "the stale certificate remains internally self-consistent"
+    );
+    assert!(
+      Actors::project_control_cell(&cell, location).is_none(),
+      "self-consistency cannot authorize service under stale host authority"
+    );
+    assert!(
+      Actors::load_frame_control_authority(actor_id).is_none(),
+      "the central authority loader fails closed"
+    );
+  });
+}
+
+#[test]
 fn control_complete_user_stop_cycle_projects_exact_scalar_authority_without_event_drift() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -3834,7 +3656,7 @@ fn control_direct_ready_stop_cycle_matches_immutable_oracle() {
     run_idle(Weight::MAX);
     let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
       .expect("reference StopCycle successor is coherent");
-    let funding = ActorFunding::<Test>::get(actor_id).expect("reference funding survives");
+    let funding = <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset);
     let hold = crate::ActorStateHolds::<Test>::get(actor_id).expect("reference User hold survives");
     (
       state.identity,
@@ -3865,8 +3687,7 @@ fn control_direct_transfer_predicate_matrix_matches_immutable_oracle() {
         .map(|index| TestAsset::Local(10_000 + index))
         .collect::<Vec<_>>();
       let precondition = (!predicate_assets.is_empty()).then(|| {
-        timed_all_conditions(
-          ObservationTiming::Opening,
+        all_conditions(
           predicate_assets
             .iter()
             .copied()
@@ -3922,7 +3743,7 @@ fn control_direct_transfer_predicate_matrix_matches_immutable_oracle() {
         run_idle(Weight::MAX);
         let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
           .expect("reference Transfer successor is coherent");
-        let funding = ActorFunding::<Test>::get(actor_id).expect("reference funding survives");
+        let funding = <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset);
         let hold =
           crate::ActorStateHolds::<Test>::get(actor_id).expect("reference User hold survives");
         (
@@ -4006,7 +3827,7 @@ fn control_direct_funding_unavailable_requeues_exact_next_block_matching_immutab
         let run = state
           .run_state
           .expect("reference FundingUnavailable run persists");
-        let funding = ActorFunding::<Test>::get(actor_id).expect("reference funding survives");
+        let funding = <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset);
         let hold =
           crate::ActorStateHolds::<Test>::get(actor_id).expect("reference User hold survives");
         (
@@ -4076,7 +3897,7 @@ fn control_direct_temporary_failure_requeues_with_atomic_effect_rollback_matchin
         let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
           .expect("reference Temporary suspension is coherent");
         let run = state.run_state.expect("reference Temporary run persists");
-        let funding = ActorFunding::<Test>::get(actor_id).expect("reference funding survives");
+        let funding = <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset);
         let hold =
           crate::ActorStateHolds::<Test>::get(actor_id).expect("reference User hold survives");
         (
@@ -4152,7 +3973,7 @@ fn control_suspended_temporary_continuation_matches_immutable_oracle_success_and
       {
         let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
           .expect("reference retry successor is coherent");
-        let funding = ActorFunding::<Test>::get(actor_id).expect("reference funding survives");
+        let funding = <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset);
         let hold =
           crate::ActorStateHolds::<Test>::get(actor_id).expect("reference User hold survives");
         (
@@ -4238,7 +4059,7 @@ fn control_suspended_funding_continuation_matches_immutable_oracle_success_and_b
       {
         let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
           .expect("reference Funding retry successor is coherent");
-        let funding = ActorFunding::<Test>::get(actor_id).expect("reference funding survives");
+        let funding = <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset);
         let hold =
           crate::ActorStateHolds::<Test>::get(actor_id).expect("reference User hold survives");
         (
@@ -4583,9 +4404,35 @@ fn control_waiting_round_trip_preserves_primary_and_coexisting_wakeup_authority(
 fn control_temporal_transition_preserves_n_plus_one_cutoff_and_pointer_cleanup() {
   new_test_ext().execute_with(|| {
     let actor_id = frame_install_temporal_system_unsignaled(1)[0];
+    let (unsignaled_location, unsignaled) =
+      Actors::actor_control_cell(actor_id).expect("temporal Unsignaled cell exists");
+    let qualification = unsignaled.admission.wake_qualification;
+    assert!(
+      Actors::project_control_cell_for_wake(&unsignaled, unsignaled_location, qualification,)
+        .is_some()
+    );
+    let mut wrong_family = qualification;
+    wrong_family.family = crate::TriggerFamily::Manual;
+    assert!(
+      Actors::project_control_cell_for_wake(&unsignaled, unsignaled_location, wrong_family,)
+        .is_none()
+    );
+    let mut wrong_selector = qualification;
+    wrong_selector.selector_commitment[0] ^= 1;
+    assert!(
+      Actors::project_control_cell_for_wake(&unsignaled, unsignaled_location, wrong_selector,)
+        .is_none()
+    );
 
     let trigger_location = Actors::control_stage_unsignaled_temporal(actor_id, 10)
       .expect("Unsignaled temporal cell stages atomically");
+    let (_, waiting) = Actors::actor_control_cell(actor_id).expect("temporal Waiting cell exists");
+    assert!(
+      Actors::project_control_cell_for_wake(&waiting, trigger_location, wrong_family).is_none()
+    );
+    assert!(
+      Actors::project_control_cell_for_wake(&waiting, trigger_location, wrong_selector).is_none()
+    );
     assert_eq!(
       trigger_location,
       C1Location::Waiting {

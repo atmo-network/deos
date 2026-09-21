@@ -32,12 +32,7 @@ export type ActorPredicateName =
   | 'ObservationEquals'
   | 'ObservationNotEquals';
 
-export type ActorAmountName =
-  | 'Fixed'
-  | 'PercentageOfCurrent'
-  | 'PercentageAtOpening'
-  | 'PercentageOfLastFunding'
-  | 'AllAvailable';
+export type ActorAmountName = 'Fixed' | 'Percent';
 
 const TASK_NAMES = [
   'Transfer',
@@ -69,10 +64,7 @@ const PREDICATE_NAMES = [
 
 const AMOUNT_NAMES = [
   'Fixed',
-  'PercentageOfCurrent',
-  'PercentageAtOpening',
-  'PercentageOfLastFunding',
-  'AllAvailable',
+  'Percent',
 ] as const satisfies readonly ActorAmountName[];
 
 export type ActorSemanticRecipient =
@@ -130,18 +122,11 @@ export type ActorSemanticPredicate = {
 export type ActorSemanticAmountResolution = {
   resolution: ActorAmountName;
   dataDependencies: Array<
-    | 'ArtifactValue'
-    | 'CurrentBalanceOrShares'
-    | 'OpeningSnapshot'
-    | 'LastFundingSnapshot'
-    | 'TaskPolicyCapacity'
+    'ArtifactValue' | 'CurrentBalanceOrShares' | 'TaskPolicyCapacity'
   >;
   minimumBalanceDependency: 'None' | 'TaskPolicy';
   feeReserveDependency: 'None' | 'TaskPolicy';
-  valueObservationWindow:
-    | 'ArtifactTime'
-    | 'LogicalCycleStart'
-    | 'StepAttemptTime';
+  valueObservationWindow: 'ArtifactTime' | 'StepAttemptTime';
   retryObservation: 'ReobserveLiveValue' | 'ReuseFrozenValueWithLiveCapacity';
 };
 

@@ -18,14 +18,7 @@ export const PERBILL_DENOMINATOR = 1_000_000_000n;
 
 export type ActorAmountResolution =
   | { type: 'Fixed'; value: bigint }
-  | { type: 'AllAvailable' }
-  | {
-      type:
-        | 'PercentageOfCurrent'
-        | 'PercentageAtOpening'
-        | 'PercentageOfLastFunding';
-      parts: number;
-    };
+  | { type: 'Percent'; parts: number };
 
 export type ActorAmountPolicy =
   | 'PreserveSpend'
@@ -43,11 +36,10 @@ export type ActorAmountObservation = {
   reservedFee: bigint;
   isFeeNative: boolean;
   trigger?: bigint;
-  lastFunding?: bigint;
 };
 
 export type ActorAmountForecast = {
-  status: 'Resolved' | 'Skipped' | 'FundingUnavailable' | 'SnapshotUnavailable';
+  status: 'Resolved' | 'Skipped' | 'FundingUnavailable';
   amount: bigint | null;
   basis: bigint | null;
   spendLimit: bigint;
@@ -127,8 +119,6 @@ export function resolveActorAmount(
   validateBalance(input.minUserBalance, 'minUserBalance');
   validateBalance(input.reservedFee, 'reservedFee');
   if (input.trigger != null) validateBalance(input.trigger, 'trigger');
-  if (input.lastFunding != null)
-    validateBalance(input.lastFunding, 'lastFunding');
 
   const isShares = input.policy === 'UnstakeShares';
   const spendableCurrent = isShares
@@ -155,44 +145,10 @@ export function resolveActorAmount(
       validateBalance(input.resolution.value, 'fixed amount');
       amount = input.resolution.value;
       break;
-    case 'AllAvailable':
-      basis = isShares ? input.current : spendLimit;
-      amount = basis;
-      break;
-    case 'PercentageOfCurrent':
+    case 'Percent':
       basis = isShares ? input.current : spendLimit;
       amount = percentage(input.resolution.parts, basis);
       if (input.resolution.parts !== 0 && basis !== 0n && amount === 0n) {
-        return { status: 'Skipped', amount: null, basis, spendLimit };
-      }
-      break;
-    case 'PercentageAtOpening':
-      if (input.trigger == null) {
-        return {
-          status: 'SnapshotUnavailable',
-          amount: null,
-          basis: null,
-          spendLimit,
-        };
-      }
-      basis = input.trigger;
-      amount = percentage(input.resolution.parts, basis);
-      if (input.resolution.parts !== 0 && basis !== 0n && amount === 0n) {
-        return { status: 'Skipped', amount: null, basis, spendLimit };
-      }
-      break;
-    case 'PercentageOfLastFunding':
-      if (input.lastFunding == null || input.lastFunding === 0n) {
-        return {
-          status: 'FundingUnavailable',
-          amount: null,
-          basis: input.lastFunding ?? null,
-          spendLimit,
-        };
-      }
-      basis = input.lastFunding;
-      amount = percentage(input.resolution.parts, basis);
-      if (input.resolution.parts !== 0 && amount === 0n) {
         return { status: 'Skipped', amount: null, basis, spendLimit };
       }
       break;

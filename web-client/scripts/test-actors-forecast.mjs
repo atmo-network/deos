@@ -57,7 +57,7 @@ test('asset amount resolution preserves fee reserve and minimum balance', () => 
   assert.deepEqual(
     resolveActorAmount(
       observation({
-        resolution: { type: 'PercentageOfCurrent', parts: 500_000_000 },
+        resolution: { type: 'Percent', parts: 500_000_000 },
       }),
     ),
     {
@@ -70,7 +70,7 @@ test('asset amount resolution preserves fee reserve and minimum balance', () => 
   assert.deepEqual(
     resolveActorAmount(
       observation({
-        resolution: { type: 'AllAvailable' },
+        resolution: { type: 'Percent', parts: 1_000_000_000 },
         current: 201n,
         minimumBalance: 1n,
         minUserBalance: 50n,
@@ -86,31 +86,11 @@ test('asset amount resolution preserves fee reserve and minimum balance', () => 
   );
 });
 
-test('snapshot, funding, rounding, mint, and staking-share outcomes remain distinct', () => {
+test('rounding, mint, and staking-share outcomes remain distinct', () => {
   assert.equal(
     resolveActorAmount(
       observation({
-        resolution: { type: 'PercentageAtOpening', parts: 1_000_000_000 },
-      }),
-    ).status,
-    'SnapshotUnavailable',
-  );
-  assert.equal(
-    resolveActorAmount(
-      observation({
-        resolution: {
-          type: 'PercentageOfLastFunding',
-          parts: 1_000_000_000,
-        },
-        lastFunding: 0n,
-      }),
-    ).status,
-    'FundingUnavailable',
-  );
-  assert.equal(
-    resolveActorAmount(
-      observation({
-        resolution: { type: 'PercentageOfCurrent', parts: 1 },
+        resolution: { type: 'Percent', parts: 1 },
         current: 1n,
         minimumBalance: 0n,
         reservedFee: 0n,

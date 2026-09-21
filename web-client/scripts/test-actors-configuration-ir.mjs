@@ -59,21 +59,15 @@ const contract = {
         clauses: [
           [
             {
-              timing: 'Opening',
-              predicate: {
-                type: 'ObservationBelow',
-                feed,
-                threshold: '1500000000000',
-                maxAgeBlocks: 20,
-              },
+              type: 'ObservationBelow',
+              feed,
+              threshold: '1500000000000',
+              maxAgeBlocks: 20,
             },
             {
-              timing: 'Current',
-              predicate: {
-                type: 'BalanceAbove',
-                asset: native,
-                threshold: '100',
-              },
+              type: 'BalanceAbove',
+              asset: native,
+              threshold: '100',
             },
           ],
         ],

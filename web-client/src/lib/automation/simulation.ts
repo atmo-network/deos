@@ -24,13 +24,8 @@ export type ActorStepErrorPolicy =
   | { type: 'ContinueNextStep' }
   | { type: 'RetryLater'; maxAttempts: number };
 
-export type ActorLocalTimedPredicate<Predicate> = {
-  timing: 'Opening' | 'Current';
-  predicate: Predicate;
-};
-
 export type ActorLocalPrecondition<Predicate> = {
-  clauses: ActorLocalTimedPredicate<Predicate>[][];
+  clauses: Predicate[][];
 };
 
 export type ActorLocalStep<Predicate> = {
@@ -83,13 +78,8 @@ export type ActorLocalSimulationResult<State> = {
 export type ActorDonationSurface = {
   stepIndex: number;
   surface: string;
-  resolution:
-    | 'Fixed'
-    | 'AllAvailable'
-    | 'PercentageOfCurrent'
-    | 'PercentageAtOpening'
-    | 'PercentageOfLastFunding';
-  observation: 'ActorBalance' | 'ActorFunding' | 'AdapterState';
+  resolution: 'Fixed' | 'Percent';
+  observation: 'ActorBalance' | 'AdapterState';
 };
 
 export type ActorDonationSensitivity = {
@@ -98,8 +88,6 @@ export type ActorDonationSensitivity = {
   sensitivity:
     | 'InsensitiveFixedAmount'
     | 'BeforeStepResolution'
-    | 'BeforeOpeningSnapshot'
-    | 'BeforeFundingSnapshot'
     | 'BeforeAdapterObservation';
   reason: string;
 };
@@ -141,7 +129,7 @@ export function simulateActorLocally<State, Predicate>(input: {
   initialCounts?: ActorLocalSimulationCounts;
   steps: ActorLocalStep<Predicate>[];
   evaluatePredicate?: (
-    predicate: ActorLocalTimedPredicate<Predicate>,
+    predicate: Predicate,
     state: Readonly<State>,
   ) => ActorLocalPredicateOutcome;
   runTask: (
@@ -391,24 +379,6 @@ export function classifyActorDonationSensitivity(
         sensitivity: 'BeforeAdapterObservation',
         reason:
           'External state can change before the adapter observes or quotes this surface.',
-      };
-    }
-    if (surface.resolution === 'PercentageAtOpening') {
-      return {
-        stepIndex: surface.stepIndex,
-        surface: surface.surface,
-        sensitivity: 'BeforeOpeningSnapshot',
-        reason:
-          'Actor balance changes can affect the captured opening snapshot, but not its persisted value.',
-      };
-    }
-    if (surface.resolution === 'PercentageOfLastFunding') {
-      return {
-        stepIndex: surface.stepIndex,
-        surface: surface.surface,
-        sensitivity: 'BeforeFundingSnapshot',
-        reason:
-          'Funding included before batch promotion can affect the last-funding snapshot.',
       };
     }
     return {

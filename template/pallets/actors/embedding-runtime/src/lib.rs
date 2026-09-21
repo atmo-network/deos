@@ -709,7 +709,6 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxContractSteps = ConstU32<8>;
   type MaxFundingTrackedAssets = ConstU32<4>;
   type MaxOpeningSnapshotEntries = ConstU32<16>;
-  type MaxOpeningPredicateResults = ConstU32<16>;
   type MaxPreconditionClauses = ConstU32<2>;
   type MaxPredicatesPerClause = ConstU32<2>;
   type MaxPredicatesPerStep = ConstU32<2>;
@@ -866,16 +865,7 @@ mod tests {
   fn all_precondition(
     predicates: alloc::vec::Vec<pallet_deos_actors::Predicate<u32, Balance, u32, u32>>,
   ) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
-    let clause = BoundedVec::try_from(
-      predicates
-        .into_iter()
-        .map(|predicate| pallet_deos_actors::TimedPredicate {
-          timing: pallet_deos_actors::ObservationTiming::Current,
-          predicate,
-        })
-        .collect::<alloc::vec::Vec<_>>(),
-    )
-    .expect("predicates fit");
+    let clause = BoundedVec::try_from(predicates).expect("predicates fit");
     Some(pallet_deos_actors::Precondition {
       clauses: BoundedVec::try_from(alloc::vec![clause]).expect("clause fits"),
     })
@@ -886,13 +876,7 @@ mod tests {
   ) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
     let clauses = predicates
       .into_iter()
-      .map(|predicate| {
-        BoundedVec::try_from(alloc::vec![pallet_deos_actors::TimedPredicate {
-          timing: pallet_deos_actors::ObservationTiming::Current,
-          predicate,
-        }])
-        .expect("predicate fits")
-      })
+      .map(|predicate| BoundedVec::try_from(alloc::vec![predicate]).expect("predicate fits"))
       .collect::<alloc::vec::Vec<_>>();
     Some(pallet_deos_actors::Precondition {
       clauses: BoundedVec::try_from(clauses).expect("clauses fit"),
@@ -1035,7 +1019,6 @@ mod tests {
       b"ActorControlLocators".as_slice(),
       b"ActorUnsignaledControlCells".as_slice(),
       b"ActorContract".as_slice(),
-      b"ActorFunding".as_slice(),
       b"ActorRunHead".as_slice(),
       b"ActorRunPayload".as_slice(),
       b"ActorReadyFrameChunks".as_slice(),
@@ -1428,133 +1411,66 @@ mod tests {
 
   #[test]
   fn admitted_geometry_follows_local_bounds_through_every_step() {
-    use pallet_deos_actors::{AmountResolution, ObservationTiming, Predicate, TimedPredicate};
+    use pallet_deos_actors::{AmountResolution, Predicate};
     let max_steps = <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get();
-    let max_funding = <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get();
     for step_count in 0..=max_steps {
-      let amount_positions = 2 * step_count;
-      let funding_boundary = amount_positions.min(max_funding);
-      let mut funding_counts = alloc::vec![0, funding_boundary];
-      if amount_positions > max_funding {
-        funding_counts.push(max_funding + 1);
-      }
-      funding_counts.dedup();
-      for funding_count in funding_counts {
-        new_test_ext().execute_with(|| {
-          System::set_block_number(1);
-          let amount = |position| {
-            if position < funding_count {
-              AmountResolution::PercentageOfLastFunding(Perbill::one())
-            } else {
-              AmountResolution::PercentageAtOpening(Perbill::one())
-            }
-          };
-          let steps = (0..step_count)
-            .map(|index| pallet_deos_actors::Step {
-              precondition: Some(pallet_deos_actors::Precondition {
-                clauses: alloc::vec![
-                  alloc::vec![
-                    TimedPredicate {
-                      timing: ObservationTiming::Opening,
-                      predicate: Predicate::BlockNumberBelow { threshold: 0 }
-                    },
-                    TimedPredicate {
-                      timing: ObservationTiming::Opening,
-                      predicate: Predicate::BlockNumberAbove { threshold: 0 }
-                    },
-                  ]
-                  .try_into()
-                  .expect("two predicates fit")
+      new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let steps = (0..step_count)
+          .map(|index| pallet_deos_actors::Step {
+            precondition: Some(pallet_deos_actors::Precondition {
+              clauses: alloc::vec![
+                alloc::vec![
+                  Predicate::BlockNumberBelow { threshold: 0 },
+                  Predicate::BlockNumberAbove { threshold: 0 },
                 ]
                 .try_into()
-                .expect("one clause fits"),
-              }),
-              task: pallet_deos_actors::Task::AddLiquidity {
-                asset_a: 10 + index * 2,
-                asset_b: 11 + index * 2,
-                amount_a: amount(index * 2),
-                amount_b: amount(index * 2 + 1),
-                min_lp_out: 1,
-              },
-              on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
-            })
-            .collect();
-          let contract = active_contract(pallet_deos_actors::Trigger::manual(), 0, steps);
-          if funding_count > max_funding {
-            assert_noop!(
-              Actors::create_system_actor(
-                RuntimeOrigin::root(),
-                ALICE,
-                pallet_deos_actors::Mutability::Mutable,
-                Some(contract)
-              ),
-              pallet_deos_actors::Error::<Runtime>::TooManyContractSteps
+                .expect("two predicates fit")
+              ]
+              .try_into()
+              .expect("one clause fits"),
+            }),
+            task: pallet_deos_actors::Task::AddLiquidity {
+              asset_a: 10 + index * 2,
+              asset_b: 11 + index * 2,
+              amount_a: AmountResolution::Percent(Perbill::one()),
+              amount_b: AmountResolution::Percent(Perbill::one()),
+              min_lp_out: 1,
+            },
+            on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
+          })
+          .collect();
+        let contract = active_contract(pallet_deos_actors::Trigger::manual(), 0, steps);
+        assert_ok!(Actors::create_system_actor(
+          RuntimeOrigin::root(),
+          ALICE,
+          pallet_deos_actors::Mutability::Mutable,
+          Some(contract)
+        ));
+        let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get() - 1;
+        assert_ok!(Actors::manual_trigger(
+          RuntimeOrigin::signed(ALICE),
+          actor_id
+        ));
+        for block in 1..=step_count.max(1) {
+          System::set_block_number(block.into());
+          service_actor_idle(block.into());
+          if block < step_count {
+            let run = Actors::actor_run_state(actor_id).expect("nonterminal Step retains its Run");
+            assert_eq!(run.cursor, block);
+          } else {
+            assert!(Actors::actor_run_state(actor_id).is_none());
+            assert_eq!(
+              Actors::actor_identity(actor_id)
+                .expect("persistent Actor survives")
+                .cycle_nonce,
+              1
             );
-            return;
           }
-          assert_ok!(Actors::create_system_actor(
-            RuntimeOrigin::root(),
-            ALICE,
-            pallet_deos_actors::Mutability::Mutable,
-            Some(contract)
-          ));
-          let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get() - 1;
-          assert_eq!(
-            pallet_deos_actors::ActorFunding::<Runtime>::get(actor_id)
-              .expect("admitted funding state")
-              .funding_tracked_assets
-              .len(),
-            funding_count as usize
-          );
-          assert_ok!(Actors::manual_trigger(
-            RuntimeOrigin::signed(ALICE),
-            actor_id
-          ));
-          let mut opening = None;
-          for block in 1..=step_count.max(1) {
-            System::set_block_number(block.into());
-            service_actor_idle(block.into());
-            if block < step_count {
-              let run =
-                Actors::actor_run_state(actor_id).expect("nonterminal Step retains its Run");
-              assert_eq!(run.cursor, block);
-              assert_eq!(
-                run.opening_snapshot.len(),
-                (amount_positions - funding_count) as usize
-              );
-              assert!(run.opening_snapshot.values().all(|value| *value == 0));
-              assert_eq!(
-                run.opening_predicate_results.len(),
-                (2 * step_count) as usize
-              );
-              assert_eq!(run.opening_predicate_cursor, 2 * block);
-              assert!(
-                run.funding_snapshot.is_empty(),
-                "Opening cannot invent certified ingress"
-              );
-              let captured = (run.opening_snapshot, run.opening_predicate_results);
-              if let Some(expected) = &opening {
-                assert_eq!(
-                  &captured, expected,
-                  "later Steps never recapture Opening facts"
-                );
-              } else {
-                opening = Some(captured);
-              }
-            } else {
-              assert!(Actors::actor_run_state(actor_id).is_none());
-              assert_eq!(
-                Actors::actor_identity(actor_id)
-                  .expect("persistent Actor survives")
-                  .cycle_nonce,
-                1
-              );
-            }
-            #[cfg(feature = "try-runtime")]
-            assert_ok!(Actors::try_state(block.into()));
-          }
-        });
-      }
+          #[cfg(feature = "try-runtime")]
+          assert_ok!(Actors::try_state(block.into()));
+        }
+      });
     }
   }
 
@@ -1935,11 +1851,11 @@ mod tests {
         pallet_deos_actors::CycleState::Suspended
       );
       assert_eq!(before.identity.cycle_nonce, 0);
-      let opening_funding = before
+      let opening_snapshot = before
         .run_state
         .as_ref()
-        .expect("open run persists funding")
-        .funding_snapshot
+        .expect("open run persists its snapshot")
+        .opening_snapshot
         .clone();
       assert!(before_hot.wakeup_pointer.is_some());
       assert!(before_hot.queue_ticket.is_none());
@@ -1962,8 +1878,8 @@ mod tests {
           .run_state
           .as_ref()
           .expect("ingress preserves open run")
-          .funding_snapshot,
-        opening_funding
+          .opening_snapshot,
+        opening_snapshot
       );
       assert_eq!(after_hot.wakeup_pointer, before_hot.wakeup_pointer);
       assert_eq!(after_hot.queue_ticket, before_hot.queue_ticket);

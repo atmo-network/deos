@@ -109,11 +109,8 @@ test('System Actors composition exposes exact Root call but denies current gover
         precondition: [
           [
             {
-              timing: { type: 'Current', value: undefined },
-              predicate: {
-                type: 'BlockNumberAbove',
-                value: { threshold: 1 },
-              },
+              type: 'BlockNumberAbove',
+              value: { threshold: 1 },
             },
           ],
         ],

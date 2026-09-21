@@ -19,6 +19,49 @@ std::thread_local! {
   static HOOK_FAILURE: RefCell<bool> = const { RefCell::new(false) };
   static HOOK_CALLS: RefCell<Vec<(u32, u64, Option<u128>, u128)>> = const { RefCell::new(Vec::new()) };
   static HOOK_PROVENANCE: RefCell<Vec<crate::ObservationCauseProvenance>> = const { RefCell::new(Vec::new()) };
+  static STATE_HOOK_FAILURE: RefCell<bool> = const { RefCell::new(false) };
+  static STATE_HOOK_CALLS: RefCell<Vec<(u32, crate::FeedStateChange)>> = const { RefCell::new(Vec::new()) };
+}
+
+pub struct TestFeedStateHook;
+impl crate::OnFeedStateChanged<u32> for TestFeedStateHook {
+  fn on_feed_state_changed(
+    feed: u32,
+    change: crate::FeedStateChange,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    assert!(crate::Feeds::<Test>::contains_key(feed));
+    match change {
+      crate::FeedStateChange::Registered => {}
+      crate::FeedStateChange::Paused => {
+        assert_eq!(
+          crate::Feeds::<Test>::get(feed).unwrap().lifecycle,
+          crate::FeedLifecycle::Paused
+        );
+      }
+      crate::FeedStateChange::Resumed => {
+        assert_eq!(
+          crate::Feeds::<Test>::get(feed).unwrap().lifecycle,
+          crate::FeedLifecycle::Active
+        );
+      }
+      crate::FeedStateChange::Deactivated => {
+        assert_eq!(
+          crate::Feeds::<Test>::get(feed).unwrap().lifecycle,
+          crate::FeedLifecycle::Deactivated
+        );
+      }
+      crate::FeedStateChange::ObservationChanged | crate::FeedStateChange::ObservationRefreshed => {
+        assert!(crate::Observations::<Test>::contains_key(feed));
+      }
+    }
+    if STATE_HOOK_FAILURE.with(|value| *value.borrow()) {
+      return Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "FeedStateHookRejected",
+      ));
+    }
+    STATE_HOOK_CALLS.with(|calls| calls.borrow_mut().push((feed, change)));
+    Ok(())
+  }
 }
 
 pub struct TestObservationHook;
@@ -51,6 +94,14 @@ pub fn set_hook_failure(fail: bool) {
 
 pub fn hook_calls() -> Vec<(u32, u64, Option<u128>, u128)> {
   HOOK_CALLS.with(|calls| calls.borrow().clone())
+}
+
+pub fn set_state_hook_failure(fail: bool) {
+  STATE_HOOK_FAILURE.with(|value| *value.borrow_mut() = fail);
+}
+
+pub fn take_state_hook_calls() -> Vec<(u32, crate::FeedStateChange)> {
+  STATE_HOOK_CALLS.with(|calls| core::mem::take(&mut *calls.borrow_mut()))
 }
 
 construct_runtime!(
@@ -100,6 +151,7 @@ impl crate::Config for Test {
   type Provenance = u8;
   type RegisterOrigin = EnsureRoot<AccountId>;
   type PublishOrigin = EnsureSigned<AccountId>;
+  type OnFeedStateChanged = TestFeedStateHook;
   type OnObservationChanged = TestObservationHook;
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = ();
@@ -117,6 +169,8 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
   HOOK_FAILURE.with(|value| *value.borrow_mut() = false);
   HOOK_CALLS.with(|calls| calls.borrow_mut().clear());
   HOOK_PROVENANCE.with(|causes| causes.borrow_mut().clear());
+  STATE_HOOK_FAILURE.with(|value| *value.borrow_mut() = false);
+  STATE_HOOK_CALLS.with(|calls| calls.borrow_mut().clear());
   ext.execute_with(|| System::set_block_number(1));
   ext
 }

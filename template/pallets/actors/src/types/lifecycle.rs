@@ -1,14 +1,397 @@
 use super::{
   contract::{
-    CrossingDirection, CrossingPhase, OpeningSurface, PredicateError, ScheduleWindow, Trigger,
-    TriggerFamily,
+    CrossingDirection, CrossingPhase, OpeningSurface, ScheduleWindow, Trigger, TriggerFamily,
   },
   scheduler::{TriggerWakeupPointer, WakeupKey, WakeupPointer},
 };
 use frame::prelude::*;
 
 pub type ActorId = u64;
+pub type ActorGeneration = u64;
+
+/// Generation-bound identity used by every future process-residence index.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorRef {
+  pub actor_id: ActorId,
+  pub generation: ActorGeneration,
+}
+
+/// Service-ring role. Live continuations and Pending activation checks share one carrier.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ServiceResidenceKind {
+  Live,
+  Pending,
+}
+
+/// Why a current-state activation check may remain parked.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ParkNegativeReason {
+  PredicateFalse,
+  SourceUnavailable,
+  MonotonicBoundaryPassed,
+}
+
+/// Process-owned identity for a negative check. Dependency registrations and their revisions remain
+/// carrier-owned reverse handles; this header prevents a Park residence from being inferred from
+/// missing scheduler membership.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ParkEvidence<BlockNumber> {
+  pub plan_identity: [u8; 32],
+  pub reason: ParkNegativeReason,
+  pub review_at: Option<BlockNumber>,
+}
+
+/// Exact executable residence owned by one serving Actor-generation process.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ProcessResidence<BlockNumber> {
+  Service(ServiceResidenceKind),
+  Deadline {
+    key: WakeupKey<BlockNumber>,
+    page: u64,
+    slot: u8,
+  },
+  Parked(ParkEvidence<BlockNumber>),
+}
+
+/// Typed reversible reason. Park is deliberately absent because negative current-state evidence is
+/// a serving residence rather than lifecycle authority.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ProcessDisableCause {
+  OwnerPaused,
+  OwnerDeactivated,
+  Protocol,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ProcessRevivalAuthority {
+  Owner,
+  SystemOrigin,
+  Protocol,
+}
+
+/// Semantic basis retained while service authority is revoked. The canonical run record continues
+/// to own committed counters, retry history, and the exact Step cursor.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum SuspendedProcessBasis<BlockNumber> {
+  Idle,
+  Running { eligible_at: BlockNumber },
+  Suspended { not_before: BlockNumber },
+  Dormant,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ProcessDisablement<BlockNumber> {
+  pub cause: ProcessDisableCause,
+  pub revival_authority: ProcessRevivalAuthority,
+  pub basis: SuspendedProcessBasis<BlockNumber>,
+}
+
+/// Sole lifecycle authority for a stable process. Only Serving may carry an executable residence;
+/// Retired is irreversible and leaves only future generation-bound cleanup authority.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ProcessStatus<BlockNumber> {
+  Serving,
+  Disabled(ProcessDisablement<BlockNumber>),
+  Retired(CloseReason),
+}
+
+/// Minimal stable process owner introduced ahead of the atomic scheduler cutover.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorProcess<BlockNumber> {
+  pub generation: ActorGeneration,
+  pub last_attempted: Option<BlockNumber>,
+  pub status: ProcessStatus<BlockNumber>,
+  pub residence: Option<ProcessResidence<BlockNumber>>,
+}
+
+/// Legacy placement input for the storage-free process cutover compiler. Unsignaled intentionally
+/// retains an explicit evidence hole instead of guessing Park or lifecycle disablement.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum LegacyProcessPlacement<BlockNumber> {
+  Ready(ServiceResidenceKind),
+  Waiting {
+    key: WakeupKey<BlockNumber>,
+    page: u64,
+    slot: u8,
+  },
+  Unsignaled(Option<UnsignaledProcessEvidence<BlockNumber>>),
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum UnsignaledProcessEvidence<BlockNumber> {
+  Parked(ParkEvidence<BlockNumber>),
+  Disabled(ProcessDisablement<BlockNumber>),
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ProcessCompileError {
+  AmbiguousUnsignaled,
+  MalformedControlCell,
+}
+
+/// Cutover obligation assigned to every owner of legacy control-placement mutation.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ProcessTransitionObligation {
+  PublishTypedResidence,
+  PreserveProcess,
+  AtomicSuccessorOrRemoval,
+  RetireOrDisable,
+  CarrierOnly,
+}
+
+/// Typed evidence supplied by a legacy mutation owner to the storage-free cutover planner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LegacyProcessTransition<BlockNumber> {
+  Publish(LegacyProcessPlacement<BlockNumber>),
+  Preserve,
+  Replace(Option<LegacyProcessPlacement<BlockNumber>>),
+  Disable(ProcessDisablement<BlockNumber>),
+  Retire(CloseReason),
+  CarrierOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessTransitionError {
+  InvalidCurrentProcess,
+  ObligationMismatch,
+  DetachWithoutSuccessor,
+  Compile(ProcessCompileError),
+}
+
+/// Publication-boundary failures kept distinct from pure transition-planning failures.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessPublicationError {
+  TransactionRequired,
+  LegacyAuthorityPresent,
+  ProcessAlreadyExists,
+  ProcessMissing,
+  CurrentProcessMismatch,
+  Transition(ProcessTransitionError),
+}
+
+/// Carrier mutation required after one useful Trigger occurrence has been accepted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanonicalOccurrencePublication<BlockNumber> {
+  /// Idle readiness leaves its Park/Deadline source and enters Pending service at B+1.
+  PublishPending { eligible_from: BlockNumber },
+  /// A busy occurrence is only a deferred semantic latch; its current residence is retained.
+  PreserveResidence,
+}
+
+/// Storage-neutral successor shared by every Trigger-family writer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CanonicalOccurrencePlan<BlockNumber> {
+  pub process: ActorProcess<BlockNumber>,
+  pub pending_signal: bool,
+  pub publication: CanonicalOccurrencePublication<BlockNumber>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanonicalOccurrenceError {
+  InvalidProcess,
+  InvalidResidence,
+  BlockNumberOverflow,
+}
+
+/// Plans the common occurrence transition without reading or writing storage. Duplicate latched
+/// occurrences are rejected by the caller before matching/charging and therefore return no plan.
+/// Idle readiness from a carrier-free Disabled process, a retained Idle Service resident, or a
+/// Deadline/Park residence always enters Pending at B+1; Running/Suspended work preserves its exact
+/// current Service or Deadline residence and changes only the deferred semantic latch.
+pub fn plan_canonical_occurrence<BlockNumber>(
+  cycle_state: CycleState,
+  pending_signal: bool,
+  process: ActorProcess<BlockNumber>,
+  now: BlockNumber,
+) -> Result<Option<CanonicalOccurrencePlan<BlockNumber>>, CanonicalOccurrenceError>
+where
+  BlockNumber: Copy + CheckedAdd + One,
+{
+  if pending_signal {
+    return Ok(None);
+  }
+  if matches!(process.status, ProcessStatus::Retired(_)) {
+    return Err(CanonicalOccurrenceError::InvalidProcess);
+  }
+
+  let (process, publication) = match cycle_state {
+    CycleState::Idle => {
+      if !matches!(
+        (process.status, process.residence),
+        (ProcessStatus::Disabled(_), None)
+          | (
+            ProcessStatus::Serving,
+            Some(
+              ProcessResidence::Deadline { .. }
+                | ProcessResidence::Parked(_)
+                | ProcessResidence::Service(_)
+            ),
+          )
+      ) {
+        return Err(CanonicalOccurrenceError::InvalidResidence);
+      }
+      let eligible_from = now
+        .checked_add(&One::one())
+        .ok_or(CanonicalOccurrenceError::BlockNumberOverflow)?;
+      (
+        ActorProcess {
+          status: ProcessStatus::Serving,
+          residence: Some(ProcessResidence::Service(ServiceResidenceKind::Pending)),
+          ..process
+        },
+        CanonicalOccurrencePublication::PublishPending { eligible_from },
+      )
+    }
+    CycleState::Running | CycleState::Suspended => {
+      if !matches!(process.status, ProcessStatus::Serving)
+        || !matches!(
+          process.residence,
+          Some(ProcessResidence::Service(ServiceResidenceKind::Live))
+            | Some(ProcessResidence::Deadline { .. })
+        )
+      {
+        return Err(CanonicalOccurrenceError::InvalidResidence);
+      }
+      (process, CanonicalOccurrencePublication::PreserveResidence)
+    }
+  };
+
+  Ok(Some(CanonicalOccurrencePlan {
+    process,
+    pending_signal: true,
+    publication,
+  }))
+}
+
+/// Pure compiler used to prove the legacy-to-process mapping before any storage authority moves.
+pub fn compile_legacy_process<BlockNumber>(
+  generation: ActorGeneration,
+  last_attempted: Option<BlockNumber>,
+  placement: LegacyProcessPlacement<BlockNumber>,
+) -> Result<ActorProcess<BlockNumber>, ProcessCompileError> {
+  let (status, residence) = match placement {
+    LegacyProcessPlacement::Ready(kind) => (
+      ProcessStatus::Serving,
+      Some(ProcessResidence::Service(kind)),
+    ),
+    LegacyProcessPlacement::Waiting { key, page, slot } => (
+      ProcessStatus::Serving,
+      Some(ProcessResidence::Deadline { key, page, slot }),
+    ),
+    LegacyProcessPlacement::Unsignaled(Some(UnsignaledProcessEvidence::Parked(evidence))) => (
+      ProcessStatus::Serving,
+      Some(ProcessResidence::Parked(evidence)),
+    ),
+    LegacyProcessPlacement::Unsignaled(Some(UnsignaledProcessEvidence::Disabled(disablement))) => {
+      (ProcessStatus::Disabled(disablement), None)
+    }
+    LegacyProcessPlacement::Unsignaled(None) => {
+      return Err(ProcessCompileError::AmbiguousUnsignaled);
+    }
+  };
+  Ok(ActorProcess {
+    generation,
+    last_attempted,
+    status,
+    residence,
+  })
+}
+
+/// Plans one legacy control-owner mutation without publishing process storage. The obligation makes
+/// the owner inventory exhaustive; typed evidence prevents detach-first and ambiguous Unsignaled
+/// transitions from becoming a process state.
+pub fn plan_legacy_process_transition<BlockNumber: Copy>(
+  current: ActorProcess<BlockNumber>,
+  obligation: ProcessTransitionObligation,
+  transition: LegacyProcessTransition<BlockNumber>,
+) -> Result<ActorProcess<BlockNumber>, ProcessTransitionError> {
+  let coherent = matches!(
+    (current.status, current.residence),
+    (ProcessStatus::Serving, Some(_))
+      | (ProcessStatus::Disabled(_), None)
+      | (ProcessStatus::Retired(_), None)
+  );
+  if !coherent {
+    return Err(ProcessTransitionError::InvalidCurrentProcess);
+  }
+
+  match (obligation, transition) {
+    (
+      ProcessTransitionObligation::PublishTypedResidence,
+      LegacyProcessTransition::Publish(next),
+    )
+    | (
+      ProcessTransitionObligation::AtomicSuccessorOrRemoval,
+      LegacyProcessTransition::Replace(Some(next)),
+    ) => compile_legacy_process(current.generation, current.last_attempted, next)
+      .map_err(ProcessTransitionError::Compile),
+    (ProcessTransitionObligation::PreserveProcess, LegacyProcessTransition::Preserve)
+    | (ProcessTransitionObligation::CarrierOnly, LegacyProcessTransition::CarrierOnly) => {
+      Ok(current)
+    }
+    (
+      ProcessTransitionObligation::AtomicSuccessorOrRemoval,
+      LegacyProcessTransition::Replace(None),
+    ) => Err(ProcessTransitionError::DetachWithoutSuccessor),
+    (
+      ProcessTransitionObligation::AtomicSuccessorOrRemoval
+      | ProcessTransitionObligation::RetireOrDisable,
+      LegacyProcessTransition::Disable(disablement),
+    ) => Ok(ActorProcess {
+      generation: current.generation,
+      last_attempted: current.last_attempted,
+      status: ProcessStatus::Disabled(disablement),
+      residence: None,
+    }),
+    (
+      ProcessTransitionObligation::AtomicSuccessorOrRemoval
+      | ProcessTransitionObligation::RetireOrDisable,
+      LegacyProcessTransition::Retire(reason),
+    ) => Ok(ActorProcess {
+      generation: current.generation,
+      last_attempted: current.last_attempted,
+      status: ProcessStatus::Retired(reason),
+      residence: None,
+    }),
+    _ => Err(ProcessTransitionError::ObligationMismatch),
+  }
+}
+
 pub const ACTOR_RUN_PAYLOAD_HASH_DOMAIN: &[u8] = b"DEOS_ACTOR_RUN_PAYLOAD";
+pub const PIPELINE_SERVICE_IDENTITY_HASH_DOMAIN: &[u8] = b"DEOS_PIPELINE_SERVICE_IDENTITY";
+
+pub fn pipeline_service_identity(admission_identity: [u8; 32]) -> [u8; 32] {
+  (PIPELINE_SERVICE_IDENTITY_HASH_DOMAIN, admission_identity)
+    .using_encoded(frame::hashing::blake2_256)
+}
 
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
@@ -413,6 +796,7 @@ pub struct ActorRunAuthority<Hash> {
   pub semantic_contract_id: Hash,
   pub body_commitment: Hash,
   pub admission_identity: Hash,
+  pub pipeline_service_identity: Hash,
 }
 
 #[derive(
@@ -423,8 +807,6 @@ pub struct ActorRunHead<BlockNumber> {
   pub payload_commitment: [u8; 32],
   pub cycle_nonce: u64,
   pub cursor: u32,
-  pub opening_predicate_cursor: u32,
-  pub opening_predicate_result_count: u32,
   pub unsuccessful_attempts_at_cursor: u32,
   pub last_attempt_block: BlockNumber,
   pub last_committed_step_block: Option<BlockNumber>,
@@ -446,19 +828,15 @@ impl<BlockNumber> ActorRunHead<BlockNumber> {
         semantic_contract_id,
         body_commitment,
         admission_identity,
+        pipeline_service_identity: pipeline_service_identity(admission_identity),
       }
-  }
-
-  fn opening_predicate_cursor_is_coherent(&self) -> bool {
-    self.opening_predicate_cursor <= self.opening_predicate_result_count
   }
 
   pub fn running_is_coherent(&self) -> bool
   where
     BlockNumber: PartialOrd,
   {
-    self.opening_predicate_cursor_is_coherent()
-      && self.suspension.is_none()
+    self.suspension.is_none()
       && self
         .last_committed_step_block
         .as_ref()
@@ -466,103 +844,57 @@ impl<BlockNumber> ActorRunHead<BlockNumber> {
   }
 
   pub fn suspension_is_coherent(&self) -> bool {
-    self.opening_predicate_cursor_is_coherent()
-      && matches!(
-        (&self.last_step_outcome, self.suspension),
-        (
-          Some(StepOutcome::FundingUnavailable),
-          Some(SuspensionReason::FundingUnavailable)
-        ) | (
-          Some(StepOutcome::Failed(crate::TaskFailure {
-            retry: crate::RetryClass::Temporary,
-            ..
-          })),
-          Some(SuspensionReason::Temporary)
-        )
+    matches!(
+      (&self.last_step_outcome, self.suspension),
+      (
+        Some(StepOutcome::FundingUnavailable),
+        Some(SuspensionReason::FundingUnavailable)
+      ) | (
+        Some(StepOutcome::Failed(crate::TaskFailure {
+          retry: crate::RetryClass::Temporary,
+          ..
+        })),
+        Some(SuspensionReason::Temporary)
       )
+    )
   }
 }
 
 #[derive(Debug, Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(
-  MaxSnapshotEntries,
-  MaxFundingTrackedAssets,
-  MaxOpeningPredicateResults
-))]
-pub struct ActorRunPayload<
-  AssetId,
-  Balance,
-  MaxSnapshotEntries: Get<u32>,
-  MaxFundingTrackedAssets: Get<u32>,
-  MaxOpeningPredicateResults: Get<u32>,
-> {
+#[scale_info(skip_type_params(MaxSnapshotEntries))]
+pub struct ActorRunPayload<AssetId, Balance, MaxSnapshotEntries: Get<u32>> {
   pub opening_snapshot: BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>,
-  pub opening_predicate_results:
-    BoundedVec<Result<bool, PredicateError>, MaxOpeningPredicateResults>,
-  pub funding_snapshot: BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>,
 }
 
 #[derive(Debug, Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(
-  MaxSnapshotEntries,
-  MaxFundingTrackedAssets,
-  MaxOpeningPredicateResults
-))]
-pub struct ActorRunState<
-  AssetId,
-  Balance,
-  BlockNumber,
-  MaxSnapshotEntries: Get<u32>,
-  MaxFundingTrackedAssets: Get<u32>,
-  MaxOpeningPredicateResults: Get<u32>,
-> {
+#[scale_info(skip_type_params(MaxSnapshotEntries))]
+pub struct ActorRunState<AssetId, Balance, BlockNumber, MaxSnapshotEntries: Get<u32>> {
   pub contract_authority: ActorRunAuthority<[u8; 32]>,
   pub cycle_nonce: u64,
   pub cursor: u32,
-  pub opening_predicate_cursor: u32,
   pub unsuccessful_attempts_at_cursor: u32,
   pub last_attempt_block: BlockNumber,
   pub last_committed_step_block: Option<BlockNumber>,
   pub eligible_at: BlockNumber,
   pub opening_snapshot: BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>,
-  pub opening_predicate_results:
-    BoundedVec<Result<bool, PredicateError>, MaxOpeningPredicateResults>,
-  pub funding_snapshot: BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>,
   pub cumulative_outcomes: OutcomeTotals,
   pub last_step_outcome: Option<StepOutcome>,
   pub suspension: Option<SuspensionReason>,
 }
 
-impl<
-  AssetId: Clone + Ord,
-  Balance: Clone,
-  BlockNumber: Clone,
-  MaxSnapshotEntries: Get<u32>,
-  MaxFundingTrackedAssets: Get<u32>,
-  MaxOpeningPredicateResults: Get<u32>,
-> Clone
-  for ActorRunState<
-    AssetId,
-    Balance,
-    BlockNumber,
-    MaxSnapshotEntries,
-    MaxFundingTrackedAssets,
-    MaxOpeningPredicateResults,
-  >
+impl<AssetId: Clone + Ord, Balance: Clone, BlockNumber: Clone, MaxSnapshotEntries: Get<u32>> Clone
+  for ActorRunState<AssetId, Balance, BlockNumber, MaxSnapshotEntries>
 {
   fn clone(&self) -> Self {
     Self {
       contract_authority: self.contract_authority,
       cycle_nonce: self.cycle_nonce,
       cursor: self.cursor,
-      opening_predicate_cursor: self.opening_predicate_cursor,
       unsuccessful_attempts_at_cursor: self.unsuccessful_attempts_at_cursor,
       last_attempt_block: self.last_attempt_block.clone(),
       last_committed_step_block: self.last_committed_step_block.clone(),
       eligible_at: self.eligible_at.clone(),
       opening_snapshot: self.opening_snapshot.clone(),
-      opening_predicate_results: self.opening_predicate_results.clone(),
-      funding_snapshot: self.funding_snapshot.clone(),
       cumulative_outcomes: self.cumulative_outcomes,
       last_step_outcome: self.last_step_outcome.clone(),
       suspension: self.suspension,
@@ -570,41 +902,17 @@ impl<
   }
 }
 
-impl<
-  AssetId: Encode,
-  Balance: Encode,
-  BlockNumber,
-  MaxSnapshotEntries: Get<u32>,
-  MaxFundingTrackedAssets: Get<u32>,
-  MaxOpeningPredicateResults: Get<u32>,
->
-  ActorRunState<
-    AssetId,
-    Balance,
-    BlockNumber,
-    MaxSnapshotEntries,
-    MaxFundingTrackedAssets,
-    MaxOpeningPredicateResults,
-  >
+impl<AssetId: Encode, Balance: Encode, BlockNumber, MaxSnapshotEntries: Get<u32>>
+  ActorRunState<AssetId, Balance, BlockNumber, MaxSnapshotEntries>
 {
   pub fn into_tiers(
     self,
   ) -> (
     ActorRunHead<BlockNumber>,
-    ActorRunPayload<
-      AssetId,
-      Balance,
-      MaxSnapshotEntries,
-      MaxFundingTrackedAssets,
-      MaxOpeningPredicateResults,
-    >,
+    ActorRunPayload<AssetId, Balance, MaxSnapshotEntries>,
   ) {
-    let opening_predicate_result_count =
-      u32::try_from(self.opening_predicate_results.len()).unwrap_or(u32::MAX);
     let payload = ActorRunPayload {
       opening_snapshot: self.opening_snapshot,
-      opening_predicate_results: self.opening_predicate_results,
-      funding_snapshot: self.funding_snapshot,
     };
     let payload_commitment =
       (ACTOR_RUN_PAYLOAD_HASH_DOMAIN, &payload).using_encoded(frame::hashing::blake2_256);
@@ -614,8 +922,6 @@ impl<
         payload_commitment,
         cycle_nonce: self.cycle_nonce,
         cursor: self.cursor,
-        opening_predicate_cursor: self.opening_predicate_cursor,
-        opening_predicate_result_count,
         unsuccessful_attempts_at_cursor: self.unsuccessful_attempts_at_cursor,
         last_attempt_block: self.last_attempt_block,
         last_committed_step_block: self.last_committed_step_block,
@@ -630,18 +936,10 @@ impl<
 
   pub fn from_tiers(
     head: ActorRunHead<BlockNumber>,
-    payload: ActorRunPayload<
-      AssetId,
-      Balance,
-      MaxSnapshotEntries,
-      MaxFundingTrackedAssets,
-      MaxOpeningPredicateResults,
-    >,
+    payload: ActorRunPayload<AssetId, Balance, MaxSnapshotEntries>,
   ) -> Option<Self> {
     if (ACTOR_RUN_PAYLOAD_HASH_DOMAIN, &payload).using_encoded(frame::hashing::blake2_256)
       != head.payload_commitment
-      || usize::try_from(head.opening_predicate_result_count).ok()
-        != Some(payload.opening_predicate_results.len())
     {
       return None;
     }
@@ -649,14 +947,11 @@ impl<
       contract_authority: head.contract_authority,
       cycle_nonce: head.cycle_nonce,
       cursor: head.cursor,
-      opening_predicate_cursor: head.opening_predicate_cursor,
       unsuccessful_attempts_at_cursor: head.unsuccessful_attempts_at_cursor,
       last_attempt_block: head.last_attempt_block,
       last_committed_step_block: head.last_committed_step_block,
       eligible_at: head.eligible_at,
       opening_snapshot: payload.opening_snapshot,
-      opening_predicate_results: payload.opening_predicate_results,
-      funding_snapshot: payload.funding_snapshot,
       cumulative_outcomes: head.cumulative_outcomes,
       last_step_outcome: head.last_step_outcome,
       suspension: head.suspension,
@@ -674,19 +969,15 @@ impl<
         semantic_contract_id,
         body_commitment,
         admission_identity,
+        pipeline_service_identity: pipeline_service_identity(admission_identity),
       }
-  }
-
-  fn opening_predicate_cursor_is_coherent(&self) -> bool {
-    (self.opening_predicate_cursor as usize) <= self.opening_predicate_results.len()
   }
 
   pub(crate) fn running_is_coherent(&self) -> bool
   where
     BlockNumber: PartialOrd,
   {
-    self.opening_predicate_cursor_is_coherent()
-      && self.suspension.is_none()
+    self.suspension.is_none()
       && self
         .last_committed_step_block
         .as_ref()
@@ -694,20 +985,19 @@ impl<
   }
 
   pub(crate) fn suspension_is_coherent(&self) -> bool {
-    self.opening_predicate_cursor_is_coherent()
-      && matches!(
-        (&self.last_step_outcome, self.suspension),
-        (
-          Some(StepOutcome::FundingUnavailable),
-          Some(SuspensionReason::FundingUnavailable)
-        ) | (
-          Some(StepOutcome::Failed(crate::TaskFailure {
-            retry: crate::RetryClass::Temporary,
-            ..
-          })),
-          Some(SuspensionReason::Temporary)
-        )
+    matches!(
+      (&self.last_step_outcome, self.suspension),
+      (
+        Some(StepOutcome::FundingUnavailable),
+        Some(SuspensionReason::FundingUnavailable)
+      ) | (
+        Some(StepOutcome::Failed(crate::TaskFailure {
+          retry: crate::RetryClass::Temporary,
+          ..
+        })),
+        Some(SuspensionReason::Temporary)
       )
+    )
   }
 }
 
@@ -732,7 +1022,6 @@ pub struct ActorStateHoldBreakdown<Balance> {
   pub contract_head: Balance,
   pub contract_body: Balance,
   pub detector: Balance,
-  pub funding: Balance,
   pub run: Balance,
 }
 
@@ -887,11 +1176,10 @@ pub struct ActorHotState<BlockNumber> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActiveActorState<Identity, Hot, Contract, Funding, RunState> {
+pub struct ActiveActorState<Identity, Hot, Contract, RunState> {
   pub identity: Identity,
   pub hot: Hot,
   pub contract: Contract,
-  pub funding: Funding,
   pub run_state: Option<RunState>,
 }
 

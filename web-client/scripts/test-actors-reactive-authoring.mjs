@@ -53,21 +53,15 @@ const canonicalContract = {
         clauses: [
           [
             {
-              timing: 'Opening',
-              predicate: {
-                type: 'ObservationBelow',
-                feed,
-                threshold: '1000000000000',
-                maxAgeBlocks: 12,
-              },
+              type: 'ObservationBelow',
+              feed,
+              threshold: '1000000000000',
+              maxAgeBlocks: 12,
             },
             {
-              timing: 'Current',
-              predicate: {
-                type: 'BalanceAbove',
-                asset: native,
-                threshold: '99',
-              },
+              type: 'BalanceAbove',
+              asset: native,
+              threshold: '99',
             },
           ],
         ],
@@ -158,14 +152,10 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
   if (!inspection.valid) return;
   assert.equal(inspection.projection.trigger.type, 'ObservationChange');
   assert.deepEqual(
-    inspection.projection.steps[0].precondition[0].map((timed) => [
-      timed.timing.type,
-      timed.predicate.type,
-    ]),
-    [
-      ['Opening', 'ObservationBelow'],
-      ['Current', 'BalanceAbove'],
-    ],
+    inspection.projection.steps[0].precondition[0].map(
+      (predicate) => predicate.type,
+    ),
+    ['ObservationBelow', 'BalanceAbove'],
   );
   assert.equal(inspection.projection.steps[0].task.type, 'SwapIn');
   assert.equal(inspection.projection.steps[0].on_error.type, 'RetryLater');
@@ -239,8 +229,7 @@ test('local projection preserves one-shot readiness, retry, and productive closu
   };
   const notReady = simulateActorLocally({
     ...base,
-    evaluatePredicate(timed, state) {
-      const predicate = timed.predicate;
+    evaluatePredicate(predicate, state) {
       if (predicate.type === 'ObservationBelow') {
         return { kind: 'Value', value: false };
       }
@@ -381,7 +370,7 @@ test('reactive authoring UI exposes every canonical fixture control', async () =
     'SwapIn',
     'RetryLater',
     'Close after productive cycle',
-    'Opening-only Contract',
+    'Zero-Step Contract',
     'Persistent',
     'CrossingUserCapacityExceeded',
     'CrossingIndexCapacityExceeded',

@@ -55,7 +55,6 @@ export type ActorStateHoldView = {
     contractHead: bigint;
     contractBody: bigint;
     detector: bigint;
-    funding: bigint;
     run: bigint;
   };
   total: bigint;
@@ -232,7 +231,6 @@ function projectStateHold(value: unknown): ActorStateHoldView {
     contractHead: asUnsigned(breakdown.contract_head, 'Contract head hold'),
     contractBody: asUnsigned(breakdown.contract_body, 'Contract body hold'),
     detector: asUnsigned(breakdown.detector, 'detector hold'),
-    funding: asUnsigned(breakdown.funding, 'funding hold'),
     run: asUnsigned(breakdown.run, 'run hold'),
   };
   const total = asUnsigned(hold.total, 'Actor state hold total');

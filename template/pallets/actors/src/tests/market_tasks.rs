@@ -242,6 +242,7 @@ fn split_transfer_executes_and_remainder_is_retained() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(50));
     assert_eq!(native_balance(&CHARLIE), charlie_before.saturating_add(50));
@@ -299,6 +300,7 @@ fn split_transfer_rejects_five_ineligible_legs_atomically_then_retries() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
 
     assert_eq!(asset_balance(&actor, asset), actor_before);
@@ -324,7 +326,7 @@ fn split_transfer_rejects_five_ineligible_legs_atomically_then_retries() {
       set_asset_balance(&recipient, asset, 1);
     }
     let retry_balances = recipients.map(|recipient| asset_balance(&recipient, asset));
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
 
     assert_eq!(asset_balance(&actor, asset), actor_before - 80);
@@ -378,6 +380,7 @@ fn split_transfer_late_leg_failure_rolls_back_every_leg() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     set_fail_transfer_to(None);
     assert_eq!(native_balance(&actor), actor_before);
@@ -409,7 +412,7 @@ fn all_zero_split_transfer_total_is_an_explicit_resolution_skip() {
     .expect("legs fit");
     let contract_steps = contract_steps_with_step(make_step(Task::SplitTransfer {
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+      amount: AmountResolution::Percent(Perbill::from_percent(50)),
       legs,
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
@@ -422,6 +425,7 @@ fn all_zero_split_transfer_total_is_an_explicit_resolution_skip() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     // No silent zero-leg transfer: the all-zero total resolves as a skip with no balance read,
     // preflight, or SplitTransferExecuted event, and the cycle continues.
@@ -471,6 +475,7 @@ fn split_transfer_rounding_skips_zero_distribution_and_allows_one_effective_leg(
       RuntimeOrigin::signed(ALICE),
       skipped
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -497,6 +502,7 @@ fn split_transfer_rounding_skips_zero_distribution_and_allows_one_effective_leg(
       RuntimeOrigin::signed(ALICE),
       one_effective,
     ));
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert!(has_actor_event(|event| matches!(
       event,
@@ -540,46 +546,9 @@ fn on_address_event_asset_filter_is_enforced() {
       100,
       &ALICE
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(10));
-  });
-}
-
-#[test]
-fn cadence_rearm_capacity_failure_rolls_back_pipeline_opening() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      timer_schedule(1),
-      None,
-      transfer_contract_steps(BOB, 10),
-    );
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let mut wakeup_meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut wakeup_meter);
-    let ready = Actors::actor_hot(actor_id).expect("Cadenced Actor remains active after detection");
-    assert!(ready.pending_signal);
-    assert!(ready.queue_ticket.is_some());
-    assert!(ready.trigger_wakeup_pointer.is_none());
-    let bob_before = native_balance(&BOB);
-    System::reset_events();
-    crate::WakeupCursorLen::<Test>::insert(
-      WakeupClock::Tick,
-      <<Test as crate::Config>::MaxActiveActors as Get<u32>>::get(),
-    );
-
-    let _ = Actors::execute_cycle(Weight::MAX);
-
-    assert_eq!(native_balance(&BOB), bob_before);
-    let state = Actors::active_actor_state(actor_id).expect("Cadenced Actor remains active");
-    assert_eq!(state.identity.cycle_nonce, 0);
-    assert!(state.hot.pending_signal);
-    assert!(state.hot.trigger_wakeup_pointer.is_none());
-    assert!(!has_actor_event(|event| matches!(
-      event,
-      Event::ActorClosed { actor_id: id, .. } if *id == actor_id
-    )));
   });
 }
 
@@ -638,6 +607,7 @@ fn dex_adapter_receives_authoritative_actor_type() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(last_dex_actor_type(), Some(ActorType::User));
   });
@@ -651,6 +621,7 @@ fn dex_adapter_receives_authoritative_actor_type() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(last_dex_actor_type(), Some(ActorType::System));
   });
@@ -681,6 +652,7 @@ fn full_slippage_cannot_accept_zero_swap_output() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
 
     assert!(!has_actor_event(|event| matches!(
@@ -783,6 +755,7 @@ fn liquidity_tasks_fail_before_effects_when_output_minima_are_unmet() {
     set_asset_balance(&add_actor, TestAsset::Local(1), 10);
     set_asset_balance(&add_actor, TestAsset::Local(2), 10);
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), add_id));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -822,11 +795,92 @@ fn liquidity_tasks_fail_before_effects_when_output_minima_are_unmet() {
       RuntimeOrigin::signed(BOB),
       remove_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::LiquidityRemoved { actor_id, .. } if *actor_id == remove_id
     )));
+  });
+}
+
+#[test]
+fn liquidity_tasks_reject_adapter_outcomes_outside_authored_bounds() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_invalid_liquidity_outcome(true);
+
+    let tasks = [
+      Task::AddLiquidity {
+        asset_a: TestAsset::Local(41),
+        asset_b: TestAsset::Local(42),
+        amount_a: AmountResolution::Fixed(10),
+        amount_b: AmountResolution::Fixed(10),
+        min_lp_out: 1,
+      },
+      Task::RemoveLiquidity {
+        lp_asset: TestAsset::Local(43),
+        asset_a: TestAsset::Local(41),
+        asset_b: TestAsset::Local(42),
+        lp_amount: AmountResolution::Fixed(10),
+        min_amount_a: 1,
+        min_amount_b: 1,
+      },
+      Task::DonateLiquidity {
+        asset_a: TestAsset::Local(41),
+        asset_b: TestAsset::Local(42),
+        max_amount_a: AmountResolution::Fixed(10),
+        max_ratio_error: Perbill::zero(),
+      },
+    ];
+    register_lp_pair(
+      TestAsset::Local(43),
+      TestAsset::Local(41),
+      TestAsset::Local(42),
+    );
+
+    for (index, task) in tasks.into_iter().enumerate() {
+      let base = 1 + index as u64 * 2;
+      frame_system::Pallet::<Test>::set_block_number(base);
+      Actors::on_initialize(base);
+      let actor_id = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        contract_steps_with_step(make_step(task)),
+      );
+      let actor = sovereign_account(actor_id);
+      fund_native(actor_id, 1_000);
+      for asset in [
+        TestAsset::Local(41),
+        TestAsset::Local(42),
+        TestAsset::Local(43),
+      ] {
+        set_asset_balance(&actor, asset, 100);
+      }
+      assert_ok!(Actors::manual_trigger(
+        RuntimeOrigin::signed(ALICE),
+        actor_id
+      ));
+      frame_system::Pallet::<Test>::set_block_number(base + 1);
+      Actors::on_initialize(base + 1);
+      run_idle(Weight::MAX);
+      assert!(
+        has_actor_event(|event| matches!(
+          event,
+          Event::StepFailed { actor_id: id, retry_class: RetryClass::Permanent, .. }
+            if *id == actor_id
+        )),
+        "liquidity task {index} accepted an adapter outcome outside its authored bounds"
+      );
+      assert!(!has_actor_event(|event| matches!(
+        event,
+        Event::LiquidityAdded { actor_id: id, .. }
+          | Event::LiquidityRemoved { actor_id: id, .. }
+          | Event::LiquidityDonated { actor_id: id, .. }
+          if *id == actor_id
+      )));
+    }
   });
 }
 
@@ -894,6 +948,13 @@ fn market_tasks_dispatch_their_resolved_task_local_amounts_without_a_system_cap(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(4);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(5);
     run_idle(Weight::MAX);
     assert!(has_actor_event(|event| matches!(
       event,
@@ -965,6 +1026,7 @@ fn swap_out_live_market_mode_uses_preservable_capacity_and_emits_swap_event() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     let out_after = asset_balance(&sovereign, asset_out);
     assert!(out_after >= out_before.saturating_add(100));
@@ -1019,6 +1081,7 @@ fn swap_out_never_spends_above_explicit_input_cap() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
 
     assert_eq!(asset_balance(&sovereign, asset_in), input_before);
@@ -1033,46 +1096,11 @@ fn swap_out_never_spends_above_explicit_input_cap() {
 }
 
 #[test]
-fn ordinary_transfer_updates_accumulator_without_resuming_paused_system_actor() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(100)),
-    }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
-    mutate_actor_hot_coherent(actor_id, |hot| {
-      hot.lifecycle = ActiveLifecycle::Paused;
-    });
-    assert_ok!(ordinary_transfer_to_actor(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      TestAsset::Native,
-      123
-    ));
-    let updated = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(updated.lifecycle, ActiveLifecycle::Paused);
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&123)
-    );
-    assert!(!has_actor_event(|event| {
-      matches!(event, Event::ActorResumed { actor_id: id } if *id == actor_id)
-    }));
-  });
-}
-
-#[test]
 fn zero_amount_resolutions_and_identical_market_assets_are_rejected() {
   new_test_ext().execute_with(|| {
     for amount in [
       AmountResolution::Fixed(0),
-      AmountResolution::PercentageOfCurrent(Perbill::zero()),
-      AmountResolution::PercentageAtOpening(Perbill::zero()),
-      AmountResolution::PercentageOfLastFunding(Perbill::zero()),
+      AmountResolution::Percent(Perbill::zero()),
     ] {
       let plan = contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
@@ -1294,6 +1322,9 @@ fn dex_adapter_late_failure_rolls_back_input_transfer() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&actor), 110);
     assert_eq!(asset_balance(&actor, asset_out), 0);
@@ -1329,7 +1360,7 @@ fn preserve_spend_keeps_sufficient_asset_minimum() {
       make_step(Task::Transfer {
         to: BOB,
         asset,
-        amount: AmountResolution::AllAvailable,
+        amount: AmountResolution::Percent(Perbill::one()),
       }),
     ])
     .expect("system execution plan fits");
@@ -1340,6 +1371,9 @@ fn preserve_spend_keeps_sufficient_asset_minimum() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset), 1);
     assert_eq!(asset_balance(&BOB, asset), 9);
@@ -1362,6 +1396,7 @@ fn stake_task_delegates_to_staking_adapter() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset), 80);
     assert_eq!(staked_balance(actor, asset), 120);
@@ -1389,6 +1424,7 @@ fn unstake_task_delegates_to_staking_adapter() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset), 25);
     assert_eq!(unstaked_shares(actor, asset), 50);
@@ -1401,18 +1437,18 @@ fn unstake_task_delegates_to_staking_adapter() {
 }
 
 #[test]
-fn unstake_dynamic_modes_resolve_against_staking_shares() {
+fn unstake_percentage_resolves_against_current_staking_shares() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(8);
     let contract_steps = BoundedVec::try_from(vec![
       make_step(Task::Unstake {
         asset,
-        shares: AmountResolution::PercentageOfCurrent(Perbill::from_percent(25)),
+        shares: AmountResolution::Percent(Perbill::from_percent(25)),
       }),
       make_step(Task::Unstake {
         asset,
-        shares: AmountResolution::PercentageAtOpening(Perbill::from_percent(50)),
+        shares: AmountResolution::Percent(Perbill::from_percent(50)),
       }),
     ])
     .expect("system execution plan fits");
@@ -1420,9 +1456,16 @@ fn unstake_dynamic_modes_resolve_against_staking_shares() {
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset, 100);
     signal_percentage_trigger(actor_id, asset);
+    // Canonical AddressEvent ingress publishes one Pending Service obligation at B+1, and each
+    // committed Step sets the adjacent-round successor eligible one block later.
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
-    assert_eq!(asset_balance(&actor, asset), 25);
-    assert_eq!(unstaked_shares(actor, asset), 75);
+    assert_eq!(asset_balance(&actor, asset), 75);
+    assert_eq!(unstaked_shares(actor, asset), 25);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+    assert_eq!(asset_balance(&actor, asset), 38);
+    assert_eq!(unstaked_shares(actor, asset), 62);
   });
 }
 
@@ -1455,6 +1498,9 @@ fn stake_adapter_failure_can_continue_next_step() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset), 100);
     assert_eq!(staked_balance(actor, asset), 0);
@@ -1503,6 +1549,7 @@ fn unstake_adapter_failure_aborts_cycle_without_partial_effects() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset), 100);
     assert_eq!(unstaked_shares(actor, asset), 0);
@@ -1550,6 +1597,9 @@ fn unstake_adapter_late_failure_rolls_back_partial_mutation() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&actor), 110);
     assert_eq!(unstaked_shares(actor, asset), 0);
@@ -1589,6 +1639,7 @@ fn donate_liquidity_task_delegates_to_liquidity_donation_adapter() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset_a), 60);
     assert_eq!(asset_balance(&actor, asset_b), 50);
@@ -1622,7 +1673,7 @@ fn donate_liquidity_percentage_resolves_only_against_asset_a() {
     let contract_steps = contract_steps_with_step(make_step(Task::DonateLiquidity {
       asset_a,
       asset_b,
-      max_amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+      max_amount_a: AmountResolution::Percent(Perbill::from_percent(50)),
       max_ratio_error: Perbill::from_percent(1),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
@@ -1633,6 +1684,7 @@ fn donate_liquidity_percentage_resolves_only_against_asset_a() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(donated_liquidity(actor, asset_a, asset_b), (50, 50));
     assert_eq!(asset_balance(&actor, asset_a), 51);
@@ -1652,7 +1704,7 @@ fn donate_liquidity_asset_b_debit_is_capped_at_preservable_capacity() {
     let contract_steps = contract_steps_with_step(make_step(Task::DonateLiquidity {
       asset_a,
       asset_b,
-      max_amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(100)),
+      max_amount_a: AmountResolution::Percent(Perbill::from_percent(100)),
       max_ratio_error: Perbill::from_percent(1),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
@@ -1664,6 +1716,7 @@ fn donate_liquidity_asset_b_debit_is_capped_at_preservable_capacity() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     let (used_a, used_b) = donated_liquidity(actor, asset_a, asset_b);
     assert!(
@@ -1711,6 +1764,9 @@ fn donate_liquidity_asset_b_cap_keeps_capped_task_continuing() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     // The asset-b debit cap caps the balanced donation at the smaller preservable side instead
     // of overdrawing; the capped task succeeds and the cycle continues to the next step.
@@ -1775,6 +1831,9 @@ fn add_liquidity_late_failure_rolls_back_partial_debit() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&actor), actor_native_before - 10);
     assert_eq!(asset_balance(&actor, asset_b), 100);
@@ -1826,6 +1885,9 @@ fn remove_liquidity_late_failure_rolls_back_partial_credit() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&actor), actor_native_before - 10);
     assert_eq!(asset_balance(&actor, lp_asset), 100);
@@ -1870,6 +1932,7 @@ fn donate_liquidity_adapter_failure_aborts_cycle_without_partial_effects() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset_a), 100);
     assert_eq!(asset_balance(&actor, asset_b), 100);
@@ -1922,6 +1985,9 @@ fn donate_liquidity_adapter_late_failure_rolls_back_partial_mutation() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&actor), 110);
     assert_eq!(asset_balance(&actor, asset_b), 100);
@@ -1943,11 +2009,11 @@ fn donate_liquidity_adapter_late_failure_rolls_back_partial_mutation() {
 }
 
 #[test]
-fn user_dca_swap_then_cold_storage_transfer() {
+fn user_swap_then_cold_storage_transfer() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let cold_wallet: AccountId = 9999;
-    let schedule = timer_schedule(5);
+    let schedule = manual_schedule();
     let foreign = TestAsset::Local(1);
     // Seed mock AMM pool for swap
     setup_pool(foreign, TestAsset::Native, 10_000, 10_000);
@@ -1977,7 +2043,7 @@ fn user_dca_swap_then_cold_storage_transfer() {
         task: Task::Transfer {
           to: cold_wallet,
           asset: TestAsset::Native,
-          amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(80)),
+          amount: AmountResolution::Percent(Perbill::from_percent(80)),
         },
         on_error: StepErrorPolicy::ContinueNextStep,
       },
@@ -1988,11 +2054,13 @@ fn user_dca_swap_then_cold_storage_transfer() {
     set_asset_balance(&actor, foreign, 1000);
     fund_native(actor_id, 5000);
     let cold_before = native_balance(&cold_wallet);
-    frame_system::Pallet::<Test>::set_block_number(6);
-    Actors::on_initialize(6);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
-    frame_system::Pallet::<Test>::set_block_number(7);
-    Actors::on_initialize(7);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert!(
       native_balance(&cold_wallet) > cold_before,
@@ -2005,41 +2073,5 @@ fn user_dca_swap_then_cold_storage_transfer() {
       )),
       "Swap should be executed"
     );
-  });
-}
-
-#[test]
-fn multi_asset_contract_steps_tracks_all_referenced_assets() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let foreign_a = TestAsset::Local(1);
-    let foreign_b = TestAsset::Local(2);
-    // ContractSteps references both assets via PercentageOfLastFunding
-    let contract_steps = BoundedVec::try_from(vec![
-      StepOf::<Test> {
-        precondition: None,
-        task: Task::Transfer {
-          to: BOB,
-          asset: foreign_a,
-          amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(10)),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      },
-      StepOf::<Test> {
-        precondition: None,
-        task: Task::Transfer {
-          to: CHARLIE,
-          asset: foreign_b,
-          amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(20)),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      },
-    ])
-    .unwrap();
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
-    let funding = actor_funding(actor_id);
-    // Verify both assets are tracked
-    assert!(funding.funding_tracked_assets.contains(&foreign_a));
-    assert!(funding.funding_tracked_assets.contains(&foreign_b));
   });
 }

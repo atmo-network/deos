@@ -4,6 +4,13 @@
 >
 > Each release keeps at most 8 outcome records of at most 512 characters.
 
+## 0.7.27: Canonical Actor Service Convergence
+
+- `Actors / Sole Scheduler Authority`: Removed the retired paged Ready/Waiting executor, overdue wakeup worker, duplicate fault/control surfaces, unreachable benchmark adapters, and eleven legacy Weight methods; canonical Service/Deadline residence now owns ordinary execution, temporal recovery, simulation, lifecycle cleanup, and bounded materialization.
+- `Actors / Complete Weight Ownership`: Added six complete canonical outer owners for successful service, retry, due recovery, late refusal rollback, terminal close, and minimal apoptosis; replaced the final paged Queue fee with measured `service_round_admit_eligible`; and generated every retained production profile at 50 steps × 20 repeats.
+- `Actors / Current Amount Semantics`: Bound `Percent` to current Available balance on every attempt, retired nonzero Opening amount-capture benchmarks and Weight models as Historical evidence, and retained only the measured zero-result Opening traversal owner.
+- `Runtime / Production Binding`: Published Actors runtime Weight SHA-256 `9f7af7f4…`, raised the Crossing worker envelope to the measured 20% requirement, reconciled exact resource/throughput ledgers, and rebound production Wasm SHA-256 `27238795…` with passing native and exact-Wasm control-attribution evidence.
+
 ## 0.7.26: Evidence-Driven Actor Efficiency
 
 - `Actors / Crossing Efficiency`: Retained the placed pair-owner fallback as the Crossing admission path: the steady cycle moves `12 → 16` at unchanged cycle ProofSize, and the declared 48-member funded User witness completes at block `12` instead of `14` (Trigger-to-completion mean `9.46 → 8.67`, p95 `14 → 12`) with charged Actor Control `−13.0%` RefTime / `−10.1%` ProofSize, unchanged effect totals, and the deeper queue span `22 → 29` as the stated cost.

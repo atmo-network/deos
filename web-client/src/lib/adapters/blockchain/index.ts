@@ -129,22 +129,6 @@ function automationContinuationSnapshot(
   };
 }
 
-function automationFundingAccumulated(
-  funding: unknown,
-): ReadonlyArray<[string, bigint]> {
-  const value = triggerRecord(funding);
-  const accumulated = value?.funding_accumulated;
-  if (!Array.isArray(accumulated)) {
-    return [];
-  }
-  return accumulated.flatMap((entry) => {
-    if (!Array.isArray(entry) || entry.length !== 2) return [];
-    const [asset, amount] = entry;
-    if (typeof amount !== 'bigint') return [];
-    return [[String(asset), amount]];
-  });
-}
-
 function automationFundingSourcePolicy(policy: unknown): string | null {
   const value = triggerRecord(policy);
   return typeof value?.type === 'string' ? value.type : null;
@@ -462,7 +446,7 @@ export class BlockchainAdapter implements Adapter {
       return await Promise.all(
         KNOWN_SYSTEM_ACTORS.map(async (actor) => {
           const runtimeActorId = BigInt(actor.actorId);
-          const [control, contractHead, runHead, funding] = await Promise.all([
+          const [control, contractHead, runHead] = await Promise.all([
             readActorControlProjection(
               snapshot.typedApi,
               snapshot.at,
@@ -473,10 +457,6 @@ export class BlockchainAdapter implements Adapter {
               { at: snapshot.at },
             ),
             snapshot.typedApi.query.Actors.ActorRunHead.getValue(
-              runtimeActorId,
-              { at: snapshot.at },
-            ),
-            snapshot.typedApi.query.Actors.ActorFunding.getValue(
               runtimeActorId,
               { at: snapshot.at },
             ),
@@ -493,15 +473,12 @@ export class BlockchainAdapter implements Adapter {
             snapshot.at,
             actor.actorId,
           );
-          if (
-            control.status === 'Active' &&
-            (contractHead == null || funding == null)
-          ) {
+          if (control.status === 'Active' && contractHead == null) {
             throw new Error('Active Actor is missing canonical cold state');
           }
           if (
             control.status !== 'Active' &&
-            (contractHead != null || runHead != null || funding != null)
+            (contractHead != null || runHead != null)
           ) {
             throw new Error('Inactive Actor retains orphan active state');
           }
@@ -542,7 +519,6 @@ export class BlockchainAdapter implements Adapter {
               control.status === 'Active' && control.location.type === 'Ready'
                 ? control.location.value.ticket
                 : null,
-            fundingAccumulated: automationFundingAccumulated(funding),
             fundingSourcePolicy: automationFundingSourcePolicy(
               contractHead?.header.funding,
             ),

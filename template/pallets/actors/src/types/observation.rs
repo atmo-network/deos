@@ -1,5 +1,5 @@
+use super::ObservationValue;
 use super::lifecycle::ActorId;
-use super::{ObservationValue, WakeupWorkerFault};
 use frame::prelude::*;
 
 pub type ObservationRevision = u64;
@@ -204,10 +204,9 @@ pub struct CrossingCapacity {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
 )]
-pub struct MaterializationFaults<FeedId, BlockNumber> {
+pub struct MaterializationFaults<FeedId> {
   pub crossing: Option<CrossingWorkerFault<FeedId>>,
   pub fanout: Option<ObservationFanoutWorkerFault<FeedId>>,
-  pub wakeup: Option<WakeupWorkerFault<BlockNumber>>,
 }
 
 #[derive(
@@ -268,7 +267,6 @@ pub enum CrossingWorkPlan {
   FireCohortCoalescedPair,
   FireCohortCoalesced,
   FireCohortPlaced,
-  FireCohortClosed,
   StructuralFault,
 }
 

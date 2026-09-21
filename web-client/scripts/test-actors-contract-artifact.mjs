@@ -58,11 +58,8 @@ test('ActorContract encodes and projects every nested value losslessly', () => {
         precondition: [
           [
             {
-              timing: { type: 'Current', value: undefined },
-              predicate: {
-                type: 'BlockNumberAbove',
-                value: { threshold: 1 },
-              },
+              type: 'BlockNumberAbove',
+              value: { threshold: 1 },
             },
           ],
         ],
@@ -101,21 +98,15 @@ test('ActorContract encodes and projects every nested value losslessly', () => {
   }
 });
 
-test('DNF timing and clause topology change canonical identity and remain diff-visible', () => {
-  const makeArtifact = (timing, separateClauses = false) => {
+test('DNF predicate and clause topology change canonical identity and remain diff-visible', () => {
+  const makeArtifact = (predicateType, separateClauses = false) => {
     const predicate = {
-      timing: { type: timing, value: undefined },
-      predicate: {
-        type: 'BlockNumberAbove',
-        value: { threshold: 1 },
-      },
+      type: predicateType,
+      value: { threshold: 1 },
     };
     const second = {
-      timing: { type: 'Current', value: undefined },
-      predicate: {
-        type: 'BlockNumberBelow',
-        value: { threshold: 10 },
-      },
+      type: 'BlockNumberBelow',
+      value: { threshold: 10 },
     };
     const precondition = separateClauses
       ? [[predicate], [second]]
@@ -142,9 +133,9 @@ test('DNF timing and clause topology change canonical identity and remain diff-v
     });
   };
   const inspected = [
-    makeArtifact('Opening'),
-    makeArtifact('Current'),
-    makeArtifact('Current', true),
+    makeArtifact('BlockNumberAbove'),
+    makeArtifact('BlockNumberBelow'),
+    makeArtifact('BlockNumberAbove', true),
   ].map((artifact) => {
     const inspection = inspectActorContractArtifact(
       artifact,
@@ -167,9 +158,9 @@ test('DNF timing and clause topology change canonical identity and remain diff-v
       changedMode.changes.some(
         (change) =>
           change.kind === 'replace' &&
-          change.path.includes('/precondition/0/0/timing/type') &&
-          change.before === 'Opening' &&
-          change.after === 'Current',
+          change.path.includes('/precondition/0/0/type') &&
+          change.before === 'BlockNumberAbove' &&
+          change.after === 'BlockNumberBelow',
       ),
     );
   }

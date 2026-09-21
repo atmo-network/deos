@@ -9,7 +9,7 @@ PRODUCTION_RUNTIME_WASM="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_r
 STEPS=50
 REPEAT=20
 MIN_DURATION=""
-HEAP_PAGES=4096
+HEAP_PAGES=8192
 CHAIN="dev"
 INCLUDE_EXTRA_BENCHMARKS=0
 PALLETS=(
@@ -68,7 +68,7 @@ Examples:
   $(basename "$0") pallet_deos_router        # Benchmark one pallet
   $(basename "$0") --check                    # Verify compilation only
   $(basename "$0") --extra pallet_deos_actors         # Include Actors diagnostics
-  $(basename "$0") --extrinsic scheduler_wakeup_replace_exact --output /tmp/wakeup.rs pallet_deos_actors
+  $(basename "$0") --extrinsic scheduler_wakeup_append_new_page --output /tmp/wakeup.rs pallet_deos_actors
   $(basename "$0") --steps 100 --repeat 50 --all  # Production-quality run
 
 Environment:
@@ -397,28 +397,32 @@ verify_weight_file_contract() {
 
     local required_runtime_benchmarks=(
         "scheduler_actor_state_probe"
-        "scheduler_paged_append_existing_page"
-        "scheduler_paged_append_new_page"
-        "scheduler_wakeup_append_existing_page"
+        "scheduler_service_successful_interior"
+        "scheduler_service_retry_to_deadline"
+        "scheduler_due_deadline_to_service"
+        "scheduler_service_late_refusal_rollback"
+        "scheduler_service_terminal_retain_close"
+        "scheduler_service_minimal_apoptosis"
+        "service_member_publish_empty"
+        "service_member_publish_populated"
+        "service_member_retire_singleton"
+        "service_member_retire_pair_cursor"
+        "service_member_retire_interior"
+        "service_member_insert_populated"
+        "service_round_begin_populated"
+        "service_round_probe_eligible"
+        "service_round_admit_eligible"
+        "dependency_publication_begun_empty_source_list"
+        "dependency_publication_begun_populated_source_list"
+        "dependency_publication_coalesced_active_source"
         "scheduler_wakeup_append_new_page"
-        "scheduler_wakeup_replace_exact"
-        "scheduler_wakeup_invalidate_middle_page"
         "scheduler_wakeup_cursor_insert"
-        "scheduler_wakeup_cursor_pop_min"
         "scheduler_wakeup_cursor_remove_exact"
-        "scheduler_wakeup_cursor_worker_partial"
-        "scheduler_wakeup_cursor_worker_remove"
-        "scheduler_wakeup_cursor_worker_future"
-        "scheduler_paged_consume_preserve_page"
-        "scheduler_paged_consume_delete_page"
-        "scheduler_paged_tombstone_drain"
-        "scheduler_paged_mixed_scan"
         "transaction_extension_ingress_base"
         "transaction_extension_ingress_notify"
         "run_suspend"
         "record_crossing_worker_fault"
         "record_observation_fanout_worker_fault"
-        "record_wakeup_worker_fault"
         "crossing_worker_base"
         "crossing_transition_unit"
         "crossing_leaf_unit"
@@ -427,14 +431,7 @@ verify_weight_file_contract() {
         "predicate_set_evaluation"
         "predicate_asset_evaluation"
         "predicate_observation_heavy_evaluation"
-        "opening_predicate_traversal"
-        "opening_predicate_capture"
-        "opening_max_encoded_balance_capture"
-        "opening_observation_heavy_capture"
         "opening_snapshot_traversal"
-        "opening_snapshot_capture"
-        "opening_target_snapshot_capture"
-        "opening_share_mixed_capture"
         "observation_fanout_blocked_page"
     )
     for benchmark in "${required_runtime_benchmarks[@]}"; do

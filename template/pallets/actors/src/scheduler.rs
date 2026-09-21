@@ -1,9 +1,9 @@
 use super::pallet::*;
 use super::{
   AddressEvent, AssetOps, BlockResourceDomain, BlockResourceLimits, BlockResourceState,
-  CanonicalObservationState, FundingAuthority, IngressFailure, ObservationProvider,
-  StepControlExecution, StepControlOutcome, StepControlPhase, StepControlPlacement,
-  StepControlWeightProvider as _, TaskEffectWeightProvider as _, weights::WeightInfo,
+  CanonicalObservationState, IngressFailure, RetryClass, StepControlExecution, StepControlOutcome,
+  StepControlPhase, StepControlPlacement, StepControlWeightContext, StepControlWeightProvider as _,
+  TaskEffectWeightProvider as _, weights::WeightInfo,
 };
 #[cfg(test)]
 use alloc::vec;
@@ -19,21 +19,54 @@ enum QueueMutation {
   Head,
 }
 
+/// Storage-free classification of the next physical residence. Publication is
+/// deliberately separate so canonical and legacy carriers can consume the
+/// same current-state decision without transiently creating dual authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NextWorkPlan<BlockNumber> {
+  Disabled(ProcessDisablement<BlockNumber>),
+  Service(ServiceResidenceKind),
+  Wakeup(BlockNumber),
+}
+
+/// Complete generation-bound destination selected before the atomic carrier
+/// cut. This plan owns no storage and cannot become a second committer.
+#[allow(
+  dead_code,
+  reason = "destination plan remains inert until the atomic carrier cutover"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlannedProcessDestination<BlockNumber> {
+  Disabled(ActorProcess<BlockNumber>),
+  Service {
+    process: ActorProcess<BlockNumber>,
+    admission_round: BlockNumber,
+  },
+  Deadline {
+    process: ActorProcess<BlockNumber>,
+    handle: DeadlineHandle<BlockNumber>,
+  },
+}
+
+/// Storage-free publication plan for the two independent physical obligations
+/// owned by one active Actor: exactly one process residence and, when its
+/// temporal Trigger is armed, one additional Tick deadline.
+#[allow(
+  dead_code,
+  reason = "composite publication remains inert until the atomic carrier cutover"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PlannedActorPublication<BlockNumber> {
+  hot: ActorHotState<BlockNumber>,
+  process: PlannedProcessDestination<BlockNumber>,
+  trigger_deadline: Option<DeadlineHandle<BlockNumber>>,
+  resources: ActorStepResourceEnvelope,
+}
+
 struct QueueTopology {
   head: QueueTicket,
   tail: QueueTicket,
   occupancy: u32,
-}
-
-enum ReadyHeadOwner<T: Config> {
-  #[cfg(any(test, feature = "runtime-benchmarks"))]
-  DiscoverCanonical,
-  Loaded {
-    actor_id: ActorId,
-    ticket: QueueTicket,
-    hot: ActorHotStateOf<T>,
-  },
-  ClosedTombstone,
 }
 
 pub(crate) struct QueueAppendPlan<T: Config> {
@@ -47,55 +80,60 @@ struct PreparedReadyPublication<T: Config> {
   cell: ActorControlCellOf<T>,
 }
 
-#[derive(Clone, Copy)]
-enum TerminalCleanupReservation {
-  Included,
-  NotIncluded,
+/// Carrier-neutral semantic result and next-residence intent of one effectful
+/// Step attempt. The legacy FIFO adapter consumes this result and owns physical
+/// placement; the execution core does not publish scheduler authority.
+struct EffectfulStepTransition<T: Config> {
+  plan: CurrentStepPlanOf<T>,
+  execution_instance: ActiveActorViewOf<T>,
+  step: StepOf<T>,
+  control_context: StepControlWeightContext,
+  reserved_control_weight: Weight,
+  reserved_effect_weight: Weight,
+  effect_execution: super::TaskEffectExecution,
+  disposition: AttemptDisposition,
+  attempt: ActorAttemptEvidence,
+  next_residence: NextResidence<T>,
+  eligible_at: Option<BlockNumberFor<T>>,
 }
 
-impl TerminalCleanupReservation {
-  fn is_included(self) -> bool {
-    matches!(self, Self::Included)
-  }
+/// Carrier-neutral intent selected after a semantic transition. The legacy
+/// FIFO adapter may realize this intent physically or fail closed when its
+/// scheduler namespace is exhausted.
+enum NextResidence<T: Config> {
+  Close {
+    state: ActiveActorStateOf<T>,
+    reason: CloseReason,
+  },
+  Publish {
+    state: ActiveActorStateOf<T>,
+  },
+}
+
+/// Carrier-neutral semantic result of completing an admitted empty Contract.
+/// The legacy FIFO adapter decides whether the still-live Actor is closed or
+/// republished after the semantic cycle has completed.
+struct ZeroStepTransition<T: Config> {
+  next_residence: NextResidence<T>,
+  cycle_nonce: u64,
 }
 
 #[derive(Clone, Copy)]
-enum ServiceCutoff {
+pub(crate) enum ServiceCutoff {
   Open,
+  #[cfg(test)]
   Snapshotted,
-}
-
-#[derive(Clone, Copy)]
-pub enum WakeupBucketDisposition {
-  Retain,
-  Remove,
 }
 
 impl ServiceCutoff {
   fn is_snapshotted(self) -> bool {
-    matches!(self, Self::Snapshotted)
+    #[cfg(test)]
+    {
+      return matches!(self, Self::Snapshotted);
+    }
+    #[cfg(not(test))]
+    false
   }
-}
-
-enum AdmissionDecision {
-  Admit {
-    weight: Weight,
-    terminal_cleanup: TerminalCleanupReservation,
-    opening_observation: Option<CanonicalObservationState>,
-  },
-  Close {
-    reason: CloseReason,
-    weight: Weight,
-  },
-  Refuse(CompleteEntryOwner),
-  Defer,
-  Skip,
-  Invariant,
-}
-
-#[derive(Clone, Copy)]
-enum CompleteEntryOwner {
-  CrossingUnavailable,
 }
 
 /// Closed outcome of one canonical FIFO placement attempt. Queue capacity
@@ -118,53 +156,17 @@ pub enum EnqueueOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ActivationOutcome {
   IgnoredStale,
-  Coalesced,
   Latched,
-  Closed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ObservationActivationOutcome {
   Ordinary(ActivationOutcome),
-  TerminalDeferred,
 }
 
-#[derive(Clone, Copy)]
-enum ObservationTerminalHandling {
-  Execute,
-  Defer,
-}
-
-pub(crate) struct ObservationQueueCandidate<T: Config> {
-  state: ObservationActivationState<T>,
-  hot: ActorHotStateOf<T>,
-}
-
-pub(crate) struct ObservationWakeupCandidate<T: Config> {
-  state: ObservationActivationState<T>,
-  hot: ActorHotStateOf<T>,
-  wakeup_key: WakeupKey<BlockNumberFor<T>>,
-}
-
-pub(crate) enum ObservationPlacementCandidate<T: Config> {
-  Queue(ObservationQueueCandidate<T>),
-  Wakeup(ObservationWakeupCandidate<T>),
-}
-
-impl<T: Config> ObservationPlacementCandidate<T> {
-  pub(crate) fn wakeup_key(&self) -> Option<WakeupKey<BlockNumberFor<T>>> {
-    match self {
-      Self::Queue(_) => None,
-      Self::Wakeup(candidate) => Some(candidate.wakeup_key),
-    }
-  }
-}
-
-/// Typed activation failure. Temporary pressure preserves the producer's
-/// retryable work; permanent corruption fails the enclosing transition closed.
+/// Typed activation failure. Permanent corruption fails the enclosing transition closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ActivationFailure {
-  Temporary(DispatchError),
   Permanent(DispatchError),
 }
 
@@ -174,52 +176,14 @@ impl From<DispatchError> for ActivationFailure {
   }
 }
 
-pub(crate) enum PrimeSchedulePlan<BlockNumber> {
-  None,
-  Enqueue,
-  BlockWakeup(BlockNumber),
-}
-
-pub(crate) enum ActivationAction<T: Config> {
-  Close(CloseReason),
-  CoalesceLive,
-  EnqueueReady(Result<QueueAppendPlan<T>, EnqueueOutcome>),
-  EnqueueTemporal(Result<QueueAppendPlan<T>, EnqueueOutcome>),
-  PrimeSchedule(Result<PrimeSchedulePlan<BlockNumberFor<T>>, EnqueueOutcome>),
-}
-
-/// Synchronous transition authority: commit before any intervening Actor mutation.
-pub(crate) struct ActivationPlan<T: Config> {
-  pub actor_id: ActorId,
-
-  pub frame_admission: ActorAdmissionCertificateOf<T>,
-  pub frame_source_state: ActiveActorStateOf<T>,
-  pub already_pending: bool,
-  pub prospective_hot: ActorHotStateOf<T>,
-  pub instance: ActiveActorViewOf<T>,
-  pub terminal_reason: Option<CloseReason>,
-  pub action: ActivationAction<T>,
-}
-
 const MAX_RETRY_BACKOFF_BLOCKS: u32 = 8;
 
 #[cfg(test)]
 std::thread_local! {
-  static CORRUPT_QUEUE_BEFORE_CLOSE_CONSUME: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
   static FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
   static QUEUE_APPEND_COMMITS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
-  static OBSERVATION_WAKEUP_COHORT_COMMITS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
   static CROSSING_CURSOR_COMMITS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
   static FIRST_CROSSING_BRANCH_WEIGHT: core::cell::Cell<Option<Weight>> = const { core::cell::Cell::new(None) };
-}
-
-/// Why the actor pass stopped at a queue boundary. Only a weight block over live FIFO work with
-/// no admitted attempt drives `IdleStarvationState`; every other reason clears it once (spec 8.6).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BlockKind {
-  Weight,
-  FeeCollection,
-  NonWeight,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -248,7 +212,6 @@ pub(crate) enum ActorWaitingAuthority {
 }
 
 pub(crate) struct StepCommitEvidence {
-  pub(crate) closed_for_exhaustion: bool,
   pub(crate) actual_control_weight: Weight,
   pub(crate) actual_effect_weight: Weight,
   pub(crate) attempt: ActorAttemptEvidence,
@@ -291,77 +254,10 @@ impl CyclePass {
   }
 }
 
-enum FifoStepResult {
-  NoWork,
-  Progress {
-    executed: bool,
-    attempt: Option<ActorAttemptEvidence>,
-  },
-  Blocked(BlockKind),
-}
-
-#[derive(Clone, Copy)]
-enum ActorServiceSource {
-  FifoHead,
-  SelectedReady,
-}
-
-#[derive(Clone, Copy)]
-struct ProvisionalEntryAccounting {
-  cycle_before_entry: Weight,
-  control_before_entry: Option<Weight>,
-}
-
-impl ProvisionalEntryAccounting {
-  fn replacement_meter(self, meter: &WeightMeter) -> WeightMeter {
-    WeightMeter::with_consumed_and_limit(self.cycle_before_entry, meter.limit())
-  }
-
-  fn can_settle_complete(
-    self,
-    cycle_meter: &WeightMeter,
-    control_meter: Option<&WeightMeter>,
-    complete_weight: Weight,
-  ) -> bool {
-    let cycle_fits = self
-      .cycle_before_entry
-      .checked_add(&complete_weight)
-      .is_some_and(|consumed| consumed.all_lte(cycle_meter.limit()));
-    let control_fits = match (self.control_before_entry, control_meter) {
-      (None, None) => true,
-      (Some(before), Some(meter)) => before
-        .checked_add(&complete_weight)
-        .is_some_and(|consumed| consumed.all_lte(meter.limit())),
-      _ => false,
-    };
-    cycle_fits && control_fits
-  }
-
-  fn settle_complete(
-    self,
-    cycle_meter: &mut WeightMeter,
-    control_meter: Option<&mut WeightMeter>,
-    complete_weight: Weight,
-  ) {
-    *cycle_meter =
-      WeightMeter::with_consumed_and_limit(self.cycle_before_entry, cycle_meter.limit());
-    cycle_meter.consume(complete_weight);
-    if let (Some(before), Some(meter)) = (self.control_before_entry, control_meter) {
-      *meter = WeightMeter::with_consumed_and_limit(before, meter.limit());
-      meter.consume(complete_weight);
-    }
-  }
-}
-
-enum HeadDiscovery<BlockNumber> {
+enum ServiceHeadDiscovery {
   Empty,
-  Head(
-    QueueTicket,
-    QueueEntry<BlockNumber>,
-    ProvisionalEntryAccounting,
-  ),
-  WeightStall,
-  PassExhausted,
+  Eligible(ActorRef, ServiceResidenceKind),
+  Closed,
   InvariantStall,
 }
 
@@ -389,14 +285,14 @@ impl<T: Config> Pallet<T> {
 
   pub(crate) fn execute_cycle_to_cutoff(
     remaining_weight: Weight,
-    cutoff: QueueTicket,
+    _cutoff: QueueTicket,
   ) -> CyclePass {
-    Self::execute_cycle_to_cutoff_inner(remaining_weight, cutoff, None)
+    Self::execute_cycle_to_cutoff_inner(remaining_weight, None)
   }
 
   pub(crate) fn execute_cycle_to_cutoff_with_resources(
     remaining_weight: Weight,
-    cutoff: QueueTicket,
+    _cutoff: QueueTicket,
     state: &mut BlockResourceState<BlockNumberFor<T>>,
     limits: BlockResourceLimits,
     effect_domain: BlockResourceDomain,
@@ -404,14 +300,12 @@ impl<T: Config> Pallet<T> {
   ) -> CyclePass {
     Self::execute_cycle_to_cutoff_inner(
       remaining_weight,
-      cutoff,
       Some((state, limits, effect_domain, control_maximum)),
     )
   }
 
   fn execute_cycle_to_cutoff_inner(
     remaining_weight: Weight,
-    cutoff: QueueTicket,
     mut resources: Option<(
       &mut BlockResourceState<BlockNumberFor<T>>,
       BlockResourceLimits,
@@ -445,57 +339,66 @@ impl<T: Config> Pallet<T> {
       None => None,
     };
     let mut cycle_meter = WeightMeter::with_limit(remaining_weight);
-    let mut control_meter = resources
-      .as_ref()
-      .map(|(_, _, _, control_maximum)| WeightMeter::with_limit(*control_maximum));
     let now = frame_system::Pallet::<T>::block_number();
-    // Only tickets below the caller-owned stage cutoff may execute in this actor-service pass.
     let max_executions = T::MaxExecutionsPerBlock::get();
     let max_scanned = T::MaxQueueEntriesScannedPerBlock::get();
     let mut executed = 0u32;
     let mut scanned = 0u32;
     let mut effect_consumed = Weight::zero();
-    let mut effect_reconciliation_uncertain = false;
+    let effect_reconciliation_uncertain = false;
     let mut starved = false;
     while executed < max_executions && scanned < max_scanned {
-      let head = Self::live_queue_head(
-        cutoff,
-        &mut cycle_meter,
-        control_meter.as_mut(),
-        &mut scanned,
-        max_scanned,
-      );
-      match head {
-        HeadDiscovery::Empty => break,
-        HeadDiscovery::WeightStall | HeadDiscovery::InvariantStall => {
-          starved = executed == 0;
-          break;
-        }
-        HeadDiscovery::PassExhausted => break,
-        HeadDiscovery::Head(position, entry, accounting) => {
-          match Self::service_live_queue_entry(
-            (position, entry),
-            now,
-            &mut cycle_meter,
-            control_meter.as_mut(),
-            &mut effect_consumed,
-            &mut effect_reconciliation_uncertain,
-            resources
-              .as_mut()
-              .map(|(state, limits, domain, _)| (&mut **state, *limits, *domain)),
-            ActorServiceSource::FifoHead,
-            accounting,
-          ) {
-            FifoStepResult::Progress {
-              executed: did_execute,
-              ..
-            } => executed = executed.saturating_add(u32::from(did_execute)),
-            FifoStepResult::NoWork => continue,
-            FifoStepResult::Blocked(_kind) => {
+      match Self::current_service_head(now) {
+        // The canonical persistent Service ring is the sole ordinary drain. A system with no
+        // canonical resident carries no live work to service; the pre-cutover paged Ready FIFO
+        // is unreachable from fresh-genesis publication and is no longer consulted here.
+        ServiceHeadDiscovery::Empty => break,
+        ServiceHeadDiscovery::Eligible(_actor, _kind) => {
+          let result = match resources.as_mut() {
+            Some((state, limits, domain, _)) => {
+              let effect_before = state.usage().actor_effect_used();
+              let result = Self::service_canonical_round_head_with_reserved_control(
+                &mut cycle_meter,
+                now,
+                &mut **state,
+                *limits,
+                *domain,
+              );
+              if result.is_ok() {
+                let effect = state
+                  .usage()
+                  .actor_effect_used()
+                  .saturating_sub(effect_before);
+                effect_consumed.saturating_accrue(effect);
+              }
+              result
+            }
+            None => Self::service_canonical_round_head(&mut cycle_meter, now),
+          };
+          match result {
+            Ok(ServiceRoundEncounter::Eligible(_)) => {
+              scanned = scanned.saturating_add(1);
+              executed = executed.saturating_add(1);
+              continue;
+            }
+            Ok(ServiceRoundEncounter::NoWork(_)) => {
+              scanned = scanned.saturating_add(1);
+              continue;
+            }
+            Ok(ServiceRoundEncounter::Empty | ServiceRoundEncounter::Closed) => break,
+            Ok(ServiceRoundEncounter::TerminallyClosed(_)) => break,
+            Ok(ServiceRoundEncounter::AlreadyAttempted(_)) => break,
+            Ok(ServiceRoundEncounter::BreakerRefused(_)) => break,
+            Err(_) => {
               starved = executed == 0;
               break;
             }
           }
+        }
+        ServiceHeadDiscovery::Closed => break,
+        ServiceHeadDiscovery::InvariantStall => {
+          starved = executed == 0;
+          break;
         }
       }
     }
@@ -524,103 +427,46 @@ impl<T: Config> Pallet<T> {
     pass
   }
 
-  /// Sole cheap readiness-presence seam for block hooks and FIFO classification. frame replaces the
-  /// backing counters; callers must not inspect scalar head/tail independently.
-  pub(crate) fn ready_work_exists() -> bool {
-    ActorReadyHead::<T>::get() < ActorReadyTail::<T>::get()
-  }
-
-  fn classify_current_queue(cutoff: QueueTicket) -> HeadDiscovery<BlockNumberFor<T>> {
-    if Self::queue_topology_preflight(QueueMutation::Head).is_err() {
-      return HeadDiscovery::InvariantStall;
-    }
-    if !Self::ready_work_exists() {
-      return HeadDiscovery::Empty;
-    }
-    match Self::paged_head_entry() {
-      Some((_, entry)) if entry.ticket >= cutoff => HeadDiscovery::Empty,
-      _ => HeadDiscovery::InvariantStall,
-    }
-  }
-
-  /// Conservatively reports physical pre-cutoff work when the complete loaded-state probe cannot
-  /// be admitted. This path performs no unmetered actor-partition reads; the next funded pass
-  /// decides whether the entry is live, stale, or corrupt.
-  fn head_blocked_by_weight(cutoff: QueueTicket) -> bool {
-    Self::ready_work_exists()
-      && Self::paged_head_entry().is_some_and(|(_, entry)| entry.ticket < cutoff)
-  }
-
-  fn live_queue_head(
-    cutoff: QueueTicket,
-    cycle_meter: &mut WeightMeter,
-    mut scan_control_meter: Option<&mut WeightMeter>,
-    scanned: &mut u32,
-    max_scanned: u32,
-  ) -> HeadDiscovery<BlockNumberFor<T>> {
-    let scan_weight = T::WeightInfo::scheduler_paged_tombstone_drain(1);
-    while *scanned < max_scanned {
-      if Self::queue_topology_preflight(QueueMutation::Head).is_err() {
-        return HeadDiscovery::InvariantStall;
-      }
-      if !cycle_meter.can_consume(scan_weight)
-        || scan_control_meter
-          .as_ref()
-          .is_some_and(|meter| !meter.can_consume(scan_weight))
-      {
-        return if Self::head_blocked_by_weight(cutoff) {
-          HeadDiscovery::WeightStall
-        } else {
-          HeadDiscovery::Empty
-        };
-      }
-      let accounting = ProvisionalEntryAccounting {
-        cycle_before_entry: cycle_meter.consumed(),
-        control_before_entry: scan_control_meter.as_ref().map(|meter| meter.consumed()),
+  fn current_service_head(now: BlockNumberFor<T>) -> ServiceHeadDiscovery {
+    let header = ServiceHeader::<T>::get();
+    let Some(actor) = header.cursor else {
+      return if header.count == 0 {
+        ServiceHeadDiscovery::Empty
+      } else {
+        ServiceHeadDiscovery::InvariantStall
       };
-      cycle_meter.consume(scan_weight);
-      if let Some(meter) = scan_control_meter.as_deref_mut() {
-        meter.consume(scan_weight);
-      }
-      let before = ActorReadyHead::<T>::get();
-      let stats = match Self::paged_drain_tombstones(cutoff, 1) {
-        Ok(stats) => stats,
-        Err(_) => return HeadDiscovery::InvariantStall,
-      };
-      if stats.entries_scanned == 0 {
-        return Self::classify_current_queue(cutoff);
-      }
-      *scanned = scanned.saturating_add(stats.entries_scanned);
-      if ActorReadyHead::<T>::get() != before {
-        continue;
-      }
-      return match Self::paged_head_entry() {
-        Some((position, entry)) if entry.ticket < cutoff => {
-          HeadDiscovery::Head(position, entry, accounting)
+    };
+    if header.count == 0 {
+      return ServiceHeadDiscovery::InvariantStall;
+    }
+    let result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = Self::begin_service_round(now).and_then(|_| Self::consider_service_head(now));
+      match result {
+        Ok(encounter) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(encounter))
         }
-        Some(_) => HeadDiscovery::Empty,
-        None => Self::classify_current_queue(cutoff),
-      };
-    }
-    HeadDiscovery::PassExhausted
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_head_discovery(
-    cutoff: QueueTicket,
-    scan_limit: u32,
-    scanned_start: u32,
-    weight: Weight,
-  ) -> (u8, Option<QueueEntry<BlockNumberFor<T>>>, u32) {
-    let mut meter = WeightMeter::with_limit(weight);
-    let mut scanned = scanned_start;
-    let discovery = Self::live_queue_head(cutoff, &mut meter, None, &mut scanned, scan_limit);
-    match discovery {
-      HeadDiscovery::Empty => (0, None, scanned),
-      HeadDiscovery::Head(_, entry, _) => (1, Some(entry), scanned),
-      HeadDiscovery::WeightStall => (2, None, scanned),
-      HeadDiscovery::InvariantStall => (3, None, scanned),
-      HeadDiscovery::PassExhausted => (4, None, scanned),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    });
+    match result {
+      Ok(ServiceRoundEncounter::Empty) => ServiceHeadDiscovery::Empty,
+      Ok(ServiceRoundEncounter::Eligible(found)) if found == actor => {
+        match ServiceNodes::<T>::get(actor.actor_id) {
+          Some(node) if node.generation == actor.generation => {
+            ServiceHeadDiscovery::Eligible(actor, node.kind)
+          }
+          _ => ServiceHeadDiscovery::InvariantStall,
+        }
+      }
+      Ok(ServiceRoundEncounter::AlreadyAttempted(found)) if found == actor => {
+        ServiceHeadDiscovery::Closed
+      }
+      Ok(ServiceRoundEncounter::Closed) => ServiceHeadDiscovery::Closed,
+      Ok(ServiceRoundEncounter::TerminallyClosed(_)) => ServiceHeadDiscovery::Closed,
+      Ok(ServiceRoundEncounter::NoWork(_)) => ServiceHeadDiscovery::InvariantStall,
+      _ => ServiceHeadDiscovery::InvariantStall,
     }
   }
 
@@ -659,16 +505,6 @@ impl<T: Config> Pallet<T> {
     });
   }
 
-  #[cfg(feature = "runtime-benchmarks")]
-  pub(crate) fn execute_zero_step_from_consumed_fixture(
-    actor_id: ActorId,
-    state: ActiveActorStateOf<T>,
-    admission: &ActorAdmissionCertificateOf<T>,
-    now: BlockNumberFor<T>,
-  ) -> Result<(), AttemptTransactionError> {
-    Self::execute_zero_step_from_consumed_frame(actor_id, state, admission, now, None).map(|_| ())
-  }
-
   fn prepare_cadenced_rearm_hot(
     actor_id: ActorId,
     instance: &ActiveActorViewOf<T>,
@@ -681,6 +517,44 @@ impl<T: Config> Pallet<T> {
     let anchor_tick = instance
       .temporal_anchor_tick
       .ok_or(AttemptTransactionError::Invariant)?;
+    let now_tick =
+      Self::current_scheduler_tick().map_err(|_| AttemptTransactionError::Invariant)?;
+    let due_tick = next_cadence_due_tick(anchor_tick, *every_ticks, now_tick)
+      .ok_or(AttemptTransactionError::Invariant)?;
+    let canonical = !ActorControlLocators::<T>::contains_key(actor_id)
+      && !ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+      && ActorProcesses::<T>::contains_key(actor_id);
+    if canonical {
+      // Opening follows a consumed occurrence commit, so no temporal Trigger member or pointer may
+      // remain. Re-register the next cadence deadline in the canonical `TriggerDeadlineHandles`
+      // carrier so the shared `service_due_deadline_frontiers` frontier observes it; the legacy
+      // `ActorWaitingEntry` reference substrate is never read by canonical production `on_idle`.
+      if hot.trigger_wakeup_pointer.is_some() {
+        return Err(AttemptTransactionError::Invariant);
+      }
+      let actor = Self::load_actor_ref(actor_id).ok_or(AttemptTransactionError::Invariant)?;
+      let handle = Self::plan_deadline_destination(actor, WakeupKey::Tick(due_tick))
+        .map_err(|_| AttemptTransactionError::Invariant)?;
+      let pointer = TriggerWakeupPointer {
+        tick: due_tick,
+        page_id: handle.page,
+        slot: u32::from(handle.slot),
+      };
+      let Some(ActorSemanticState::Active(current)) = ActorSemanticStates::<T>::get(actor_id)
+      else {
+        return Err(AttemptTransactionError::Invariant);
+      };
+      if current.generation != actor.generation || current.admission != *admission {
+        return Err(AttemptTransactionError::Invariant);
+      }
+      let mut replacement = current;
+      replacement.hot.trigger_wakeup_pointer = Some(pointer);
+      ActorSemanticStates::<T>::insert(actor_id, ActorSemanticState::Active(replacement));
+      Self::insert_trigger_deadline_member(handle)
+        .map_err(|_| AttemptTransactionError::Invariant)?;
+      hot.trigger_wakeup_pointer = Some(pointer);
+      return Ok(hot);
+    }
     if let Some(pointer) = hot.trigger_wakeup_pointer {
       Self::invalidate_wakeup_reference(
         actor_id,
@@ -694,10 +568,6 @@ impl<T: Config> Pallet<T> {
       .map_err(|_| AttemptTransactionError::Invariant)?;
       hot.trigger_wakeup_pointer = None;
     }
-    let now_tick =
-      Self::current_scheduler_tick().map_err(|_| AttemptTransactionError::Invariant)?;
-    let due_tick = next_cadence_due_tick(anchor_tick, *every_ticks, now_tick)
-      .ok_or(AttemptTransactionError::Invariant)?;
     let (page_id, slot) = Self::schedule_fresh_wakeup_reference(
       actor_id,
       WakeupKey::Tick(due_tick),
@@ -726,6 +596,29 @@ impl<T: Config> Pallet<T> {
         };
         // Replacement may preserve a paid latch from a different Trigger family.
         *consumed = true;
+        // A canonical replacement that armed the AtTime deadline while a different-family latch was
+        // pending leaves that one-shot Trigger member behind. This Opening consumes the occurrence,
+        // so the deadline must be released here; otherwise the shared deadline frontier observes a
+        // consumed occurrence and its member can never be serviced. The ordinary AtTime path already
+        // removed its member before the occurrence commit reached this point.
+        let canonical = !ActorControlLocators::<T>::contains_key(actor_id)
+          && !ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+          && ActorProcesses::<T>::contains_key(actor_id);
+        if canonical && hot.trigger_wakeup_pointer.is_some() {
+          let actor = Self::load_actor_ref(actor_id).ok_or(AttemptTransactionError::Invariant)?;
+          Self::remove_trigger_deadline_member(actor)
+            .map_err(|_| AttemptTransactionError::Invariant)?;
+          hot.trigger_wakeup_pointer = None;
+          let Some(ActorSemanticState::Active(mut semantic)) =
+            ActorSemanticStates::<T>::get(actor_id)
+          else {
+            return Err(AttemptTransactionError::Invariant);
+          };
+          semantic.hot = hot.clone();
+          ActorSemanticStates::<T>::insert(actor_id, ActorSemanticState::Active(semantic));
+          Self::reconcile_actor_state_hold_with_authority(actor_id)
+            .map_err(|_| AttemptTransactionError::StateHold)?;
+        }
         Ok(hot)
       }
       Trigger::Cadenced { .. } => {
@@ -751,13 +644,13 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  fn execute_zero_step_from_consumed_frame(
+  fn execute_zero_step_transition(
     actor_id: ActorId,
     mut state: ActiveActorStateOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
     opening_observation: Option<CanonicalObservationState>,
-  ) -> Result<ActorAttemptEvidence, AttemptTransactionError> {
+  ) -> Result<ZeroStepTransition<T>, AttemptTransactionError> {
     if !matches!(
       state.contract.trigger,
       Trigger::Manual
@@ -796,8 +689,6 @@ impl<T: Config> Pallet<T> {
     state.hot.pending_signal = false;
     state.hot.last_cycle_block = Some(now);
     state.hot.unsuccessful_attempt_streak = 0;
-    state.funding.funding_accumulated.clear();
-    ActorFunding::<T>::insert(actor_id, &state.funding);
     Self::deposit_event(Event::CycleStarted {
       actor_id,
       cycle_nonce,
@@ -808,555 +699,99 @@ impl<T: Config> Pallet<T> {
       result: CycleResult::Completed,
       outcomes: OutcomeTotals::default(),
     });
-    if state
+    let next_residence = if state
       .contract
       .auto_close_at_cycle_nonce
       .is_some_and(|target| cycle_nonce >= target)
     {
-      Self::finalize_actor_from_consumed_state(
-        actor_id,
+      NextResidence::Close {
         state,
-        admission,
-        CloseReason::AutoCloseNonceReached,
-      )
-      .map_err(|_| AttemptTransactionError::Invariant)?;
-      return Ok(Self::step_simulation_evidence(
-        cycle_nonce,
-        0,
-        AttemptDisposition::Closed(CloseReason::AutoCloseNonceReached),
-        OutcomeTotals::default(),
-        None,
-        None,
-      ));
-    }
-    let resources = ActorStepResourceEnvelope {
-      control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-      effect: Weight::zero(),
+        reason: CloseReason::AutoCloseNonceReached,
+      }
+    } else {
+      NextResidence::Publish { state }
     };
-    let instance = Self::derive_active_actor_view(
-      state.identity.clone(),
-      state.hot.clone(),
-      state.contract.clone(),
-    );
-    let unsignaled_hot = state.hot.clone();
-    match Self::schedule_next_work_with_authority(
-      actor_id,
-      &instance,
-      state.hot.clone(),
-      &state.identity,
-      None,
-      admission,
-      resources,
-      now,
-      ServiceCutoff::Snapshotted,
-    ) {
-      Ok(StepControlPlacement::None) => Self::restore_unsignaled_from_authority(
-        actor_id,
-        unsignaled_hot,
-        &state.identity,
-        None,
-        admission,
-        resources,
-      )
-      .map_err(|_| AttemptTransactionError::Invariant)?,
-      Ok(_) => {}
-      Err(_) => {
-        Self::finalize_actor_from_consumed_state(
-          actor_id,
+    Ok(ZeroStepTransition {
+      next_residence,
+      cycle_nonce,
+    })
+  }
+
+  /// Executes and commits one generation-bound zero-Step Service attempt without restoring legacy
+  /// FIFO authority. Refusal rolls back semantic, lifecycle, process, and ring mutations together.
+  pub(crate) fn execute_zero_step_on_service(
+    actor: ActorRef,
+    kind: ServiceResidenceKind,
+    state: ActiveActorStateOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+    opening_observation: Option<CanonicalObservationState>,
+  ) -> Result<ActorAttemptEvidence, AttemptTransactionError> {
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = (|| {
+        let semantic = Self::load_service_actor_semantic_state(actor, kind)
+          .map_err(|_| AttemptTransactionError::Invariant)?;
+        if semantic.identity != state.identity
+          || semantic.hot != state.hot
+          || semantic.admission != *admission
+          || Self::load_actor_contract(actor.actor_id).as_ref() != Some(&state.contract)
+        {
+          return Err(AttemptTransactionError::Invariant);
+        }
+        let transition = Self::execute_zero_step_transition(
+          actor.actor_id,
           state,
           admission,
-          CloseReason::SchedulerIndexExhausted,
-        )
-        .map_err(|_| AttemptTransactionError::Invariant)?;
-        return Ok(Self::step_simulation_evidence(
+          now,
+          opening_observation,
+        )?;
+        let ZeroStepTransition {
+          next_residence,
+          cycle_nonce,
+        } = transition;
+        let status = match next_residence {
+          NextResidence::Publish { state, .. } => {
+            Self::commit_retained_service_attempt(actor, kind, state.identity, state.hot, now)
+              .map_err(|_| AttemptTransactionError::Invariant)?;
+            AttemptDisposition::Completed
+          }
+          NextResidence::Close { state, reason } => {
+            // Commit semantic/lifecycle cleanup before unlinking the cursor-owning ring member.
+            Self::finalize_actor_from_consumed_state(actor.actor_id, state, admission, reason)
+              .map_err(|_| AttemptTransactionError::Invariant)?;
+            Self::retire_service_member(actor, reason)
+              .map_err(|_| AttemptTransactionError::Invariant)?;
+            AttemptDisposition::Closed(reason)
+          }
+        };
+        Ok(Self::step_simulation_evidence(
           cycle_nonce,
           0,
-          AttemptDisposition::Closed(CloseReason::SchedulerIndexExhausted),
+          status,
           OutcomeTotals::default(),
           None,
           None,
-        ));
-      }
-    }
-    Self::reconcile_actor_state_hold_with_authority(actor_id)
-      .map_err(|_| AttemptTransactionError::StateHold)?;
-    Ok(Self::step_simulation_evidence(
-      cycle_nonce,
-      0,
-      AttemptDisposition::Completed,
-      OutcomeTotals::default(),
-      None,
-      None,
-    ))
-  }
-
-  fn execute_stop_cycle_from_consumed_frame(
-    actor_id: ActorId,
-    mut state: ActiveActorStateOf<T>,
-    commit_plan: CurrentStepPlanOf<T>,
-    admission: &ActorAdmissionCertificateOf<T>,
-    now: BlockNumberFor<T>,
-  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
-    let step = commit_plan.loaded_step.step.clone();
-    if state.hot.cycle_state != CycleState::Idle
-      || state.run_state.is_some()
-      || commit_plan.run.is_some()
-      || ActorControlLocators::<T>::contains_key(actor_id)
-      || commit_plan.ticket.actor_id != actor_id
-      || commit_plan.ticket.cursor != 0
-      || commit_plan.loaded_step.cursor != 0
-      || commit_plan.ticket.cycle_nonce
-        != state
-          .identity
-          .cycle_nonce
-          .checked_add(1)
-          .ok_or(AttemptTransactionError::Invariant)?
-      || !matches!(step.task, super::types::Task::StopCycle)
-      || state.contract.steps.first() != Some(&step)
-      || commit_plan.identity != state.identity
-      || commit_plan.hot != state.hot
-      || commit_plan.funding != state.funding
-      || commit_plan.admission != *admission
-    {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    state.hot.queue_ticket = None;
-    let instance = Self::derive_active_actor_view(
-      state.identity.clone(),
-      state.hot.clone(),
-      state.contract.clone(),
-    );
-    let control_context =
-      Self::execution_step_control_weight_context(&instance, None, &commit_plan.loaded_step)
-        .ok_or(AttemptTransactionError::Invariant)?;
-    let reserved_control_weight = commit_plan.loaded_step.resources.control;
-    let reserved_effect_weight = commit_plan.loaded_step.resources.effect;
-    if T::StepControlWeight::maximum_control_weight(control_context, &step)
-      != Some(reserved_control_weight)
-    {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    let expected_fee = Self::maximum_current_action_fee(
-      instance.actor_class.actor_type(),
-      &step,
-      commit_plan.loaded_step.resources,
-    )
-    .map_err(|_| AttemptTransactionError::Invariant)?;
-    if commit_plan.maximum_fee != expected_fee {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    state.hot = Self::prepare_opening_rearm_hot(actor_id, &instance, admission, state.hot, None)?;
-    Self::charge_pipeline_opening(actor_id, &instance)?;
-    let opening_predicate_results = Self::capture_opening_predicate_results(
-      &instance.sovereign_account,
-      &instance.steps,
-      commit_plan.maximum_fee.total_fee,
-    );
-    let mut opening_predicate_index = 0usize;
-    let predicate_matches = Self::evaluate_step_precondition(
-      step.precondition.as_ref(),
-      &instance.sovereign_account,
-      commit_plan.maximum_fee.total_fee,
-      &opening_predicate_results,
-      &mut opening_predicate_index,
-    )
-    .map_err(|_| AttemptTransactionError::Invariant)?;
-    let cycle_nonce = commit_plan.ticket.cycle_nonce;
-    state.identity.cycle_nonce = cycle_nonce;
-    state.hot.cycle_state = CycleState::Idle;
-    state.hot.pending_signal = false;
-    state.hot.last_cycle_block = Some(now);
-    state.hot.unsuccessful_attempt_streak = 0;
-    state.funding.funding_accumulated.clear();
-    ActorFunding::<T>::insert(actor_id, &state.funding);
-    Self::deposit_event(Event::CycleStarted {
-      actor_id,
-      cycle_nonce,
-    });
-    let (effect_execution, outcomes) = if predicate_matches {
-      Self::record_stop_cycle_event(actor_id, cycle_nonce, 0);
-      (
-        super::TaskEffectExecution::Invoked,
-        OutcomeTotals {
-          executed_steps: 1,
-          ..Default::default()
-        },
-      )
-    } else {
-      Self::deposit_event(Event::StepSkipped {
-        actor_id,
-        cycle_nonce,
-        step_index: 0,
-        reason: StepSkippedReason::PreconditionFalse,
-      });
-      (
-        super::TaskEffectExecution::NotInvoked,
-        OutcomeTotals {
-          precondition_skips: 1,
-          ..Default::default()
-        },
-      )
-    };
-    Self::deposit_event(Event::CycleSummary {
-      actor_id,
-      cycle_nonce,
-      result: CycleResult::Completed,
-      outcomes,
-    });
-
-    let mut closed_for_exhaustion = false;
-    let mut attempt_status = AttemptDisposition::Completed;
-    let placement = if state
-      .contract
-      .auto_close_at_cycle_nonce
-      .is_some_and(|target| cycle_nonce >= target)
-    {
-      Self::finalize_actor_from_consumed_state(
-        actor_id,
-        state.clone(),
-        admission,
-        CloseReason::AutoCloseNonceReached,
-      )
-      .map_err(|_| AttemptTransactionError::Invariant)?;
-      attempt_status = AttemptDisposition::Closed(CloseReason::AutoCloseNonceReached);
-      StepControlPlacement::None
-    } else {
-      let placement_instance = Self::derive_active_actor_view(
-        state.identity.clone(),
-        state.hot.clone(),
-        state.contract.clone(),
-      );
-      let unsignaled_hot = state.hot.clone();
-      match Self::schedule_next_work_with_authority(
-        actor_id,
-        &placement_instance,
-        state.hot.clone(),
-        &state.identity,
-        None,
-        admission,
-        commit_plan.loaded_step.resources,
-        now,
-        ServiceCutoff::Snapshotted,
-      ) {
-        Ok(placement) => {
-          if placement == StepControlPlacement::None {
-            Self::restore_unsignaled_from_authority(
-              actor_id,
-              unsignaled_hot,
-              &state.identity,
-              None,
-              admission,
-              commit_plan.loaded_step.resources,
-            )
-            .map_err(|_| AttemptTransactionError::Invariant)?;
-          }
-          placement
+        ))
+      })();
+      match result {
+        Ok(evidence) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(evidence))
         }
         Err(error) => {
-          if !Self::scheduler_index_is_exhausted(error) {
-            return Err(AttemptTransactionError::Invariant);
-          }
-          Self::finalize_actor_from_consumed_state(
-            actor_id,
-            state.clone(),
-            admission,
-            CloseReason::SchedulerIndexExhausted,
-          )
-          .map_err(|_| AttemptTransactionError::Invariant)?;
-          closed_for_exhaustion = true;
-          attempt_status = AttemptDisposition::Closed(CloseReason::SchedulerIndexExhausted);
-          StepControlPlacement::None
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
         }
       }
-    };
-    let actual_effect_weight =
-      T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
-        .ok_or(AttemptTransactionError::Invariant)?;
-    if !actual_effect_weight.all_lte(reserved_effect_weight) {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    let actual_control_weight = T::StepControlWeight::actual_control_weight(
-      control_context,
-      &step,
-      reserved_control_weight,
-      StepControlExecution {
-        phase: StepControlPhase::Opening,
-        outcome: StepControlOutcome::Completed,
-        placement,
-        task_effect: effect_execution,
-        action_fee_collected: false,
-      },
-    )
-    .ok_or(AttemptTransactionError::Invariant)?;
-    if !actual_control_weight.all_lte(reserved_control_weight) {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    let actual_fee = Self::maximum_current_action_fee(
-      instance.actor_class.actor_type(),
-      &step,
-      ActorStepResourceEnvelope {
-        control: Weight::zero(),
-        effect: actual_effect_weight,
-      },
-    )
-    .map_err(|_| AttemptTransactionError::Invariant)?;
-    if instance.actor_class.actor_type() == ActorType::User && !actual_fee.total_fee.is_zero() {
-      Self::collect_user_step_fee(&instance.sovereign_account, actual_fee.total_fee)
-        .map_err(|_| AttemptTransactionError::FeeCollection)?;
-    }
-    if ActorControlLocators::<T>::contains_key(actor_id) {
-      Self::reconcile_actor_state_hold_with_authority(actor_id)
-        .map_err(|_| AttemptTransactionError::StateHold)?;
-    }
-    Ok(StepCommitEvidence {
-      closed_for_exhaustion,
-      actual_control_weight,
-      actual_effect_weight,
-      attempt: Self::step_simulation_evidence(
-        cycle_nonce,
-        0,
-        attempt_status,
-        outcomes,
-        None,
-        Some(if predicate_matches {
-          StepOutcome::Stopped
-        } else {
-          StepOutcome::Skipped(StepSkippedReason::PreconditionFalse)
-        }),
-      ),
     })
   }
 
-  fn execute_running_stop_cycle_from_consumed_frame(
-    actor_id: ActorId,
-    mut state: ActiveActorStateOf<T>,
-    commit_plan: CurrentStepPlanOf<T>,
-    admission: &ActorAdmissionCertificateOf<T>,
-    now: BlockNumberFor<T>,
-  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
-    let step = commit_plan.loaded_step.step.clone();
-    let mut run = commit_plan
-      .run
-      .clone()
-      .ok_or(AttemptTransactionError::Invariant)?;
-    if state.hot.cycle_state != CycleState::Running
-      || state.run_state.is_none()
-      || !run.running_is_coherent()
-      || ActorControlLocators::<T>::contains_key(actor_id)
-      || commit_plan.ticket.actor_id != actor_id
-      || commit_plan.ticket.cursor != run.cursor
-      || commit_plan.ticket.cycle_nonce != run.cycle_nonce
-      || commit_plan.loaded_step.cursor != run.cursor
-      || !matches!(step.task, super::types::Task::StopCycle)
-      || commit_plan.identity != state.identity
-      || commit_plan.hot != state.hot
-      || commit_plan.funding != state.funding
-      || commit_plan.admission != *admission
-    {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    let instance = Self::derive_active_actor_view(
-      state.identity.clone(),
-      state.hot.clone(),
-      state.contract.clone(),
-    );
-    let control_context =
-      Self::execution_step_control_weight_context(&instance, Some(&run), &commit_plan.loaded_step)
-        .ok_or(AttemptTransactionError::Invariant)?;
-    let reserved_control_weight = commit_plan.loaded_step.resources.control;
-    let reserved_effect_weight = commit_plan.loaded_step.resources.effect;
-    let expected_fee = Self::maximum_current_action_fee(
-      instance.actor_class.actor_type(),
-      &step,
-      commit_plan.loaded_step.resources,
-    )
-    .map_err(|_| AttemptTransactionError::Invariant)?;
-    if commit_plan.maximum_fee != expected_fee {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    let mut predicate_index = run.opening_predicate_cursor as usize;
-    let predicate_matches = Self::evaluate_step_precondition(
-      step.precondition.as_ref(),
-      &instance.sovereign_account,
-      commit_plan.maximum_fee.total_fee,
-      &run.opening_predicate_results,
-      &mut predicate_index,
-    )
-    .map_err(|_| AttemptTransactionError::Invariant)?;
-    let cycle_nonce = run.cycle_nonce;
-    let cursor = run.cursor;
-    let (effect_execution, outcomes) = if predicate_matches {
-      run.cumulative_outcomes.executed_steps = run
-        .cumulative_outcomes
-        .executed_steps
-        .checked_add(1)
-        .ok_or(AttemptTransactionError::Invariant)?;
-      Self::record_stop_cycle_event(actor_id, cycle_nonce, cursor);
-      (super::TaskEffectExecution::Invoked, run.cumulative_outcomes)
-    } else {
-      run.cumulative_outcomes.precondition_skips = run
-        .cumulative_outcomes
-        .precondition_skips
-        .checked_add(1)
-        .ok_or(AttemptTransactionError::Invariant)?;
-      Self::deposit_event(Event::StepSkipped {
-        actor_id,
-        cycle_nonce,
-        step_index: cursor,
-        reason: StepSkippedReason::PreconditionFalse,
-      });
-      (
-        super::TaskEffectExecution::NotInvoked,
-        run.cumulative_outcomes,
-      )
-    };
-    ActorRunStateStore::<T>::remove(actor_id);
-    state.run_state = None;
-    state.identity.cycle_nonce = cycle_nonce;
-    state.hot.cycle_state = CycleState::Idle;
-    state.hot.queue_ticket = None;
-    state.hot.last_cycle_block = Some(now);
-    state.hot.unsuccessful_attempt_streak = 0;
-    Self::deposit_event(Event::CycleSummary {
-      actor_id,
-      cycle_nonce,
-      result: CycleResult::Completed,
-      outcomes,
-    });
-
-    let next_resources = Self::load_current_step_with_admission(actor_id, 0, admission)
-      .map(|loaded| loaded.resources)
-      .ok_or(AttemptTransactionError::Invariant)?;
-    let mut closed_for_exhaustion = false;
-    let mut attempt_status = AttemptDisposition::Completed;
-    let placement = if state
-      .contract
-      .auto_close_at_cycle_nonce
-      .is_some_and(|target| cycle_nonce >= target)
-    {
-      Self::finalize_actor_from_consumed_state(
-        actor_id,
-        state.clone(),
-        admission,
-        CloseReason::AutoCloseNonceReached,
-      )
-      .map_err(|_| AttemptTransactionError::Invariant)?;
-      attempt_status = AttemptDisposition::Closed(CloseReason::AutoCloseNonceReached);
-      StepControlPlacement::None
-    } else {
-      let placement_instance = Self::derive_active_actor_view(
-        state.identity.clone(),
-        state.hot.clone(),
-        state.contract.clone(),
-      );
-      let unsignaled_hot = state.hot.clone();
-      match Self::schedule_next_work_with_authority(
-        actor_id,
-        &placement_instance,
-        state.hot.clone(),
-        &state.identity,
-        None,
-        admission,
-        next_resources,
-        now,
-        ServiceCutoff::Snapshotted,
-      ) {
-        Ok(placement) => {
-          if placement == StepControlPlacement::None {
-            Self::restore_unsignaled_from_authority(
-              actor_id,
-              unsignaled_hot,
-              &state.identity,
-              None,
-              admission,
-              next_resources,
-            )
-            .map_err(|_| AttemptTransactionError::Invariant)?;
-          }
-          placement
-        }
-        Err(error) => {
-          if !Self::scheduler_index_is_exhausted(error) {
-            return Err(AttemptTransactionError::Invariant);
-          }
-          Self::finalize_actor_from_consumed_state(
-            actor_id,
-            state.clone(),
-            admission,
-            CloseReason::SchedulerIndexExhausted,
-          )
-          .map_err(|_| AttemptTransactionError::Invariant)?;
-          closed_for_exhaustion = true;
-          attempt_status = AttemptDisposition::Closed(CloseReason::SchedulerIndexExhausted);
-          StepControlPlacement::None
-        }
-      }
-    };
-    let actual_effect_weight =
-      T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
-        .ok_or(AttemptTransactionError::Invariant)?;
-    if !actual_effect_weight.all_lte(reserved_effect_weight) {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    let actual_control_weight = T::StepControlWeight::actual_control_weight(
-      control_context,
-      &step,
-      reserved_control_weight,
-      StepControlExecution {
-        phase: StepControlPhase::Running,
-        outcome: StepControlOutcome::Completed,
-        placement,
-        task_effect: effect_execution,
-        action_fee_collected: false,
-      },
-    )
-    .ok_or(AttemptTransactionError::Invariant)?;
-    if !actual_control_weight.all_lte(reserved_control_weight) {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    let actual_fee = Self::maximum_current_action_fee(
-      instance.actor_class.actor_type(),
-      &step,
-      ActorStepResourceEnvelope {
-        control: Weight::zero(),
-        effect: actual_effect_weight,
-      },
-    )
-    .map_err(|_| AttemptTransactionError::Invariant)?;
-    if instance.actor_class.actor_type() == ActorType::User && !actual_fee.total_fee.is_zero() {
-      Self::collect_user_step_fee(&instance.sovereign_account, actual_fee.total_fee)
-        .map_err(|_| AttemptTransactionError::FeeCollection)?;
-    }
-    if ActorControlLocators::<T>::contains_key(actor_id) {
-      Self::reconcile_actor_state_hold_with_authority(actor_id)
-        .map_err(|_| AttemptTransactionError::StateHold)?;
-    }
-    Ok(StepCommitEvidence {
-      closed_for_exhaustion,
-      actual_control_weight,
-      actual_effect_weight,
-      attempt: Self::step_simulation_evidence(
-        cycle_nonce,
-        cursor,
-        attempt_status,
-        outcomes,
-        None,
-        Some(if predicate_matches {
-          StepOutcome::Stopped
-        } else {
-          StepOutcome::Skipped(StepSkippedReason::PreconditionFalse)
-        }),
-      ),
-    })
-  }
-
-  fn execute_effectful_step_from_consumed_frame(
+  fn execute_effectful_step_transition(
     actor_id: ActorId,
     mut state: ActiveActorStateOf<T>,
     mut plan: CurrentStepPlanOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
-  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
+    requires_detached_primary: bool,
+  ) -> Result<EffectfulStepTransition<T>, AttemptTransactionError> {
     let header =
       ActorContractHeads::<T>::get(actor_id).ok_or(AttemptTransactionError::Invariant)?;
     if header.header.admission_identity != admission.admission_identity {
@@ -1374,10 +809,9 @@ impl<T: Config> Pallet<T> {
         | StepErrorPolicy::AbortCycle
         | StepErrorPolicy::RetryLater { .. }
     );
-    if ActorControlLocators::<T>::contains_key(actor_id)
+    if requires_detached_primary && ActorControlLocators::<T>::contains_key(actor_id)
       || plan.identity != state.identity
       || plan.hot != state.hot
-      || plan.funding != state.funding
       || plan.admission != *admission
       || !direct_task_policy
     {
@@ -1416,14 +850,8 @@ impl<T: Config> Pallet<T> {
     Self::charge_pipeline_opening(actor_id, &execution_instance)?;
     let (mut plan, effect_execution, disposition, outcomes, eligible_at) =
       Self::execute_loaded_single_step_core(actor_id, &execution_instance, plan, now, step_count)?;
-    let actual_effect_weight =
-      T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
-        .ok_or(AttemptTransactionError::Invariant)?;
-    if !actual_effect_weight.all_lte(reserved_effect_weight) {
-      return Err(AttemptTransactionError::Invariant);
-    }
     let placement_run = plan.run.take();
-    let mut attempt = Self::step_simulation_evidence(
+    let attempt = Self::step_simulation_evidence(
       plan.ticket.cycle_nonce,
       plan.loaded_step.cursor,
       disposition,
@@ -1436,18 +864,6 @@ impl<T: Config> Pallet<T> {
           .ok_or(AttemptTransactionError::Invariant)?,
       ),
     );
-    let placement_cursor = placement_run.as_ref().map_or(0, |run| run.cursor);
-    let placement_resources =
-      Self::load_current_step_with_admission(actor_id, placement_cursor, admission)
-        .map(|loaded| loaded.resources)
-        .ok_or(AttemptTransactionError::Invariant)?;
-    let placement_instance = Self::derive_active_actor_view(
-      plan.identity.clone(),
-      plan.hot.clone(),
-      state.contract.clone(),
-    );
-    let unsignaled_hot = plan.hot.clone();
-    let mut closed_for_exhaustion = false;
     let failure_close_reason = if disposition != AttemptDisposition::Failed {
       None
     } else if retry_attempt_limit_reached {
@@ -1470,172 +886,226 @@ impl<T: Config> Pallet<T> {
         .filter(|target_nonce| plan.identity.cycle_nonce >= *target_nonce)
         .map(|_| CloseReason::AutoCloseNonceReached)
     };
-    let placement = if let Some(close_reason) = failure_close_reason.or(successful_close_reason) {
-      state.identity = plan.identity.clone();
-      state.hot = plan.hot.clone();
-      state.run_state = placement_run;
-      state.funding = plan.funding.clone();
-      Self::finalize_actor_from_consumed_state(actor_id, state, admission, close_reason)
-        .map_err(|_| AttemptTransactionError::Invariant)?;
-      attempt.status = AttemptDisposition::Closed(close_reason);
-      attempt.run_cursor = None;
-      attempt.unsuccessful_attempts_at_cursor = None;
-      StepControlPlacement::None
-    } else {
-      match Self::schedule_next_work_with_authority(
-        actor_id,
-        &placement_instance,
-        plan.hot.clone(),
-        &plan.identity,
-        placement_run.as_ref(),
-        admission,
-        placement_resources,
-        now,
-        ServiceCutoff::Snapshotted,
-      ) {
-        Ok(placement) => {
-          if placement == StepControlPlacement::None {
-            Self::restore_unsignaled_from_authority(
-              actor_id,
-              unsignaled_hot,
-              &plan.identity,
-              placement_run.as_ref(),
-              admission,
-              placement_resources,
-            )
-            .map_err(|_| AttemptTransactionError::Invariant)?;
-          }
-          placement
-        }
-        Err(error) => {
-          if !Self::scheduler_index_is_exhausted(error) {
-            return Err(AttemptTransactionError::Invariant);
-          }
-          state.identity = plan.identity.clone();
-          state.hot = plan.hot.clone();
-          state.run_state = placement_run;
-          state.funding = plan.funding.clone();
-          Self::finalize_actor_from_consumed_state(
-            actor_id,
-            state,
-            admission,
-            CloseReason::SchedulerIndexExhausted,
-          )
-          .map_err(|_| AttemptTransactionError::Invariant)?;
-          closed_for_exhaustion = true;
-          attempt.status = AttemptDisposition::Closed(CloseReason::SchedulerIndexExhausted);
-          attempt.run_cursor = None;
-          attempt.unsuccessful_attempts_at_cursor = None;
-          StepControlPlacement::None
-        }
-      }
+    state.identity = plan.identity.clone();
+    state.hot = plan.hot.clone();
+    state.run_state = placement_run;
+    let next_residence = match failure_close_reason.or(successful_close_reason) {
+      Some(reason) => NextResidence::Close { state, reason },
+      None => NextResidence::Publish { state },
     };
-    let control_outcome = match disposition {
-      AttemptDisposition::Completed => StepControlOutcome::Completed,
-      AttemptDisposition::Continued => StepControlOutcome::Continued,
-      AttemptDisposition::Suspended => StepControlOutcome::Suspended,
-      AttemptDisposition::Failed => StepControlOutcome::Failed,
-      _ => return Err(AttemptTransactionError::Invariant),
-    };
-    // Completion may leave a paid deferred activation or terminal deadline even
-    // though the completed Run no longer has its own service eligibility.
-    if eligible_at.is_some() && placement == StepControlPlacement::None && !closed_for_exhaustion {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    let actual_fee = Self::maximum_current_action_fee(
-      execution_instance.actor_class.actor_type(),
-      &step,
-      ActorStepResourceEnvelope {
-        control: Weight::zero(),
-        effect: actual_effect_weight,
-      },
-    )
-    .map_err(|_| AttemptTransactionError::Invariant)?;
-    let action_fee_collected = execution_instance.actor_class.actor_type() == ActorType::User
-      && !actual_fee.total_fee.is_zero();
-    let actual_control_weight = T::StepControlWeight::actual_control_weight(
+    Ok(EffectfulStepTransition {
+      plan,
+      execution_instance,
+      step,
       control_context,
-      &step,
       reserved_control_weight,
-      StepControlExecution {
-        phase: match execution_instance.cycle_state {
-          CycleState::Idle => StepControlPhase::Opening,
-          CycleState::Running => StepControlPhase::Running,
-          CycleState::Suspended => StepControlPhase::Suspended,
-        },
-        outcome: control_outcome,
-        placement,
-        task_effect: effect_execution,
-        action_fee_collected,
-      },
-    )
-    .ok_or(AttemptTransactionError::Invariant)?;
-    if !actual_control_weight.all_lte(reserved_control_weight) {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    if action_fee_collected {
-      Self::collect_user_step_fee(&execution_instance.sovereign_account, actual_fee.total_fee)
-        .map_err(|_| AttemptTransactionError::FeeCollection)?;
-    }
-    if matches!(effect_execution, super::TaskEffectExecution::Invoked) {
-      Self::deposit_action_fee_receipt(
-        actor_id,
-        plan.ticket.cycle_nonce,
-        plan.loaded_step.cursor,
-        actual_effect_weight,
-        actual_fee.effect_fee,
-      );
-    }
-    if ActorControlLocators::<T>::contains_key(actor_id) {
-      Self::reconcile_actor_state_hold_with_authority(actor_id)
-        .map_err(|_| AttemptTransactionError::StateHold)?;
-    }
-    Ok(StepCommitEvidence {
-      closed_for_exhaustion,
-      actual_control_weight,
-      actual_effect_weight,
+      reserved_effect_weight,
+      effect_execution,
+      disposition,
       attempt,
+      next_residence,
+      eligible_at,
     })
   }
 
-  pub(crate) fn execute_current_step_and_place(
-    actor_id: ActorId,
-    state: &ActiveActorStateOf<T>,
-    commit_plan: CurrentStepPlanOf<T>,
+  pub(crate) fn execute_effectful_step_on_service_with_deadline(
+    actor: ActorRef,
+    kind: ServiceResidenceKind,
+    state: ActiveActorStateOf<T>,
+    plan: CurrentStepPlanOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
+    deadline: Option<WakeupKey<BlockNumberFor<T>>>,
   ) -> Result<StepCommitEvidence, AttemptTransactionError> {
-    if matches!(
-      commit_plan.loaded_step.step.task,
-      super::types::Task::StopCycle
-    ) && commit_plan.loaded_step.step.precondition.is_none()
-    {
-      match state.hot.cycle_state {
-        CycleState::Idle => Self::execute_stop_cycle_from_consumed_frame(
-          actor_id,
-          state.clone(),
-          commit_plan,
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = (|| {
+        let semantic = Self::load_service_actor_semantic_state(actor, kind)
+          .map_err(|_| AttemptTransactionError::Invariant)?;
+        if semantic.identity != state.identity
+          || semantic.hot != state.hot
+          || semantic.admission != *admission
+          || Self::consider_service_head(now).map_err(|_| AttemptTransactionError::Invariant)?
+            != ServiceRoundEncounter::Eligible(actor)
+        {
+          return Err(AttemptTransactionError::Invariant);
+        }
+        let deadline = deadline
+          .map(|key| Self::plan_deadline_destination(actor, key))
+          .transpose()
+          .map_err(|_| AttemptTransactionError::Invariant)?;
+        if let Some(destination) = deadline {
+          Self::probe_service_member_to_deadline(actor, destination)
+            .map_err(|_| AttemptTransactionError::Invariant)?;
+        }
+        let transition = Self::execute_effectful_step_transition(
+          actor.actor_id,
+          state,
+          plan,
           admission,
           now,
-        ),
-        CycleState::Running => Self::execute_running_stop_cycle_from_consumed_frame(
-          actor_id,
-          state.clone(),
-          commit_plan,
-          admission,
-          now,
-        ),
-        CycleState::Suspended => Err(AttemptTransactionError::Invariant),
+          false,
+        )?;
+        let EffectfulStepTransition {
+          plan,
+          execution_instance,
+          step,
+          control_context,
+          reserved_control_weight,
+          reserved_effect_weight,
+          effect_execution,
+          disposition,
+          mut attempt,
+          next_residence,
+          eligible_at,
+        } = transition;
+        let exhaustion_reason = match &next_residence {
+          NextResidence::Close {
+            reason:
+              reason @ (CloseReason::RetryAttemptsExhausted | CloseReason::ConsecutiveFailures),
+            ..
+          } => Some(*reason),
+          _ => None,
+        };
+        let later_retry_destination = match (disposition, eligible_at, deadline) {
+          // A successful attempt always retains canonical Service residence. The destination
+          // precomputed for a possible retry failure is irrelevant on success and must not
+          // prevent the commit; the member simply advances within the ring.
+          (AttemptDisposition::Completed | AttemptDisposition::Continued, Some(eligible_at), _)
+            if now.checked_add(&One::one()) == Some(eligible_at) =>
+          {
+            None
+          }
+          (AttemptDisposition::Completed, None, _) => None,
+          (AttemptDisposition::Failed, None, _)
+            if matches!(step.on_error, StepErrorPolicy::RetryLater { .. })
+              && exhaustion_reason.is_some() =>
+          {
+            None
+          }
+          // A terminal permanent failure or an abort removes the Run, so the retry deadline
+          // precomputed for the possible temporary case is irrelevant even when the round probed
+          // and retained it; match any deadline instead of requiring its absence.
+          (AttemptDisposition::Failed, None, _)
+            if matches!(step.on_error, StepErrorPolicy::AbortCycle)
+              || matches!(step.on_error, StepErrorPolicy::RetryLater { .. })
+                && attempt.step.as_ref().is_some_and(|record| {
+                  matches!(
+                    record.outcome,
+                    StepOutcome::Failed(ref failure) if failure.retry == RetryClass::Permanent
+                  )
+                }) =>
+          {
+            None
+          }
+          (AttemptDisposition::Suspended, Some(eligible_at), None)
+            if now.checked_add(&One::one()) == Some(eligible_at) =>
+          {
+            None
+          }
+          (AttemptDisposition::Suspended, Some(eligible_at), Some(destination))
+            if destination.actor == actor
+              && destination.key == WakeupKey::Block(eligible_at)
+              && now.checked_add(&One::one()) != Some(eligible_at) =>
+          {
+            Some(destination)
+          }
+          _ => return Err(AttemptTransactionError::Invariant),
+        };
+        let control_outcome = match disposition {
+          AttemptDisposition::Continued => StepControlOutcome::Continued,
+          AttemptDisposition::Completed => StepControlOutcome::Completed,
+          AttemptDisposition::Suspended => StepControlOutcome::Suspended,
+          AttemptDisposition::Failed => StepControlOutcome::Failed,
+          _ => return Err(AttemptTransactionError::Invariant),
+        };
+        let actual_effect_weight =
+          T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
+            .filter(|actual| actual.all_lte(reserved_effect_weight))
+            .ok_or(AttemptTransactionError::Invariant)?;
+        let placement = match next_residence {
+          NextResidence::Publish { state, .. } => {
+            Self::try_store_service_control_state(actor, kind, state.identity, state.hot)
+              .map_err(|_| AttemptTransactionError::Invariant)?;
+            if let Some(destination) = later_retry_destination {
+              Self::transfer_service_member_to_deadline(actor, destination)
+                .map_err(|_| AttemptTransactionError::Invariant)?;
+              StepControlPlacement::Wakeup
+            } else {
+              Self::advance_service_head(actor, now)
+                .map_err(|_| AttemptTransactionError::Invariant)?;
+              StepControlPlacement::Queue
+            }
+          }
+          NextResidence::Close { state, reason } => {
+            Self::finalize_actor_from_consumed_state(actor.actor_id, state, admission, reason)
+              .map_err(|_| AttemptTransactionError::Invariant)?;
+            Self::retire_service_member(actor, reason)
+              .map_err(|_| AttemptTransactionError::Invariant)?;
+            attempt.status = AttemptDisposition::Closed(reason);
+            attempt.run_cursor = None;
+            attempt.unsuccessful_attempts_at_cursor = None;
+            StepControlPlacement::None
+          }
+        };
+        let actual_fee = Self::maximum_current_action_fee(
+          execution_instance.actor_class.actor_type(),
+          &step,
+          ActorStepResourceEnvelope {
+            control: Weight::zero(),
+            effect: actual_effect_weight,
+          },
+        )
+        .map_err(|_| AttemptTransactionError::Invariant)?;
+        let action_fee_collected = execution_instance.actor_class.actor_type() == ActorType::User
+          && !actual_fee.total_fee.is_zero();
+        let actual_control_weight = T::StepControlWeight::actual_control_weight(
+          control_context,
+          &step,
+          reserved_control_weight,
+          StepControlExecution {
+            phase: match execution_instance.cycle_state {
+              CycleState::Idle => StepControlPhase::Opening,
+              CycleState::Running => StepControlPhase::Running,
+              CycleState::Suspended => StepControlPhase::Suspended,
+            },
+            outcome: control_outcome,
+            placement,
+            task_effect: effect_execution,
+            action_fee_collected,
+          },
+        )
+        .filter(|actual| actual.all_lte(reserved_control_weight))
+        .ok_or(AttemptTransactionError::Invariant)?;
+        if action_fee_collected {
+          Self::collect_user_step_fee(&execution_instance.sovereign_account, actual_fee.total_fee)
+            .map_err(|_| AttemptTransactionError::FeeCollection)?;
+        }
+        if !matches!(step.task, super::types::Task::StopCycle)
+          && matches!(effect_execution, super::TaskEffectExecution::Invoked)
+        {
+          Self::deposit_action_fee_receipt(
+            actor.actor_id,
+            plan.ticket.cycle_nonce,
+            plan.loaded_step.cursor,
+            actual_effect_weight,
+            actual_fee.effect_fee,
+          );
+        }
+        Ok(StepCommitEvidence {
+          actual_control_weight,
+          actual_effect_weight,
+          attempt,
+        })
+      })();
+      match result {
+        Ok(evidence) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(evidence))
+        }
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
       }
-    } else {
-      Self::execute_effectful_step_from_consumed_frame(
-        actor_id,
-        state.clone(),
-        commit_plan,
-        admission,
-        now,
-      )
-    }
+    })
   }
 
   fn control_blank_control_chunk() -> Result<ActorControlChunkOf<T>, ActorControlTransitionError> {
@@ -1891,6 +1361,7 @@ impl<T: Config> Pallet<T> {
           };
           ActorWaitingFrameChunks::<T>::insert((key, pointer.page_id), page);
           ActorControlLocators::<T>::insert(actor_id, location);
+          Self::replace_active_semantics_from_primary(actor_id, location)?;
           return Ok(location);
         }
         if page
@@ -1924,6 +1395,7 @@ impl<T: Config> Pallet<T> {
     let slot = u8::try_from(slot).map_err(|_| ActorControlTransitionError::Invariant)?;
     let location = ActorControlLocation::Waiting { key, page, slot };
     ActorControlLocators::<T>::insert(actor_id, location);
+    Self::replace_active_semantics_from_primary(actor_id, location)?;
     Ok(location)
   }
 
@@ -1969,7 +1441,9 @@ impl<T: Config> Pallet<T> {
     ActorReadyFrameChunks::<T>::insert(page, chunk);
     ActorReadyTail::<T>::put(next_tail);
     ActorReadyOccupancy::<T>::put(next_occupancy);
-    ActorControlLocators::<T>::insert(actor_id, ActorControlLocation::Ready { ticket: tail });
+    let location = ActorControlLocation::Ready { ticket: tail };
+    ActorControlLocators::<T>::insert(actor_id, location);
+    Self::replace_active_semantics_from_primary(actor_id, location)?;
     Ok((actor_id, tail))
   }
 
@@ -2294,25 +1768,12 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  fn simulation_placement_error(error: EnqueueOutcome) -> SimulationError {
-    match error {
-      EnqueueOutcome::CapacityUnavailable | EnqueueOutcome::WakeupCapacityExhausted => {
-        SimulationError::ResourceDeferred
-      }
-      EnqueueOutcome::TicketExhausted
-      | EnqueueOutcome::SchedulerIndexExhausted
-      | EnqueueOutcome::WakeupIndexExhausted => {
-        SimulationError::Classification(ActorClassificationError::ComputationOverflow)
-      }
-      _ => SimulationError::Classification(ActorClassificationError::ActorInvariant),
-    }
-  }
-
   /// Called only within the simulation's outer rollback. Selects one real primary without
   /// advancing the FIFO Head or servicing any other Actor.
   pub(crate) fn simulate_actor_service(
     actor_id: ActorId,
     budget: SimulationBudget,
+    terminal_reason: Option<CloseReason>,
   ) -> Result<SimulationResult, SimulationError> {
     let limits = budget
       .checked_limits()
@@ -2328,781 +1789,126 @@ impl<T: Config> Pallet<T> {
     resources
       .begin_drain()
       .map_err(|_| SimulationError::InvalidBudget)?;
-    let mut reservation = resources
-      .reserve(
-        limits,
-        BlockResourceDomain::ActorControl,
-        budget.actor_control,
-      )
-      .map_err(|_| SimulationError::ResourceDeferred)?;
-    let mut control_meter = WeightMeter::with_limit(budget.actor_control);
     let mut cycle_meter = WeightMeter::with_limit(
       budget
         .actor_control
         .checked_add(&budget.shared_economic)
         .ok_or(SimulationError::InvalidBudget)?,
     );
-    let (location, cell) = Self::load_primary_control_cell(actor_id)
-      .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?;
-    let (terminal_state, terminal_admission, _) = Self::load_frame_actor_service_state(actor_id)
-      .ok_or(SimulationError::Classification(
+    // Fresh-genesis runtime state has one canonical Service/Deadline owner. A retained legacy
+    // locator is malformed compatibility state, not an alternate simulation executor.
+    if ActorControlLocators::<T>::contains_key(actor_id) {
+      return Err(SimulationError::Classification(
         ActorClassificationError::ActorInvariant,
-      ))?;
-    let terminal_instance = Self::derive_active_actor_view(
-      terminal_state.identity.clone(),
-      terminal_state.hot.clone(),
-      terminal_state.contract.clone(),
-    );
-    let terminal_classification =
-      Self::classify_actor_loaded(&terminal_instance, terminal_state.run_state.as_ref())
-        .map_err(SimulationError::Classification)?;
-    if terminal_classification.terminal_reason.is_some() {
-      let accounting = ProvisionalEntryAccounting {
-        cycle_before_entry: cycle_meter.consumed(),
-        control_before_entry: Some(control_meter.consumed()),
-      };
-      let probe = Self::scheduler_actor_state_probe_weight_upper();
-      if !control_meter.can_consume(probe) || !cycle_meter.can_consume(probe) {
-        return Err(SimulationError::ResourceDeferred);
-      }
-      control_meter.consume(probe);
-      cycle_meter.consume(probe);
-      let decision = Self::apply_admission_loaded(
-        actor_id,
-        &terminal_instance,
-        terminal_state.run_state.as_ref(),
-        None,
-        None,
-        &cycle_meter,
-        Some(&accounting.replacement_meter(&cycle_meter)),
-      );
-      let AdmissionDecision::Close { reason, weight } = decision else {
-        return Err(match decision {
-          AdmissionDecision::Defer => SimulationError::ResourceDeferred,
-          _ => SimulationError::Classification(ActorClassificationError::ActorInvariant),
-        });
-      };
-      let source = match location {
-        ActorControlLocation::Ready { ticket } => {
-          Some((ActorServiceSource::SelectedReady, ticket, ticket))
-        }
-        _ => None,
-      };
-      let result = Self::service_admitted_close(
-        actor_id,
-        terminal_state,
-        terminal_admission,
-        reason,
-        weight,
-        &mut cycle_meter,
-        Some(&mut control_meter),
-        source,
-        accounting,
-      );
-      resources
-        .settle(&mut reservation, cycle_meter.consumed())
-        .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?;
-      return Self::simulation_service_result(result);
+      ));
     }
-    if let ActorControlLocation::Waiting { key, page, slot } = location {
-      let WakeupKey::Block(due) = key else {
-        return Err(SimulationError::NotReady);
-      };
-      if due > now
-        || cell.hot.wakeup_pointer
-          != Some(WakeupPointer {
-            block: key,
-            page_id: page,
-            slot: u32::from(slot),
-          })
-      {
-        return Err(SimulationError::Classification(
-          ActorClassificationError::ActorInvariant,
+
+    let Some(ActorSemanticState::Active(semantic)) = ActorSemanticStates::<T>::get(actor_id) else {
+      return Err(SimulationError::Classification(
+        ActorClassificationError::ActorInvariant,
+      ));
+    };
+    let actor = ActorRef {
+      actor_id,
+      generation: semantic.generation,
+    };
+    let (_, process) = Self::load_canonical_actor_semantic_state(actor)
+      .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?;
+    match process.residence {
+      Some(ProcessResidence::Deadline {
+        key: WakeupKey::Block(due),
+        ..
+      }) if due <= now => {
+        Self::return_due_deadline_member_to_service(actor, ServiceResidenceKind::Live, now)
+          .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?;
+      }
+      Some(ProcessResidence::Deadline { .. }) => return Err(SimulationError::NotReady),
+      Some(ProcessResidence::Service(_)) => {}
+      _ => {
+        // An Idle Actor with no Service/Deadline residence is only reachable by the canonical
+        // Service round after a trigger occurrence publishes membership. The projection must
+        // still surface a terminal classification (for example an exhausted cycle nonce), which
+        // production applies through the same atomic close owner once the Actor is serviced.
+        // Charge the identical selector plus close envelope so an insufficient control budget
+        // defers instead of silently projecting a close.
+        let Some(reason) = terminal_reason else {
+          return Err(SimulationError::NotReady);
+        };
+        let selector_envelope = T::WeightInfo::service_round_begin_populated()
+          .saturating_add(T::WeightInfo::service_round_probe_eligible());
+        let close_envelope = selector_envelope.saturating_add(Self::close_dispatch_weight_upper());
+        let total = close_envelope;
+        let mut reservation = resources
+          .reserve(limits, BlockResourceDomain::ActorControl, close_envelope)
+          .map_err(|_| SimulationError::ResourceDeferred)?;
+        if !cycle_meter.can_consume(total) {
+          return Err(SimulationError::ResourceDeferred);
+        }
+        cycle_meter.consume(total);
+        resources
+          .settle(&mut reservation, close_envelope)
+          .map_err(|_| SimulationError::ResourceDeferred)?;
+        return Ok(Self::simulation_attempt_result(
+          Self::step_simulation_evidence(
+            semantic.identity.cycle_nonce,
+            0,
+            AttemptDisposition::Closed(reason),
+            OutcomeTotals::default(),
+            None,
+            None,
+          ),
         ));
       }
-      let preparation = Self::wakeup_cursor_drain_unit_weight_for(
-        WakeupBucketDisposition::Retain,
-        WakeupClock::Block,
-      )
-      .max(Self::wakeup_cursor_drain_unit_weight_for(
-        WakeupBucketDisposition::Remove,
-        WakeupClock::Block,
-      ));
-      if !control_meter.can_consume(preparation) || !cycle_meter.can_consume(preparation) {
-        return Err(SimulationError::ResourceDeferred);
-      }
-      control_meter.consume(preparation);
-      cycle_meter.consume(preparation);
-      let (mut state, admission, loaded_step) = Self::load_frame_actor_service_state(actor_id)
-        .ok_or(SimulationError::Classification(
-          ActorClassificationError::ActorInvariant,
-        ))?;
-      Self::remove_primary_control_cell_inner(actor_id)
-        .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?;
-      state.hot.wakeup_pointer = None;
-      let step_resources = if state.contract.steps.is_empty() {
-        ActorStepResourceEnvelope {
-          control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-          effect: Weight::zero(),
-        }
-      } else {
-        loaded_step
-          .ok_or(SimulationError::Classification(
-            ActorClassificationError::ActorInvariant,
-          ))?
-          .resources
-      };
-      let plan = Self::preflight_paged_enqueue_authority(
-        actor_id,
-        state.hot,
-        &state.identity,
-        state.run_state.as_ref(),
-        &admission,
-        step_resources,
-      )
-      .map_err(Self::simulation_placement_error)?;
-      Self::commit_paged_enqueue(plan).map_err(Self::simulation_placement_error)?;
     }
-    let (location, cell) = Self::load_primary_control_cell(actor_id)
+    Self::begin_service_round(now)
       .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?;
-    let ActorControlLocation::Ready { ticket } = location else {
-      return Err(SimulationError::NotReady);
-    };
-    let eligible_at = cell.eligible_at.ok_or(SimulationError::Classification(
-      ActorClassificationError::ActorInvariant,
-    ))?;
-    if eligible_at > now {
+    if Self::consider_service_head(now)
+      .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?
+      != ServiceRoundEncounter::Eligible(actor)
+    {
       return Err(SimulationError::NotReady);
     }
-    let entry = ActorStepTicket {
-      actor_id,
-      cycle_nonce: cell.identity.cycle_nonce.saturating_add(1),
-      cursor: cell.cursor,
-      ticket,
-      eligible_at,
-      contract_commitment: ActorContractCommitment {
-        semantic_contract_id: cell.admission.semantic_contract_id,
-        body_commitment: cell.admission.body_commitment,
-      },
-    };
-    let mut effect_consumed = Weight::zero();
-    let mut uncertain = false;
-    let accounting = ProvisionalEntryAccounting {
-      cycle_before_entry: cycle_meter.consumed(),
-      control_before_entry: Some(control_meter.consumed()),
-    };
-    let result = Self::service_live_queue_entry(
-      (ticket, entry),
-      now,
+    let (encounter, attempt) = Self::service_canonical_round_head_inner(
       &mut cycle_meter,
-      Some(&mut control_meter),
-      &mut effect_consumed,
-      &mut uncertain,
-      Some((
-        &mut resources,
-        limits,
-        BlockResourceDomain::ActorDrainEffect,
-      )),
-      ActorServiceSource::SelectedReady,
-      accounting,
-    );
-    let actual_control = if uncertain {
-      budget.actor_control
-    } else {
-      cycle_meter.consumed().checked_sub(&effect_consumed).ok_or(
-        SimulationError::Classification(ActorClassificationError::ActorInvariant),
-      )?
-    };
-    resources
-      .settle(&mut reservation, actual_control)
-      .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?;
-    Self::simulation_service_result(result)
-  }
-
-  fn simulation_service_result(
-    result: FifoStepResult,
-  ) -> Result<SimulationResult, SimulationError> {
-    match result {
-      FifoStepResult::Progress {
-        attempt: Some(attempt),
-        ..
-      } => Ok(SimulationResult {
-        status: attempt.status,
-        cycle_nonce: attempt.cycle_nonce,
-        start_cursor: attempt.start_cursor,
-        run_cursor: attempt.run_cursor,
-        unsuccessful_attempts_at_cursor: attempt.unsuccessful_attempts_at_cursor,
-        cumulative_outcomes: attempt.cumulative_outcomes,
-        steps: BoundedVec::truncate_from(attempt.step.into_iter().collect()),
-      }),
-      FifoStepResult::Blocked(BlockKind::Weight) => Err(SimulationError::ResourceDeferred),
-      FifoStepResult::Blocked(BlockKind::FeeCollection) => {
-        Err(SimulationError::FeeCollectionFailed)
+      now,
+      Some((&mut resources, limits)),
+      BlockResourceDomain::ActorDrainEffect,
+      false,
+    )
+    .map_err(|error| match error {
+      ServiceRoundError::InsufficientWeight | ServiceRoundError::ResourceUnavailable => {
+        SimulationError::ResourceDeferred
       }
-      FifoStepResult::Blocked(BlockKind::NonWeight) => Err(SimulationError::Classification(
-        ActorClassificationError::ActorInvariant,
+      ServiceRoundError::FeeCollection => SimulationError::FeeCollectionFailed,
+      _ => SimulationError::Classification(ActorClassificationError::ActorInvariant),
+    })?;
+    return match encounter {
+      ServiceRoundEncounter::Eligible(_) => attempt
+        .map(Self::simulation_attempt_result)
+        .ok_or(SimulationError::NotReady),
+      ServiceRoundEncounter::TerminallyClosed(reason) => Ok(Self::simulation_attempt_result(
+        Self::step_simulation_evidence(
+          semantic.identity.cycle_nonce,
+          0,
+          AttemptDisposition::Closed(reason),
+          OutcomeTotals::default(),
+          None,
+          None,
+        ),
       )),
       _ => Err(SimulationError::NotReady),
-    }
+    };
   }
 
-  fn consume_actor_service_source(
-    source: ActorServiceSource,
-    position: QueueTicket,
-    actor_id: ActorId,
-    ticket: QueueTicket,
-    hot: ActorHotStateOf<T>,
-  ) -> Result<(), EnqueueOutcome> {
-    match source {
-      ActorServiceSource::FifoHead => {
-        Self::paged_consume_loaded_head_at(position, actor_id, ticket, hot)
-      }
-      ActorServiceSource::SelectedReady => {
-        if hot.queue_ticket != Some(ticket) {
-          return Err(EnqueueOutcome::CorruptedTopology);
-        }
-        Self::queue_topology_preflight(QueueMutation::Head)?;
-        Self::consume_ready_primary(actor_id, ticket)
-      }
-    }
-  }
-
-  fn service_admitted_close(
-    actor_id: ActorId,
-    state: ActiveActorStateOf<T>,
-    admission: ActorAdmissionCertificateOf<T>,
-    reason: CloseReason,
-    weight: Weight,
-    cycle_meter: &mut WeightMeter,
-    mut control_meter: Option<&mut WeightMeter>,
-    source: Option<(ActorServiceSource, QueueTicket, QueueTicket)>,
-    accounting: ProvisionalEntryAccounting,
-  ) -> FifoStepResult {
-    if !accounting.can_settle_complete(cycle_meter, control_meter.as_deref(), weight) {
-      return FifoStepResult::Blocked(BlockKind::Weight);
-    }
-    let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
-      if matches!(source, Some((ActorServiceSource::SelectedReady, _, _)))
-        && Self::queue_topology_preflight(QueueMutation::Head).is_err()
-      {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          polkadot_sdk::sp_runtime::DispatchError::Other("scheduler queue topology corrupted"),
-        ));
-      }
-      let close_result =
-        Self::finalize_actor_from_retained_state(actor_id, state.clone(), &admission, reason);
-      if let Err(error) = close_result {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-      }
-      Self::apply_test_close_queue_corruption();
-      let source_closed = match source {
-        None => {
-          if ActorControlLocators::<T>::contains_key(actor_id) {
-            Err(EnqueueOutcome::CorruptedTopology)
-          } else {
-            Ok(())
-          }
-        }
-        Some((ActorServiceSource::FifoHead, position, _)) => {
-          Self::paged_consume_closed_head_at(position)
-        }
-        Some((ActorServiceSource::SelectedReady, _, ticket)) => {
-          if Self::queue_topology_preflight(QueueMutation::Head).is_err()
-            || ActorControlLocators::<T>::contains_key(actor_id)
-            || ActorReadyFrameChunks::<T>::get(ticket / 32)
-              .and_then(|chunk| chunk.get((ticket % 32) as usize).cloned().flatten())
-              .is_some()
-          {
-            Err(EnqueueOutcome::CorruptedTopology)
-          } else {
-            Ok(())
-          }
-        }
-      };
-      if source_closed.is_err() {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          polkadot_sdk::sp_runtime::DispatchError::Other("scheduler queue head changed"),
-        ));
-      }
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
-    });
-    accounting.settle_complete(cycle_meter, control_meter.as_deref_mut(), weight);
-    match outcome {
-      Ok(()) => FifoStepResult::Progress {
-        executed: false,
-        attempt: Some(Self::step_simulation_evidence(
-          state
-            .run_state
-            .as_ref()
-            .map_or(state.identity.cycle_nonce, |run| run.cycle_nonce),
-          state.run_state.as_ref().map_or(0, |run| run.cursor),
-          AttemptDisposition::Closed(reason),
-          state
-            .run_state
-            .as_ref()
-            .map_or(OutcomeTotals::default(), |run| run.cumulative_outcomes),
-          None,
-          None,
-        )),
-      },
-      Err(_) => FifoStepResult::Blocked(BlockKind::NonWeight),
-    }
-  }
-
-  fn service_live_queue_entry(
-    (position, entry): (QueueTicket, QueueEntry<BlockNumberFor<T>>),
-    now: BlockNumberFor<T>,
-    cycle_meter: &mut WeightMeter,
-    mut control_meter: Option<&mut WeightMeter>,
-    effect_consumed: &mut Weight,
-    effect_reconciliation_uncertain: &mut bool,
-    mut resources: Option<(
-      &mut BlockResourceState<BlockNumberFor<T>>,
-      BlockResourceLimits,
-      BlockResourceDomain,
-    )>,
-    source: ActorServiceSource,
-    accounting: ProvisionalEntryAccounting,
-  ) -> FifoStepResult {
-    let consume_weight = T::WeightInfo::scheduler_paged_consume_preserve_page()
-      .max(T::WeightInfo::scheduler_paged_consume_delete_page());
-    let state_probe_weight = Self::scheduler_actor_state_probe_weight_upper();
-    if !cycle_meter.can_consume(state_probe_weight)
-      || control_meter
-        .as_ref()
-        .is_some_and(|meter| !meter.can_consume(state_probe_weight))
-    {
-      return FifoStepResult::Blocked(BlockKind::Weight);
-    }
-    cycle_meter.consume(state_probe_weight);
-    if let Some(meter) = control_meter.as_deref_mut() {
-      meter.consume(state_probe_weight);
-    }
-    let Ok((location, cell)) = Self::load_primary_control_cell(entry.actor_id) else {
-      return FifoStepResult::Blocked(BlockKind::NonWeight);
-    };
-    let Some((identity, hot, admission)) = Self::project_control_cell(&cell, location) else {
-      return FifoStepResult::Blocked(BlockKind::NonWeight);
-    };
-    if hot.queue_ticket != Some(entry.ticket) {
-      return FifoStepResult::NoWork;
-    }
-    if cell.eligible_at != Some(entry.eligible_at) {
-      return FifoStepResult::Blocked(BlockKind::NonWeight);
-    }
-    let inline_terminal_due = hot.terminal_at.is_some_and(|terminal| terminal <= now)
-      || identity.cycle_nonce == u64::MAX
-      || Self::failure_limit_reached(hot.unsuccessful_attempt_streak);
-    if entry.eligible_at > now
-      && !inline_terminal_due
-      && !hot.lifecycle.is_paused()
-      && !GlobalCircuitBreaker::<T>::get()
-    {
-      return FifoStepResult::Blocked(BlockKind::NonWeight);
-    }
-    let opening_head = if hot.cycle_state == CycleState::Idle && hot.pending_signal {
-      let Some(head) = ActorContractHeads::<T>::get(entry.actor_id) else {
-        return FifoStepResult::Blocked(BlockKind::NonWeight);
-      };
-      Some(head)
-    } else {
-      None
-    };
-    let ordinary_opening = opening_head.as_ref().is_some_and(|head| {
-      head.header.step_count > 0
-        && head
-          .header
-          .auto_close_at_cycle_nonce
-          .is_none_or(|target| identity.cycle_nonce < target)
-    });
-    let mut pipeline_capacity = None;
-    if (matches!(hot.cycle_state, CycleState::Running | CycleState::Suspended) || ordinary_opening)
-      && !inline_terminal_due
-      && !hot.lifecycle.is_paused()
-      && let Some(required_control) = consume_weight
-        .checked_add(&cell.resources.control)
-        .and_then(|weight| weight.checked_add(&Self::close_cleanup_weight_upper()))
-      && let Some(required_attempt) = required_control.checked_add(&cell.resources.effect)
-      && (!cycle_meter.can_consume(required_attempt)
-        || control_meter
-          .as_ref()
-          .is_some_and(|meter| !meter.can_consume(required_control))
-        || resources.as_ref().is_some_and(|(state, limits, domain)| {
-          state.capacity_exceeded(*limits, *domain, cell.resources.effect)
-        }))
-      && !GlobalCircuitBreaker::<T>::get()
-    {
-      if hot.cycle_state == CycleState::Running {
-        return FifoStepResult::Blocked(BlockKind::Weight);
-      }
-      if hot.cycle_state == CycleState::Suspended {
-        // Retry policy and User Action liability precede resource deferral; neither needs
-        // Opening payloads or funding state. Exceptional paths retain full classification.
-        let solvent_retry = (|| {
-          let run = ActorRunHeads::<T>::get(entry.actor_id)?;
-          if !run.suspension_is_coherent()
-            || run.cycle_nonce != identity.cycle_nonce.checked_add(1)?
-            || run.last_attempt_block == now
-            || run.last_committed_step_block == Some(now)
-            || !run.has_contract_authority(
-              admission.semantic_contract_id,
-              admission.body_commitment,
-              admission.admission_identity,
-            )
-          {
-            return None;
-          }
-          let loaded =
-            Self::load_current_step_with_admission(entry.actor_id, run.cursor, &admission)?;
-          let retry_limit = loaded.step.on_error.retry_max_attempts()?;
-          if run.unsuccessful_attempts_at_cursor == 0
-            || run.unsuccessful_attempts_at_cursor >= retry_limit
-          {
-            return None;
-          }
-          Self::action_capacity_sufficient(
-            identity.actor_class.actor_type(),
-            &identity.sovereign_account,
-            &loaded.step,
-            loaded.resources,
-          )
-          .ok()
-        })();
-        if solvent_retry == Some(true) {
-          return FifoStepResult::Blocked(BlockKind::Weight);
-        }
-      }
-      pipeline_capacity = opening_head.as_ref().map(|head| {
-        Self::pipeline_capacity_sufficient_with_envelope(
-          identity.actor_class.actor_type(),
-          &identity.sovereign_account,
-          head.header.pipeline_machine_envelope,
-        )
-      });
-      if pipeline_capacity
-        .as_ref()
-        .is_some_and(|capacity| matches!(capacity, Ok(true)))
-      {
-        return FifoStepResult::Blocked(BlockKind::Weight);
-      }
-    }
-    let service_state = match opening_head {
-      Some(head) => {
-        Self::load_actor_service_state_with_head(entry.actor_id, identity, hot, admission, head)
-      }
-      None => Self::load_actor_service_state_with_control(entry.actor_id, identity, hot, admission),
-    };
-    let Some((state, admission, loaded_step)) = service_state else {
-      return FifoStepResult::Blocked(BlockKind::NonWeight);
-    };
-    let current_ticket = loaded_step.as_ref().and_then(|_| {
-      Self::build_actor_step_ticket(
-        entry.actor_id,
-        entry.ticket,
-        entry.eligible_at,
-        &state.identity,
-        &state.hot,
-        state.run_state.as_ref(),
-        &admission,
-      )
-    });
-    let current_plan = loaded_step.as_ref().and_then(|loaded_step| {
-      let ticket = current_ticket?;
-      let maximum_fee = Self::maximum_current_action_fee(
-        state.identity.actor_class.actor_type(),
-        &loaded_step.step,
-        loaded_step.resources,
-      )
-      .ok()?;
-      Self::build_current_step_plan(
-        entry.actor_id,
-        state.identity.clone(),
-        state.hot.clone(),
-        state.run_state.clone(),
-        state.funding.clone(),
-        admission.clone(),
-        ticket,
-        loaded_step.clone(),
-        maximum_fee,
-      )
-    });
-    if state
-      .run_state
-      .as_ref()
-      .is_some_and(|run_state| run_state.last_committed_step_block == Some(now))
-    {
-      return FifoStepResult::Blocked(BlockKind::NonWeight);
-    }
-    if state.hot.cycle_state == CycleState::Suspended {
-      if state
-        .run_state
-        .as_ref()
-        .is_some_and(|run_state| run_state.last_attempt_block == now)
-      {
-        return FifoStepResult::Blocked(BlockKind::NonWeight);
-      }
-    } else if state.identity.cycle_nonce > 0 && state.hot.last_cycle_block == Some(now) {
-      return FifoStepResult::Blocked(BlockKind::NonWeight);
-    }
-    let queue_owner_hot = state.hot.clone();
-    // A coherent pause atom clears the ticket and demotes Ready authority to Unsignaled before
-    // commit. A live paused Ready owner can therefore arise only from malformed frame state; do
-    // not invent a source/restoration Weight owner for an unreachable production transition.
-    if state.hot.lifecycle.is_paused()
-      && state
-        .hot
-        .terminal_at
-        .is_none_or(|terminal_at| terminal_at > now)
-    {
-      return FifoStepResult::Blocked(BlockKind::NonWeight);
-    }
-    let actor_id = entry.actor_id;
-    let loaded_run_state = state.run_state.clone();
-    let instance = Self::derive_active_actor_view(
-      state.identity.clone(),
-      state.hot.clone(),
-      state.contract.clone(),
-    );
-    match Self::apply_admission_loaded(
-      actor_id,
-      &instance,
-      loaded_run_state.as_ref(),
-      current_plan.as_ref(),
-      pipeline_capacity,
-      cycle_meter,
-      Some(&accounting.replacement_meter(cycle_meter)),
-    ) {
-      AdmissionDecision::Admit {
-        weight,
-        terminal_cleanup,
-        opening_observation,
-      } => {
-        if loaded_step.is_none() {
-          if !instance.steps.is_empty()
-            || instance.cycle_state != CycleState::Idle
-            || state.run_state.is_some()
-          {
-            return FifoStepResult::Blocked(BlockKind::NonWeight);
-          }
-          let attempt_weight = consume_weight.saturating_add(weight);
-          if !cycle_meter.can_consume(attempt_weight)
-            || control_meter
-              .as_ref()
-              .is_some_and(|meter| !meter.can_consume(attempt_weight))
-          {
-            return FifoStepResult::Blocked(BlockKind::Weight);
-          }
-          let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
-            if Self::consume_actor_service_source(
-              source,
-              position,
-              entry.actor_id,
-              entry.ticket,
-              queue_owner_hot,
-            )
-            .is_err()
-            {
-              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-                AttemptTransactionError::Invariant,
-              ));
-            }
-            let execution = Self::execute_zero_step_from_consumed_frame(
-              actor_id,
-              state.clone(),
-              &admission,
-              now,
-              opening_observation,
-            );
-            match execution {
-              Ok(attempt) => {
-                polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(attempt))
-              }
-              Err(error) => {
-                polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-              }
-            }
-          });
-          cycle_meter.consume(attempt_weight);
-          if let Some(meter) = control_meter.as_deref_mut() {
-            meter.consume(attempt_weight);
-          }
-          return match outcome {
-            Ok(attempt) => FifoStepResult::Progress {
-              executed: true,
-              attempt: Some(attempt),
-            },
-            Err(AttemptTransactionError::FeeCollection) => {
-              FifoStepResult::Blocked(BlockKind::FeeCollection)
-            }
-            Err(AttemptTransactionError::StateHold | AttemptTransactionError::Invariant) => {
-              FifoStepResult::Blocked(BlockKind::NonWeight)
-            }
-          };
-        }
-        if current_ticket != Some(entry) || current_plan.is_none() {
-          return FifoStepResult::Blocked(BlockKind::NonWeight);
-        }
-        let Some(commit_plan) = current_plan else {
-          return FifoStepResult::Blocked(BlockKind::NonWeight);
-        };
-        let attempt_weight = consume_weight.saturating_add(weight);
-        let exhaustion_close_weight = if terminal_cleanup.is_included() {
-          Weight::zero()
-        } else {
-          Self::close_cleanup_weight_upper()
-        };
-        let reserved_control_weight = commit_plan.loaded_step.resources.control;
-        let reserved_effect_weight = commit_plan.loaded_step.resources.effect;
-        let Some(reserved_attempt_control) = attempt_weight.checked_sub(&reserved_effect_weight)
-        else {
-          return FifoStepResult::Blocked(BlockKind::NonWeight);
-        };
-        let reserved_control_with_cleanup =
-          reserved_attempt_control.saturating_add(exhaustion_close_weight);
-        if !cycle_meter.can_consume(attempt_weight.saturating_add(exhaustion_close_weight))
-          || control_meter
-            .as_ref()
-            .is_some_and(|meter| !meter.can_consume(reserved_control_with_cleanup))
-        {
-          return FifoStepResult::Blocked(BlockKind::Weight);
-        }
-        let mut resource_reservation = match resources.as_mut() {
-          Some((state, limits, effect_domain)) => {
-            match state.reserve(*limits, *effect_domain, reserved_effect_weight) {
-              Ok(reservation) => Some(reservation),
-              Err(_) => return FifoStepResult::Blocked(BlockKind::Weight),
-            }
-          }
-          None => None,
-        };
-        let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
-          if Self::consume_actor_service_source(
-            source,
-            position,
-            entry.actor_id,
-            entry.ticket,
-            queue_owner_hot,
-          )
-          .is_err()
-          {
-            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-              AttemptTransactionError::Invariant,
-            ));
-          }
-          let execution =
-            Self::execute_current_step_and_place(actor_id, &state, commit_plan, &admission, now);
-          match execution {
-            Ok(evidence) => {
-              if let (Some((state, _, _)), Some(reservation)) =
-                (resources.as_mut(), resource_reservation.as_mut())
-                && state
-                  .settle(reservation, evidence.actual_effect_weight)
-                  .is_err()
-              {
-                state.halt_optional_actor_work();
-                return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-                  AttemptTransactionError::Invariant,
-                ));
-              }
-              polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(evidence))
-            }
-            Err(error) => {
-              polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-            }
-          }
-        });
-        if outcome.is_err()
-          && let (Some(reservation), Some((state, _, _))) =
-            (resource_reservation.as_mut(), resources.as_mut())
-        {
-          // The storage attempt rolled back its settlement together with the effect. Retain the
-          // admitted maximum, but consume this reservation's transition authority outside that
-          // transaction so external user work and final reconciliation remain reachable.
-          let _ = state.settle(reservation, reserved_effect_weight);
-          state.halt_optional_actor_work();
-        }
-        match outcome {
-          Ok(StepCommitEvidence {
-            closed_for_exhaustion,
-            actual_control_weight,
-            actual_effect_weight,
-            attempt,
-          }) => {
-            let Some(non_step_reservation) = attempt_weight
-              .checked_sub(&reserved_control_weight)
-              .and_then(|weight| weight.checked_sub(&reserved_effect_weight))
-            else {
-              cycle_meter.consume(attempt_weight);
-              if let Some(meter) = control_meter.as_deref_mut() {
-                meter.consume(reserved_attempt_control);
-              }
-              return FifoStepResult::Blocked(BlockKind::NonWeight);
-            };
-            let actual_attempt_weight = non_step_reservation
-              .saturating_add(actual_control_weight)
-              .saturating_add(actual_effect_weight);
-            cycle_meter.consume(actual_attempt_weight);
-            let actual_attempt_control = actual_attempt_weight
-              .checked_sub(&actual_effect_weight)
-              .unwrap_or(reserved_attempt_control);
-            if let Some(meter) = control_meter.as_deref_mut() {
-              meter.consume(actual_attempt_control);
-            }
-            effect_consumed.saturating_accrue(actual_effect_weight);
-            if closed_for_exhaustion {
-              cycle_meter.consume(exhaustion_close_weight);
-              if let Some(meter) = control_meter.as_deref_mut() {
-                meter.consume(exhaustion_close_weight);
-              }
-            }
-            FifoStepResult::Progress {
-              executed: true,
-              attempt: Some(attempt),
-            }
-          }
-          Err(AttemptTransactionError::FeeCollection) => {
-            *effect_reconciliation_uncertain |= !reserved_effect_weight.is_zero();
-            cycle_meter.consume(attempt_weight);
-            if let Some(meter) = control_meter.as_deref_mut() {
-              meter.consume(reserved_attempt_control);
-            }
-            FifoStepResult::Blocked(BlockKind::FeeCollection)
-          }
-          Err(AttemptTransactionError::StateHold | AttemptTransactionError::Invariant) => {
-            *effect_reconciliation_uncertain |= !reserved_effect_weight.is_zero();
-            cycle_meter.consume(attempt_weight);
-            if let Some(meter) = control_meter.as_deref_mut() {
-              meter.consume(reserved_attempt_control);
-            }
-            FifoStepResult::Blocked(BlockKind::NonWeight)
-          }
-        }
-      }
-      AdmissionDecision::Close { reason, weight } => Self::service_admitted_close(
-        actor_id,
-        state,
-        admission,
-        reason,
-        weight,
-        cycle_meter,
-        control_meter,
-        Some((source, position, entry.ticket)),
-        accounting,
-      ),
-      AdmissionDecision::Refuse(owner) => {
-        let weight = Self::complete_entry_owner_weight(owner);
-        if !accounting.can_settle_complete(cycle_meter, control_meter.as_deref(), weight) {
-          return FifoStepResult::Blocked(BlockKind::Weight);
-        }
-        accounting.settle_complete(cycle_meter, control_meter.as_deref_mut(), weight);
-        FifoStepResult::Blocked(BlockKind::NonWeight)
-      }
-      AdmissionDecision::Defer => FifoStepResult::Blocked(BlockKind::Weight),
-      AdmissionDecision::Invariant => FifoStepResult::Blocked(BlockKind::NonWeight),
-      // Global-breaker classification is a state-preserving refusal. Keep the exact Ready owner
-      // and FIFO position rather than consuming and republishing the same authority under an
-      // unmeasured destination branch.
-      AdmissionDecision::Skip => FifoStepResult::Blocked(BlockKind::NonWeight),
+  fn simulation_attempt_result(attempt: ActorAttemptEvidence) -> SimulationResult {
+    SimulationResult {
+      status: attempt.status,
+      cycle_nonce: attempt.cycle_nonce,
+      start_cursor: attempt.start_cursor,
+      run_cursor: attempt.run_cursor,
+      unsuccessful_attempts_at_cursor: attempt.unsuccessful_attempts_at_cursor,
+      cumulative_outcomes: attempt.cumulative_outcomes,
+      steps: BoundedVec::truncate_from(attempt.step.into_iter().collect()),
     }
   }
 
@@ -3123,115 +1929,6 @@ impl<T: Config> Pallet<T> {
       Err(other) => Err(other),
     }
   }
-
-  fn enqueue_authority_loaded(
-    actor_id: ActorId,
-    hot: ActorHotStateOf<T>,
-    identity: &ActorIdentityOf<T>,
-    run_state: Option<&ActorRunStateOf<T>>,
-    admission: &ActorAdmissionCertificateOf<T>,
-    resources: ActorStepResourceEnvelope,
-  ) -> Result<(), EnqueueOutcome> {
-    let result = with_transaction_opaque_err(|| {
-      match Self::preflight_paged_enqueue_authority(
-        actor_id, hot, identity, run_state, admission, resources,
-      ) {
-        Ok(plan) => match Self::commit_paged_enqueue(plan) {
-          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
-          Err(error) => {
-            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-          }
-        },
-        Err(error) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-        }
-      }
-    })
-    .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
-    match result {
-      Ok(()) | Err(EnqueueOutcome::AlreadyLive) => Ok(()),
-      Err(other) => Err(other),
-    }
-  }
-
-  fn enqueue_actor_state_loaded(
-    actor_id: ActorId,
-    state: &ActiveActorStateOf<T>,
-    admission: &ActorAdmissionCertificateOf<T>,
-    loaded_step: Option<&LoadedActorStepOf<T>>,
-  ) -> Result<(), EnqueueOutcome> {
-    let result = with_transaction_opaque_err(|| {
-      match Self::preflight_paged_enqueue_actor_state(actor_id, state, admission, loaded_step) {
-        Ok(plan) => match Self::commit_paged_enqueue(plan) {
-          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
-          Err(error) => {
-            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-          }
-        },
-        Err(error) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-        }
-      }
-    })
-    .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
-    match result {
-      Ok(()) | Err(EnqueueOutcome::AlreadyLive) => Ok(()),
-      Err(EnqueueOutcome::CapacityUnavailable) => {
-        let next_block = frame_system::Pallet::<T>::block_number()
-          .checked_add(&One::one())
-          .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-        let instance = Self::derive_active_actor_view(
-          state.identity.clone(),
-          state.hot.clone(),
-          state.contract.clone(),
-        );
-        {
-          let resources = if state.contract.steps.is_empty() {
-            ActorStepResourceEnvelope {
-              control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-              effect: Weight::zero(),
-            }
-          } else {
-            let cursor = state.run_state.as_ref().map_or(0, |run| run.cursor);
-            loaded_step
-              .filter(|loaded| loaded.cursor == cursor)
-              .map(|loaded| loaded.resources)
-              .ok_or(EnqueueOutcome::CorruptedTopology)?
-          };
-          Self::defer_wakeup_with_authority(
-            actor_id,
-            next_block,
-            &instance,
-            state.hot.clone(),
-            &state.identity,
-            state.run_state.as_ref(),
-            admission,
-            resources,
-          )
-        }
-      }
-      Err(other) => Err(other),
-    }
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_corrupt_queue_before_close_consume() {
-    CORRUPT_QUEUE_BEFORE_CLOSE_CONSUME.with(|flag| flag.set(true));
-  }
-
-  #[cfg(test)]
-  fn apply_test_close_queue_corruption() {
-    CORRUPT_QUEUE_BEFORE_CLOSE_CONSUME.with(|flag| {
-      if flag.replace(false) {
-        ActorReadyTail::<T>::put(
-          ActorReadyHead::<T>::get().saturating_add(u64::from(T::MaxQueueLength::get()) + 1),
-        );
-      }
-    });
-  }
-
-  #[cfg(not(test))]
-  fn apply_test_close_queue_corruption() {}
 
   fn queue_topology_preflight(_mutation: QueueMutation) -> Result<QueueTopology, EnqueueOutcome> {
     let head = ActorReadyHead::<T>::get();
@@ -3286,6 +1983,7 @@ impl<T: Config> Pallet<T> {
     )
   }
 
+  #[cfg(test)]
   pub(crate) fn preflight_paged_enqueue_cohort_with_authority(
     actors: Vec<(ActorId, ActorHotStateOf<T>)>,
   ) -> Result<QueueAppendPlan<T>, EnqueueOutcome> {
@@ -3321,6 +2019,7 @@ impl<T: Config> Pallet<T> {
     Ok(plan)
   }
 
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
   fn preflight_paged_enqueue_actor_state(
     actor_id: ActorId,
     state: &ActiveActorStateOf<T>,
@@ -3371,78 +2070,6 @@ impl<T: Config> Pallet<T> {
       &mut plan, actor_id, hot, identity, run_state, admission, resources,
     )?;
     Ok(plan)
-  }
-
-  fn prepare_observation_ready_cell(
-    state: &ObservationActivationState<T>,
-    hot: &ActorHotStateOf<T>,
-  ) -> Result<ActorControlCellOf<T>, EnqueueOutcome> {
-    let (location, mut cell) = Self::load_primary_control_cell(state.actor_id)
-      .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
-    let expected_identity = Self::control_identity_from_scalar(state.identity.clone())
-      .ok_or(EnqueueOutcome::CorruptedTopology)?;
-    if matches!(location, ActorControlLocation::Ready { .. })
-      || cell.identity != expected_identity
-      || cell.hot != Self::control_hot_from_scalar(state.hot.clone())
-    {
-      return Err(EnqueueOutcome::CorruptedTopology);
-    }
-    cell.hot = Self::control_hot_from_scalar(hot.clone());
-    cell.cursor = state.run_head.as_ref().map_or(0, |run| run.cursor);
-    cell.eligible_at = Some(
-      state
-        .run_head
-        .as_ref()
-        .map_or_else(frame_system::Pallet::<T>::block_number, |run| {
-          run.eligible_at
-        }),
-    );
-    Ok(cell)
-  }
-
-  fn preflight_paged_enqueue_observation_loaded(
-    state: &ObservationActivationState<T>,
-    hot: ActorHotStateOf<T>,
-  ) -> Result<QueueAppendPlan<T>, EnqueueOutcome> {
-    let cell = Self::prepare_observation_ready_cell(state, &hot)?;
-    let mut plan = Self::new_queue_append_plan()?;
-    let mut planned_actors = alloc::collections::BTreeSet::new();
-    Self::reserve_following_paged_enqueue_observation(
-      &mut plan,
-      &mut planned_actors,
-      state,
-      hot,
-      cell,
-    )?;
-    Ok(plan)
-  }
-
-  fn reserve_following_paged_enqueue_observation(
-    plan: &mut QueueAppendPlan<T>,
-    planned_actors: &mut alloc::collections::BTreeSet<ActorId>,
-    state: &ObservationActivationState<T>,
-    hot: ActorHotStateOf<T>,
-    cell: ActorControlCellOf<T>,
-  ) -> Result<(), EnqueueOutcome> {
-    if hot.queue_ticket.is_some() {
-      return Err(EnqueueOutcome::CapacityUnavailable);
-    }
-    Self::preflight_ready_publication_capacity(plan)?;
-    match (hot.cycle_state, state.run_head.as_ref()) {
-      (CycleState::Idle, None) => {
-        state
-          .identity
-          .cycle_nonce
-          .checked_add(1)
-          .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-      }
-      (CycleState::Running | CycleState::Suspended, Some(_)) => {}
-      _ => return Err(EnqueueOutcome::CorruptedTopology),
-    }
-    if !planned_actors.insert(state.actor_id) {
-      return Err(EnqueueOutcome::CorruptedTopology);
-    }
-    Self::reserve_ready_publication(plan, cell)
   }
 
   fn preflight_ready_publication_capacity(plan: &QueueAppendPlan<T>) -> Result<(), EnqueueOutcome> {
@@ -3523,6 +2150,7 @@ impl<T: Config> Pallet<T> {
       identity: Self::control_identity_from_scalar(identity.clone())
         .ok_or(EnqueueOutcome::CorruptedTopology)?,
       hot: Self::control_hot_from_scalar(hot),
+      pipeline_service_identity: pipeline_service_identity(admission.admission_identity),
       cursor: step_ticket.cursor,
       eligible_at: Some(step_ticket.eligible_at),
       admission: admission.clone(),
@@ -3672,6 +2300,7 @@ impl<T: Config> Pallet<T> {
     QUEUE_APPEND_COMMITS.with(core::cell::Cell::get)
   }
 
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
   pub(crate) fn update_existing_frame_control_identity(
     actor_id: ActorId,
     identity: &ActorIdentityOf<T>,
@@ -3710,22 +2339,16 @@ impl<T: Config> Pallet<T> {
       identity: Self::control_identity_from_scalar(identity.clone())
         .ok_or(EnqueueOutcome::CorruptedTopology)?,
       hot: Self::control_hot_from_scalar(hot),
+      pipeline_service_identity: pipeline_service_identity(admission.admission_identity),
       cursor: run_state.map_or(0, |run| run.cursor),
       eligible_at: None,
       admission: admission.clone(),
       resources,
     };
     ActorUnsignaledControlCells::<T>::insert(actor_id, cell);
-    ActorControlLocators::<T>::insert(actor_id, ActorControlLocation::Unsignaled);
-    Ok(())
-  }
-
-  fn consume_ready_primary(actor_id: ActorId, ticket: QueueTicket) -> Result<(), EnqueueOutcome> {
-    if ActorControlLocators::<T>::get(actor_id) != Some(ActorControlLocation::Ready { ticket }) {
-      return Err(EnqueueOutcome::CorruptedTopology);
-    }
-    Self::remove_primary_control_cell_inner(actor_id)
-      .map(|_| ())
+    let location = ActorControlLocation::Unsignaled;
+    ActorControlLocators::<T>::insert(actor_id, location);
+    Self::replace_active_semantics_from_primary(actor_id, location)
       .map_err(|_| EnqueueOutcome::CorruptedTopology)
   }
 
@@ -3795,7 +2418,10 @@ impl<T: Config> Pallet<T> {
         cell.cursor = 0;
         cell.eligible_at = None;
         ActorUnsignaledControlCells::<T>::insert(actor_id, cell);
-        ActorControlLocators::<T>::insert(actor_id, ActorControlLocation::Unsignaled);
+        let destination = ActorControlLocation::Unsignaled;
+        ActorControlLocators::<T>::insert(actor_id, destination);
+        Self::replace_active_semantics_from_primary(actor_id, destination)
+          .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
       }
       return Ok(());
     }
@@ -3803,14 +2429,6 @@ impl<T: Config> Pallet<T> {
       Self::load_primary_control_cell(actor_id).map_err(|_| EnqueueOutcome::CorruptedTopology)?;
     cell.hot = Self::control_hot_from_scalar(hot.clone());
     Self::store_primary_control_cell(location, cell).map_err(|_| EnqueueOutcome::CorruptedTopology)
-  }
-
-  fn commit_paged_enqueue_transactional(plan: QueueAppendPlan<T>) -> Result<(), EnqueueOutcome> {
-    with_transaction_opaque_err(|| match Self::commit_paged_enqueue(plan) {
-      Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
-      Err(error) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error)),
-    })
-    .map_err(|_| EnqueueOutcome::CorruptedTopology)?
   }
 
   pub(crate) fn commit_paged_enqueue(plan: QueueAppendPlan<T>) -> Result<(), EnqueueOutcome> {
@@ -3881,782 +2499,9 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  pub(crate) fn request_activation(
-    actor_id: ActorId,
-  ) -> Result<ActivationOutcome, ActivationFailure> {
-    let activate = || Self::request_activation_inner(actor_id);
-    if polkadot_sdk::frame_support::storage::transactional::is_transactional() {
-      return activate();
-    }
-    polkadot_sdk::frame_support::storage::with_transaction(|| match activate() {
-      Ok(outcome) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(outcome)),
-      Err(error) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error)),
-    })
-  }
-
-  #[cfg(any(test, feature = "runtime-benchmarks"))]
-  pub(crate) fn request_observation_activation_compact(
-    actor_id: ActorId,
-    feed: T::ObservationFeedId,
-  ) -> Result<ActivationOutcome, ActivationFailure> {
-    Self::request_observation_activation_compact_with_cause(
-      actor_id,
-      feed,
-      TriggerCauseProvenance::Deferred,
-      frame_system::Pallet::<T>::block_number().saturated_into::<u64>(),
-    )
-  }
-
-  pub(crate) fn request_observation_activation_compact_with_cause(
-    actor_id: ActorId,
-    feed: T::ObservationFeedId,
-    cause_provenance: TriggerCauseProvenance,
-    cause_block: u64,
-  ) -> Result<ActivationOutcome, ActivationFailure> {
-    let activate = || match Self::request_observation_activation_compact_inner(
-      actor_id,
-      feed,
-      ObservationTerminalHandling::Execute,
-      cause_provenance,
-      cause_block,
-    )? {
-      ObservationActivationOutcome::Ordinary(outcome) => Ok(outcome),
-      ObservationActivationOutcome::TerminalDeferred => Err(ActivationFailure::Permanent(
-        Error::<T>::ActorInvariant.into(),
-      )),
-    };
-    if polkadot_sdk::frame_support::storage::transactional::is_transactional() {
-      return activate();
-    }
-    polkadot_sdk::frame_support::storage::with_transaction(|| match activate() {
-      Ok(outcome) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(outcome)),
-      Err(error) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error)),
-    })
-  }
-
-  pub(crate) fn request_observation_activation_ordinary_with_cause(
-    actor_id: ActorId,
-    feed: T::ObservationFeedId,
-    cause_provenance: TriggerCauseProvenance,
-    cause_block: u64,
-  ) -> Result<ObservationActivationOutcome, ActivationFailure> {
-    Self::request_observation_activation_compact_inner(
-      actor_id,
-      feed,
-      ObservationTerminalHandling::Defer,
-      cause_provenance,
-      cause_block,
-    )
-  }
-
-  pub(crate) fn prepare_observation_placement_candidate(
-    actor_id: ActorId,
-    feed: T::ObservationFeedId,
-    _cause_provenance: TriggerCauseProvenance,
-    _cause_block: u64,
-  ) -> Result<Option<ObservationPlacementCandidate<T>>, ActivationFailure> {
-    if IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id) {
-      return Ok(None);
-    }
-    let Some(state) = Self::load_observation_activation_state(actor_id, feed) else {
-      return Ok(None);
-    };
-    let classification =
-      Self::classify_observation_activation_compact(&state).map_err(|error| {
-        ActivationFailure::Permanent(Self::classification_dispatch_error(error).into())
-      })?;
-    if classification.terminal_reason.is_some()
-      || state.hot.queue_ticket.is_some()
-      || state.hot.wakeup_pointer.is_some()
-    {
-      return Ok(None);
-    }
-    let now = frame_system::Pallet::<T>::block_number();
-    let wakeup_at = if state.hot.lifecycle.is_paused() {
-      let Some(window) = state.authority.window else {
-        return Ok(None);
-      };
-      Self::window_terminal_at(&window)
-    } else {
-      let eligible_at = if state.hot.cycle_state == CycleState::Suspended {
-        state
-          .run_head
-          .as_ref()
-          .ok_or(ActivationFailure::Permanent(
-            Error::<T>::ActorRunInvariant.into(),
-          ))?
-          .eligible_at
-      } else {
-        let cooldown_anchor = state
-          .hot
-          .last_cycle_block
-          .unwrap_or(state.hot.schedule_anchor);
-        let cooldown_eligible_at =
-          if state.identity.cycle_nonce == 0 && state.hot.last_cycle_block.is_none() {
-            state.hot.schedule_anchor
-          } else {
-            cooldown_anchor
-              .checked_add(&state.authority.cooldown_blocks.into())
-              .ok_or(ActivationFailure::Permanent(
-                Error::<T>::SchedulerIndexExhausted.into(),
-              ))?
-          };
-        let window_floor = state
-          .authority
-          .window
-          .map(|window| window.start)
-          .unwrap_or_else(Zero::zero);
-        now.max(cooldown_eligible_at).max(window_floor)
-      };
-      state.authority.window.map_or(eligible_at, |window| {
-        eligible_at.min(Self::window_terminal_at(&window))
-      })
-    };
-    let exact_next_block = now
-      .checked_add(&One::one())
-      .ok_or(ActivationFailure::Permanent(
-        Error::<T>::SchedulerIndexExhausted.into(),
-      ))?;
-    let mut hot = state.hot.clone();
-    hot.pending_signal = true;
-    if wakeup_at >= exact_next_block {
-      return Ok(Some(ObservationPlacementCandidate::Wakeup(
-        ObservationWakeupCandidate {
-          state,
-          hot,
-          wakeup_key: WakeupKey::Block(wakeup_at),
-        },
-      )));
-    }
-    Ok(Some(ObservationPlacementCandidate::Queue(
-      ObservationQueueCandidate { state, hot },
-    )))
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_reset_observation_wakeup_cohort_commits() {
-    OBSERVATION_WAKEUP_COHORT_COMMITS.with(|count| count.set(0));
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_observation_wakeup_cohort_commits() -> u32 {
-    OBSERVATION_WAKEUP_COHORT_COMMITS.with(core::cell::Cell::get)
-  }
-
-  pub(crate) fn commit_observation_queue_cohort(
-    candidates: Vec<ObservationQueueCandidate<T>>,
-  ) -> Result<(), EnqueueOutcome> {
-    if candidates.is_empty() || candidates.len() > T::ObservationPageSize::get() as usize {
-      return Err(EnqueueOutcome::CapacityUnavailable);
-    }
-    with_transaction_opaque_err(|| {
-      let mut admitted = Vec::new();
-      let mut occurrences = Vec::new();
-      for candidate in candidates.into_iter(/* deos-bypass: bounded-iter */) {
-        let actor_type = candidate.state.identity.actor_class.actor_type();
-        let breakdown = Self::trigger_fee_for_weight(
-          actor_type,
-          TriggerFamily::ObservationChange,
-          T::WeightInfo::observation_change_trigger_occurrence(),
-        );
-        let charged = match Self::try_charge_automatic_trigger_occurrence(
-          actor_type,
-          &candidate.state.identity.sovereign_account,
-          breakdown,
-        ) {
-          Ok(charged) => charged,
-          Err(_) => {
-            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-              EnqueueOutcome::CorruptedTopology,
-            ));
-          }
-        };
-        if charged {
-          occurrences.push((
-            candidate.state.actor_id,
-            breakdown,
-            candidate.state.hot.pending_signal,
-          ));
-          admitted.push(candidate);
-        }
-      }
-      if admitted.is_empty() {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()));
-      }
-      let topology = match Self::queue_topology_preflight(QueueMutation::Enqueue) {
-        Ok(topology) => topology,
-        Err(error) => {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-        }
-      };
-      let mut plan = QueueAppendPlan {
-        publications: Vec::new(),
-        next_tail: topology.tail,
-        next_occupancy: topology.occupancy,
-      };
-      // Identity-only membership is bounded by this observation page, not actor population.
-      let mut planned_actors = alloc::collections::BTreeSet::new();
-      for candidate in admitted.into_iter(/* deos-bypass: bounded-iter */) {
-        let prepared_frame_cell =
-          match Self::prepare_observation_ready_cell(&candidate.state, &candidate.hot) {
-            Ok(cell) => cell,
-            Err(error) => {
-              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-                error,
-              ));
-            }
-          };
-        if let Err(error) = Self::reserve_following_paged_enqueue_observation(
-          &mut plan,
-          &mut planned_actors,
-          &candidate.state,
-          candidate.hot,
-          prepared_frame_cell,
-        ) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-        }
-      }
-      if let Err(error) = Self::commit_paged_enqueue(plan) {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-      }
-      for (actor_id, breakdown, _) in occurrences {
-        IndexedTriggerDetectionDisabled::<T>::insert(actor_id, ());
-        Self::deposit_event(Event::TriggerOccurrenceProcessed {
-          actor_id,
-          trigger_family: breakdown.trigger_family,
-          fee: breakdown.trigger_fee,
-        });
-      }
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
-    })
-    .map_err(|_| EnqueueOutcome::CorruptedTopology)?
-  }
-
-  pub(crate) fn commit_observation_wakeup_cohort(
-    candidates: Vec<ObservationWakeupCandidate<T>>,
-  ) -> Result<(), EnqueueOutcome> {
-    if candidates.is_empty() || candidates.len() > T::ObservationPageSize::get() as usize {
-      return Err(EnqueueOutcome::CapacityUnavailable);
-    }
-    let wakeup_key = candidates[0].wakeup_key;
-    if candidates
-      .iter(/* deos-bypass: bounded-iter */)
-      .any(|candidate| candidate.wakeup_key != wakeup_key)
-    {
-      return Err(EnqueueOutcome::CorruptedTopology);
-    }
-    let result = with_transaction_opaque_err(|| {
-      for candidate in candidates {
-        let actor_id = candidate.state.actor_id;
-        let actor_type = candidate.state.identity.actor_class.actor_type();
-        let breakdown = Self::trigger_fee_for_weight(
-          actor_type,
-          TriggerFamily::ObservationChange,
-          T::WeightInfo::observation_change_trigger_occurrence(),
-        );
-        let charged = match Self::try_charge_automatic_trigger_occurrence(
-          actor_type,
-          &candidate.state.identity.sovereign_account,
-          breakdown,
-        ) {
-          Ok(charged) => charged,
-          Err(_) => {
-            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-              EnqueueOutcome::CorruptedTopology,
-            ));
-          }
-        };
-        if !charged {
-          continue;
-        }
-        match Self::place_observation_wakeup(&candidate.state, candidate.hot, candidate.wakeup_key)
-        {
-          Ok(()) | Err(EnqueueOutcome::AlreadyLive) => {}
-          Err(error) => {
-            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-          }
-        }
-        IndexedTriggerDetectionDisabled::<T>::insert(actor_id, ());
-        Self::deposit_event(Event::TriggerOccurrenceProcessed {
-          actor_id,
-          trigger_family: breakdown.trigger_family,
-          fee: breakdown.trigger_fee,
-        });
-      }
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
-    })
-    .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
-    #[cfg(test)]
-    if result.is_ok() {
-      OBSERVATION_WAKEUP_COHORT_COMMITS.with(|count| count.set(count.get().saturating_add(1)));
-    }
-    result
-  }
-
-  fn place_observation_wakeup(
-    state: &ObservationActivationState<T>,
-    hot: ActorHotStateOf<T>,
-    wakeup_key: WakeupKey<BlockNumberFor<T>>,
-  ) -> Result<(), EnqueueOutcome> {
-    let admission = state
-      .admission
-      .as_ref()
-      .ok_or(EnqueueOutcome::CorruptedTopology)?;
-    let cursor = state.run_head.as_ref().map_or(0, |run| run.cursor);
-    let resources = state.loaded_step.as_ref().map_or(
-      ActorStepResourceEnvelope {
-        control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-        effect: Weight::zero(),
-      },
-      |loaded| loaded.resources,
-    );
-    Self::try_store_control_hot_with_authority(state.actor_id, hot.clone())
-      .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
-    Self::try_wakeup_substrate_schedule_transition_with_authority(
-      state.actor_id,
-      wakeup_key,
-      hot,
-      &state.identity,
-      cursor,
-      admission,
-      resources,
-    )
-  }
-
-  fn request_observation_activation_compact_inner(
-    actor_id: ActorId,
-    feed: T::ObservationFeedId,
-    terminal_handling: ObservationTerminalHandling,
-    _cause_provenance: TriggerCauseProvenance,
-    _cause_block: u64,
-  ) -> Result<ObservationActivationOutcome, ActivationFailure> {
-    let Some(state) = Self::load_observation_activation_state(actor_id, feed) else {
-      return if Self::control_hot_exists(actor_id) {
-        Err(ActivationFailure::Permanent(
-          Error::<T>::ActorInvariant.into(),
-        ))
-      } else {
-        Ok(ObservationActivationOutcome::Ordinary(
-          ActivationOutcome::IgnoredStale,
-        ))
-      };
-    };
-    let classification =
-      Self::classify_observation_activation_compact(&state).map_err(|error| {
-        ActivationFailure::Permanent(Self::classification_dispatch_error(error).into())
-      })?;
-    if classification.terminal_reason.is_some() {
-      return if matches!(terminal_handling, ObservationTerminalHandling::Execute) {
-        Self::request_activation_inner(actor_id).map(ObservationActivationOutcome::Ordinary)
-      } else {
-        Ok(ObservationActivationOutcome::TerminalDeferred)
-      };
-    }
-
-    let already_pending = state.hot.pending_signal;
-    let mut hot = state.hot.clone();
-    hot.pending_signal = true;
-    if hot.queue_ticket.is_some() {
-      if !already_pending {
-        Self::try_store_control_hot_with_authority(actor_id, hot)
-          .map_err(|_| ActivationFailure::Permanent(Error::<T>::ActorInvariant.into()))?;
-      }
-      return Ok(ObservationActivationOutcome::Ordinary(if already_pending {
-        ActivationOutcome::Coalesced
-      } else {
-        ActivationOutcome::Latched
-      }));
-    }
-
-    enum CompactPlacement<BlockNumber> {
-      None,
-      Queue,
-      Wakeup(BlockNumber),
-    }
-    let placement = if hot.lifecycle.is_paused() {
-      state
-        .authority
-        .window
-        .map(|window| CompactPlacement::Wakeup(Self::window_terminal_at(&window)))
-        .unwrap_or(CompactPlacement::None)
-    } else {
-      let now = frame_system::Pallet::<T>::block_number();
-      let eligible_at = if hot.cycle_state == CycleState::Suspended {
-        state
-          .run_head
-          .as_ref()
-          .ok_or(ActivationFailure::Permanent(
-            Error::<T>::ActorRunInvariant.into(),
-          ))?
-          .eligible_at
-      } else {
-        let cooldown_anchor = hot.last_cycle_block.unwrap_or(hot.schedule_anchor);
-        let cooldown_eligible_at =
-          if state.identity.cycle_nonce == 0 && hot.last_cycle_block.is_none() {
-            hot.schedule_anchor
-          } else {
-            cooldown_anchor
-              .checked_add(&state.authority.cooldown_blocks.into())
-              .ok_or(ActivationFailure::Permanent(
-                Error::<T>::SchedulerIndexExhausted.into(),
-              ))?
-          };
-        let window_floor = state
-          .authority
-          .window
-          .map(|window| window.start)
-          .unwrap_or_else(Zero::zero);
-        now.max(cooldown_eligible_at).max(window_floor)
-      };
-      let wakeup_at = state.authority.window.map_or(eligible_at, |window| {
-        eligible_at.min(Self::window_terminal_at(&window))
-      });
-      let exact_next_block = now
-        .checked_add(&One::one())
-        .ok_or(ActivationFailure::Permanent(
-          Error::<T>::SchedulerIndexExhausted.into(),
-        ))?;
-      if wakeup_at < exact_next_block {
-        CompactPlacement::Queue
-      } else {
-        CompactPlacement::Wakeup(wakeup_at)
-      }
-    };
-
-    let placement_result = match placement {
-      CompactPlacement::None => Self::try_store_control_hot_with_authority(actor_id, hot),
-      CompactPlacement::Queue => {
-        match Self::preflight_paged_enqueue_observation_loaded(&state, hot.clone()) {
-          Ok(plan) => Self::commit_paged_enqueue(plan),
-          Err(EnqueueOutcome::CapacityUnavailable) => {
-            let retry_at = frame_system::Pallet::<T>::block_number()
-              .checked_add(&One::one())
-              .ok_or(ActivationFailure::Permanent(
-                Error::<T>::SchedulerIndexExhausted.into(),
-              ))?;
-            Self::place_observation_wakeup(&state, hot, WakeupKey::Block(retry_at))
-          }
-          Err(_) => {
-            return Self::request_activation_inner(actor_id)
-              .map(ObservationActivationOutcome::Ordinary);
-          }
-        }
-      }
-      CompactPlacement::Wakeup(block) => {
-        Self::place_observation_wakeup(&state, hot, WakeupKey::Block(block))
-      }
-    };
-    match placement_result {
-      Ok(()) | Err(EnqueueOutcome::AlreadyLive) => {
-        Ok(ObservationActivationOutcome::Ordinary(if already_pending {
-          ActivationOutcome::Coalesced
-        } else {
-          ActivationOutcome::Latched
-        }))
-      }
-      Err(EnqueueOutcome::CapacityUnavailable | EnqueueOutcome::WakeupCapacityExhausted) => Err(
-        ActivationFailure::Temporary(Error::<T>::QueueCapacityUnavailable.into()),
-      ),
-      Err(_) => Err(ActivationFailure::Permanent(
-        Error::<T>::SchedulerIndexExhausted.into(),
-      )),
-    }
-  }
-
-  fn preflight_activation_enqueue(
-    actor_id: ActorId,
-    state: &ActiveActorStateOf<T>,
-    admission: &ActorAdmissionCertificateOf<T>,
-  ) -> Result<QueueAppendPlan<T>, EnqueueOutcome> {
-    let cursor = state.run_state.as_ref().map_or(0, |run| run.cursor);
-    let loaded_step = if state.contract.steps.is_empty() {
-      None
-    } else {
-      Some(
-        Self::load_current_step_with_admission(actor_id, cursor, admission)
-          .ok_or(EnqueueOutcome::CorruptedTopology)?,
-      )
-    };
-    Self::preflight_paged_enqueue_actor_state(actor_id, state, admission, loaded_step.as_ref())
-  }
-
-  pub(crate) fn preflight_activation_loaded(
-    actor_id: ActorId,
-    state: ActiveActorStateOf<T>,
-  ) -> Result<ActivationPlan<T>, ActivationFailure> {
-    let frame_admission = {
-      let (_, identity, _, admission) = Self::load_frame_control_authority(actor_id).ok_or(
-        ActivationFailure::Permanent(Error::<T>::ActorInvariant.into()),
-      )?;
-      if identity != state.identity {
-        return Err(ActivationFailure::Permanent(
-          Error::<T>::ActorInvariant.into(),
-        ));
-      }
-      admission
-    };
-    Self::preflight_activation_from_authority(actor_id, state, frame_admission)
-  }
-
-  fn preflight_activation_from_authority(
-    actor_id: ActorId,
-    state: ActiveActorStateOf<T>,
-    frame_admission: ActorAdmissionCertificateOf<T>,
-  ) -> Result<ActivationPlan<T>, ActivationFailure> {
-    let frame_source_state = state.clone();
-    let already_pending = state.hot.pending_signal;
-    let mut queue_state = state;
-    let run_state = queue_state.run_state.clone();
-    let mut hot = queue_state.hot.clone();
-    hot.pending_signal = true;
-    queue_state.hot = hot.clone();
-    let instance = Self::derive_active_actor_view(
-      queue_state.identity.clone(),
-      hot.clone(),
-      queue_state.contract.clone(),
-    );
-    let classification =
-      Self::classify_actor_loaded(&instance, run_state.as_ref()).map_err(|error| {
-        ActivationFailure::Permanent(Self::classification_dispatch_error(error).into())
-      })?;
-    let action = if matches!(
-      classification.terminal_reason,
-      Some(CloseReason::WindowExpired | CloseReason::CycleNonceExhausted)
-    ) {
-      ActivationAction::Close(classification.terminal_reason.ok_or(
-        ActivationFailure::Permanent(Error::<T>::ActorInvariant.into()),
-      )?)
-    } else if instance.queue_ticket.is_some()
-      || (ActorControlLocators::<T>::contains_key(actor_id)
-        && matches!(
-          instance.cycle_state,
-          CycleState::Running | CycleState::Suspended
-        ))
-    {
-      ActivationAction::CoalesceLive
-    } else if matches!(
-      instance.trigger,
-      Trigger::AtTime { .. } | Trigger::Cadenced { .. }
-    ) {
-      ActivationAction::EnqueueTemporal(Self::preflight_activation_enqueue(
-        actor_id,
-        &queue_state,
-        &frame_admission,
-      ))
-    } else {
-      match Self::preflight_prime_schedule_loaded(&instance, run_state.as_ref()) {
-        Ok(PrimeSchedulePlan::Enqueue) => ActivationAction::EnqueueReady(
-          Self::preflight_activation_enqueue(actor_id, &queue_state, &frame_admission),
-        ),
-        other => ActivationAction::PrimeSchedule(other),
-      }
-    };
-    Ok(ActivationPlan {
-      actor_id,
-
-      frame_admission,
-      frame_source_state,
-      already_pending,
-      prospective_hot: hot,
-      instance,
-      terminal_reason: classification.terminal_reason,
-      action,
-    })
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_activation_plan_kind(actor_id: ActorId) -> Result<u8, ActivationFailure> {
-    let loaded = if cfg!(feature = "runtime-benchmarks") {
-      Self::load_actor_state(actor_id)
-    } else {
-      Self::load_frame_actor_state(actor_id)
-    };
-    let LoadedActorStateOf::Active(state) = loaded else {
-      return Err(ActivationFailure::Permanent(
-        Error::<T>::ActorInvariant.into(),
-      ));
-    };
-    let plan = Self::preflight_activation_loaded(actor_id, state)?;
-    Ok(match plan.action {
-      ActivationAction::Close(_) => 0,
-      ActivationAction::CoalesceLive => 1,
-      ActivationAction::EnqueueTemporal(_) => 2,
-      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::None)) => 3,
-      ActivationAction::EnqueueReady(_) => 4,
-      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::Enqueue)) => 4,
-      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::BlockWakeup(_))) => 5,
-      ActivationAction::PrimeSchedule(Err(_)) => 6,
-    })
-  }
-
-  pub(crate) fn commit_activation_plan(
-    plan: ActivationPlan<T>,
-  ) -> Result<ActivationOutcome, ActivationFailure> {
-    if polkadot_sdk::frame_support::storage::transactional::is_transactional() {
-      return Self::commit_activation_plan_inner(plan);
-    }
-    polkadot_sdk::frame_support::storage::with_transaction(|| {
-      match Self::commit_activation_plan_inner(plan) {
-        Ok(outcome) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(outcome))
-        }
-        Err(error) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-        }
-      }
-    })
-  }
-
-  fn commit_activation_plan_inner(
-    plan: ActivationPlan<T>,
-  ) -> Result<ActivationOutcome, ActivationFailure> {
-    let ActivationPlan {
-      actor_id,
-
-      frame_admission,
-      frame_source_state,
-      already_pending,
-      prospective_hot,
-      instance,
-      terminal_reason: _,
-      action,
-    } = plan;
-    let placement_hot = prospective_hot.clone();
-    if !already_pending {
-      // A live process latches the deferred occurrence by mutating its canonical primary in place.
-      // Placement-changing activations instead publish prospective authority in the destination
-      // cell; writing it into Unsignaled first would create a forbidden transient owner state.
-      if matches!(
-        &action,
-        ActivationAction::CoalesceLive
-          | ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::None))
-      ) {
-        Self::try_store_control_hot_with_authority(actor_id, prospective_hot)
-          .map_err(|_| ActivationFailure::Permanent(Error::<T>::ActorInvariant.into()))?;
-      }
-    }
-    match action {
-      ActivationAction::Close(reason) => {
-        {
-          Self::finalize_actor_from_retained_state(
-            actor_id,
-            frame_source_state,
-            &frame_admission,
-            reason,
-          )
-          .map_err(ActivationFailure::Permanent)?;
-        }
-        return Ok(ActivationOutcome::Closed);
-      }
-      ActivationAction::CoalesceLive => {
-        return Ok(if already_pending {
-          ActivationOutcome::Coalesced
-        } else {
-          ActivationOutcome::Latched
-        });
-      }
-      ActivationAction::EnqueueReady(_)
-      | ActivationAction::EnqueueTemporal(_)
-      | ActivationAction::PrimeSchedule(_) => {}
-    }
-
-    let placement = match action {
-      ActivationAction::EnqueueReady(Ok(queue_plan))
-      | ActivationAction::EnqueueTemporal(Ok(queue_plan)) => {
-        Self::commit_paged_enqueue_transactional(queue_plan)
-      }
-      ActivationAction::EnqueueReady(Err(EnqueueOutcome::CapacityUnavailable))
-      | ActivationAction::EnqueueTemporal(Err(EnqueueOutcome::CapacityUnavailable)) => {
-        match frame_system::Pallet::<T>::block_number().checked_add(&One::one()) {
-          Some(next_block) => Self::defer_activation_wakeup(
-            actor_id,
-            next_block,
-            &instance,
-            placement_hot.clone(),
-            &frame_source_state,
-            &frame_admission,
-          ),
-          None => Err(EnqueueOutcome::SchedulerIndexExhausted),
-        }
-      }
-      ActivationAction::EnqueueReady(Err(error))
-      | ActivationAction::EnqueueTemporal(Err(error)) => Err(error),
-      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::None)) => {
-        if Self::load_frame_control_authority(actor_id).is_some() {
-          Ok(())
-        } else {
-          Err(EnqueueOutcome::CorruptedTopology)
-        }
-      }
-      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::Enqueue)) => {
-        Err(EnqueueOutcome::CorruptedTopology)
-      }
-      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::BlockWakeup(block))) => {
-        Self::defer_activation_wakeup(
-          actor_id,
-          block,
-          &instance,
-          placement_hot,
-          &frame_source_state,
-          &frame_admission,
-        )
-      }
-      ActivationAction::PrimeSchedule(Err(error)) => Err(error),
-      ActivationAction::Close(_) | ActivationAction::CoalesceLive => {
-        return Err(ActivationFailure::Permanent(
-          Error::<T>::ActorInvariant.into(),
-        ));
-      }
-    };
-    match placement {
-      Ok(()) | Err(EnqueueOutcome::AlreadyLive) => Ok(if already_pending {
-        ActivationOutcome::Coalesced
-      } else {
-        ActivationOutcome::Latched
-      }),
-      Err(EnqueueOutcome::CapacityUnavailable | EnqueueOutcome::WakeupCapacityExhausted) => Err(
-        ActivationFailure::Temporary(Error::<T>::QueueCapacityUnavailable.into()),
-      ),
-      Err(
-        EnqueueOutcome::TicketExhausted
-        | EnqueueOutcome::SchedulerIndexExhausted
-        | EnqueueOutcome::WakeupIndexExhausted,
-      ) => {
-        Self::finalize_actor_from_retained_state(
-          actor_id,
-          frame_source_state,
-          &frame_admission,
-          CloseReason::SchedulerIndexExhausted,
-        )
-        .map_err(ActivationFailure::Permanent)?;
-        Ok(ActivationOutcome::Closed)
-      }
-      Err(EnqueueOutcome::CorruptedTopology) => Err(ActivationFailure::Permanent(
-        Error::<T>::SchedulerIndexExhausted.into(),
-      )),
-    }
-  }
-
-  fn request_activation_inner(actor_id: ActorId) -> Result<ActivationOutcome, ActivationFailure> {
-    let loaded = Self::load_actor_state_with_authority(actor_id);
-    let state = match loaded {
-      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
-        return Ok(ActivationOutcome::IgnoredStale);
-      }
-      LoadedActorStateOf::Active(state) => state,
-      LoadedActorStateOf::Corrupt => {
-        return Err(ActivationFailure::Permanent(
-          Error::<T>::ActorInvariant.into(),
-        ));
-      }
-    };
-    let plan = Self::preflight_activation_loaded(actor_id, state)?;
-    Self::commit_activation_plan(plan)
-  }
-
   pub(crate) fn activation_failure_error(error: ActivationFailure) -> DispatchError {
     match error {
-      ActivationFailure::Temporary(error) | ActivationFailure::Permanent(error) => error,
+      ActivationFailure::Permanent(error) => error,
     }
   }
 
@@ -4695,6 +2540,7 @@ impl<T: Config> Pallet<T> {
       .flatten()
   }
 
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
   fn invalidate_ready_to_unsignaled_inner(
     actor_id: ActorId,
   ) -> Result<Option<QueueTicket>, EnqueueOutcome> {
@@ -4721,6 +2567,9 @@ impl<T: Config> Pallet<T> {
           .ok_or(EnqueueOutcome::CorruptedTopology)?
       };
       let mut hot = state.hot;
+      if !hot.lifecycle.is_paused() {
+        hot.pending_signal = false;
+      }
       hot.queue_ticket = None;
       Self::remove_primary_control_cell_inner(actor_id)
         .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
@@ -4736,6 +2585,7 @@ impl<T: Config> Pallet<T> {
     Ok(ticket)
   }
 
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
   pub(crate) fn try_invalidate_ready_to_unsignaled(
     actor_id: ActorId,
   ) -> Result<Option<QueueTicket>, EnqueueOutcome> {
@@ -4748,21 +2598,6 @@ impl<T: Config> Pallet<T> {
       },
     )
     .map_err(|_| EnqueueOutcome::CorruptedTopology)?
-  }
-
-  #[cfg(test)]
-  pub(crate) fn try_paged_invalidate(
-    actor_id: ActorId,
-  ) -> Result<Option<QueueTicket>, EnqueueOutcome> {
-    Self::try_invalidate_ready_to_unsignaled(actor_id)
-  }
-
-  pub(crate) fn invalidate_ready_to_unsignaled_with_authority(
-    actor_id: ActorId,
-  ) -> Result<(), EnqueueOutcome> {
-    Self::try_invalidate_ready_to_unsignaled(actor_id)?
-      .map(|_| ())
-      .ok_or(EnqueueOutcome::CorruptedTopology)
   }
 
   pub fn paged_head_entry() -> Option<(QueueTicket, QueueEntry<BlockNumberFor<T>>)> {
@@ -4789,76 +2624,42 @@ impl<T: Config> Pallet<T> {
   }
 
   #[cfg(any(test, feature = "runtime-benchmarks"))]
+  fn consume_ready_primary(actor_id: ActorId, ticket: QueueTicket) -> Result<(), EnqueueOutcome> {
+    if ActorControlLocators::<T>::get(actor_id) != Some(ActorControlLocation::Ready { ticket }) {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    }
+    Self::remove_primary_control_cell_inner(actor_id)
+      .map(|_| ())
+      .map_err(|_| EnqueueOutcome::CorruptedTopology)
+  }
+
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
   pub(crate) fn paged_consume_head_at(position: QueueTicket) -> Result<(), EnqueueOutcome> {
-    Self::paged_consume_head_at_inner(position, ReadyHeadOwner::DiscoverCanonical)
+    Self::paged_consume_head_at_inner(position)
   }
 
-  pub(crate) fn paged_consume_loaded_head_at(
-    position: QueueTicket,
-    actor_id: ActorId,
-    ticket: QueueTicket,
-    hot: ActorHotStateOf<T>,
-  ) -> Result<(), EnqueueOutcome> {
-    Self::paged_consume_head_at_inner(
-      position,
-      ReadyHeadOwner::Loaded {
-        actor_id,
-        ticket,
-        hot,
-      },
-    )
-  }
-
-  fn paged_consume_closed_head_at(position: QueueTicket) -> Result<(), EnqueueOutcome> {
-    Self::paged_consume_head_at_inner(position, ReadyHeadOwner::ClosedTombstone)
-  }
-
-  fn paged_consume_head_at_inner(
-    position: QueueTicket,
-    owner: ReadyHeadOwner<T>,
-  ) -> Result<(), EnqueueOutcome> {
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
+  fn paged_consume_head_at_inner(position: QueueTicket) -> Result<(), EnqueueOutcome> {
     with_transaction_opaque_err(|| {
       let transition = || -> Result<(), EnqueueOutcome> {
         let topology = Self::queue_topology_preflight(QueueMutation::Head)?;
         if position != topology.head || position >= topology.tail {
           return Err(EnqueueOutcome::CorruptedTopology);
         }
-        let entry = Self::paged_head_entry().map(|(_, entry)| entry);
-        let loaded = match owner {
-          ReadyHeadOwner::Loaded {
-            actor_id,
-            ticket,
-            hot,
-          } => {
-            let entry = entry.ok_or(EnqueueOutcome::CorruptedTopology)?;
-            if entry.actor_id != actor_id
-              || entry.ticket != ticket
-              || hot.queue_ticket != Some(ticket)
-            {
-              return Err(EnqueueOutcome::CorruptedTopology);
-            }
-            Some(entry)
-          }
-          ReadyHeadOwner::ClosedTombstone => {
-            if entry.is_some() {
-              return Err(EnqueueOutcome::CorruptedTopology);
-            }
-            None
-          }
-          #[cfg(any(test, feature = "runtime-benchmarks"))]
-          ReadyHeadOwner::DiscoverCanonical => {
-            let entry = entry.ok_or(EnqueueOutcome::CorruptedTopology)?;
-            let (state, _, _) = Self::load_frame_actor_service_state(entry.actor_id)
-              .ok_or(EnqueueOutcome::CorruptedTopology)?;
-            if state.hot.queue_ticket != Some(entry.ticket) {
-              return Err(EnqueueOutcome::CorruptedTopology);
-            }
-            Some(entry)
-          }
-        };
-        if let Some(entry) = loaded {
-          Self::consume_ready_primary(entry.actor_id, entry.ticket)?;
+        let entry = Self::paged_head_entry()
+          .map(|(_, entry)| entry)
+          .ok_or(EnqueueOutcome::CorruptedTopology)?;
+        let (location, cell) = Self::load_primary_control_cell(entry.actor_id)
+          .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+        if location
+          != (ActorControlLocation::Ready {
+            ticket: entry.ticket,
+          })
+          || cell.actor_id != entry.actor_id
+        {
+          return Err(EnqueueOutcome::CorruptedTopology);
         }
+        Self::consume_ready_primary(entry.actor_id, entry.ticket)?;
         let next_head = position
           .checked_add(1)
           .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
@@ -5014,6 +2815,14 @@ impl<T: Config> Pallet<T> {
     admission: &ActorAdmissionCertificateOf<T>,
     clock: WakeupClock,
   ) -> Result<Option<WakeupPointer<BlockNumberFor<T>>>, EnqueueOutcome> {
+    let Some((_, frame_identity, frame_hot, frame_admission)) =
+      Self::load_frame_control_authority(actor_id)
+    else {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    };
+    if frame_identity != state.identity || frame_hot != state.hot || frame_admission != *admission {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    }
     let Some(pointer) = Self::wakeup_pointer_for_clock(&state.hot, clock) else {
       return Ok(None);
     };
@@ -5231,7 +3040,7 @@ impl<T: Config> Pallet<T> {
     Self::control_invalidate_wakeup_reference(cell, key.clock())
   }
 
-  #[cfg(any(feature = "try-runtime", all(test, feature = "runtime-benchmarks")))]
+  #[cfg(all(test, feature = "runtime-benchmarks"))]
   pub(crate) fn frame_control_entries() -> Option<
     Vec<(
       ActorId,
@@ -5333,10 +3142,36 @@ impl<T: Config> Pallet<T> {
       }
     }
     .ok_or(ActorControlTransitionError::Invariant)?;
-    if cell.actor_id != actor_id {
+    if cell.actor_id != actor_id
+      || !cell.admission.has_valid_identity()
+      || cell.pipeline_service_identity
+        != pipeline_service_identity(cell.admission.admission_identity)
+    {
       return Err(ActorControlTransitionError::Invariant);
     }
     Ok((location, cell))
+  }
+
+  pub(crate) fn replace_active_semantics_from_primary(
+    actor_id: ActorId,
+    location: ActorControlLocation<BlockNumberFor<T>>,
+  ) -> Result<(), ActorControlTransitionError> {
+    let Some(ActorSemanticState::Active(current)) = ActorSemanticStates::<T>::get(actor_id) else {
+      return Err(ActorControlTransitionError::Invariant);
+    };
+    let (_, cell) = Self::load_primary_control_cell(actor_id)?;
+    let (identity, hot, admission) =
+      Self::project_control_cell(&cell, location).ok_or(ActorControlTransitionError::Invariant)?;
+    ActorSemanticStates::<T>::insert(
+      actor_id,
+      ActorSemanticState::Active(ActorSemanticRecord {
+        identity,
+        generation: current.generation,
+        hot,
+        admission,
+      }),
+    );
+    Ok(())
   }
 
   pub(crate) fn store_primary_control_cell(
@@ -5344,7 +3179,13 @@ impl<T: Config> Pallet<T> {
     cell: ActorControlCellOf<T>,
   ) -> Result<(), ActorControlTransitionError> {
     let actor_id = cell.actor_id;
-    if ActorControlLocators::<T>::get(actor_id) != Some(location) {
+    if ActorControlLocators::<T>::get(actor_id) != Some(location)
+      || !matches!(
+        ActorSemanticStates::<T>::get(actor_id),
+        Some(ActorSemanticState::Active(_))
+      )
+      || Self::project_control_cell(&cell, location).is_none()
+    {
       return Err(ActorControlTransitionError::Invariant);
     }
     match location {
@@ -5389,7 +3230,7 @@ impl<T: Config> Pallet<T> {
         ActorWaitingFrameChunks::<T>::insert((key, page), chunk);
       }
     }
-    Ok(())
+    Self::replace_active_semantics_from_primary(actor_id, location)
   }
 
   pub(crate) fn remove_primary_control_cell_inner(
@@ -5454,7 +3295,6 @@ impl<T: Config> Pallet<T> {
       || cell.hot.wakeup_pointer.is_some()
       || cell.hot.trigger_wakeup_pointer.is_some()
       || ActorIdentities::<T>::contains_key(actor_id)
-      || !ActorFunding::<T>::contains_key(actor_id)
       || ActiveActorCount::<T>::get() == 0
       || ActorIdentityCount::<T>::get() == 0
       || SovereignIndex::<T>::get(&identity.sovereign_account) != Some(actor_id)
@@ -5468,7 +3308,6 @@ impl<T: Config> Pallet<T> {
       return Err(ActorControlTransitionError::Invariant);
     }
     ActorRunStateStore::<T>::remove(actor_id);
-    ActorFunding::<T>::remove(actor_id);
     let active_count = ActiveActorCount::<T>::get()
       .checked_sub(1)
       .ok_or(ActorControlTransitionError::Invariant)?;
@@ -5604,43 +3443,9 @@ impl<T: Config> Pallet<T> {
         let (location, mut cell) = Self::load_primary_control_cell(actor_id)?;
         let (identity, _, admission) = Self::project_control_cell(&cell, location)
           .ok_or(ActorControlTransitionError::Invariant)?;
-        let (contract, _, contract_head) =
-          Self::control_load_current_step_contract(actor_id, &admission, 0)
-            .ok_or(ActorControlTransitionError::Invariant)?;
-        let mut funding =
-          ActorFunding::<T>::get(actor_id).ok_or(ActorControlTransitionError::Invariant)?;
-        let funding_authorized = Self::funding_event_authorized(
-          actor_id,
-          &identity.owner,
-          &contract.funding,
-          source,
-          provenance,
-        );
-        if funding_authorized && funding.funding_tracked_assets.contains(&asset) {
-          let accumulated = if let Some(accumulated) = funding.funding_accumulated.get_mut(&asset) {
-            *accumulated = accumulated
-              .checked_add(&amount)
-              .ok_or(ActorControlTransitionError::Invariant)?;
-            *accumulated
-          } else {
-            funding
-              .funding_accumulated
-              .try_insert(asset, amount)
-              .map_err(|_| ActorControlTransitionError::Invariant)?;
-            amount
-          };
-          Self::ensure_funding_state_hold_capacity(actor_id, &identity, &funding)
-            .map_err(|_| ActorControlTransitionError::Invariant)?;
-          ActorFunding::<T>::insert(actor_id, &funding);
-          Self::control_reconcile_single_step_state_hold(actor_id, &cell, &contract_head, &funding)
-            .map_err(|_| ActorControlTransitionError::Invariant)?;
-          Self::deposit_event(Event::FundingAccumulated {
-            actor_id,
-            asset,
-            added: amount,
-            accumulated,
-          });
-        }
+        let (contract, _, _) = Self::control_load_current_step_contract(actor_id, &admission, 0)
+          .ok_or(ActorControlTransitionError::Invariant)?;
+        let _ = provenance;
         let signal_matched = if !cell.hot.pending_signal
           && let Trigger::AddressEvent {
             source_filter,
@@ -6096,7 +3901,7 @@ impl<T: Config> Pallet<T> {
               anchor_tick: Some(anchor_tick),
               consumed: false,
             },
-          ) if idle_activation => TriggerRuntimeState::AtTime {
+          ) if idle_activation || busy_deferred => TriggerRuntimeState::AtTime {
             anchor_tick: Some(anchor_tick),
             consumed: true,
           },
@@ -6108,6 +3913,25 @@ impl<T: Config> Pallet<T> {
           ) => state,
           _ => return Err(ActorControlTransitionError::Invariant),
         };
+        if busy_deferred {
+          let mut cell = Self::control_consume_due_wakeup_reference(cell, key, now, now_tick)?;
+          if trigger_family == TriggerFamily::Cadenced {
+            let Trigger::Cadenced { every_ticks } = contract.trigger else {
+              return Err(ActorControlTransitionError::Invariant);
+            };
+            let anchor_tick = cell
+              .hot
+              .trigger_runtime_state
+              .temporal_anchor_tick()
+              .ok_or(ActorControlTransitionError::Invariant)?;
+            let next_due_tick = next_cadence_due_tick(anchor_tick, every_ticks, now_tick)
+              .ok_or(ActorControlTransitionError::Invariant)?;
+            cell =
+              Self::control_schedule_fresh_wakeup_reference(cell, WakeupKey::Tick(next_due_tick))?;
+          }
+          Self::store_primary_control_cell(location, cell)?;
+          return Ok((actor_id, location));
+        }
         let actor_type = identity.actor_class.actor_type();
         let breakdown = Self::trigger_fee_for_weight(actor_type, trigger_family, occurrence_weight);
         let charged = if trigger_family == TriggerFamily::AtTime {
@@ -6193,6 +4017,10 @@ impl<T: Config> Pallet<T> {
   }
 
   #[cfg(any(test, feature = "runtime-benchmarks"))]
+  #[allow(
+    dead_code,
+    reason = "legacy waiting-substrate invalidation is reachable only from runtime-benchmark fixtures after the canonical deadline carrier cutover"
+  )]
   pub(crate) fn trigger_wakeup_substrate_invalidate_inner(
     actor_id: ActorId,
   ) -> Result<Option<WakeupPointer<BlockNumberFor<T>>>, EnqueueOutcome> {
@@ -6228,14 +4056,6 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  #[cfg(test)]
-  pub(crate) fn try_wakeup_substrate_schedule_inner(
-    actor_id: ActorId,
-    wakeup_block: BlockNumberFor<T>,
-  ) -> Result<(), EnqueueOutcome> {
-    Self::try_wakeup_substrate_schedule_key_inner(actor_id, WakeupKey::Block(wakeup_block))
-  }
-
   #[cfg(any(test, feature = "runtime-benchmarks"))]
   fn try_wakeup_substrate_schedule_key_inner(
     actor_id: ActorId,
@@ -6261,6 +4081,14 @@ impl<T: Config> Pallet<T> {
     else {
       return Err(EnqueueOutcome::CorruptedTopology);
     };
+    let Some((_, frame_identity, frame_hot, frame_admission)) =
+      Self::load_frame_control_authority(actor_id)
+    else {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    };
+    if frame_identity != state.identity || frame_hot != state.hot || frame_admission != admission {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    }
     let resources = if state.contract.steps.is_empty() {
       ActorStepResourceEnvelope {
         control: T::WeightInfo::scheduler_inner_zero_step_complete(),
@@ -6303,6 +4131,7 @@ impl<T: Config> Pallet<T> {
       identity: Self::control_identity_from_scalar(identity.clone())
         .ok_or(EnqueueOutcome::CorruptedTopology)?,
       hot: Self::control_hot_from_scalar(hot),
+      pipeline_service_identity: pipeline_service_identity(admission.admission_identity),
       cursor,
       eligible_at,
       admission: admission.clone(),
@@ -6588,6 +4417,7 @@ impl<T: Config> Pallet<T> {
       let (mut state, admission, loaded_step) = match frozen {
         Some((state, admission, loaded_step))
           if admission.admission_identity == expected_admission
+            && Self::admission_authorizes_contract_wake(&admission, &state.contract)
             && Self::wakeup_pointer_for_clock(&state.hot, wakeup_key.clock()) == Some(pointer) =>
         {
           (state, admission, loaded_step)
@@ -6995,261 +4825,6 @@ impl<T: Config> Pallet<T> {
     result.ok()
   }
 
-  pub(crate) fn prime_initial_actor_schedule(actor_id: ActorId) -> Result<(), EnqueueOutcome> {
-    let Some((mut state, admission, loaded_step)) = Self::load_frame_actor_service_state(actor_id)
-    else {
-      return match (
-        Self::control_identity_exists(actor_id),
-        Self::control_hot_exists(actor_id),
-        ActorContractHeads::<T>::contains_key(actor_id),
-        Self::control_admission_exists(actor_id),
-        ActorFunding::<T>::contains_key(actor_id),
-        ActorRunStateStore::<T>::contains_key(actor_id),
-      ) {
-        (false, false, false, false, false, false) | (true, false, false, false, false, false) => {
-          Ok(())
-        }
-        _ => Err(EnqueueOutcome::CorruptedTopology),
-      };
-    };
-    let mut instance = Self::derive_active_actor_view(
-      state.identity.clone(),
-      state.hot.clone(),
-      state.contract.clone(),
-    );
-    let resources = if state.contract.steps.is_empty() {
-      ActorStepResourceEnvelope {
-        control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-        effect: Weight::zero(),
-      }
-    } else {
-      loaded_step
-        .ok_or(EnqueueOutcome::CorruptedTopology)?
-        .resources
-    };
-    let now = frame_system::Pallet::<T>::block_number();
-    if !instance.lifecycle.is_paused() && instance.trigger_wakeup_pointer.is_none() {
-      if let Some(due_tick) = Self::initial_trigger_wakeup_tick(&instance)? {
-        #[cfg(test)]
-        if FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY.with(|flag| flag.replace(false)) {
-          return Err(EnqueueOutcome::WakeupCapacityExhausted);
-        }
-        match Self::try_wakeup_substrate_schedule_transition_with_authority(
-          actor_id,
-          WakeupKey::Tick(due_tick),
-          state.hot.clone(),
-          &state.identity,
-          state.run_state.as_ref().map_or(0, |run| run.cursor),
-          &admission,
-          resources,
-        ) {
-          Ok(()) | Err(EnqueueOutcome::AlreadyLive) => {}
-          Err(error) => return Err(error),
-        }
-        let (_, _, hot, _) =
-          Self::load_frame_control_authority(actor_id).ok_or(EnqueueOutcome::CorruptedTopology)?;
-        state.hot = hot;
-        instance = Self::derive_active_actor_view(
-          state.identity.clone(),
-          state.hot.clone(),
-          state.contract.clone(),
-        );
-      }
-    }
-    let placement = Self::schedule_next_work_with_authority(
-      actor_id,
-      &instance,
-      state.hot,
-      &state.identity,
-      state.run_state.as_ref(),
-      &admission,
-      resources,
-      now,
-      ServiceCutoff::Open,
-    )?;
-    if placement == StepControlPlacement::None
-      && Self::load_frame_control_authority(actor_id).is_none()
-    {
-      return Err(EnqueueOutcome::CorruptedTopology);
-    }
-    Ok(())
-  }
-
-  pub(crate) fn demote_ready_frame_to_unsignaled(actor_id: ActorId) -> Result<(), EnqueueOutcome> {
-    let (location, mut cell) =
-      Self::load_primary_control_cell(actor_id).map_err(|_| EnqueueOutcome::CorruptedTopology)?;
-    if !matches!(location, ActorControlLocation::Ready { .. })
-      || cell.hot.cycle_state != CycleState::Idle
-    {
-      return Ok(());
-    }
-    Self::remove_primary_control_cell_inner(actor_id)
-      .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
-    cell.eligible_at = None;
-    ActorUnsignaledControlCells::<T>::insert(actor_id, cell);
-    ActorControlLocators::<T>::insert(actor_id, ActorControlLocation::Unsignaled);
-    Ok(())
-  }
-
-  pub(crate) fn prime_frame_actor_schedule(actor_id: ActorId) -> Result<(), EnqueueOutcome> {
-    let Some((state, admission, loaded_step)) = Self::load_frame_actor_service_state(actor_id)
-    else {
-      return Err(EnqueueOutcome::CorruptedTopology);
-    };
-    let instance = Self::derive_active_actor_view(
-      state.identity.clone(),
-      state.hot.clone(),
-      state.contract.clone(),
-    );
-    if instance.queue_ticket.is_some() {
-      return Ok(());
-    }
-    let prime = Self::preflight_prime_schedule_loaded(&instance, state.run_state.as_ref());
-    match prime? {
-      PrimeSchedulePlan::Enqueue => {
-        let plan = Self::preflight_activation_enqueue(actor_id, &state, &admission)?;
-        Self::commit_paged_enqueue_transactional(plan)
-      }
-      PrimeSchedulePlan::BlockWakeup(block) => {
-        let resources = if state.contract.steps.is_empty() {
-          ActorStepResourceEnvelope {
-            control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-            effect: Weight::zero(),
-          }
-        } else {
-          loaded_step
-            .as_ref()
-            .map(|loaded| loaded.resources)
-            .ok_or(EnqueueOutcome::CorruptedTopology)?
-        };
-        Self::defer_wakeup_with_authority(
-          actor_id,
-          block,
-          &instance,
-          state.hot,
-          &state.identity,
-          state.run_state.as_ref(),
-          &admission,
-          resources,
-        )
-      }
-      PrimeSchedulePlan::None => {
-        if state.hot.trigger_wakeup_pointer.is_some() {
-          return Ok(());
-        }
-        let due_tick = Self::initial_trigger_wakeup_tick(&instance)?;
-        if let Some(due_tick) = due_tick {
-          let resources = if state.contract.steps.is_empty() {
-            ActorStepResourceEnvelope {
-              control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-              effect: Weight::zero(),
-            }
-          } else {
-            loaded_step
-              .as_ref()
-              .map(|loaded| loaded.resources)
-              .ok_or(EnqueueOutcome::CorruptedTopology)?
-          };
-          Self::try_wakeup_substrate_schedule_transition_with_authority(
-            actor_id,
-            WakeupKey::Tick(due_tick),
-            state.hot,
-            &state.identity,
-            state.run_state.as_ref().map_or(0, |run| run.cursor),
-            &admission,
-            resources,
-          )
-        } else {
-          Ok(())
-        }
-      }
-    }
-  }
-
-  pub(crate) fn publish_resumed_frame(
-    actor_id: ActorId,
-    state: ActiveActorStateOf<T>,
-    admission: ActorAdmissionCertificateOf<T>,
-    loaded_step: Option<LoadedActorStepOf<T>>,
-  ) -> Result<(), EnqueueOutcome> {
-    let resources = if state.contract.steps.is_empty() {
-      ActorStepResourceEnvelope {
-        control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-        effect: Weight::zero(),
-      }
-    } else {
-      loaded_step
-        .as_ref()
-        .map(|loaded| loaded.resources)
-        .ok_or(EnqueueOutcome::CorruptedTopology)?
-    };
-    let instance = Self::derive_active_actor_view(
-      state.identity.clone(),
-      state.hot.clone(),
-      state.contract.clone(),
-    );
-    let placement = Self::schedule_next_work_with_authority(
-      actor_id,
-      &instance,
-      state.hot.clone(),
-      &state.identity,
-      state.run_state.as_ref(),
-      &admission,
-      resources,
-      frame_system::Pallet::<T>::block_number(),
-      ServiceCutoff::Open,
-    )?;
-    if placement == StepControlPlacement::None {
-      Self::restore_unsignaled_from_authority(
-        actor_id,
-        state.hot,
-        &state.identity,
-        state.run_state.as_ref(),
-        &admission,
-        resources,
-      )?;
-      Self::prime_frame_actor_schedule(actor_id)?;
-    }
-    Ok(())
-  }
-
-  fn preflight_prime_schedule_loaded(
-    instance: &ActiveActorViewOf<T>,
-    run_state: Option<&ActorRunStateOf<T>>,
-  ) -> Result<PrimeSchedulePlan<BlockNumberFor<T>>, EnqueueOutcome> {
-    if instance.lifecycle.is_paused() {
-      return Ok(
-        Self::window_expiry_wakeup(instance)
-          .map_or(PrimeSchedulePlan::None, PrimeSchedulePlan::BlockWakeup),
-      );
-    }
-    let now = frame_system::Pallet::<T>::block_number();
-    let eligible_at = if instance.cycle_state == CycleState::Suspended {
-      Self::retry_eligible_at_loaded(
-        instance,
-        run_state.ok_or(EnqueueOutcome::CorruptedTopology)?,
-      )?
-    } else if instance.pending_signal {
-      Self::next_eligible_at(instance, now)?
-    } else {
-      return Ok(
-        Self::window_expiry_wakeup(instance)
-          .map_or(PrimeSchedulePlan::None, PrimeSchedulePlan::BlockWakeup),
-      );
-    };
-    let wakeup_at = instance.window.map_or(eligible_at, |window| {
-      eligible_at.min(Self::window_terminal_at(&window))
-    });
-    let exact_next_block = now
-      .checked_add(&One::one())
-      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-    Ok(if wakeup_at < exact_next_block {
-      PrimeSchedulePlan::Enqueue
-    } else {
-      PrimeSchedulePlan::BlockWakeup(wakeup_at)
-    })
-  }
-
   fn initial_trigger_wakeup_tick(
     instance: &ActiveActorViewOf<T>,
   ) -> Result<Option<SchedulerTick>, EnqueueOutcome> {
@@ -7283,38 +4858,6 @@ impl<T: Config> Pallet<T> {
     instance
       .window
       .map(|window| Self::window_terminal_at(&window))
-  }
-
-  fn schedule_window_expiry_with_authority(
-    actor_id: ActorId,
-    instance: &ActiveActorViewOf<T>,
-    loaded_authority: (
-      &ActorHotStateOf<T>,
-      &ActorIdentityOf<T>,
-      Option<&ActorRunStateOf<T>>,
-      &ActorAdmissionCertificateOf<T>,
-      ActorStepResourceEnvelope,
-    ),
-  ) -> Result<(), EnqueueOutcome> {
-    let Some(expiry) = Self::window_expiry_wakeup(instance) else {
-      return Ok(());
-    };
-    let (hot, identity, run_state, admission, resources) = loaded_authority;
-    Self::defer_wakeup_with_authority(
-      actor_id,
-      expiry,
-      instance,
-      hot.clone(),
-      identity,
-      run_state,
-      admission,
-      resources,
-    )
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_fail_wakeup_placement_with_capacity() {
-    FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY.with(|flag| flag.set(true));
   }
 
   #[cfg(test)]
@@ -7351,6 +4894,7 @@ impl<T: Config> Pallet<T> {
     )
   }
 
+  #[cfg(test)]
   fn defer_wakeup_with_authority(
     actor_id: ActorId,
     wakeup_block: BlockNumberFor<T>,
@@ -7391,56 +4935,14 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  fn defer_activation_wakeup(
-    actor_id: ActorId,
-    wakeup_block: BlockNumberFor<T>,
-    instance: &ActiveActorViewOf<T>,
-    hot: ActorHotStateOf<T>,
-    source: &ActiveActorStateOf<T>,
-    admission: &ActorAdmissionCertificateOf<T>,
-  ) -> Result<(), EnqueueOutcome> {
-    #[cfg(test)]
-    if FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY.with(|flag| flag.replace(false)) {
-      return Err(EnqueueOutcome::WakeupCapacityExhausted);
-    }
-    let target = Self::window_expiry_wakeup(instance)
-      .map(|expiry| wakeup_block.min(expiry))
-      .unwrap_or(wakeup_block);
-    match with_transaction_opaque_err(|| {
-      let transition = || {
-        let cursor = source.run_state.as_ref().map_or(0, |run| run.cursor);
-        let resources = if source.contract.steps.is_empty() {
-          ActorStepResourceEnvelope {
-            control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-            effect: Weight::zero(),
-          }
-        } else {
-          Self::load_current_step_with_admission(actor_id, cursor, admission)
-            .ok_or(EnqueueOutcome::CorruptedTopology)?
-            .resources
-        };
-        Self::try_wakeup_substrate_schedule_transition_with_authority(
-          actor_id,
-          WakeupKey::Block(target),
-          hot,
-          &source.identity,
-          cursor,
-          admission,
-          resources,
-        )
-      };
-      match transition() {
-        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
-        Err(error) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-        }
-      }
-    })
-    .map_err(|_| EnqueueOutcome::CorruptedTopology)?
-    {
-      Ok(()) | Err(EnqueueOutcome::AlreadyLive) => Ok(()),
-      Err(other) => Err(other),
-    }
+  /// Component-wise conservative owner across every complete canonical outer Service profile.
+  pub fn scheduler_complete_outer_weight_upper() -> Weight {
+    T::WeightInfo::scheduler_service_successful_interior()
+      .max(T::WeightInfo::scheduler_service_retry_to_deadline())
+      .max(T::WeightInfo::scheduler_due_deadline_to_service())
+      .max(T::WeightInfo::scheduler_service_late_refusal_rollback())
+      .max(T::WeightInfo::scheduler_service_terminal_retain_close())
+      .max(T::WeightInfo::scheduler_service_minimal_apoptosis())
   }
 
   /// Baseline scheduler envelope reserved ahead of one actor run plus pure cleanup.
@@ -7448,16 +4950,6 @@ impl<T: Config> Pallet<T> {
   /// guaranteed scheduler envelope.
   pub fn scheduler_admission_overhead() -> Weight {
     T::WeightInfo::scheduler_on_idle_base()
-      .saturating_add(T::WeightInfo::scheduler_paged_tombstone_drain(1).saturating_mul(2))
-      .saturating_add(
-        T::WeightInfo::scheduler_paged_consume_preserve_page()
-          .max(T::WeightInfo::scheduler_paged_consume_delete_page()),
-      )
-      .saturating_add(
-        T::WeightInfo::scheduler_paged_append_existing_page()
-          .max(T::WeightInfo::scheduler_paged_append_new_page()),
-      )
-      .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_worker_future().saturating_mul(2))
       .saturating_add(Self::scheduler_actor_state_probe_weight_upper())
   }
 
@@ -7481,63 +4973,6 @@ impl<T: Config> Pallet<T> {
     T::WeightInfo::scheduler_actor_state_probe()
   }
 
-  #[cfg(feature = "runtime-benchmarks")]
-  pub(crate) fn benchmark_defer_tick_wakeup(
-    actor_id: ActorId,
-    wakeup_tick: SchedulerTick,
-  ) -> Result<(), EnqueueOutcome> {
-    #[cfg(test)]
-    if FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY.with(|flag| flag.replace(false)) {
-      return Err(EnqueueOutcome::WakeupCapacityExhausted);
-    }
-    match Self::try_wakeup_substrate_schedule_key_inner(actor_id, WakeupKey::Tick(wakeup_tick)) {
-      Ok(()) | Err(EnqueueOutcome::AlreadyLive) => Ok(()),
-      Err(other) => Err(other),
-    }
-  }
-
-  fn wakeup_cursor_drain_branch_weight(
-    bucket: WakeupBucketDisposition,
-    clock: WakeupClock,
-  ) -> Weight {
-    let physical = if matches!(bucket, WakeupBucketDisposition::Remove) {
-      T::WeightInfo::scheduler_wakeup_cursor_worker_remove()
-    } else {
-      T::WeightInfo::scheduler_wakeup_cursor_worker_partial()
-    };
-    match clock {
-      WakeupClock::Block => physical,
-      WakeupClock::Tick => {
-        let at_time = T::WeightInfo::at_time_trigger_occurrence();
-        let cadenced = T::WeightInfo::cadenced_trigger_occurrence();
-        physical.saturating_add(Weight::from_parts(
-          at_time.ref_time().max(cadenced.ref_time()),
-          at_time.proof_size().max(cadenced.proof_size()),
-        ))
-      }
-    }
-  }
-
-  fn wakeup_cursor_drain_unit_weight_for(
-    bucket: WakeupBucketDisposition,
-    clock: WakeupClock,
-  ) -> Weight {
-    Self::wakeup_cursor_drain_branch_weight(bucket, clock)
-      .saturating_add(Self::close_cleanup_weight_upper())
-      .saturating_add(T::WeightInfo::record_wakeup_worker_fault())
-  }
-
-  pub fn wakeup_cursor_drain_unit_weight_upper(bucket: WakeupBucketDisposition) -> Weight {
-    Self::wakeup_cursor_drain_unit_weight_for(bucket, WakeupClock::Tick)
-  }
-
-  #[cfg(test)]
-  pub(crate) fn block_wakeup_cursor_drain_unit_weight_upper(
-    bucket: WakeupBucketDisposition,
-  ) -> Weight {
-    Self::wakeup_cursor_drain_unit_weight_for(bucket, WakeupClock::Block)
-  }
-
   pub(crate) fn process_due_temporal_occurrence_loaded(
     actor_id: ActorId,
     mut state: ActiveActorStateOf<T>,
@@ -7545,6 +4980,11 @@ impl<T: Config> Pallet<T> {
     loaded_step: Option<LoadedActorStepOf<T>>,
     now_tick: SchedulerTick,
   ) -> Result<bool, DispatchError> {
+    if !Self::admission_authorizes_contract_wake(&admission, &state.contract) {
+      return Err(DispatchError::Other(
+        "temporal wake qualification is corrupt",
+      ));
+    }
     let resources = if state.contract.steps.is_empty() {
       ActorStepResourceEnvelope {
         control: T::WeightInfo::scheduler_inner_zero_step_complete(),
@@ -7592,7 +5032,7 @@ impl<T: Config> Pallet<T> {
       let due_tick = anchor_tick
         .checked_add(delay_ticks)
         .ok_or(DispatchError::Other("genesis temporal deadline failed"))?;
-      state.hot.trigger_runtime_state = match state.contract.trigger {
+      let initialized = match state.contract.trigger {
         Trigger::AtTime { .. } => TriggerRuntimeState::AtTime {
           anchor_tick: Some(anchor_tick),
           consumed: false,
@@ -7602,6 +5042,48 @@ impl<T: Config> Pallet<T> {
         },
         _ => return Err(DispatchError::Other("tick wakeup owner changed trigger")),
       };
+      // Genesis installation records `None` as the bounded bootstrap marker because no consensus
+      // timestamp exists yet and `plan_actor_publication` publishes a Tick(0) bootstrap deadline;
+      // the first observed timestamp initializes the anchor here. A canonically published Actor
+      // therefore re-anchors and places its deadline through the canonical carrier, while a
+      // pre-cutover carrier keeps the legacy waiting-substrate transition.
+      let canonical = !ActorControlLocators::<T>::contains_key(actor_id)
+        && !ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+        && ActorProcesses::<T>::contains_key(actor_id);
+      if canonical {
+        let actor = Self::load_actor_ref(actor_id).ok_or(DispatchError::Other(
+          "genesis temporal generation authority is missing",
+        ))?;
+        let handle = Self::plan_deadline_destination(actor, WakeupKey::Tick(due_tick))
+          .map_err(|_| DispatchError::Other("genesis temporal deadline planning failed"))?;
+        let Some(ActorSemanticState::Active(current)) = ActorSemanticStates::<T>::get(actor_id)
+        else {
+          return Err(DispatchError::Other(
+            "genesis temporal semantic authority is missing",
+          ));
+        };
+        if current.generation != actor.generation
+          || current.identity != state.identity
+          || current.hot != state.hot
+          || current.admission != admission
+        {
+          return Err(DispatchError::Other(
+            "genesis temporal semantic authority is corrupt",
+          ));
+        }
+        let mut replacement = current.clone();
+        replacement.hot.trigger_runtime_state = initialized;
+        replacement.hot.trigger_wakeup_pointer = Some(TriggerWakeupPointer {
+          tick: due_tick,
+          page_id: handle.page,
+          slot: u32::from(handle.slot),
+        });
+        ActorSemanticStates::<T>::insert(actor_id, ActorSemanticState::Active(replacement));
+        Self::insert_trigger_deadline_member(handle)
+          .map_err(|_| DispatchError::Other("genesis temporal placement failed"))?;
+        return Ok(false);
+      }
+      state.hot.trigger_runtime_state = initialized;
       Self::try_store_control_hot_with_authority(actor_id, state.hot.clone())
         .map_err(|_| DispatchError::Other("genesis temporal authority update failed"))?;
       let placement = {
@@ -7641,17 +5123,67 @@ impl<T: Config> Pallet<T> {
         anchor_tick,
         consumed: false,
       } => {
-        state.hot.trigger_runtime_state = TriggerRuntimeState::AtTime {
+        let Some(ActorSemanticState::Active(current)) = ActorSemanticStates::<T>::get(actor_id)
+        else {
+          return Err(DispatchError::Other("AtTime semantic authority is missing"));
+        };
+        if current.identity != state.identity
+          || current.hot != state.hot
+          || current.admission != admission
+        {
+          return Err(DispatchError::Other("AtTime semantic authority is corrupt"));
+        }
+        let mut replacement = current.clone();
+        replacement.hot.trigger_runtime_state = TriggerRuntimeState::AtTime {
           anchor_tick,
           consumed: true,
         };
-        Self::try_store_control_hot_with_authority(actor_id, state.hot)
-          .map_err(|_| DispatchError::Other("AtTime progression commit failed"))?;
+        Self::mutate_actor_semantic_state(
+          actor_id,
+          ActorSemanticMutation::Replace {
+            expected: ActorSemanticState::Active(current),
+            replacement: ActorSemanticState::Active(replacement),
+          },
+        )
+        .map_err(|_| DispatchError::Other("AtTime progression commit failed"))?;
       }
       TriggerRuntimeState::Cadenced { .. } => {
         let next_due_tick = next_cadence_due_tick(anchor_tick, delay_ticks, now_tick)
           .ok_or(DispatchError::Other("cadence deadline failed"))?;
-        let placement = {
+        let canonical = !ActorControlLocators::<T>::contains_key(actor_id)
+          && !ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+          && ActorProcesses::<T>::contains_key(actor_id);
+        let placement = if canonical {
+          let actor = Self::load_actor_ref(actor_id).ok_or(DispatchError::Other(
+            "cadence generation authority is missing",
+          ))?;
+          let handle = Self::plan_deadline_destination(actor, WakeupKey::Tick(next_due_tick))
+            .map_err(|_| DispatchError::Other("cadence deadline planning failed"))?;
+          let Some(ActorSemanticState::Active(current)) = ActorSemanticStates::<T>::get(actor_id)
+          else {
+            return Err(DispatchError::Other(
+              "cadence semantic authority is missing",
+            ));
+          };
+          if current.generation != actor.generation
+            || current.identity != state.identity
+            || current.hot != state.hot
+            || current.admission != admission
+          {
+            return Err(DispatchError::Other(
+              "cadence semantic authority is corrupt",
+            ));
+          }
+          let mut replacement = current.clone();
+          replacement.hot.trigger_wakeup_pointer = Some(TriggerWakeupPointer {
+            tick: next_due_tick,
+            page_id: handle.page,
+            slot: u32::from(handle.slot),
+          });
+          ActorSemanticStates::<T>::insert(actor_id, ActorSemanticState::Active(replacement));
+          Self::insert_trigger_deadline_member(handle)
+            .map_err(|_| EnqueueOutcome::CorruptedTopology)
+        } else {
           Self::try_wakeup_substrate_schedule_transition_with_authority(
             actor_id,
             WakeupKey::Tick(next_due_tick),
@@ -7691,28 +5223,34 @@ impl<T: Config> Pallet<T> {
         "temporal progression state is corrupt",
       ));
     };
-    let activation =
-      Self::preflight_activation_from_authority(actor_id, state.clone(), admission.clone())
-        .map_err(|_| DispatchError::Other("temporal activation preflight failed"))?;
-    let closes_without_occurrence = activation.terminal_reason.is_some()
-      || matches!(
-        activation.action,
-        ActivationAction::Close(_)
-          | ActivationAction::EnqueueTemporal(Err(
-            EnqueueOutcome::TicketExhausted
-              | EnqueueOutcome::SchedulerIndexExhausted
-              | EnqueueOutcome::WakeupIndexExhausted
-          ))
-      );
-    if closes_without_occurrence {
-      let activation = Self::commit_activation_plan(activation);
-      return match activation {
-        Ok(ActivationOutcome::Closed) => Ok(true),
-        Ok(ActivationOutcome::Latched | ActivationOutcome::Coalesced) => Ok(false),
-        _ => Err(DispatchError::Other(
-          "temporal terminal substitution failed",
-        )),
-      };
+    if matches!(
+      state.hot.cycle_state,
+      CycleState::Running | CycleState::Suspended
+    ) {
+      return Ok(false);
+    }
+    let canonical = !ActorControlLocators::<T>::contains_key(actor_id)
+      && !ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+      && ActorProcesses::<T>::contains_key(actor_id);
+    // Fresh genesis publishes canonical Actors only, so a temporal occurrence that is not
+    // canonically owned is an incoherent pre-cutover carrier state rather than a supported
+    // legacy activation path. Canonical publication remains the sole temporal placement owner.
+    if !canonical {
+      return Err(DispatchError::Other(
+        "temporal owner is not canonically published",
+      ));
+    }
+    let instance = Self::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    let classification = Self::classify_actor_loaded(&instance, state.run_state.as_ref())
+      .map_err(|error| Self::classification_dispatch_error(error))?;
+    if let Some(reason) = classification.terminal_reason {
+      Self::finalize_actor_from_retained_state(actor_id, state, &admission, reason)
+        .map_err(|_| DispatchError::Other("temporal terminal substitution failed"))?;
+      return Ok(true);
     }
     let actor_type = state.identity.actor_class.actor_type();
     let breakdown = Self::trigger_fee_for_weight(actor_type, trigger_family, occurrence_weight);
@@ -7724,263 +5262,39 @@ impl<T: Config> Pallet<T> {
       )
       .map_err(|_| DispatchError::Other("temporal capacity calculation failed"))?;
       if !temporal_capacity {
-        let close_result = Self::finalize_actor_from_retained_state(
+        Self::finalize_actor_from_retained_state(
           actor_id,
           state,
           &admission,
           CloseReason::TriggerAdmissionInsufficient,
-        );
-        close_result.map_err(|_| DispatchError::Other("underfunded temporal apoptosis failed"))?;
+        )
+        .map_err(|_| DispatchError::Other("underfunded temporal apoptosis failed"))?;
         return Ok(true);
       }
-      if !Self::try_charge_prechecked_automatic_trigger_occurrence(
-        actor_type,
-        &state.identity.sovereign_account,
-        breakdown,
-      )
-      .map_err(|_| DispatchError::Other("temporal collection failed"))?
-      {
-        return Err(DispatchError::Other("temporal fee collection failed"));
-      }
-    } else if !Self::try_charge_automatic_trigger_occurrence(
+    }
+    let actor = Self::load_actor_ref(actor_id).ok_or(DispatchError::Other(
+      "temporal generation authority is missing",
+    ))?;
+    let sovereign_account = state.identity.sovereign_account.clone();
+    match Self::commit_canonical_trigger_occurrence_with_authority(
+      actor,
       actor_type,
-      &state.identity.sovereign_account,
+      &sovereign_account,
       breakdown,
-    )
-    .map_err(|_| DispatchError::Other("temporal collection failed"))?
-    {
-      return Ok(false);
-    }
-    if trigger_family == TriggerFamily::Cadenced {
-      let (state, _, _) = Self::load_frame_actor_service_state(actor_id)
-        .ok_or(DispatchError::Other("cadence latch authority disappeared"))?;
-      if state.hot.trigger_wakeup_pointer.is_some() {
-        Self::trigger_wakeup_substrate_invalidate_loaded(actor_id, state, &admission)
-          .map_err(|_| DispatchError::Other("cadence latch disable failed"))?;
-      }
-    }
-    let activation = Self::request_activation(actor_id);
-    match activation {
-      Ok(ActivationOutcome::Coalesced | ActivationOutcome::Latched) => {
-        let paused_hot =
-          Self::load_control_authority_with_authority(actor_id).map(|(_, hot, _)| hot);
-        if let Some(hot) = paused_hot
-          && hot.lifecycle.is_paused()
-          && hot.queue_ticket.is_some()
-        {
-          Self::invalidate_ready_to_unsignaled_with_authority(actor_id)
-            .map_err(|_| DispatchError::Other("paused temporal queue invalidation failed"))?;
-        }
-        Self::reconcile_actor_state_hold_with_authority(actor_id)
-          .map_err(|_| DispatchError::Other("temporal latch hold reconciliation failed"))?;
-        Self::deposit_event(Event::TriggerOccurrenceProcessed {
-          actor_id,
-          trigger_family: breakdown.trigger_family,
-          fee: breakdown.trigger_fee,
-        });
+      state,
+      frame_system::Pallet::<T>::block_number(),
+    ) {
+      Ok(_) => Ok(false),
+      Err(error)
+        if trigger_family == TriggerFamily::Cadenced
+          && error == Error::<T>::InsufficientFee.into() =>
+      {
         Ok(false)
       }
-      _ => Err(DispatchError::Other("temporal activation failed")),
+      Err(_) => Err(DispatchError::Other(
+        "temporal canonical publication failed",
+      )),
     }
-  }
-
-  pub fn drain_overdue_wakeups_cursor(
-    now: BlockNumberFor<T>,
-    meter: &mut WeightMeter,
-  ) -> WakeupDrainStats {
-    Self::drain_overdue_wakeups_cursor_resuming(now, meter, WakeupDrainStats::default())
-  }
-
-  pub(crate) fn drain_overdue_wakeups_cursor_resuming(
-    now: BlockNumberFor<T>,
-    meter: &mut WeightMeter,
-    mut total: WakeupDrainStats,
-  ) -> WakeupDrainStats {
-    let max_scans = T::MaxWakeupsPerBlock::get();
-    if total.entries_scanned >= max_scans {
-      return total;
-    }
-    let now_tick = match Self::current_scheduler_tick() {
-      Ok(tick) => tick,
-      Err(_) => return total,
-    };
-    while total.entries_scanned < max_scans {
-      let first_clock = NextWakeupClock::<T>::get();
-      let clocks = match first_clock {
-        WakeupClock::Block => [WakeupClock::Block, WakeupClock::Tick],
-        WakeupClock::Tick => [WakeupClock::Tick, WakeupClock::Block],
-      };
-      let mut selected = None;
-      for clock in clocks {
-        let cursor_weight = T::WeightInfo::scheduler_wakeup_cursor_worker_future();
-        if !meter.can_consume(cursor_weight) {
-          break;
-        }
-        meter.consume(cursor_weight);
-        if WakeupWorkerFaultState::<T>::exists() {
-          return total;
-        }
-        let Some(key) = Self::wakeup_cursor_peek_key(clock) else {
-          continue;
-        };
-        let due = match key {
-          WakeupKey::Block(block) => block <= now,
-          WakeupKey::Tick(tick) => tick <= now_tick,
-        };
-        if due {
-          selected = Some((
-            key,
-            match clock {
-              WakeupClock::Block => WakeupClock::Tick,
-              WakeupClock::Tick => WakeupClock::Block,
-            },
-          ));
-          break;
-        }
-      }
-      let Some((wakeup_key, next_clock_after_success)) = selected else {
-        break;
-      };
-      let base_weight = Self::wakeup_cursor_drain_branch_weight(
-        WakeupBucketDisposition::Retain,
-        wakeup_key.clock(),
-      );
-      if Self::combined_queue_occupancy() >= u64::from(T::MaxActiveActors::get())
-        || !meter.can_consume(base_weight)
-      {
-        break;
-      }
-      let occupancy = ActorWaitingOccupancies::<T>::get(wakeup_key);
-      if occupancy == 0 {
-        meter.consume(base_weight);
-        break;
-      }
-      let bucket_disposition = if occupancy <= 1 {
-        WakeupBucketDisposition::Remove
-      } else {
-        WakeupBucketDisposition::Retain
-      };
-      let unit_weight =
-        Self::wakeup_cursor_drain_branch_weight(bucket_disposition, wakeup_key.clock());
-      let admission_weight =
-        Self::wakeup_cursor_drain_unit_weight_for(bucket_disposition, wakeup_key.clock());
-      if !meter.can_consume(admission_weight) {
-        meter.consume(base_weight);
-        break;
-      }
-      meter.consume(unit_weight);
-      let source_page = ActorWaitingHeads::<T>::get(wakeup_key) / 32;
-      let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
-        let (ready, stats) = Self::wakeup_substrate_drain_key(wakeup_key, 1);
-        if stats.entries_scanned == 0 {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok((
-            stats, false,
-          )));
-        }
-        let mut closed_with_reserved_cleanup = false;
-        for (actor_id, post_source_state, admission, loaded_step) in ready {
-          if matches!(wakeup_key, WakeupKey::Tick(_)) {
-            match Self::process_due_temporal_occurrence_loaded(
-              actor_id,
-              post_source_state,
-              admission,
-              loaded_step,
-              now_tick,
-            ) {
-              Ok(closed) => closed_with_reserved_cleanup |= closed,
-              Err(error) => {
-                return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-                  error,
-                ));
-              }
-            }
-            continue;
-          }
-          let close_instance = Self::derive_active_actor_view(
-            post_source_state.identity.clone(),
-            post_source_state.hot.clone(),
-            post_source_state.contract.clone(),
-          );
-          match Self::expiry_substitution_due_loaded(
-            &close_instance,
-            post_source_state.run_state.as_ref(),
-          ) {
-            Ok(true) => {
-              let close_result = Self::finalize_actor_from_consumed_state(
-                actor_id,
-                post_source_state.clone(),
-                &admission,
-                CloseReason::WindowExpired,
-              );
-              if let Err(error) = close_result {
-                return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-                  error,
-                ));
-              }
-              closed_with_reserved_cleanup = true;
-              continue;
-            }
-            Ok(false) => {}
-            Err(error) => {
-              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-                error.into(),
-              ));
-            }
-          }
-          if let Err(error) = Self::enqueue_actor_state_loaded(
-            actor_id,
-            &post_source_state,
-            &admission,
-            loaded_step.as_ref(),
-          ) {
-            let close_result = Self::finalize_actor_from_consumed_state(
-              actor_id,
-              post_source_state.clone(),
-              &admission,
-              CloseReason::SchedulerIndexExhausted,
-            );
-            if !Self::scheduler_index_is_exhausted(error) || close_result.is_err() {
-              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-                polkadot_sdk::sp_runtime::DispatchError::Other("wakeup materialization failed"),
-              ));
-            }
-            closed_with_reserved_cleanup = true;
-          }
-        }
-        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok((
-          stats,
-          closed_with_reserved_cleanup,
-        )))
-      });
-      let (stats, closed_with_reserved_cleanup) = match outcome {
-        Ok(outcome) => outcome,
-        Err(_) => {
-          let recorded = Self::record_wakeup_worker_fault(
-            meter,
-            WakeupWorkerFault {
-              key: wakeup_key,
-              page: source_page,
-              class: CrossingWorkerFaultClass::Invariant,
-            },
-          );
-          debug_assert!(recorded, "fault Weight was reserved before wakeup mutation");
-          break;
-        }
-      };
-      if closed_with_reserved_cleanup {
-        meter.consume(Self::close_cleanup_weight_upper());
-      }
-      if stats.entries_scanned == 0 {
-        break;
-      }
-      NextWakeupClock::<T>::put(next_clock_after_success);
-      total.entries_scanned = total.entries_scanned.saturating_add(stats.entries_scanned);
-      total.ready_entries = total.ready_entries.saturating_add(stats.ready_entries);
-      total.stale_entries = total.stale_entries.saturating_add(stats.stale_entries);
-      total.pages_touched = total.pages_touched.saturating_add(stats.pages_touched);
-      total.pages_deleted = total.pages_deleted.saturating_add(stats.pages_deleted);
-    }
-    total
   }
 
   pub(crate) fn current_scheduler_tick() -> Result<SchedulerTick, EnqueueOutcome> {
@@ -8070,7 +5384,9 @@ impl<T: Config> Pallet<T> {
       .checked_add(&retry_delay)
       .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
     if let Some(window) = window {
-      eligible_at = eligible_at.max(window.start);
+      eligible_at = eligible_at
+        .max(window.start)
+        .min(Self::window_terminal_at(&window));
     }
     Ok(eligible_at)
   }
@@ -8091,6 +5407,821 @@ impl<T: Config> Pallet<T> {
     Ok(run_state.eligible_at)
   }
 
+  fn plan_next_work_loaded(
+    instance: &ActiveActorViewOf<T>,
+    run_state: Option<&ActorRunStateOf<T>>,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<NextWorkPlan<BlockNumberFor<T>>, EnqueueOutcome> {
+    let disabled_basis = || match instance.cycle_state {
+      CycleState::Idle => Ok(SuspendedProcessBasis::Idle),
+      CycleState::Running => {
+        let run = run_state.ok_or(EnqueueOutcome::CorruptedTopology)?;
+        if !run.running_is_coherent() {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        Ok(SuspendedProcessBasis::Running {
+          eligible_at: run.eligible_at,
+        })
+      }
+      CycleState::Suspended => {
+        let run = run_state.ok_or(EnqueueOutcome::CorruptedTopology)?;
+        Ok(SuspendedProcessBasis::Suspended {
+          not_before: Self::retry_eligible_at_loaded(instance, run)?,
+        })
+      }
+    };
+    if instance.lifecycle.is_paused() {
+      return Self::window_expiry_wakeup(instance).map_or_else(
+        || {
+          Ok(NextWorkPlan::Disabled(ProcessDisablement {
+            cause: ProcessDisableCause::OwnerPaused,
+            revival_authority: ProcessRevivalAuthority::Owner,
+            basis: disabled_basis()?,
+          }))
+        },
+        |at| Ok(NextWorkPlan::Wakeup(at)),
+      );
+    }
+    let (eligible_at, kind) = if matches!(
+      instance.cycle_state,
+      CycleState::Running | CycleState::Suspended
+    ) {
+      let run = run_state.ok_or(EnqueueOutcome::CorruptedTopology)?;
+      let eligible_at = if instance.cycle_state == CycleState::Running {
+        if !run.running_is_coherent() {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        run.eligible_at
+      } else {
+        Self::retry_eligible_at_loaded(instance, run)?
+      };
+      (eligible_at, ServiceResidenceKind::Live)
+    } else if instance.pending_signal {
+      (
+        Self::next_eligible_at(instance, now)?,
+        ServiceResidenceKind::Pending,
+      )
+    } else {
+      return Self::window_expiry_wakeup(instance).map_or_else(
+        || {
+          Ok(NextWorkPlan::Disabled(ProcessDisablement {
+            cause: ProcessDisableCause::Protocol,
+            revival_authority: ProcessRevivalAuthority::Protocol,
+            basis: SuspendedProcessBasis::Idle,
+          }))
+        },
+        |at| Ok(NextWorkPlan::Wakeup(at)),
+      );
+    };
+    let wakeup_at = instance.window.map_or(eligible_at, |window| {
+      eligible_at.min(Self::window_terminal_at(&window))
+    });
+    let exact_next_block = now
+      .checked_add(&One::one())
+      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
+    Ok(
+      if wakeup_at < exact_next_block || wakeup_at == exact_next_block && cutoff.is_snapshotted() {
+        NextWorkPlan::Service(kind)
+      } else {
+        NextWorkPlan::Wakeup(wakeup_at)
+      },
+    )
+  }
+
+  #[allow(
+    dead_code,
+    reason = "destination materialization remains inert until the atomic carrier cutover"
+  )]
+  fn plan_process_destination(
+    actor: ActorRef,
+    plan: NextWorkPlan<BlockNumberFor<T>>,
+    now: BlockNumberFor<T>,
+    last_attempted: Option<BlockNumberFor<T>>,
+  ) -> Result<PlannedProcessDestination<BlockNumberFor<T>>, EnqueueOutcome> {
+    let process = |status, residence| ActorProcess {
+      generation: actor.generation,
+      last_attempted,
+      status,
+      residence,
+    };
+    match plan {
+      NextWorkPlan::Disabled(disablement) => Ok(PlannedProcessDestination::Disabled(process(
+        ProcessStatus::Disabled(disablement),
+        None,
+      ))),
+      NextWorkPlan::Service(kind) => {
+        if ActorProcesses::<T>::contains_key(actor.actor_id)
+          || ServiceNodes::<T>::contains_key(actor.actor_id)
+        {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        let header = ServiceHeader::<T>::get();
+        if header.count >= T::MaxActiveActors::get() {
+          return Err(EnqueueOutcome::CapacityUnavailable);
+        }
+        match (header.count, header.cursor) {
+          (0, None) => {}
+          (0, Some(_)) | (_, None) => return Err(EnqueueOutcome::CorruptedTopology),
+          (_, Some(cursor)) => {
+            let head = ServiceNodes::<T>::get(cursor.actor_id)
+              .filter(|node| node.generation == cursor.generation)
+              .ok_or(EnqueueOutcome::CorruptedTopology)?;
+            let tail = ServiceNodes::<T>::get(head.previous.actor_id)
+              .filter(|node| node.generation == head.previous.generation)
+              .ok_or(EnqueueOutcome::CorruptedTopology)?;
+            if tail.next != cursor {
+              return Err(EnqueueOutcome::CorruptedTopology);
+            }
+          }
+        }
+        Ok(PlannedProcessDestination::Service {
+          process: process(
+            ProcessStatus::Serving,
+            Some(ProcessResidence::Service(kind)),
+          ),
+          admission_round: now,
+        })
+      }
+      NextWorkPlan::Wakeup(at) => {
+        let handle = Self::plan_deadline_destination(actor, WakeupKey::Block(at)).map_err(
+          |error| match error {
+            DeadlineMutationError::CapacityExceeded | DeadlineMutationError::PageFull => {
+              EnqueueOutcome::WakeupCapacityExhausted
+            }
+            _ => EnqueueOutcome::CorruptedTopology,
+          },
+        )?;
+        Ok(PlannedProcessDestination::Deadline {
+          process: process(
+            ProcessStatus::Serving,
+            Some(ProcessResidence::Deadline {
+              key: handle.key,
+              page: handle.page,
+              slot: handle.slot,
+            }),
+          ),
+          handle,
+        })
+      }
+    }
+  }
+
+  #[allow(
+    dead_code,
+    reason = "composite publication remains inert until the atomic carrier cutover"
+  )]
+  fn plan_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<PlannedActorPublication<BlockNumberFor<T>>, EnqueueOutcome> {
+    let instance = Self::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    let process_plan = Self::plan_next_work_loaded(&instance, supplied_run, now, cutoff)?;
+    let process = Self::plan_process_destination(actor, process_plan, now, None)?;
+    let mut hot = state.hot.clone();
+    let trigger_deadline = if instance.lifecycle.is_paused() {
+      hot.trigger_wakeup_pointer = None;
+      None
+    } else {
+      let trigger_tick = match instance.trigger_wakeup_pointer.as_ref() {
+        Some(pointer) => Some(pointer.tick),
+        None => Self::initial_trigger_wakeup_tick(&instance)?,
+      };
+      trigger_tick
+        .map(|tick| {
+          Self::plan_deadline_destination(actor, WakeupKey::Tick(tick)).inspect(|handle| {
+            hot.trigger_wakeup_pointer = Some(TriggerWakeupPointer {
+              tick,
+              page_id: handle.page,
+              slot: u32::from(handle.slot),
+            });
+          })
+        })
+        .transpose()
+        .map_err(|error| match error {
+          DeadlineMutationError::CapacityExceeded | DeadlineMutationError::PageFull => {
+            EnqueueOutcome::WakeupCapacityExhausted
+          }
+          _ => EnqueueOutcome::CorruptedTopology,
+        })?
+    };
+    Ok(PlannedActorPublication {
+      hot,
+      process,
+      trigger_deadline,
+      resources,
+    })
+  }
+
+  /// Preflights every stable owner needed by a first canonical publication. The legacy carrier may
+  /// still exist while planning, but no canonical process, residence, or reverse handle may have
+  /// been published. Generated current-Step resources and semantic generation are checked before
+  /// any caller is allowed to enter the future transactional commit boundary.
+  #[allow(
+    dead_code,
+    reason = "composite publication preflight remains inert until the atomic carrier cutover"
+  )]
+  fn preflight_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<PlannedActorPublication<BlockNumberFor<T>>, EnqueueOutcome> {
+    if actor.generation == 0
+      || ActorProcesses::<T>::contains_key(actor.actor_id)
+      || ServiceNodes::<T>::contains_key(actor.actor_id)
+      || DeadlineHandles::<T>::contains_key(actor.actor_id)
+      || TriggerDeadlineHandles::<T>::contains_key(actor.actor_id)
+      || state.run_state.is_some() != supplied_run.is_some()
+    {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    }
+    let Some(ActorSemanticState::Active(semantic)) = ActorSemanticStates::<T>::get(actor.actor_id)
+    else {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    };
+    let admission = Self::build_admission_certificate(&state.contract)
+      .ok_or(EnqueueOutcome::CorruptedTopology)?;
+    if semantic.generation != actor.generation
+      || semantic.identity != state.identity
+      || semantic.hot != state.hot
+      || semantic.admission != admission
+    {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    }
+    let expected_resources = if state.contract.steps.is_empty() {
+      ActorStepResourceEnvelope {
+        control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+        effect: Weight::zero(),
+      }
+    } else {
+      let cursor = supplied_run.map_or(0, |run| run.cursor);
+      Self::derive_step_resource_envelopes(&state.contract)
+        .and_then(|envelopes| envelopes.get(cursor as usize).copied())
+        .ok_or(EnqueueOutcome::CorruptedTopology)?
+    };
+    if resources != expected_resources {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    }
+    Self::plan_actor_publication(actor, state, supplied_run, resources, now, cutoff)
+  }
+
+  /// Atomically replaces one canonical publication with a validated lifecycle successor. The
+  /// source semantic record and process residence remain authoritative until their exact carrier
+  /// members have been removed; any refusal restores the complete canonical root.
+  pub(crate) fn transition_actor_publication_to_successor(
+    actor: ActorRef,
+    source: &ActiveActorStateOf<T>,
+    successor: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<(), EnqueueOutcome> {
+    with_transaction_opaque_err(|| {
+      let result = (|| -> Result<(), EnqueueOutcome> {
+        if ActorControlLocators::<T>::contains_key(actor.actor_id)
+          || ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id)
+          || successor.contract != source.contract
+          || successor.identity.sovereign_account != source.identity.sovereign_account
+          || successor.identity.owner != source.identity.owner
+          || successor.identity.actor_class != source.identity.actor_class
+          || successor.identity.mutability != source.identity.mutability
+          || successor.identity.cycle_nonce != source.identity.cycle_nonce
+          || source.run_state.as_ref().map(|run| run.encode())
+            != supplied_run.map(|run| run.encode())
+          || successor.run_state.as_ref().map(|run| run.encode())
+            != supplied_run.map(|run| run.encode())
+        {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        let admission = Self::build_admission_certificate(&source.contract)
+          .ok_or(EnqueueOutcome::CorruptedTopology)?;
+        let Some(ActorSemanticState::Active(mut semantic)) =
+          ActorSemanticStates::<T>::get(actor.actor_id)
+        else {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        };
+        if semantic.generation != actor.generation
+          || semantic.identity != source.identity
+          || semantic.hot != source.hot
+          || semantic.admission != admission
+          || Self::build_admission_certificate(&successor.contract) != Some(admission.clone())
+          || ActorRunStateStore::<T>::get(actor.actor_id)
+            .as_ref()
+            .map(|run| run.encode())
+            != supplied_run.map(|run| run.encode())
+        {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        let process = ActorProcesses::<T>::get(actor.actor_id)
+          .filter(|process| process.generation == actor.generation)
+          .ok_or(EnqueueOutcome::CorruptedTopology)?;
+
+        if TriggerDeadlineHandles::<T>::contains_key(actor.actor_id) {
+          Self::remove_trigger_deadline_member(actor)
+            .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+        } else if source.hot.trigger_wakeup_pointer.is_some() {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        match process.residence {
+          Some(ProcessResidence::Service(_)) => {
+            Self::remove_service_member(actor).map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+          }
+          Some(ProcessResidence::Deadline { .. }) => {
+            Self::remove_deadline_member(actor).map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+          }
+          Some(ProcessResidence::Parked(_)) => return Err(EnqueueOutcome::CorruptedTopology),
+          None if matches!(process.status, ProcessStatus::Disabled(_)) => {}
+          None => return Err(EnqueueOutcome::CorruptedTopology),
+        }
+        ActorProcesses::<T>::remove(actor.actor_id);
+        semantic.identity = successor.identity.clone();
+        semantic.hot = successor.hot.clone();
+        ActorSemanticStates::<T>::insert(actor.actor_id, ActorSemanticState::Active(semantic));
+        Self::publish_actor_publication(actor, successor, supplied_run, resources, now, cutoff)
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+    .map_err(|_| EnqueueOutcome::CorruptedTopology)?
+  }
+
+  /// Atomically removes one exact canonical active publication and converges on the existing
+  /// custody-neutral terminal finalizer. Trigger and process residence are independent; a refusal
+  /// after either removal restores the complete storage root.
+  /// Releases one canonical generation-bound process publication and its exact residence without
+  /// finalizing the durable identity. On success the semantic Active record owns the released Hot
+  /// state, `ActorProcesses` and its Service/Deadline/Trigger residence are gone, and no legacy
+  /// authority was created. The caller owns the enclosing storage transaction.
+  fn detach_actor_publication_inner(
+    actor: ActorRef,
+    state: ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+  ) -> Result<(ActiveActorStateOf<T>, ActorAdmissionCertificateOf<T>), DispatchError> {
+    ensure!(
+      !ActorControlLocators::<T>::contains_key(actor.actor_id)
+        && !ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id),
+      Error::<T>::ActorInvariant
+    );
+    let admission =
+      Self::build_admission_certificate(&state.contract).ok_or(Error::<T>::ActorInvariant)?;
+    let Some(ActorSemanticState::Active(semantic)) = ActorSemanticStates::<T>::get(actor.actor_id)
+    else {
+      return Err(Error::<T>::ActorInvariant.into());
+    };
+    ensure!(
+      actor.generation != 0
+        && semantic.generation == actor.generation
+        && semantic.identity == state.identity
+        && semantic.hot == state.hot
+        && semantic.admission == admission
+        && state.run_state.as_ref().map(|run| run.encode()) == supplied_run.map(|run| run.encode())
+        && ActorRunStateStore::<T>::get(actor.actor_id)
+          .as_ref()
+          .map(|run| run.encode())
+          == supplied_run.map(|run| run.encode()),
+      Error::<T>::ActorInvariant
+    );
+    let process = ActorProcesses::<T>::get(actor.actor_id)
+      .filter(|process| process.generation == actor.generation)
+      .ok_or(Error::<T>::ActorInvariant)?;
+
+    let mut terminal_state = state;
+    if TriggerDeadlineHandles::<T>::contains_key(actor.actor_id) {
+      Self::remove_trigger_deadline_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
+      terminal_state.hot.trigger_wakeup_pointer = None;
+    } else {
+      ensure!(
+        terminal_state.hot.trigger_wakeup_pointer.is_none(),
+        Error::<T>::ActorInvariant
+      );
+    }
+    match process.residence {
+      Some(ProcessResidence::Service(_)) => {
+        Self::remove_service_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
+      }
+      Some(ProcessResidence::Deadline { .. }) => {
+        Self::remove_deadline_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
+        terminal_state.hot.wakeup_pointer = None;
+      }
+      None if matches!(process.status, ProcessStatus::Disabled(_)) => {}
+      _ => return Err(Error::<T>::ActorInvariant.into()),
+    }
+    ActorProcesses::<T>::remove(actor.actor_id);
+    let Some(ActorSemanticState::Active(mut terminal_semantic)) =
+      ActorSemanticStates::<T>::get(actor.actor_id)
+    else {
+      return Err(Error::<T>::ActorInvariant.into());
+    };
+    terminal_semantic.hot = terminal_state.hot.clone();
+    ActorSemanticStates::<T>::insert(
+      actor.actor_id,
+      ActorSemanticState::Active(terminal_semantic),
+    );
+    Ok((terminal_state, admission))
+  }
+
+  /// Atomically releases one canonical process publication and residence while preserving the
+  /// durable identity, used by owner-initiated deactivation. Refusal restores the complete
+  /// canonical root and never creates legacy control authority.
+  pub(crate) fn detach_actor_publication(
+    actor: ActorRef,
+    state: ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+  ) -> Result<ActiveActorStateOf<T>, DispatchError> {
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      match Self::detach_actor_publication_inner(actor, state, supplied_run) {
+        Ok((terminal_state, _admission)) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(terminal_state))
+        }
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+  }
+
+  pub(crate) fn remove_actor_publication_and_finalize(
+    actor: ActorRef,
+    state: ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    reason: CloseReason,
+  ) -> DispatchResult {
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      let result = (|| -> DispatchResult {
+        let (terminal_state, admission) =
+          Self::detach_actor_publication_inner(actor, state, supplied_run)?;
+        Self::finalize_actor_from_consumed_state(actor.actor_id, terminal_state, &admission, reason)
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+  }
+
+  /// Atomically replaces one canonical running publication with its cancelled Idle successor.
+  /// The running residence and any independent temporal Trigger deadline are released before the
+  /// successor publication is planned and committed; refusal restores the complete canonical root
+  /// and no legacy control authority is ever created. `source` still carries the open Run, while
+  /// `successor` carries the same stable identity with `run_state` cleared and its Hot state set to
+  /// the cancelled Idle form.
+  pub(crate) fn cancel_actor_publication(
+    actor: ActorRef,
+    source: &ActiveActorStateOf<T>,
+    successor: &ActiveActorStateOf<T>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<(), EnqueueOutcome> {
+    with_transaction_opaque_err(|| {
+      let result = (|| -> Result<(), EnqueueOutcome> {
+        // The control loader deliberately reconstructs a bounded current-Step Contract whose body
+        // commitment differs from the stored full body for a multi-Step Actor. Cancellation
+        // republishes from the durable admitted geometry, so read the stored full Contract and use
+        // it as the publication authority for the pre-cancel source and the Idle successor.
+        let full_contract =
+          Self::load_actor_contract(actor.actor_id).ok_or(EnqueueOutcome::CorruptedTopology)?;
+        let mut source = source.clone();
+        source.contract = full_contract.clone();
+        let mut successor = successor.clone();
+        successor.contract = full_contract;
+        let source = &source;
+        let successor = &successor;
+        if ActorControlLocators::<T>::contains_key(actor.actor_id)
+          || ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id)
+          || successor.contract != source.contract
+          || successor.identity.sovereign_account != source.identity.sovereign_account
+          || successor.identity.owner != source.identity.owner
+          || successor.identity.actor_class != source.identity.actor_class
+          || successor.identity.mutability != source.identity.mutability
+          || successor.run_state.is_some()
+        {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        let run = source
+          .run_state
+          .as_ref()
+          .ok_or(EnqueueOutcome::CorruptedTopology)?;
+        if successor.identity.cycle_nonce != run.cycle_nonce {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        let admission = Self::build_admission_certificate(&source.contract)
+          .ok_or(EnqueueOutcome::CorruptedTopology)?;
+        let Some(ActorSemanticState::Active(mut semantic)) =
+          ActorSemanticStates::<T>::get(actor.actor_id)
+        else {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        };
+        if semantic.generation != actor.generation
+          || semantic.identity != source.identity
+          || semantic.hot != source.hot
+          || semantic.admission != admission
+        {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        if let Some(stored) = ActorRunStateStore::<T>::get(actor.actor_id)
+          && source.run_state.as_ref().map(|run| run.encode()) != Some(stored.encode())
+        {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        let process = ActorProcesses::<T>::get(actor.actor_id)
+          .filter(|process| process.generation == actor.generation)
+          .ok_or(EnqueueOutcome::CorruptedTopology)?;
+
+        if TriggerDeadlineHandles::<T>::contains_key(actor.actor_id) {
+          Self::remove_trigger_deadline_member(actor)
+            .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+        } else if source.hot.trigger_wakeup_pointer.is_some() {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        match process.residence {
+          Some(ProcessResidence::Service(_)) => {
+            Self::remove_service_member(actor).map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+          }
+          Some(ProcessResidence::Deadline { .. }) => {
+            Self::remove_deadline_member(actor).map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+          }
+          Some(ProcessResidence::Parked(_)) => return Err(EnqueueOutcome::CorruptedTopology),
+          None => return Err(EnqueueOutcome::CorruptedTopology),
+        }
+        ActorProcesses::<T>::remove(actor.actor_id);
+        ActorRunStateStore::<T>::remove(actor.actor_id);
+        semantic.identity = successor.identity.clone();
+        semantic.hot = successor.hot.clone();
+        ActorSemanticStates::<T>::insert(actor.actor_id, ActorSemanticState::Active(semantic));
+        Self::publish_actor_publication(actor, successor, None, resources, now, cutoff)
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+    .map_err(|_| EnqueueOutcome::CorruptedTopology)?
+  }
+
+  /// Atomically publishes semantic Hot state, one exclusive process residence and an optional
+  /// independent temporal Trigger deadline for initial activation and lifecycle republishing.
+  pub(crate) fn publish_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<(), EnqueueOutcome> {
+    with_transaction_opaque_err(|| {
+      let result = (|| -> Result<(), EnqueueOutcome> {
+        let publication =
+          Self::preflight_actor_publication(actor, state, supplied_run, resources, now, cutoff)?;
+        let Some(ActorSemanticState::Active(mut semantic)) =
+          ActorSemanticStates::<T>::get(actor.actor_id)
+        else {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        };
+        semantic.hot = publication.hot;
+        ActorSemanticStates::<T>::insert(actor.actor_id, ActorSemanticState::Active(semantic));
+
+        let process = match publication.process {
+          PlannedProcessDestination::Disabled(process) => process,
+          PlannedProcessDestination::Service { process, .. } => process,
+          PlannedProcessDestination::Deadline { process, .. } => process,
+        };
+        ActorProcesses::<T>::insert(actor.actor_id, process);
+
+        match publication.process {
+          PlannedProcessDestination::Disabled(_) => {}
+          PlannedProcessDestination::Service {
+            process,
+            admission_round,
+          } => {
+            let Some(ProcessResidence::Service(kind)) = process.residence else {
+              return Err(EnqueueOutcome::CorruptedTopology);
+            };
+            Self::insert_service_member(actor, kind, admission_round)
+              .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+          }
+          PlannedProcessDestination::Deadline { handle, .. } => {
+            Self::insert_deadline_member(handle).map_err(|error| match error {
+              DeadlineMutationError::CapacityExceeded | DeadlineMutationError::PageFull => {
+                EnqueueOutcome::WakeupCapacityExhausted
+              }
+              _ => EnqueueOutcome::CorruptedTopology,
+            })?;
+          }
+        }
+        if let Some(handle) = publication.trigger_deadline {
+          Self::insert_trigger_deadline_member(handle).map_err(|error| match error {
+            DeadlineMutationError::CapacityExceeded | DeadlineMutationError::PageFull => {
+              EnqueueOutcome::WakeupCapacityExhausted
+            }
+            _ => EnqueueOutcome::CorruptedTopology,
+          })?;
+        }
+        Ok(())
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+    .map_err(|_| EnqueueOutcome::CorruptedTopology)?
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_plan_next_work_source(
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    now: BlockNumberFor<T>,
+  ) -> Result<
+    (
+      StepControlPlacement,
+      Option<BlockNumberFor<T>>,
+      Option<ProcessDisablement<BlockNumberFor<T>>>,
+      Option<ServiceResidenceKind>,
+    ),
+    EnqueueOutcome,
+  > {
+    let instance = Self::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    Self::plan_next_work_loaded(&instance, supplied_run, now, ServiceCutoff::Snapshotted).map(
+      |plan| match plan {
+        NextWorkPlan::Disabled(disablement) => {
+          (StepControlPlacement::None, None, Some(disablement), None)
+        }
+        NextWorkPlan::Service(kind) => (StepControlPlacement::Queue, None, None, Some(kind)),
+        NextWorkPlan::Wakeup(at) => (StepControlPlacement::Wakeup, Some(at), None, None),
+      },
+    )
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_plan_process_destination(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    now: BlockNumberFor<T>,
+  ) -> Result<
+    (
+      ActorProcessOf<T>,
+      Option<BlockNumberFor<T>>,
+      Option<DeadlineHandleOf<T>>,
+    ),
+    EnqueueOutcome,
+  > {
+    let instance = Self::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    let plan =
+      Self::plan_next_work_loaded(&instance, supplied_run, now, ServiceCutoff::Snapshotted)?;
+    Self::plan_process_destination(actor, plan, now, None).map(|destination| match destination {
+      PlannedProcessDestination::Disabled(process) => (process, None, None),
+      PlannedProcessDestination::Service {
+        process,
+        admission_round,
+      } => (process, Some(admission_round), None),
+      PlannedProcessDestination::Deadline { process, handle } => (process, None, Some(handle)),
+    })
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_preflight_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+  ) -> Result<(), EnqueueOutcome> {
+    Self::preflight_actor_publication(
+      actor,
+      state,
+      supplied_run,
+      resources,
+      now,
+      ServiceCutoff::Snapshotted,
+    )
+    .map(|_| ())
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_transition_actor_publication_to_successor(
+    actor: ActorRef,
+    source: &ActiveActorStateOf<T>,
+    successor: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+  ) -> Result<(), EnqueueOutcome> {
+    Self::transition_actor_publication_to_successor(
+      actor,
+      source,
+      successor,
+      supplied_run,
+      resources,
+      now,
+      ServiceCutoff::Snapshotted,
+    )
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_remove_actor_publication_and_finalize(
+    actor: ActorRef,
+    state: ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    reason: CloseReason,
+  ) -> DispatchResult {
+    Self::remove_actor_publication_and_finalize(actor, state, supplied_run, reason)
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_publish_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+  ) -> Result<(), EnqueueOutcome> {
+    Self::publish_actor_publication(
+      actor,
+      state,
+      supplied_run,
+      resources,
+      now,
+      ServiceCutoff::Snapshotted,
+    )
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_plan_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+  ) -> Result<
+    (
+      ActorHotStateOf<T>,
+      ActorProcessOf<T>,
+      Option<BlockNumberFor<T>>,
+      Option<DeadlineHandleOf<T>>,
+      Option<DeadlineHandleOf<T>>,
+    ),
+    EnqueueOutcome,
+  > {
+    Self::plan_actor_publication(
+      actor,
+      state,
+      supplied_run,
+      resources,
+      now,
+      ServiceCutoff::Snapshotted,
+    )
+    .map(|publication| {
+      let (process, admission_round, process_deadline) = match publication.process {
+        PlannedProcessDestination::Disabled(process) => (process, None, None),
+        PlannedProcessDestination::Service {
+          process,
+          admission_round,
+        } => (process, Some(admission_round), None),
+        PlannedProcessDestination::Deadline { process, handle } => (process, None, Some(handle)),
+      };
+      (
+        publication.hot,
+        process,
+        admission_round,
+        process_deadline,
+        publication.trigger_deadline,
+      )
+    })
+  }
+
+  #[cfg(test)]
   fn schedule_next_work_loaded(
     actor_id: ActorId,
     instance: &ActiveActorViewOf<T>,
@@ -8104,64 +6235,23 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
     cutoff: ServiceCutoff,
   ) -> Result<StepControlPlacement, EnqueueOutcome> {
-    if instance.lifecycle.is_paused() {
-      return Self::schedule_window_expiry_with_authority(actor_id, instance, loaded_authority)
-        .map(|()| {
-          if instance.window.is_some() {
-            StepControlPlacement::Wakeup
-          } else {
-            StepControlPlacement::None
-          }
-        });
-    }
-    let eligible_at = if matches!(
-      instance.cycle_state,
-      CycleState::Running | CycleState::Suspended
-    ) {
-      let run = loaded_authority
-        .2
-        .ok_or(EnqueueOutcome::CorruptedTopology)?;
-      if instance.cycle_state == CycleState::Running {
-        if !run.running_is_coherent() {
-          return Err(EnqueueOutcome::CorruptedTopology);
-        }
-        run.eligible_at
-      } else {
-        Self::retry_eligible_at_loaded(instance, run)?
+    match Self::plan_next_work_loaded(instance, loaded_authority.2, now, cutoff)? {
+      NextWorkPlan::Disabled(_) => Ok(StepControlPlacement::None),
+      NextWorkPlan::Service(_) => Ok(StepControlPlacement::Queue),
+      NextWorkPlan::Wakeup(wakeup_at) => {
+        let (hot, identity, run_state, admission, resources) = loaded_authority;
+        Self::defer_wakeup_with_authority(
+          actor_id,
+          wakeup_at,
+          instance,
+          hot.clone(),
+          identity,
+          run_state,
+          admission,
+          resources,
+        )
+        .map(|()| StepControlPlacement::Wakeup)
       }
-    } else if instance.pending_signal {
-      Self::next_eligible_at(instance, now)?
-    } else {
-      return Self::schedule_window_expiry_with_authority(actor_id, instance, loaded_authority)
-        .map(|()| {
-          if instance.window.is_some() {
-            StepControlPlacement::Wakeup
-          } else {
-            StepControlPlacement::None
-          }
-        });
-    };
-    let wakeup_at = instance.window.map_or(eligible_at, |window| {
-      eligible_at.min(Self::window_terminal_at(&window))
-    });
-    let exact_next_block = now
-      .checked_add(&One::one())
-      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-    if wakeup_at < exact_next_block || wakeup_at == exact_next_block && cutoff.is_snapshotted() {
-      Ok(StepControlPlacement::Queue)
-    } else {
-      let (hot, identity, run_state, admission, resources) = loaded_authority;
-      Self::defer_wakeup_with_authority(
-        actor_id,
-        wakeup_at,
-        instance,
-        hot.clone(),
-        identity,
-        run_state,
-        admission,
-        resources,
-      )
-      .map(|()| StepControlPlacement::Wakeup)
     }
   }
 
@@ -8216,52 +6306,6 @@ impl<T: Config> Pallet<T> {
     Ok((placement, requeues))
   }
 
-  fn schedule_next_work_with_authority(
-    actor_id: ActorId,
-    instance: &ActiveActorViewOf<T>,
-    hot: ActorHotStateOf<T>,
-    identity: &ActorIdentityOf<T>,
-    run_state: Option<&ActorRunStateOf<T>>,
-    admission: &ActorAdmissionCertificateOf<T>,
-    resources: ActorStepResourceEnvelope,
-    now: BlockNumberFor<T>,
-    cutoff: ServiceCutoff,
-  ) -> Result<StepControlPlacement, EnqueueOutcome> {
-    let loaded_authority = (&hot, identity, run_state, admission, resources);
-    let placement =
-      Self::schedule_next_work_loaded(actor_id, instance, loaded_authority, now, cutoff)?;
-    if placement == StepControlPlacement::Queue {
-      match Self::enqueue_authority_loaded(
-        actor_id,
-        hot.clone(),
-        identity,
-        run_state,
-        admission,
-        resources,
-      ) {
-        Ok(()) => {}
-        Err(EnqueueOutcome::CapacityUnavailable) => {
-          let next_block = frame_system::Pallet::<T>::block_number()
-            .checked_add(&One::one())
-            .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-          Self::defer_wakeup_with_authority(
-            actor_id,
-            next_block,
-            instance,
-            hot.clone(),
-            identity,
-            run_state,
-            admission,
-            resources,
-          )?;
-          return Ok(StepControlPlacement::Wakeup);
-        }
-        Err(error) => return Err(error),
-      }
-    }
-    Ok(placement)
-  }
-
   pub(crate) fn is_window_expired(instance: &ActiveActorViewOf<T>) -> bool {
     let now = frame_system::Pallet::<T>::block_number();
     instance
@@ -8296,6 +6340,7 @@ impl<T: Config> Pallet<T> {
     Self::classify_actor_loaded(instance, run_state.as_ref())
   }
 
+  #[cfg(test)]
   pub(crate) fn classify_observation_activation_compact(
     state: &ObservationActivationState<T>,
   ) -> Result<ActorClassification<BlockNumberFor<T>>, ActorClassificationError> {
@@ -8519,218 +6564,6 @@ impl<T: Config> Pallet<T> {
     })
   }
 
-  fn complete_entry_owner_weight(owner: CompleteEntryOwner) -> Weight {
-    match owner {
-      CompleteEntryOwner::CrossingUnavailable => {
-        T::WeightInfo::scheduler_paged_zero_step_user_crossing_unavailable()
-      }
-    }
-  }
-
-  fn close_admission_decision(reason: CloseReason, meter: &WeightMeter) -> AdmissionDecision {
-    let weight = if matches!(
-      reason,
-      CloseReason::CycleAdmissionInsufficient | CloseReason::TriggerAdmissionInsufficient
-    ) {
-      T::WeightInfo::pipeline_admission_apoptosis()
-    } else {
-      Self::close_cleanup_weight_upper()
-    };
-    if !meter.can_consume(weight) {
-      return AdmissionDecision::Defer;
-    }
-    AdmissionDecision::Close { reason, weight }
-  }
-
-  fn cycle_may_close_on_failure(
-    instance: &ActiveActorViewOf<T>,
-    start_cursor: usize,
-    prior_unsuccessful_attempts_at_cursor: Option<u32>,
-  ) -> bool {
-    if Self::failure_limit_reached(instance.unsuccessful_attempt_streak.saturating_add(1)) {
-      return true;
-    }
-    instance
-      .steps
-      .get(start_cursor)
-      .and_then(|step| step.on_error.retry_max_attempts())
-      .is_some_and(|limit| {
-        prior_unsuccessful_attempts_at_cursor
-          .unwrap_or_default()
-          .saturating_add(1)
-          >= limit
-      })
-  }
-
-  fn cycle_may_close_on_success(instance: &ActiveActorViewOf<T>) -> bool {
-    instance.completion == CompletionPolicy::CloseAfterProductiveCycle
-      || instance
-        .auto_close_at_cycle_nonce
-        .map(|target| instance.cycle_nonce.saturating_add(1) >= target)
-        .unwrap_or(false)
-  }
-
-  fn cycle_requires_terminal_cleanup_budget(
-    instance: &ActiveActorViewOf<T>,
-    start_cursor: usize,
-    prior_unsuccessful_attempts_at_cursor: Option<u32>,
-  ) -> bool {
-    Self::cycle_may_close_on_failure(
-      instance,
-      start_cursor,
-      prior_unsuccessful_attempts_at_cursor,
-    ) || Self::cycle_may_close_on_success(instance)
-  }
-
-  fn apply_admission_loaded(
-    actor_id: ActorId,
-    instance: &ActiveActorViewOf<T>,
-    run_state: Option<&ActorRunStateOf<T>>,
-    step_plan: Option<&CurrentStepPlanOf<T>>,
-    pipeline_capacity: Option<Result<bool, Error<T>>>,
-    meter: &WeightMeter,
-    complete_owner_meter: Option<&WeightMeter>,
-  ) -> AdmissionDecision {
-    let current_step = step_plan.map(|plan| &plan.loaded_step.step).or_else(|| {
-      instance
-        .steps
-        .get(run_state.map_or(0, |run| run.cursor as usize))
-    });
-    let Ok(classification) =
-      Self::classify_actor_at_current_step(instance, run_state, current_step)
-    else {
-      return AdmissionDecision::Invariant;
-    };
-    if classification.execution_phase == ActorExecutionPhase::GlobalCircuitBreaker {
-      return AdmissionDecision::Skip;
-    }
-    if let Some(reason) = classification.terminal_reason {
-      return Self::close_admission_decision(reason, complete_owner_meter.unwrap_or(meter));
-    }
-    if instance.actor_class.actor_type() == ActorType::User
-      && instance.cycle_state == CycleState::Idle
-      && instance.pending_signal
-    {
-      match pipeline_capacity.unwrap_or_else(|| {
-        Self::pipeline_capacity_sufficient(actor_id, ActorType::User, &instance.sovereign_account)
-      }) {
-        Ok(true) => {}
-        Ok(false) => {
-          return Self::close_admission_decision(
-            CloseReason::CycleAdmissionInsufficient,
-            complete_owner_meter.unwrap_or(meter),
-          );
-        }
-        Err(_) => return AdmissionDecision::Invariant,
-      }
-    }
-    if classification.execution_phase != ActorExecutionPhase::Ready {
-      return AdmissionDecision::Skip;
-    }
-    let run_state = if matches!(
-      instance.cycle_state,
-      CycleState::Running | CycleState::Suspended
-    ) {
-      let Some(run_state) = run_state else {
-        return AdmissionDecision::Skip;
-      };
-      Some(run_state)
-    } else {
-      None
-    };
-    if instance.steps.is_empty() {
-      if instance.cycle_state != CycleState::Idle || run_state.is_some() || step_plan.is_some() {
-        return AdmissionDecision::Invariant;
-      }
-      let opening_observation = if let Trigger::ObservationCrossing { feed, .. } = &instance.trigger
-        && IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id)
-      {
-        let current = T::ObservationProvider::current(feed);
-        match current {
-          CanonicalObservationState::Unavailable => {
-            let owner = CompleteEntryOwner::CrossingUnavailable;
-            let complete_meter = complete_owner_meter.unwrap_or(meter);
-            if !complete_meter.can_consume(Self::complete_entry_owner_weight(owner)) {
-              return AdmissionDecision::Defer;
-            }
-            return AdmissionDecision::Refuse(owner);
-          }
-          CanonicalObservationState::Uninitialized => return AdmissionDecision::Invariant,
-          CanonicalObservationState::Available { .. } => Some(current),
-        }
-      } else {
-        None
-      };
-      let zero_step_weight = Self::contract_steps_admission_weight_upper(
-        instance.actor_class.actor_type(),
-        &instance.steps,
-      );
-      if !meter.can_consume(zero_step_weight) {
-        return AdmissionDecision::Defer;
-      }
-      return AdmissionDecision::Admit {
-        weight: zero_step_weight,
-        terminal_cleanup: TerminalCleanupReservation::Included,
-        opening_observation,
-      };
-    }
-    let start_cursor = run_state.as_ref().map_or(0, |state| state.cursor as usize);
-    let prior_unsuccessful_attempts_at_cursor = run_state
-      .as_ref()
-      .map(|state| state.unsuccessful_attempts_at_cursor);
-    let terminal_cleanup = if Self::cycle_requires_terminal_cleanup_budget(
-      instance,
-      start_cursor,
-      prior_unsuccessful_attempts_at_cursor,
-    ) {
-      TerminalCleanupReservation::Included
-    } else {
-      TerminalCleanupReservation::NotIncluded
-    };
-    let resources = step_plan
-      .filter(|plan| {
-        plan.ticket.actor_id == actor_id && plan.ticket.cursor as usize == start_cursor
-      })
-      .map(|plan| plan.loaded_step.resources);
-    let Some(resources) = resources else {
-      return AdmissionDecision::Invariant;
-    };
-    if instance.actor_class.actor_type() == ActorType::User
-      && instance.cycle_state == CycleState::Suspended
-    {
-      let Some(step) = current_step else {
-        return AdmissionDecision::Invariant;
-      };
-      match Self::action_capacity_sufficient(
-        ActorType::User,
-        &instance.sovereign_account,
-        step,
-        resources,
-      ) {
-        Ok(true) => {}
-        Ok(false) => {
-          return Self::close_admission_decision(
-            CloseReason::CycleAdmissionInsufficient,
-            complete_owner_meter.unwrap_or(meter),
-          );
-        }
-        Err(_) => return AdmissionDecision::Invariant,
-      }
-    }
-    let mut current_step_weight = resources.control.saturating_add(resources.effect);
-    if terminal_cleanup.is_included() {
-      current_step_weight = current_step_weight.saturating_add(Self::close_cleanup_weight_upper());
-    }
-    if !meter.can_consume(current_step_weight) {
-      return AdmissionDecision::Defer;
-    }
-    AdmissionDecision::Admit {
-      weight: current_step_weight,
-      terminal_cleanup,
-      opening_observation: None,
-    }
-  }
-
   /// Projects the canonical actor classifier without stripping temporal payloads.
   pub fn actor_eligibility(
     actor_id: ActorId,
@@ -8916,70 +6749,26 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  fn funding_event_authorized(
-    actor_id: ActorId,
-    owner: &T::AccountId,
-    policy: &FundingSourcePolicyOf<T>,
-    source: Option<&T::AccountId>,
-    provenance: Option<&FundingProvenance>,
-  ) -> bool {
-    match policy {
-      FundingSourcePolicy::OwnerOnly => {
-        provenance == Some(&FundingProvenance::Signed) && source == Some(owner)
-      }
-      FundingSourcePolicy::SignedAllowlist(allowed) => {
-        provenance == Some(&FundingProvenance::Signed)
-          && source.is_some_and(|source| allowed.contains(source))
-      }
-      FundingSourcePolicy::RuntimePolicy => {
-        T::FundingAuthority::permits(actor_id, owner, source, provenance)
-      }
-      FundingSourcePolicy::AnyVerifiedIngress => source.is_some() || provenance.is_some(),
-    }
-  }
-
   pub fn preflight_funding_event(
     actor_id: ActorId,
-    asset: T::AssetId,
+    _asset: T::AssetId,
     amount: T::Balance,
-    source: Option<&T::AccountId>,
-    provenance: Option<&FundingProvenance>,
+    _source: Option<&T::AccountId>,
+    _provenance: Option<&FundingProvenance>,
   ) -> DispatchResult {
     let state = match Self::load_actor_state_for_frame_control(actor_id) {
       LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => return Ok(()),
       LoadedActorStateOf::Active(state) => state,
       LoadedActorStateOf::Corrupt => return Err(Error::<T>::ActorInvariant.into()),
     };
-    let authorized = Self::funding_event_authorized(
-      actor_id,
-      &state.identity.owner,
-      &state.contract.funding,
-      source,
-      provenance,
-    );
-    let mut funding = state.funding;
     let run_state = state.run_state;
-    let identity = state.identity.clone();
     let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
     let classification = Self::classify_actor_loaded(&instance, run_state.as_ref())
       .map_err(Self::classification_dispatch_error)?;
     if classification.terminal_reason == Some(CloseReason::WindowExpired) || amount.is_zero() {
       return Ok(());
     }
-    if !authorized || !funding.funding_tracked_assets.contains(&asset) {
-      return Ok(());
-    }
-    if let Some(accumulated) = funding.funding_accumulated.get_mut(&asset) {
-      *accumulated = accumulated
-        .checked_add(&amount)
-        .ok_or(Error::<T>::FundingAccumulatorOverflow)?;
-    } else {
-      funding
-        .funding_accumulated
-        .try_insert(asset, amount)
-        .map_err(|_| Error::<T>::FundingAccumulatorOverflow)?;
-    }
-    Self::ensure_funding_state_hold_capacity(actor_id, &identity, &funding)
+    Ok(())
   }
 
   /// Typed certified-ingress preflight (spec 5.3, 6.2). Read-only and covers
@@ -9092,9 +6881,9 @@ impl<T: Config> Pallet<T> {
   fn apply_address_event_parts(
     actor_id: ActorId,
     asset: T::AssetId,
-    amount: T::Balance,
+    _amount: T::Balance,
     source: Option<&T::AccountId>,
-    provenance: Option<&FundingProvenance>,
+    _provenance: Option<&FundingProvenance>,
     cause_provenance: TriggerCauseProvenance,
   ) -> DispatchResult {
     let state = match Self::load_actor_state_for_frame_control(actor_id) {
@@ -9102,14 +6891,6 @@ impl<T: Config> Pallet<T> {
       LoadedActorStateOf::Active(state) => state,
       LoadedActorStateOf::Corrupt => return Err(Error::<T>::ActorInvariant.into()),
     };
-    let funding_authorized = Self::funding_event_authorized(
-      actor_id,
-      &state.identity.owner,
-      &state.contract.funding,
-      source,
-      provenance,
-    );
-    let mut funding = state.funding;
     let run_state = state.run_state;
     let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
     let classification = Self::classify_actor_loaded(&instance, run_state.as_ref())
@@ -9117,7 +6898,10 @@ impl<T: Config> Pallet<T> {
     if classification.terminal_reason == Some(CloseReason::WindowExpired) {
       return Self::finalize_actor(actor_id, &instance, CloseReason::WindowExpired);
     }
-    let signal_matched = if !instance.pending_signal
+    // A busy Actor may still account authorized funding, but the open Cycle owns all
+    // process authority: the occurrence cannot pay for or latch a future Cycle.
+    let signal_matched = if instance.cycle_state == CycleState::Idle
+      && !instance.pending_signal
       && let Trigger::AddressEvent {
         source_filter,
         asset_filter,
@@ -9128,30 +6912,6 @@ impl<T: Config> Pallet<T> {
     } else {
       false
     };
-    if amount > Zero::zero() {
-      if funding_authorized && funding.funding_tracked_assets.contains(&asset) {
-        let accumulated = if let Some(accumulated) = funding.funding_accumulated.get_mut(&asset) {
-          *accumulated = accumulated
-            .checked_add(&amount)
-            .ok_or(Error::<T>::FundingAccumulatorOverflow)?;
-          *accumulated
-        } else {
-          funding
-            .funding_accumulated
-            .try_insert(asset, amount)
-            .map_err(|_| Error::<T>::FundingAccumulatorOverflow)?;
-          amount
-        };
-        ActorFunding::<T>::insert(actor_id, funding);
-        Self::reconcile_actor_state_hold_with_authority(actor_id)?;
-        Self::deposit_event(Event::FundingAccumulated {
-          actor_id,
-          asset,
-          added: amount,
-          accumulated,
-        });
-      }
-    }
     if signal_matched {
       let actor_type = instance.actor_class.actor_type();
       let breakdown = Self::trigger_fee_for_weight(

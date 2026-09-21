@@ -1,12 +1,9 @@
 use crate::pallet::*;
-use crate::scheduler::{
-  ActivationFailure, ActivationOutcome, ObservationActivationOutcome, ObservationPlacementCandidate,
-};
+use crate::scheduler::{ActivationFailure, ActivationOutcome, ObservationActivationOutcome};
 use crate::types::{
   DirtyObservationList, DirtyObservationState, ObservationFanoutBranch, ObservationRevision,
 };
 use crate::weights::WeightInfo as _;
-use alloc::vec;
 use polkadot_sdk::frame_support::{ensure, storage::TransactionOutcome, traits::Get};
 use polkadot_sdk::frame_system::{Pallet as System, pallet_prelude::BlockNumberFor};
 use polkadot_sdk::sp_runtime::{
@@ -469,9 +466,9 @@ impl<T: Config> Pallet<T> {
   fn process_observation_change_occurrence(
     actor_id: ActorId,
     feed: T::ObservationFeedId,
-    execute_terminal: bool,
-    cause_provenance: crate::TriggerCauseProvenance,
-    cause_block: u64,
+    _execute_terminal: bool,
+    _cause_provenance: crate::TriggerCauseProvenance,
+    _cause_block: u64,
   ) -> Result<ObservationActivationOutcome, ActivationFailure> {
     if IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id) {
       return Ok(ObservationActivationOutcome::Ordinary(
@@ -479,49 +476,23 @@ impl<T: Config> Pallet<T> {
       ));
     }
     let Some(state) = Self::load_observation_activation_state(actor_id, feed) else {
-      return if execute_terminal {
-        Self::request_observation_activation_compact_with_cause(
-          actor_id,
-          feed,
-          cause_provenance,
-          cause_block,
-        )
-        .map(ObservationActivationOutcome::Ordinary)
+      // A canonically published Actor with absent or incoherent observation authority fails
+      // closed; a pre-cutover identity that owns no canonical Hot state is simply stale. There is
+      // no legacy compact activation producer.
+      return if Self::control_hot_exists(actor_id) {
+        Err(ActivationFailure::Permanent(
+          Error::<T>::ActorInvariant.into(),
+        ))
       } else {
-        Self::request_observation_activation_ordinary_with_cause(
-          actor_id,
-          feed,
-          cause_provenance,
-          cause_block,
-        )
+        Ok(ObservationActivationOutcome::Ordinary(
+          ActivationOutcome::IgnoredStale,
+        ))
       };
     };
-    if state.hot.pending_signal {
+    if state.hot.cycle_state != crate::CycleState::Idle || state.hot.pending_signal {
       return Ok(ObservationActivationOutcome::Ordinary(
         ActivationOutcome::IgnoredStale,
       ));
-    }
-    let classification =
-      Self::classify_observation_activation_compact(&state).map_err(|error| {
-        ActivationFailure::Permanent(Self::classification_dispatch_error(error).into())
-      })?;
-    if classification.terminal_reason.is_some() {
-      return if execute_terminal {
-        Self::request_observation_activation_compact_with_cause(
-          actor_id,
-          feed,
-          cause_provenance,
-          cause_block,
-        )
-        .map(ObservationActivationOutcome::Ordinary)
-      } else {
-        Self::request_observation_activation_ordinary_with_cause(
-          actor_id,
-          feed,
-          cause_provenance,
-          cause_block,
-        )
-      };
     }
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       let actor_type = state.identity.actor_class.actor_type();
@@ -530,58 +501,48 @@ impl<T: Config> Pallet<T> {
         TriggerFamily::ObservationChange,
         T::WeightInfo::observation_change_trigger_occurrence(),
       );
-      let charged = match Self::try_charge_automatic_trigger_occurrence(
+      let Some(crate::ActorSemanticState::Active(record)) =
+        crate::ActorSemanticStates::<T>::get(actor_id)
+      else {
+        return TransactionOutcome::Rollback(Err(ActivationFailure::Permanent(
+          Error::<T>::ActorInvariant.into(),
+        )));
+      };
+      let canonical_state = match Self::active_actor_state_for_frame_control(actor_id) {
+        Ok(state) => state,
+        Err(error) => {
+          return TransactionOutcome::Rollback(Err(ActivationFailure::Permanent(error.into())));
+        }
+      };
+      if canonical_state.identity != state.identity || canonical_state.hot != state.hot {
+        return TransactionOutcome::Rollback(Err(ActivationFailure::Permanent(
+          Error::<T>::ActorInvariant.into(),
+        )));
+      }
+      let actor = crate::ActorRef {
+        actor_id,
+        generation: record.generation,
+      };
+      let outcome = match Self::commit_canonical_trigger_occurrence_with_authority(
+        actor,
         actor_type,
         &state.identity.sovereign_account,
         breakdown,
+        canonical_state,
+        polkadot_sdk::frame_system::Pallet::<T>::block_number(),
       ) {
-        Ok(charged) => charged,
+        Ok(outcome) => outcome,
+        Err(error) if error == Error::<T>::InsufficientFee.into() => {
+          return TransactionOutcome::Commit(Ok(ObservationActivationOutcome::Ordinary(
+            ActivationOutcome::IgnoredStale,
+          )));
+        }
         Err(error) => {
           return TransactionOutcome::Rollback(Err(ActivationFailure::Permanent(error)));
         }
       };
-      if !charged {
-        return TransactionOutcome::Commit(Ok(ObservationActivationOutcome::Ordinary(
-          ActivationOutcome::IgnoredStale,
-        )));
-      }
-      let outcome = if execute_terminal {
-        Self::request_observation_activation_compact_with_cause(
-          actor_id,
-          feed,
-          cause_provenance,
-          cause_block,
-        )
-        .map(ObservationActivationOutcome::Ordinary)
-      } else {
-        Self::request_observation_activation_ordinary_with_cause(
-          actor_id,
-          feed,
-          cause_provenance,
-          cause_block,
-        )
-      };
-      let outcome = match outcome {
-        Ok(outcome) => outcome,
-        Err(error) => return TransactionOutcome::Rollback(Err(error)),
-      };
-      let ObservationActivationOutcome::Ordinary(activation) = outcome else {
-        return TransactionOutcome::Rollback(Ok(outcome));
-      };
-      if matches!(
-        activation,
-        ActivationOutcome::Latched | ActivationOutcome::Coalesced
-      ) {
-        IndexedTriggerDetectionDisabled::<T>::insert(actor_id, ());
-        Self::deposit_event(Event::TriggerOccurrenceProcessed {
-          actor_id,
-          trigger_family: breakdown.trigger_family,
-          fee: breakdown.trigger_fee,
-        });
-        TransactionOutcome::Commit(Ok(outcome))
-      } else {
-        TransactionOutcome::Rollback(Ok(outcome))
-      }
+      IndexedTriggerDetectionDisabled::<T>::insert(actor_id, ());
+      TransactionOutcome::Commit(Ok(ObservationActivationOutcome::Ordinary(outcome)))
     })
   }
 
@@ -599,13 +560,8 @@ impl<T: Config> Pallet<T> {
       cause_block,
     ) {
       Ok(ObservationActivationOutcome::Ordinary(
-        ActivationOutcome::IgnoredStale
-        | ActivationOutcome::Coalesced
-        | ActivationOutcome::Latched
-        | ActivationOutcome::Closed,
+        ActivationOutcome::IgnoredStale | ActivationOutcome::Latched,
       )) => Ok(true),
-      Ok(ObservationActivationOutcome::TerminalDeferred) => Err(Error::<T>::ActorInvariant.into()),
-      Err(ActivationFailure::Temporary(_)) => Ok(false),
       Err(error @ ActivationFailure::Permanent(_)) => Err(Self::activation_failure_error(error)),
     }
   }
@@ -624,13 +580,8 @@ impl<T: Config> Pallet<T> {
       cause_block,
     ) {
       Ok(ObservationActivationOutcome::Ordinary(
-        ActivationOutcome::IgnoredStale
-        | ActivationOutcome::Coalesced
-        | ActivationOutcome::Latched
-        | ActivationOutcome::Closed,
+        ActivationOutcome::IgnoredStale | ActivationOutcome::Latched,
       )) => Ok(Some(true)),
-      Ok(ObservationActivationOutcome::TerminalDeferred) => Ok(None),
-      Err(ActivationFailure::Temporary(_)) => Ok(Some(false)),
       Err(error @ ActivationFailure::Permanent(_)) => Err(Self::activation_failure_error(error)),
     }
   }
@@ -731,90 +682,7 @@ impl<T: Config> Pallet<T> {
       Error::<T>::DirtyObservationInvariant
     );
     let mut page_complete = true;
-    'page: while state.next_subscriber_position < page_len {
-      if state.next_subscriber_branch == ObservationFanoutBranch::Ordinary {
-        let cohort_start = state.next_subscriber_position as usize;
-        if let Some(actor_id) = page.entries[cohort_start]
-          && let Some(first) = Self::prepare_observation_placement_candidate(
-            actor_id,
-            feed,
-            state.fanout_cause_provenance,
-            state.fanout_cause_block,
-          )
-          .map_err(Self::activation_failure_error)?
-        {
-          let wakeup_key = first.wakeup_key();
-          let mut cohort_end = cohort_start.saturating_add(1);
-          let committed = match first {
-            ObservationPlacementCandidate::Queue(first) => {
-              let mut candidates = vec![first];
-              while cohort_end < page.entries.len() {
-                let Some(actor_id) = page.entries[cohort_end] else {
-                  break;
-                };
-                let Some(ObservationPlacementCandidate::Queue(candidate)) =
-                  Self::prepare_observation_placement_candidate(
-                    actor_id,
-                    feed,
-                    state.fanout_cause_provenance,
-                    state.fanout_cause_block,
-                  )
-                  .map_err(Self::activation_failure_error)?
-                else {
-                  break;
-                };
-                candidates.push(candidate);
-                cohort_end = cohort_end.saturating_add(1);
-              }
-              Self::commit_observation_queue_cohort(candidates).is_ok()
-            }
-            ObservationPlacementCandidate::Wakeup(first) => {
-              let mut candidates = vec![first];
-              while cohort_end < page.entries.len() {
-                let Some(actor_id) = page.entries[cohort_end] else {
-                  break;
-                };
-                let Some(candidate) = Self::prepare_observation_placement_candidate(
-                  actor_id,
-                  feed,
-                  state.fanout_cause_provenance,
-                  state.fanout_cause_block,
-                )
-                .map_err(Self::activation_failure_error)?
-                else {
-                  break;
-                };
-                if candidate.wakeup_key() != wakeup_key {
-                  break;
-                }
-                let ObservationPlacementCandidate::Wakeup(candidate) = candidate else {
-                  break;
-                };
-                candidates.push(candidate);
-                cohort_end = cohort_end.saturating_add(1);
-              }
-              match Self::commit_observation_wakeup_cohort(candidates) {
-                Ok(()) => true,
-                Err(
-                  crate::scheduler::EnqueueOutcome::CapacityUnavailable
-                  | crate::scheduler::EnqueueOutcome::WakeupCapacityExhausted,
-                ) => {
-                  state.retry_after = Some(System::<T>::block_number().saturating_add(One::one()));
-                  page_complete = false;
-                  break 'page;
-                }
-                Err(_) => return Err(Error::<T>::SchedulerIndexExhausted.into()),
-              }
-            }
-          };
-          if committed {
-            state.next_subscriber_position =
-              u32::try_from(cohort_end).map_err(|_| Error::<T>::DirtyObservationInvariant)?;
-            continue;
-          }
-        }
-      }
-
+    while state.next_subscriber_position < page_len {
       let position = state.next_subscriber_position as usize;
       let maybe_actor_id = page.entries[position];
       let next_position = state
@@ -1107,6 +975,12 @@ impl<T: Config> Pallet<T> {
       }
     }
     Ok(())
+  }
+}
+
+impl<T: Config> crate::DependencyEventIngress<T::ObservationFeedId> for Pallet<T> {
+  fn note_dependency_event(feed: T::ObservationFeedId) -> DispatchResult {
+    Pallet::<T>::publish_observation_dependency_event(feed)
   }
 }
 
