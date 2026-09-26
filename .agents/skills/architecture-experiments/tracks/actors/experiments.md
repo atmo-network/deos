@@ -11,7 +11,7 @@ This is the sole Actors experiment entrypoint and owner of shared track metadata
 
 ## Scope and Boundary
 
-- `Owns`: Actor Contract and Step representation, hot/cold state, run state, FIFO and temporal topology, detector/fanout geometry, block service, resource allocation, and executor lowering.
+- `Owns`: Actor Contract and Step representation, hot/cold state, run state, FIFO and temporal topology, detector geometry, block service, resource allocation, and executor lowering.
 - `Excludes`: Normative Actor semantics, adapter-internal execution architecture, Router-internal route selection, open work, and experiment results.
 
 ## Governing Invariants
@@ -23,6 +23,17 @@ This is the sole Actors experiment entrypoint and owner of shared track metadata
 
 - Current 0.7.25 physical baseline: [EXP-0025](./EXP-0025.md), Accepted with decision scope physical architecture only; **C1 PHYSICAL GEOMETRY: FROZEN**. Production Weight, bindings, throughput and release Geometry Freeze remain separate gates.
 - The 0.7.24 Actors baseline combines [EXP-0016](./EXP-0016.md) C6 Contract geometry, [EXP-0013](./EXP-0013.md) loaded-state reuse through one-Step planning and commit, and [EXP-0010](./EXP-0010.md) compact Observation activation. Complete renewed evidence binds the P32 runtime profile; [EXP-0001](./EXP-0001.md) preserves the rejected 0.7.23 throughput hypothesis as historical evidence.
+
+## 0.7.27 Pull-Model Epoch Cut
+
+The pull-model cut (commit `5d33ddf`) deleted push-reactive observation Triggers, Oracle-to-Actors ingress, broad fanout, Crossing indexes/workers, their fault surfaces and observation-gated Park. Observations are now read only by execution-time Step predicates. Records whose measured mechanism no longer exists carry `Benchmark Evidence Status: Invalidated — mechanism removed` and `Current Authority: None`; their historical decisions stay unchanged, they owe no migration, refresh, fission or decomposition review, and reintroducing such a mechanism requires a new record.
+
+| Retired mechanism | Records |
+| --- | --- |
+| Crossing membership, admission, pair fallback and skip owners | [EXP-0008](./EXP-0008.md), [EXP-0009](./EXP-0009.md), [EXP-0039](./EXP-0039.md), [EXP-0098](./EXP-0098.md), [EXP-0103](./EXP-0103.md)–[EXP-0110](./EXP-0110.md), [EXP-0113](./EXP-0113.md), [EXP-0114](./EXP-0114.md), [EXP-0156](./EXP-0156.md)–[EXP-0160](./EXP-0160.md) |
+| Broad ObservationChange activation, subscriptions and fanout | [EXP-0010](./EXP-0010.md), [EXP-0040](./EXP-0040.md), [EXP-0143](./EXP-0143.md)–[EXP-0147](./EXP-0147.md), [EXP-0153](./EXP-0153.md), [EXP-0154](./EXP-0154.md) |
+
+Records that used a Crossing or fanout witness only to exercise a surviving owner (for example [EXP-0041](./EXP-0041.md), [EXP-0042](./EXP-0042.md), [EXP-0089](./EXP-0089.md), [EXP-0115](./EXP-0115.md) and [EXP-0116](./EXP-0116.md)) keep their recorded disposition; their workload is no longer constructible, so any current consumer must re-witness the surviving owner on the current tree. The general principle imported from EXP-0113/EXP-0114 below survives; their numbers do not.
 
 ## 0.7.27 Active Current-State Lineage
 
