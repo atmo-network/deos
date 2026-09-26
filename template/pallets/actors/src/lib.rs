@@ -696,13 +696,6 @@ pub mod pallet {
     GenesisInstallation,
     CreateActive,
     ActivateDormant,
-    ReplaceActive,
-    Deactivate,
-    Close,
-  }
-
-  pub(crate) struct TriggerTransitionPlan {
-    intent: TriggerTransitionIntent,
   }
 
   pub type TriggerOf<T> = Trigger<
@@ -8116,30 +8109,6 @@ pub mod pallet {
       )
     }
 
-    pub(crate) fn preflight_trigger_transition(
-      intent: TriggerTransitionIntent,
-    ) -> Result<TriggerTransitionPlan, DispatchError> {
-      Ok(TriggerTransitionPlan { intent })
-    }
-
-    fn preflight_trigger_cleanup(
-      intent: TriggerTransitionIntent,
-    ) -> Result<TriggerTransitionPlan, DispatchError> {
-      ensure!(
-        matches!(
-          intent,
-          TriggerTransitionIntent::Deactivate | TriggerTransitionIntent::Close
-        ),
-        Error::<T>::ActorInvariant
-      );
-      Self::preflight_trigger_transition(intent)
-    }
-
-    fn commit_trigger_transition(actor_id: ActorId, plan: TriggerTransitionPlan) {
-      let _intent = plan.intent;
-      IndexedTriggerDetectionDisabled::<T>::remove(actor_id);
-    }
-
     pub(crate) fn insert_active_actor(
       actor_id: ActorId,
       identity: ActorIdentityOf<T>,
@@ -8147,10 +8116,8 @@ pub mod pallet {
       contract: ActorContractOf<T>,
       intent: TriggerTransitionIntent,
     ) -> DispatchResult {
-      let transition = Self::preflight_trigger_transition(intent)?;
       let admission =
         Self::build_admission_certificate(&contract).ok_or(Error::<T>::AdmissionBoundOverflow)?;
-      Self::commit_trigger_transition(actor_id, transition);
       hot.trigger_runtime_state = Self::provisional_trigger_runtime_state(
         &contract.trigger,
         hot.trigger_runtime_state.temporal_anchor_tick(),
@@ -8178,7 +8145,6 @@ pub mod pallet {
             next_actor_generation(record.generation).ok_or(Error::<T>::ActorInvariant)?;
           (generation, Some(record))
         }
-        _ => return Err(Error::<T>::ActorInvariant.into()),
       };
       let semantic_record = ActorSemanticRecord {
         identity: identity.clone(),
@@ -8234,10 +8200,8 @@ pub mod pallet {
 
     fn remove_active_actor_with_admission(
       actor_id: ActorId,
-      trigger_transition: TriggerTransitionPlan,
       admission: Option<&ActorAdmissionCertificateOf<T>>,
     ) -> DispatchResult {
-      Self::commit_trigger_transition(actor_id, trigger_transition);
       if ActorControlLocators::<T>::contains_key(actor_id) {
         Self::remove_primary_control_cell_inner(actor_id)
           .map_err(|_| Error::<T>::ActorInvariant)?;
@@ -8601,12 +8565,6 @@ pub mod pallet {
   #[pallet::storage]
   #[pallet::getter(fn configured_active_actor_limit)]
   pub type ActiveActorLimit<T: Config> = StorageValue<_, u32, ValueQuery>;
-
-  /// Detector-local latch authority for indexed Trigger memberships retained during active traversal.
-  #[pallet::storage]
-  #[pallet::getter(fn indexed_trigger_detection_disabled)]
-  pub type IndexedTriggerDetectionDisabled<T> =
-    StorageMap<_, Blake2_128Concat, ActorId, (), OptionQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn global_circuit_breaker)]
@@ -9471,8 +9429,6 @@ pub mod pallet {
     EmptyPrecondition,
     ManualSourceDisabled,
     RecipientDepositUnavailable,
-    ObservationUnavailable,
-    ObservationUninitialized,
     SystemActorTopologyInvalid,
     AdmissionBoundOverflow,
     StateHoldUnavailable,
@@ -9863,15 +9819,9 @@ pub mod pallet {
       let schedule_anchor = Self::schedule_anchor_at(contract.window, now);
       let temporal_anchor_tick =
         Self::temporal_anchor_tick(&contract.trigger).map_err(Self::placement_error)?;
-      let trigger_transition = schedule_changed
-        .then(|| Self::preflight_trigger_transition(TriggerTransitionIntent::ReplaceActive))
-        .transpose()?;
       Self::with_control_transaction(|| {
         if let Some(reason) = cancellation_reason {
           Self::cancel_run_internal(actor_id, reason, None)?;
-        }
-        if let Some(transition) = trigger_transition {
-          Self::commit_trigger_transition(actor_id, transition);
         }
         let legacy_authority = ActorControlLocators::<T>::contains_key(actor_id)
           || ActorUnsignaledControlCells::<T>::contains_key(actor_id);
@@ -11675,8 +11625,6 @@ pub mod pallet {
 
     fn do_deactivate_actor(actor_id: ActorId, _instance: ActiveActorViewOf<T>) -> DispatchResult {
       let now = frame_system::Pallet::<T>::block_number();
-      let trigger_transition =
-        Self::preflight_trigger_cleanup(TriggerTransitionIntent::Deactivate)?;
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         // Canonical deactivation owns one removal transition. Publishing an intermediate Idle
         // successor before detaching it would compose two independently validated scheduler
@@ -11784,7 +11732,7 @@ pub mod pallet {
           }
         }
         if let Err(error) =
-          Self::remove_active_actor_with_admission(actor_id, trigger_transition, Some(&admission))
+          Self::remove_active_actor_with_admission(actor_id, Some(&admission))
         {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
@@ -12457,7 +12405,6 @@ pub mod pallet {
           Error::<T>::SystemSovereignInvariant
         );
       }
-      let trigger_transition = Self::preflight_trigger_cleanup(TriggerTransitionIntent::Close)?;
       let identity = ActorIdentity {
         sovereign_account: instance.sovereign_account.clone(),
         owner: instance.owner.clone(),
@@ -12522,7 +12469,7 @@ pub mod pallet {
           )?;
 
           // Exact secondary references are gone; remove the sole primary without a population scan.
-          Self::remove_active_actor_with_admission(actor_id, trigger_transition, Some(&admission))?;
+          Self::remove_active_actor_with_admission(actor_id, Some(&admission))?;
           let semantic_state = ActorSemanticStates::<T>::get(actor_id)
             .filter(|state| matches!(state, ActorSemanticState::Active(_)))
             .ok_or(Error::<T>::ActorInvariant)?;

@@ -259,7 +259,7 @@ The standalone Oracle provides bounded pair admission, typed status/provenance, 
 | Governance | Canonical pool indexing admits exact immutable feed configurations; Router governance controls only the bounded fee rate |
 | History | Changed values emit bounded current-revision events; archive/history remains materialized-provider work |
 
-Router-local observation storage, tracking calls, metadata, and generated weights have been removed. The non-noop Actors dirty hook binds at Oracle publication. The composed failed-swap regression installs a real subscriber and preserves pre-execution ordering, directional math, Router outcomes, System-Actors freshness behavior, and whole-swap rollback including exact Actors dirty-map and active-list state. General feeds, arbitrary bytes, callbacks, off-chain correctness, multi-source quorum, and Actors oracle predicates remain outside that price-only candidate.
+Router-local observation storage, tracking calls, metadata, and generated weights have been removed. Oracle publication carries no consumer hook in the reference composition. The composed failed-swap regression preserves pre-execution ordering, directional math, Router outcomes, System-Actors freshness behavior, and whole-swap rollback of Oracle state. General feeds, arbitrary bytes, callbacks, off-chain correctness, multi-source quorum, and Actors oracle predicates remain outside that price-only candidate.
 
 ## Storage Summary
 

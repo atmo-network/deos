@@ -9834,7 +9834,6 @@ fn actor_storage_schema_is_explicit() {
       ("OwnerSlotBitmaps", false, true),
       ("SovereignIndex", true, true),
       ("ActiveActorLimit", false, false),
-      ("IndexedTriggerDetectionDisabled", true, true),
       ("GlobalCircuitBreaker", false, false),
       ("IdleStarvationState", false, false),
     ]
@@ -9864,7 +9863,6 @@ fn actor_storage_schema_is_explicit() {
     "ActorContractTailChunk",
   ));
   assert_map_storage_types::<u64, crate::ActorStateHoldRecordOf<Test>>(entry("ActorStateHolds"));
-  assert_map_storage_types::<u64, ()>(entry("IndexedTriggerDetectionDisabled"));
 
   assert_plain_storage_type::<u64>(entry("NextActorId"));
   assert_map_storage_types::<u64, crate::ActorContractHeadOf<Test>>(entry("ActorContractHead"));

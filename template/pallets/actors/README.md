@@ -14,7 +14,7 @@ The current kernel/runtime slice provides:
 - User and System Actor creation with deterministic sovereign accounts
 - Bounded Actor Contracts whose Steps own an optional canonical `Precondition` DNF of current-state Predicates and one typed Task (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, or adapter-free `StopCycle`, etc.); absence is the sole unconditional form
 - One scheduler over an actor-keyed persistent Service ring with one authoritative head/cursor, generation-bound process residence, B+1 eligibility, cyclic cross-class encounter order, and canonical C32 Block/Tick Deadline carriers
-- Exactly one `Manual`, `AddressEvent`, `ObservationChange`, `ObservationCrossing`, `AtTime`, or `Cadenced` Trigger per Actor; bounded indexed detection and materialization may publish the existing readiness latch only while Idle
+- Exactly one `Manual`, `AddressEvent`, `AtTime`, or `Cadenced` Trigger per Actor, publishing the existing readiness latch only while Idle; observation comparisons are pull-time Step predicates, never Trigger sources
 - Bounded `on_idle` execution with sparse Healthy/Starving/Alerted state and one-time detection/recovery events
 - Fee admission, lifecycle controls, pause/resume, and pure prechecked terminal cleanup
 - Sparse progress-preserving `ActorRunState` for Mutable suspension, with an open nonce separate from finalized identity, one scalar cursor, exact eligibility, current-state reevaluation, exact outcomes, Temporary-only retry, deterministic cancellation, and no prefix replay

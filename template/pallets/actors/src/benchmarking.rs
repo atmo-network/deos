@@ -3003,10 +3003,6 @@ mod benches {
     let _ = fund_reachable_assets_except::<T>(actor_id, funding_amount, Some(liquidity_funding.0));
     open_reachable_retry::<T>(actor_id, liquidity_funding);
     let state = Pallet::<T>::active_actor_state(actor_id).expect("update Run is live");
-    assert!(
-      !IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id),
-      "suspended update Actor has rearmed indexed detection"
-    );
     let run = state.run_state.as_ref().expect("real update Run exists");
     let retained_run = run.encode();
     // Indexed occurrences during a live Run are ignored; the removed funding accumulator must not

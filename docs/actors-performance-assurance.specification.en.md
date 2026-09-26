@@ -136,12 +136,13 @@ They are retained as reference workloads for like-for-like comparison and so tha
 Construct 10,000 prefunded one-Step User Actors on one feed:
 
 ```text
-ObservationCrossing
+Cadenced (one shared due tick)
+→ Fresh ObservationAbove precondition
 → Transfer
 → completed Cycle
 ```
 
-One accepted changed publication in source block `N` causes the qualifying crossing. Report each Actor's first completed one-Step Cycle and aggregate coverage against the historical horizon `N + 1 ..= N + 100` and against any declared bounded extension horizon. Report `S` and `A` per block even though both count the same committed population in this exact Q1 one-Step profile.
+The shared due tick is reached in block `N` while the authored observation predicate is true; publication itself activates no Actor. Report each Actor's first completed one-Step Cycle and aggregate coverage against the historical horizon `N + 1 ..= N + 100` and against any declared bounded extension horizon. Report `S` and `A` per block even though both count the same committed population in this exact Q1 one-Step profile.
 
 The Transfer destination and amount geometry MUST be identical across the population and executable throughout the run. Setup MUST isolate scheduler/control throughput from avoidable recipient-creation or insufficient-funding failures while retaining the real certified ingress and ledger consequences of the canonical Transfer operation.
 
@@ -156,12 +157,13 @@ The external workload MUST be deterministic, independently successful, and suffi
 Construct 10,000 prefunded one-Step User Actors:
 
 ```text
-ObservationCrossing
+Cadenced (one shared due tick)
+→ Fresh observation precondition
 → bounded SwapOut
 → committed typed Step disposition
 ```
 
-One qualifying publication in block `N` causes readiness. Report each Actor's typed Step disposition and coverage against the historical horizon `N + 1 ..= N + 100` and against any declared bounded extension horizon. The market fixture MUST use deterministic bounded liquidity and authored input protection; it MUST NOT fabricate 10,000 stale shared quotes or promise that every market operation succeeds economically.
+The shared due tick in block `N` causes readiness; the observation predicate is evaluated at each Attempt. Report each Actor's typed Step disposition and coverage against the historical horizon `N + 1 ..= N + 100` and against any declared bounded extension horizon. The market fixture MUST use deterministic bounded liquidity and authored input protection; it MUST NOT fabricate 10,000 stale shared quotes or promise that every market operation succeeds economically.
 
 Report runtime service separately from economic outcome:
 
@@ -228,9 +230,9 @@ Measure `0/1/4/8/32` Steps across no/max Precondition geometry and reads, no/max
 
 Additionally report:
 
-- Trigger occurrence service by `Manual`, `AddressEvent`, `ObservationChange`, `ObservationCrossing`, `AtTime`, and `Cadenced`, separating source publication/ordinary transaction work from the disjoint User Trigger Fee.
+- Trigger occurrence service by `Manual`, `AddressEvent`, `AtTime`, and `Cadenced`, separating source publication/ordinary transaction work from the disjoint User Trigger Fee.
 - Independent Trigger and Pipeline deltas for: Idle useful occurrence with immediate Opening; one busy `false -> true` occurrence during an active Pipeline; redundant latched-period sources that perform no Actor-specific evaluation or charge; delayed Opening after retained `pending_signal`; paid useful Trigger followed by unavailable Pipeline Machine capacity; and a zero-Step immutable AtTime one-shot.
-- For every separation fixture, component-wise incremental RefTime, ProofSize, database reads/writes, accounting touches, fee movement, latch transition, detector disable/re-arm, and Cycle transition attributable separately to useful occurrence materialization and Pipeline Opening.
+- For every separation fixture, component-wise incremental RefTime, ProofSize, database reads/writes, accounting touches, fee movement, latch transition, re-arm, and Cycle transition attributable separately to useful occurrence materialization and Pipeline Opening.
 - Running/Suspended current-Step cost at every cursor, proving no balance viability read, machine charge, machine hold, or suffix reconstruction after Opening.
 - Success, typed failure, retry, and `FundingUnavailable` Action paths: every invoked Action pays valid actual effect Weight; an unfunded non-invoked Action pays zero and follows prepaid control policy without apoptosis.
 - Pipeline-admission-insufficient minimal apoptosis Weight, ProofSize, reads/writes, touched keys, event count, custody-root invariance, non-refund of committed Trigger fees, and absence of any Task/economic adapter.
@@ -280,13 +282,7 @@ Initial causal candidate discovery MUST be length-blind; fixtures fund every mem
 
 Construct 100,000 Actors with identical or tightly clustered due ticks. Measure empty-time probes, due-page materialization, aggregate FIFO placement, partial resumption, block/tick ordering, and total convergence. Service MUST remain bounded per block, preserve temporal order, coalesce missed cadence without catch-up Cycles, and expose no unbounded scan or duplicate ticket.
 
-### 5.2 Observation Herd
-
-Construct 100,000 `ObservationChange` subscriptions or `ObservationCrossing` memberships on one hot feed, subject to the tested profile's explicit configured capacity. Measure publication ingress separately from deferred page/threshold discovery, candidate materialization, FIFO placement, faults, and convergence.
-
-Publication work MUST remain cardinality-independent. Deferred work MAY span blocks but MUST preserve revision order, exact membership authority, causal delay, and bounded per-block control.
-
-### 5.3 Million Dormant
+### 5.2 Million Dormant
 
 Construct 1,000,000 Dormant identities in the stress state generator without claiming that the production runtime admits one million Active Actors. A tiny fixed active frontier is then exercised while all other identities remain Dormant.
 

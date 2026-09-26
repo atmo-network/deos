@@ -37,7 +37,7 @@ A repeated description MUST NOT redefine behavior. If two passages conflict, the
 | Trigger underfunding and source advancement | §4.4 |
 | Trigger re-arm | §4.5 |
 | Causal cohort | §4.6 |
-| Trigger-family timing and crossing semantics | §4.7 |
+| Trigger-family timing semantics | §4.7 |
 | Cycle and run state | §5.1 |
 | Pipeline Opening | §5.2 |
 | Current Attempt inputs | §5.3 |
@@ -58,7 +58,7 @@ A repeated description MUST NOT redefine behavior. If two passages conflict, the
 | Active Actor classification | §8.1 |
 | Process residence and temporal readiness | §8.2 |
 | Prepass, Service round, and Drain | §8.3 |
-| Detector workers, cohorts, and faults | §8.4 |
+| Detector workers and cohorts | §8.4 |
 | Scheduler liveness | §8.5 |
 | Class and mutability | §9.1 |
 | Terminal precedence | §9.2 |
@@ -171,18 +171,6 @@ The selected default mode is fixed-anchor absolute net change. Reference native 
 Failure of fixed-anchor cost or coverage gates may select exactly one fallback rather than silently changing semantics. The only permitted fallback is parked-period certified positive credit from a bounded nonempty whitelist of immediate authenticated producer/payer identities and exact assets. It sums committed credits per asset only within the current episode, caps retained evidence at that asset's threshold, applies the same inclusive `max(authored_min_delta, 100 * minimum_balance)` rule, coalesces one Pending check, and rolls back tentative evidence with the credit transaction.
 
 Unknown or absent sources, self-transfers, refunds, replayed callbacks, busy-period credits, and inferred upstream origin do not count. The whitelist qualifies wake only; execution still evaluates current conditions and spends current Available.
-
-### 2.5 Manual observation-gated activation
-
-The first supported observation-Park profile is an authorized `Manual` start whose Step 0 has a nonempty precondition containing only observation comparisons. Mixed balance, block, and observation preconditions remain outside this profile until their union certificate and deadline semantics are implemented. This restriction changes scheduling only: Step execution retains the ordinary predicate semantics in §6.2.
-
-An idle authorized Manual occurrence performs one current Step-0 check under its ordinary paid readiness transition. If every comparison is currently true, it publishes ordinary B+1 Service. If any comparison is false because of value, availability, or age, it atomically publishes Park instead, bound to the generation, Contract identity, exact deduplicated feeds, covered event-complete revisions, and one B+1 block review. A running Cycle, retry, existing Pending obligation, paused generation, or non-Manual Trigger cannot enter this profile.
-
-Every certified host observation registration, pause, resume, deactivation, changed publication, and equal-value refresh advances the exact feed source revision under the owning transaction. The bounded fair source scan may transfer one generation-bound Pending obligation only after acknowledging the registration at its fixed target. Repeated or racing revisions coalesce without erasing the newest unacknowledged revision.
-
-Pending interpretation reconstructs Step 0 from the bound Contract identity and rereads every authored observation comparison at the current block. All true wakes B+1 Service. Any false result acknowledges only the complete stable current snapshot and returns to Park with a fresh B+1 review. Uninitialized, structurally invalid, exhausted, stale-authority, source-mapping, or newer-unacknowledged state refuses atomically and retains both Pending and timed authority.
-
-The B+1 review is mandatory even though Oracle mutation coverage is event-complete. It is the explicit validity clock for `max_age_blocks`: age can change without an Oracle write. Review does not infer historical truth or replay an earlier fresh value; it performs the same complete current comparison and either rearms or wakes. This one-block reference policy is deliberately conservative and configuration-independent; replacing it requires a separately specified bounded review policy and regenerated Weight.
 
 ---
 
@@ -433,18 +421,11 @@ Dormant means only `ActorIdentity` and class locator/slot authority exist. Dorma
 ### 4.1 Trigger families and runtime state
 
 ```rust
-enum Trigger<AccountId, AssetId, FeedId> {
+enum Trigger<AccountId, AssetId> {
   Manual,
   AddressEvent {
     source_filter: SourceFilter<AccountId>,
     asset_filter: AssetFilter<AssetId>,
-  },
-  ObservationChange { feed: FeedId },
-  ObservationCrossing {
-    feed: FeedId,
-    direction: CrossingDirection,
-    threshold: u128,
-    rearm_threshold: u128,
   },
   AtTime { after_ticks: u64 },
   Cadenced { every_ticks: u64 },
@@ -473,10 +454,6 @@ struct AddressEvent<AccountId, AssetId, Balance> {
 
 enum TriggerRuntimeState {
   Stateless,
-  ObservationCrossing {
-    phase: CrossingPhase,
-    installed_at_revision: ObservationRevision,
-  },
   AtTime {
     anchor_tick: Option<u64>,
     consumed: bool,
@@ -485,19 +462,15 @@ enum TriggerRuntimeState {
     anchor_tick: Option<u64>,
   },
 }
-
-enum CrossingPhase { Armed, WaitingForRearm }
-enum CrossingDirection { Rising, Falling }
 ```
 
 Compatibility is exact:
 
-- `Manual`, `AddressEvent`, `ObservationChange` require `Stateless`;
-- `ObservationCrossing` requires crossing state;
+- `Manual` and `AddressEvent` require `Stateless`;
 - `AtTime` requires AtTime state;
 - `Cadenced` requires cadence state.
 
-Mismatch is `ActorInvariant` (§12.4). Whitelists MUST be nonempty, duplicate-free, and strictly ordered by canonical typed SCALE bytes; runtime admission MUST reject rather than normalize noncanonical input.
+Mismatch is `ActorInvariant` (§12.4). Observation publication is never a Trigger source: Actors read observations only through Step predicates evaluated at the actual check or Attempt (§6.2), so an observation-reactive strategy composes a `Cadenced` or `AddressEvent` Trigger with a fresh-only observation precondition. Whitelists MUST be nonempty, duplicate-free, and strictly ordered by canonical typed SCALE bytes; runtime admission MUST reject rather than normalize noncanonical input.
 
 ### 4.2 Useful Trigger occurrence
 
@@ -546,8 +519,6 @@ User Trigger underfunding means the sovereign account cannot pay the current Tri
 | --- | --- |
 | `Manual` | Reject the call; no Actors state/event/Trigger fee changes. Ordinary signed transaction payment remains. |
 | `AddressEvent` | The certified movement and independent funding semantics MAY commit; no latch or Trigger fee. The same movement is not retried as a Trigger. |
-| `ObservationChange` | The source revision frontier advances; no latch or Trigger fee. A later revision may form a new cause. |
-| `ObservationCrossing` | The transition frontier advances and crossing phase consumes the fire as if no readiness were purchased; no latch or Trigger fee. A later re-arm and later crossing may form a new cause. |
 | `AtTime` | The one-shot source is consumed. A User Actor undergoes minimal apoptosis with `TriggerAdmissionInsufficient` (§9.4). System is fee-exempt. |
 | `Cadenced` | The due point is skipped and the next future cadence point is installed; no latch or Trigger fee. |
 
@@ -561,8 +532,6 @@ Opening consumes the current latch and re-arms the Trigger (§5.2):
 | --- | --- |
 | `Manual` | Stateless and enabled. |
 | `AddressEvent` | Stateless and enabled. |
-| `ObservationChange` | Re-enable from the current authoritative revision; no replay of latched revisions. |
-| `ObservationCrossing` | Derive phase from the current authoritative value and revision; no replay of latched transitions. |
 | `AtTime` | Never re-arm; `consumed == true`. |
 | `Cadenced` | Install the first canonical cadence deadline strictly after the current authoritative tick; no catch-up. |
 
@@ -599,24 +568,6 @@ Only the authorized owner may call `manual_trigger` (§12.1). A useful call foll
 #### AddressEvent
 
 Only certified positive non-self movement may form an AddressEvent cause (§11.4). Trigger matching is independent from funding acceptance (§6.4). `SourceFilter::Any` accepts any source, including absent source; `OwnerOnly` requires concrete source equal to owner; `Whitelist` requires a concrete listed source. `AssetFilter::Whitelist` requires the exact listed asset.
-
-#### ObservationChange
-
-Every accepted changed feed revision is a source cause. Equality is an exact source no-op. Revision regression fails. Subscriber topology is paged and bounded (§8.4).
-
-#### ObservationCrossing
-
-Rising requires `rearm_threshold < threshold`. Falling requires `rearm_threshold > threshold`.
-
-```text
-Rising fire:  previous < threshold && current >= threshold
-Rising rearm: previous > rearm_threshold && current <= rearm_threshold
-
-Falling fire:  previous > threshold && current <= threshold
-Falling rearm: previous < rearm_threshold && current >= rearm_threshold
-```
-
-Repeated equal observations cause neither transition. Installation derives phase from current canonical observation and never retrofires history. Every accepted revision transition is processed in per-feed revision order (§8.4).
 
 #### AtTime
 
@@ -708,8 +659,6 @@ Opening MUST execute in this order:
 If the Actor cannot pay the Pipeline Machine fee, or its active-installed run-state hold authority is inconsistent, Opening MUST NOT partially occur. Insufficient Pipeline payment invokes minimal apoptosis with `CycleAdmissionInsufficient` (§9.4); inconsistent hold authority fails closed as an Actor invariant. The prior Trigger fee remains final (§7.3).
 
 If Pipeline fee collection fails despite valid capacity, the entire Opening attempt rolls back, the latch remains consumable, and the Service head is preserved (§7.4, §8.3).
-
-If Trigger rearm requires a current authoritative observation (§4.5) and that observation is unavailable or uninitialized, Opening MUST atomically refuse. The latch, placement, cycle nonce, and prior Trigger payment remain unchanged; no Pipeline fee, Run, or Task effect commits. This refusal grants no bypass, retry Continuation, or observation-loss close authority. Independently applicable terminal checks, including insufficient Pipeline capacity, retain their existing precedence and do not require successful rearm (§9.2, §9.4).
 
 ### 5.3 Current Attempt inputs
 
@@ -1069,7 +1018,7 @@ A useful User `manual_trigger` call charges the complete generated Manual Trigge
 
 Automatic source ingress/publishers pay their own source work; the Actor pays only its occurrence materialization (§7.7, §11.4).
 
-Insufficient Trigger capacity follows the family table (§4.4). Trigger-fee collection failure rolls back occurrence materialization and preserves the exact retry/fault authority (§4.4, §8.4).
+Insufficient Trigger capacity follows the family table (§4.4). Trigger-fee collection failure rolls back occurrence materialization and preserves the exact source obligation (§4.4, §8.4).
 
 Committed Trigger fees are non-refundable and independent from later Pipeline admission.
 
@@ -1202,7 +1151,7 @@ Each Active Actor owns exactly one generation-bound process record. A serving pr
 - `Service(Pending)` for paid readiness awaiting Opening;
 - `Service(Live)` for an admitted Pipeline or an Idle Actor that remains serviceable;
 - `Deadline` for a suspended Pipeline that is not yet due;
-- `Parked` for one predicate- or balance-dependent wait; or
+- `Parked` for one parked-balance wait (§2.4); or
 - No residence while Disabled.
 
 A temporal Trigger may additionally own one independent Trigger deadline for `AtTime` or `Cadenced`. This Trigger authority is not a process residence and cannot execute the Actor directly.
@@ -1210,7 +1159,6 @@ A temporal Trigger may additionally own one independent Trigger deadline for `At
 ```rust
 type WakeupPageId = u64;
 type WakeupSlot = u32;
-type ObservationRevision = u64;
 
 enum WakeupKey<BlockNumber> { Block(BlockNumber), Tick(u64) }
 
@@ -1263,18 +1211,14 @@ The valid Service head is authoritative:
 
 A maximum valid Step may be the only Actor Step in a block. This is paid bounded service, not structural starvation. Pipeline- or Action-fee collector failure rolls back the current transition, preserves the Service head, and stops the pass; it is not a Task failure (§7.4, §7.5).
 
-Required Opening observation unavailability likewise preserves the Service head and stops the pass (§5.2), even when Weight remains. Later residents cannot bypass that refusal.
-
-### 8.4 Detector workers, cohorts, and faults
+### 8.4 Detector workers and cohorts
 
 Detector geometry is source-specific:
 
 ```text
-Manual              -> direct call
-AddressEvent        -> certified destination/filter path
-ObservationChange   -> paged broad subscribers
-ObservationCrossing -> ordered sparse threshold index
-AtTime/Cadenced     -> temporal index
+Manual          -> direct call
+AddressEvent    -> certified destination/filter path
+AtTime/Cadenced -> temporal index
 ```
 
 A universal Trigger index is forbidden.
@@ -1285,12 +1229,12 @@ Workers MUST:
 - Inspect only exact affected candidates;
 - Admit complete multidimensional Weight before mutation;
 - Use bounded candidate/page/chunk counts;
-- Preserve one exact source frontier on fault;
+- Preserve one exact source obligation on refusal;
 - Never skip corruption or let later source work overtake it.
 
 A homogeneous causal cohort (§4.6) MAY aggregate physical writes only when every included candidate follows the same generated control branch and compatible destination shape. Cohorting MUST NOT reorder candidates or create Task-shape affinity.
 
-A worker fault records one bounded current fault. Repeated observation of the same uncleared fault emits no duplicate first-recorded event. Repair is explicit and bounded (§12.1, §12.2). The reference profile MUST admit a homogeneous causal cohort of at least 128 candidates when its generated Actor Control Weight and destination capacity fit.
+The reference profile MUST admit a homogeneous causal cohort of at least 128 candidates when its generated Actor Control Weight and destination capacity fit.
 
 ### 8.5 Scheduler liveness
 
@@ -1300,14 +1244,14 @@ Given:
 - Recurring conforming Actor Control and Shared Economic capacity;
 - Finite stale churn;
 - Eventual placement capacity;
-- Eventual availability of required authoritative observations and successful fee collection when valid payment capacity exists;
+- Successful fee collection when valid payment capacity exists;
 - No structural invariant fault;
 
 all eligible residents receive service in persistent ring order.
 
 The protocol promises no fixed block latency. Increasing runnable population MAY increase inter-Step service gaps while preserving order and eventual service.
 
-Without the required host observation or fee-collection prerequisite, the Service head MAY prevent later service despite spare Weight. Only restored prerequisites or already-authorized lifecycle transitions can resolve that obstruction; liveness creates no additional close or scheduling authority.
+Without the fee-collection prerequisite, the Service head MAY prevent later service despite spare Weight. Only restored prerequisites or already-authorized lifecycle transitions can resolve that obstruction; liveness creates no additional close or scheduling authority.
 
 Starvation telemetry MUST NOT change priority, order, or execution authority.
 
@@ -1434,7 +1378,7 @@ While the global breaker is active:
 
 - Service Step effects and ordinary automatic terminal close do not run;
 - Mandatory minimal apoptosis (§9.4), explicit close, and bounded sweep cleanup MAY run because they invoke no economic Task;
-- Bounded detector, Deadline, stale-cleanup, and fault work MAY continue;
+- Bounded detector, Deadline, and stale-cleanup work MAY continue;
 - New Active creation and activation fail;
 - Authorized control over existing Mutable Actors remains available;
 - Explicit close and permissionless sweep of independently owned terminal state remain available;
@@ -1657,7 +1601,7 @@ Uncertified movement is balance-only. Absent or Dormant destination is balance-o
 
 #### Observation publication
 
-Only generated certified publishers create observation revisions. Publication is `O(1)` and records the exact previous/current transition and monotonic revision. Deferred matching belongs to detector workers (§8.4).
+Observation publication creates no Actors ingress, subscription, Pending obligation, or Trigger cause. Its cost and revision semantics belong to the observation owner; Actors read the committed current value only when an authored predicate is evaluated (§6.2).
 
 ---
 
@@ -1684,8 +1628,6 @@ set_global_circuit_breaker
 set_active_actor_limit
 permissionless_sweep
 permissionless_sweep_many
-clear_crossing_worker_fault
-clear_observation_fanout_worker_fault
 actor_prepass
 ```
 
@@ -1695,7 +1637,7 @@ Authorization:
 | --- | --- |
 | User creation | signed creator |
 | System creation/locator reuse/active limit | `SystemOrigin` |
-| breaker/fault repair | configured control origin |
+| breaker | configured control origin |
 | User control | signed owner, subject to mutability (§9.1) |
 | System control | signed owner or `SystemOrigin`, subject to mutability (§9.1) |
 | sweep | any signed origin |
@@ -1712,7 +1654,7 @@ Creation charges ordinary transaction fee, Actor Creation Fee, and state-hold de
 The ordered event ABI is normative:
 
 ```rust
-enum Event<AccountId, AssetId, Balance, BlockNumber, ObservationFeedId> {
+enum Event<AccountId, AssetId, Balance> {
   ActorCreated { actor_id: ActorId, owner: AccountId, actor_class: ActorClass, mutability: Mutability, sovereign_account: AccountId, initial_lifecycle: InitialLifecycle },
   ActorActivated { actor_id: ActorId },
   ActorDeactivated { actor_id: ActorId },
@@ -1740,9 +1682,6 @@ enum Event<AccountId, AssetId, Balance, BlockNumber, ObservationFeedId> {
   ContractUpdated { actor_id: ActorId },
   ActiveActorLimitSet { old_limit: u32, new_limit: u32 },
   GlobalCircuitBreakerSet { paused: bool },
-  ActorFaultRecorded { fault_id: FaultId, kind: ActorFaultKind, first_recorded_block: BlockNumber, context: FaultContext },
-  CrossingWorkerFaultCleared { feed: ObservationFeedId, revision: Option<ObservationRevision>, class: CrossingWorkerFaultClass },
-  ObservationFanoutWorkerFaultCleared { feed: ObservationFeedId, revision: ObservationRevision, subscriber_page: Option<u32>, class: CrossingWorkerFaultClass },
   ManualTriggerSet { actor_id: ActorId },
   TriggerOccurrenceProcessed { actor_id: ActorId, trigger_family: TriggerFamily, fee: Balance },
   PipelineFeeCharged { actor_id: ActorId, fee: Balance },
@@ -1771,7 +1710,7 @@ Exact fields and discriminants come from metadata.
 ### 12.3 Runtime APIs
 
 ```rust
-enum TriggerFamily { Manual, AddressEvent, ObservationChange, ObservationCrossing, AtTime, Cadenced }
+enum TriggerFamily { Manual, AddressEvent, AtTime, Cadenced }
 
 enum RunPhase<BlockNumber> {
   WaitingNextBlock { not_before: BlockNumber },
@@ -1826,8 +1765,7 @@ The runtime MUST expose named structures for:
 - Maximum next Action fee and last actual Action fee;
 - Actor state hold and body footprint;
 - Block resource limits/counters;
-- Current bounded faults;
-- Crossing capacity.
+- Current bounded Service/Deadline counters.
 
 Clients MUST NOT assemble semantic Contracts from raw heads, chunks, pages, or locators.
 
@@ -1868,12 +1806,7 @@ enum Error {
   AutoCloseNonceHorizonExceeded, ControlMutationRateLimited, QueueCapacityUnavailable,
   RetryLaterNotAllowedForImmutableActor, ActorRunNotFound, ActorRunInvariant, ComputationOverflow,
   EmptyPrecondition, ManualSourceDisabled, RecipientDepositUnavailable,
-  ObservationSubscriptionCapacityExceeded, ObservationSubscriptionInvariant,
-  InvalidObservationRevision, DirtyObservationCapacityExceeded, DirtyObservationInvariant,
-  ObservationUnavailable, ObservationUninitialized, CrossingIndexCapacityExceeded,
-  CrossingUserCapacityExceeded, CrossingIndexInvariant, CrossingGenerationExhausted,
-  CrossingTransitionCapacityExceeded, CrossingTransitionInvariant, CrossingWorkerFaultNotFound,
-  ObservationFanoutWorkerFaultNotFound, SystemActorTopologyInvalid,
+  SystemActorTopologyInvalid,
   AdmissionBoundOverflow, StateHoldUnavailable, StateHoldInvariant, StateHoldOverflow,
   PrepassDuplicateOrStale, ResourceProtocolFailed, PrepassContextIncomplete,
 }
@@ -1887,7 +1820,7 @@ Required distinguishable failure domains, represented either by a dedicated vari
 - Capacity and bound overflow;
 - Slot/locator/collision/reserved account;
 - State hold and fee collection;
-- Service/Deadline/detector faults and monotonic exhaustion;
+- Service/Deadline/detector invariant failures and monotonic exhaustion;
 - Stale admission or body authority projects to `ActorInvariant`; stale run authority projects to `ActorRunInvariant`;
 - Control rate limit and breaker;
 - Prepass/round/resource protocol failure.
@@ -1961,17 +1894,16 @@ Required relations:
 3. `MaxRetryAttempts >= 2`; reference is 10.
 4. `MaxContractSteps * MaxRetryAttempts` fits outcome counters.
 5. Current-Step predicate and amount-read bounds cover every admitted Contract.
-6. `MaxCrossingMembersPerFeed` covers the configured User membership allowance plus every separately bounded host-owned membership reserved for the feed; the reference split is 9,000 User and 1,000 System positions within 10,000 total.
-7. Every Service, Deadline, detector, cohort, sweep, and worker bound is nonzero and owns one complete worst-case unit.
-8. One maximum current-Step control/effect transition fits the guaranteed base pass (§7.6, §8.3).
-9. Maximum admitted create, activate, update, deactivate, cancel, and close paths remain dispatchable under their owning call limits.
-10. `MinUserBalance >= host minimum balance`.
-11. `ActorCreationFee > 0`.
-12. `WeightToFee` maps every nonzero User Trigger, Pipeline, and Action Weight upper bound to positive fee.
-13. Trigger and Pipeline fee owners are disjoint (§7.3, §7.4).
-14. Actor Control is floor one third of schedulable Weight; Shared Economic owns the remainder and its two base turns split floor/remainder (§7.6).
-15. `MaxTemporalDelayTicks` and `MaxExecutionDelayBlocks` are clock-specific and representable.
-16. `MaxSplitTransferLegs >= 2`.
+6. Every Service, Deadline, detector, cohort, sweep, and worker bound is nonzero and owns one complete worst-case unit.
+7. One maximum current-Step control/effect transition fits the guaranteed base pass (§7.6, §8.3).
+8. Maximum admitted create, activate, update, deactivate, cancel, and close paths remain dispatchable under their owning call limits.
+9. `MinUserBalance >= host minimum balance`.
+10. `ActorCreationFee > 0`.
+11. `WeightToFee` maps every nonzero User Trigger, Pipeline, and Action Weight upper bound to positive fee.
+12. Trigger and Pipeline fee owners are disjoint (§7.3, §7.4).
+13. Actor Control is floor one third of schedulable Weight; Shared Economic owns the remainder and its two base turns split floor/remainder (§7.6).
+14. `MaxTemporalDelayTicks` and `MaxExecutionDelayBlocks` are clock-specific and representable.
+15. `MaxSplitTransferLegs >= 2`.
 
 Reference profile:
 
@@ -2014,7 +1946,7 @@ A runtime conforms iff:
 6. Opening, current Attempt inputs, nonce, zero-Step, and Cycle boundaries follow §5;
 7. Q1 Step execution, error policies, and Tasks follow §6;
 8. Creation, Trigger, Pipeline, Action, state-hold, and resource ownership follow §7 without overlap;
-9. Classification, Service rounds, cohorts, faults, and liveness follow §8;
+9. Classification, Service rounds, cohorts, and liveness follow §8;
 10. Mutability, terminal precedence, close, apoptosis, and breaker follow §9;
 11. Sovereign custody survives process deletion and exact reattachment follows §10;
 12. Each Task effect maps to one canonical host owner and typed failure surface (§11);

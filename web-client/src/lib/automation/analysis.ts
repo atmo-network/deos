@@ -34,7 +34,7 @@ export type {
   ActorTaskName,
 } from './semantic-manifest.ts';
 
-export const ACTORS_STATIC_ANALYZER_VERSION = '10' as const;
+export const ACTORS_STATIC_ANALYZER_VERSION = '11' as const;
 
 export type ActorRequiredAdapter =
   | 'AssetOps'

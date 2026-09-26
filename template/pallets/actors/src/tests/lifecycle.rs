@@ -195,29 +195,6 @@ fn late_trigger_transition_failure_rolls_back_canonical_and_derived_state() {
 }
 
 #[test]
-fn trigger_transition_preflight_is_read_only() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    create_system_with(
-      ALICE,
-      Schedule {
-        trigger: RuntimeTrigger::Manual,
-        cooldown_blocks: 0,
-      },
-      None,
-      contract_steps_with_step(make_step(Task::StopCycle)),
-    );
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    let _plan = Actors::preflight_trigger_transition(crate::TriggerTransitionIntent::ReplaceActive)
-      .expect("valid Trigger transition preflights");
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
-    );
-  });
-}
-
-#[test]
 fn already_live_map_error_fails_closed_without_panicking() {
   new_test_ext().execute_with(|| {
     assert_eq!(

@@ -190,7 +190,7 @@ The system implements "Economic Backpressure" to handle volatility gracefully.
 
 Actors delegates host behavior through typed runtime contracts:
 
-Reactive work follows `specialize detection -> unify activation -> unify execution`: Manual calls, certified address movement, broad observation changes, sparse observation crossings, and cadence deadlines retain distinct bounded detectors, then share one readiness latch, placement contract, cutoff, and FIFO.
+Reactive work follows `specialize detection -> unify activation -> unify execution`: Manual calls, certified address movement, and AtTime/Cadenced deadlines retain distinct bounded detectors, then share one readiness latch, placement contract, cutoff, and FIFO. Observations never activate Actors; they are read only by execution-time Step predicates.
 
 - `AssetOps`: transferable balances, transfer, burn, mint, minimum-balance, and deposit checks
 - `DexOps`: caller-aware exact-input and exact-output swaps
