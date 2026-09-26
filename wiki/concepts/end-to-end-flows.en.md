@@ -65,7 +65,7 @@ Owner pages: [Actors System](../overview/actor-system.en.md), [AA-Actor](../over
 1. A Mutable plan executes `SwapIn`, then attempts `AddLiquidity`, then intends to `Transfer` the result.
 2. The swap succeeds and commits. The liquidity adapter reports an explicitly Temporary failure.
 3. `RetryLater` rolls back only the failed task and stores a sparse Continuation at the `AddLiquidity` cursor.
-4. Cooldown re-enters the same FIFO/wakeup scheduler without a new external trigger. Retry charges and admits only `AddLiquidity → Transfer`.
+4. After the cooldown, the retry returns through the same Service ring and Deadline scheduler without a new external trigger. Retry charges and admits only `AddLiquidity → Transfer`.
 5. Success removes Continuation and emits one cumulative summary for the original logical-cycle nonce. Cancellation instead keeps the swap committed and performs no compensation.
 
 Current cursor and attempt are bounded chain truth. A long attempt timeline belongs to a materialized event index.

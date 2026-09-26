@@ -2320,7 +2320,7 @@ fn observed_attempt_projection(
   (disposition, outcomes, None, None)
 }
 
-// --- Eligibility Projection API (spec 7.3) ---
+// --- Eligibility Projection API ---
 
 fn eligibility(actor_id: ActorId) -> ActorEligibility<u64> {
   Actors::actor_eligibility(actor_id).expect("eligibility computes")

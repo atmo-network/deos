@@ -729,7 +729,7 @@ fn typed_ingress_zero_movement_creates_no_ingress() {
     let hot = Actors::actor_hot(actor_id).expect("hot state");
     assert!(
       !hot.pending_signal,
-      "zero movement must not latch readiness (spec 5.3)"
+      "zero movement must not latch readiness"
     );
     assert!(hot.queue_ticket.is_none(), "zero movement must not enqueue");
   });

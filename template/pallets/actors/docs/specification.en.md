@@ -6,81 +6,23 @@
 
 RFC 2119/RFC 8174 key words are normative when uppercase.
 
-This document owns runtime behavior and semantic type meaning. Runtime metadata owns exact SCALE encoding. Generated storage descriptors own exact physical layout. Generated Weight descriptors own measured `Weight(RefTime, ProofSize)`.
-
-Rust blocks that do not declare public types, calls, events, errors, or runtime APIs are normative semantic pseudocode. They define branch order, dependencies, and failure propagation, not source identifiers or Rust ownership syntax.
-
 ---
 
-## 1. Authority and sole ownership
+## 1. Ownership and conventions
 
-### 1.1 Sole-owner rule
+This specification owns Actor semantics, the public ABI shapes listed in it, and the resource guarantees every conforming implementation MUST provide. It does not own:
 
-Every semantic function has exactly one normative owner in this specification. Other sections MAY use that function only by reference in parentheses, for example `Opening (§5.2)`.
-
-A repeated description MUST NOT redefine behavior. If two passages conflict, the passage in the sole-owner section wins.
-
-### 1.2 Owner registry
-
-| Function or semantic surface | Sole normative owner |
+| Surface | Owner |
 | --- | --- |
-| Core determinism, boundedness, Q1, and atomicity | §2 |
-| Current-state inputs, residence, block rounds, parking, and generation safety | §2.3 |
-| Actor Contract public shape | §3.1 |
-| Semantic Contract identity and body commitment | §3.2 |
-| C6 hot-head/lazy-tail geometry | §3.3 |
-| Admission certificate and Pipeline Machine envelope | §3.4 |
-| Canonical partitions and field ownership | §3.5 |
-| Trigger families and runtime phase | §4.1 |
-| Useful Trigger occurrence | §4.2 |
-| Trigger latch and redundant-source behavior | §4.3 |
-| Trigger underfunding and source advancement | §4.4 |
-| Trigger re-arm | §4.5 |
-| Causal cohort | §4.6 |
-| Trigger-family timing semantics | §4.7 |
-| Cycle and run state | §5.1 |
-| Pipeline Opening | §5.2 |
-| Current Attempt inputs | §5.3 |
-| Cycle nonce | §5.4 |
-| Zero-Step Cycle | §5.5 |
-| Cycle completion and cancellation | §5.6 |
-| One-Step attempt transaction | §6.1 |
-| Precondition | §6.2 |
-| Amount resolution | §6.3 |
-| Funding authorization | §6.4 |
-| Step outcome and error-policy interpretation | §6.5 |
-| Task semantics | §6.6 |
-| Creation fee and state hold | §7.2 |
-| Trigger fee | §7.3 |
-| Pipeline Machine fee | §7.4 |
-| Action fee | §7.5 |
-| Actor Control and Shared Economic meters | §7.6 |
-| Active Actor classification | §8.1 |
-| Process residence and temporal readiness | §8.2 |
-| Prepass, Service round, and Drain | §8.3 |
-| Detector workers and cohorts | §8.4 |
-| Scheduler liveness | §8.5 |
-| Class and mutability | §9.1 |
-| Terminal precedence | §9.2 |
-| Close cleanup | §9.3 |
-| Minimal User apoptosis | §9.4 |
-| Control transitions and breaker | §9.5 |
-| Sovereign-account derivation | §10.1 |
-| User slots and System locators | §10.2 |
-| Custody reattachment and recovery | §10.3 |
-| Protected minimum | §10.4 |
-| Canonical Task-effect ownership | §11.1 |
-| Adapter interfaces | §11.2 |
-| Failure classification | §11.3 |
-| Swap, liquidity, staking, and ingress special rules | §11.4 |
-| Calls and authorization | §12.1 |
-| Events and ordering | §12.2 |
-| Runtime APIs | §12.3 |
-| Errors and projections | §12.4 |
-| Storage and integrity | §13.1 |
-| Runtime upgrades | §13.2 |
-| Runtime configuration | §13.3 |
-| Conformance | §13.4 |
+| Exact SCALE encoding, discriminants, and type paths | Runtime metadata |
+| Storage items, keys, internal records, and page geometry | Generated storage descriptors and the package architecture document |
+| Measured `Weight(RefTime, ProofSize)` values | Generated Weight descriptors |
+| Concrete host adapter trait signatures | The package embedding guide |
+| A host's concrete block allocation, fixed envelope, and reference constants | That host's integration documentation |
+
+Each semantic function has exactly one owning section. Other sections use it only by reference, for example `Opening (§6.2)`. If two passages conflict, the owning section wins.
+
+Rust blocks declaring public types, calls, events, or errors are normative shapes. Other code blocks are semantic pseudocode: they fix branch order, dependencies, and failure propagation, not identifiers or Rust syntax.
 
 ---
 
@@ -90,19 +32,20 @@ A repeated description MUST NOT redefine behavior. If two passages conflict, the
 
 1. Equal canonical state and block context MUST produce equal behavior.
 2. Every path MUST be `O(1)` or `O(K)` under explicit finite bounds.
-3. Complete `Weight(RefTime, ProofSize)` for the current transition MUST fit before semantic mutation.
-4. An Actor Contract is a bounded linear sequence of `0..=MaxContractSteps` Steps (§3.1).
+3. The complete `Weight(RefTime, ProofSize)` of a transition MUST be admitted before semantic mutation.
+4. An Actor Contract is a bounded linear sequence of `0..=MaxContractSteps` Steps (§4.1).
 5. Contracts contain no loops, jumps, nested contracts, opaque dispatch, Task-authored memory, or authored whole-pipeline rollback.
-6. The service quantum is Q1: one Actor MAY commit at most one Step in one block (§6.1).
-7. A Pipeline MAY span multiple blocks and is non-atomic across committed Steps (§6.1).
-8. An admitted Pipeline MUST NOT undergo economic apoptosis before its Cycle boundary (§9.4).
-9. A cause observed in block `N` cannot authorize Actor execution before block `N + 1` (§8.3).
-10. User and System Actors share one persistent Service ring and class-neutral encounter order (§8.3).
-11. Trigger occurrence, Pipeline Opening, and Action execution are independent transitions (§4.2, §5.2, §6.1).
-12. Trigger, Pipeline Machine, and Action work have disjoint economic owners (§7.3-§7.5).
-13. Close deletes process semantics and MUST preserve sovereign custody (§9.3, §10.3).
-14. Unknown capability, stale authority, unbounded work, invalid actual Weight, or unknown downstream failure MUST fail closed.
-15. Rejected control transitions restore Actors state, Actors events, scheduler state, topology, and Actors fee movement to pre-state. Host nonce and ordinary transaction-payment effects are outside this definition.
+6. The service quantum is Q1: one Actor MAY commit at most one Step in one block (§7.1).
+7. A Pipeline MAY span multiple blocks and is non-atomic across committed Steps (§7.1).
+8. An admitted Pipeline MUST NOT undergo economic apoptosis before its Cycle boundary (§10.4).
+9. A cause observed in block `N` cannot authorize Actor execution before block `N + 1` (§3.2).
+10. User and System Actors share one Service ring and class-neutral encounter order (§3.2).
+11. Trigger occurrence, Pipeline Opening, and Action execution are independent transitions (§5.2, §6.2, §7.1).
+12. Trigger, Pipeline Machine, and Action work have disjoint economic owners (§8).
+13. Close deletes process semantics and MUST preserve sovereign custody (§10.3, §11.3).
+14. Observations never activate Actors; they are read only by Step predicates at the actual check or Attempt (§5.1, §7.2).
+15. Unknown capability, stale authority, unbounded work, invalid actual Weight, or unknown downstream failure MUST fail closed.
+16. Rejected control transitions restore Actors state, events, scheduler state, and Actors fee movement to pre-state. Host nonce and ordinary transaction-payment effects are outside this definition.
 
 ### 2.2 Atomicity terms
 
@@ -110,48 +53,56 @@ A repeated description MUST NOT redefine behavior. If two passages conflict, the
 | --- | --- |
 | Rejected control transition | Call returns `Err`; Actors-owned state and events equal pre-state. |
 | Provisional Task commit | Task layer succeeded inside the current Step transaction but is not durable until that transaction commits. |
-| Committed unsuccessful attempt | Current Step transaction durably commits suspension or failure; fees owned by that committed transition remain charged. |
-| Rolled-back scheduler attempt | Current Step transaction fails; process residence, run, Task effects, Actors fees, and Actors events equal pre-attempt state. |
+| Committed unsuccessful attempt | The current Step transaction durably commits suspension or failure; fees owned by that committed transition remain charged. |
+| Rolled-back scheduler attempt | The current Step transaction fails; residence, run, Task effects, Actors fees, and Actors events equal pre-attempt state. |
 
-### 2.3 Current-state service state machine
+---
 
-This section owns the fresh-genesis current-state service contract. Removed historical amount forms, Trigger histories, Opening snapshots, deferred Cycles, and per-Step successor tickets are invalid encodings rather than compatibility aliases.
+## 3. Current-state service
 
-Every admitted predicate observes current authoritative state at the actual check or Attempt. Every amount is exactly `Fixed(value)` or `Percent(perbill)`. `Percent` uses widened floor arithmetic over current Available at each Attempt; zero skips, a positive `Fixed` above capacity is funding unavailable without clipping, and `Percent(100%)` means all current Available. No Opening predicate result, Opening amount snapshot, funding-history basis, or event-sender history exists.
+This section owns residence, service order, block rounds, wake acknowledgment, parking, and generation safety. Removed historical amount forms, Trigger histories, Opening snapshots, deferred Cycles, queue tickets, and per-Step successor tickets are invalid encodings, not compatibility aliases.
 
-The logical service states are:
+### 3.1 Residence states
 
-| State | Canonical obligation | Permitted exit |
+Each Active Actor owns exactly one generation-bound process. A serving process has exactly one residence:
+
+| Residence | Canonical obligation | Permitted exit |
 | --- | --- | --- |
-| `Live` | One persistent cyclic-ring membership and current process state. | One metered turn may retain Live, move to Deadline or Park, disable, or close it. |
-| `Deadline` | One known future eligibility or timed-review obligation. | Due extraction creates one coalesced Service return, no earlier than the next block round. |
-| `Parked` | Idle process plus a generation-bound negative current-state certificate and complete invalidation or timed-review plan. | Relevant invalidation creates one coalesced `Pending` check. |
-| `Pending` | One current-state activation check is owed; no Cycle is admitted yet. | False refreshes parking evidence; true admits Live no earlier than the next round; refusal retains Pending. |
-| `Disabled` | Serving authority is explicitly paused or revoked. | Only authorized control restores service; ordinary invalidation has no effect. |
+| `Live` | One Service ring membership for an admitted Pipeline or an Idle Actor due for a current start check. | One metered turn may retain Live, move to Deadline or Parked, disable, or close. |
+| `Pending` | One Service ring membership for paid readiness or an owed current activation check; no Cycle admitted yet. | False refreshes parking evidence; true opens a Cycle no earlier than the next round; resource refusal retains Pending. |
+| `Deadline` | One known future eligibility: a suspended retry or a timed review. | Due extraction returns the process to Service no earlier than the next round. |
+| `Parked` | An Idle process with a generation-bound negative certificate for a parked-balance plan (§3.4). | A qualifying invalidation creates one coalesced `Pending` check. |
+| `Disabled` | Serving authority is paused; no ordinary residence. | Only authorized control restores service; ordinary invalidation has no effect. |
 
-An open Cycle is Live when eligible by the next permitted round and in Deadline when eligibility is known later. It is never Parked under an idle start certificate. An Idle Actor may be Live for its next current start check. False idle activation admits no Cycle and establishes or refreshes a valid park plan. Unknown, stale, unavailable, or corrupt state cannot certify indefinite parking; it selects a typed dependency deadline, deterministic timed review, or failure.
+A temporal Trigger (`AtTime`, `Cadenced`) MAY additionally own one independent Trigger deadline. That deadline is detector authority, not a residence, and cannot execute the Actor directly.
 
-One block owns one immutable round identity shared by every Actor pass. The semantic oracle snapshots the ordered eligible membership at the round boundary only to decide outcomes; production MUST use bounded frontier and membership authority rather than enumerate the ring. A member receives at most one ordinary turn per round, and at most one Step may commit for that Actor per block. A member admitted or reentered in block `B` is ineligible until `B + 1`. Removal never donates its turn; remove/reinsert and generation replacement cannot reset the same-block guards.
+An open Cycle is Live when eligible by the next permitted round and in Deadline when eligibility is known later; it is never Parked. Unknown, stale, unavailable, or corrupt state cannot certify indefinite parking: it selects a typed deadline, deterministic timed review, or failure.
 
-Admission determines initial ring order; thereafter service preserves cyclic encounter order among resident members. A successful Step whose continuation is due next round retains membership and advances the service cursor without a successor ticket. Every newly admitted, reentered, or replacement membership is appended behind all current residents as encountered from the persistent next-encounter cursor. Physically it may be inserted immediately before that cursor, but storage geometry is not normative. Thus after `A` advances in `A -> B -> C`, admitting `D` before the next block produces next-round order `B -> C -> A -> D`, not `B -> C -> D -> A`.
+Every residence transfer is transactional: the complete transition commits, or the former residence remains unchanged. Exactly one source or destination obligation survives any failure. Every membership, wake, pending record, and deadline binds the exact generation; stale-generation work has no authority over a recreated Actor.
 
-Head, tail, and interior deletion, Deadline transfer, parking, close, and additions MUST preserve the encounter order of surviving members. A resource-blocked eligible head retains priority. Certified absence of current work is a distinct fully admitted transition and may detach it. Empty, stale, already-served, and ineligible physical entries have explicit bounded traversal and cannot permit an infinite wrap.
+### 3.2 Block rounds and Service order
 
-Level-sensitive recurrence checks current state after Cycle completion no earlier than the next round and cannot start twice in one block. While an Actor is Running, in Deadline for retry, Pending, or Live, repeated Manual or source hints coalesce and create no second Cycle, cursor reset, retry reset, or fee claim. Cadence misses coalesce to one current check without catch-up. One-shot temporal service has no recurrence after its completed or terminal Cycle.
+One block owns one immutable round identity shared by every Actor pass. The outcome MUST equal that of a snapshot of the ordered eligible membership taken at the round boundary, but implementations MUST NOT enumerate the ring to achieve it. A member receives at most one ordinary turn per round, and at most one Step commits for an Actor per block. A member admitted or reentered in block `B` is ineligible until `B + 1`. Removal never donates its turn; remove/reinsert and generation replacement cannot reset the same-block guards.
 
-A Park certificate binds Actor id, generation, admitted dependency plan, covered authoritative revisions, negative conclusion, and any validity deadline. Its completeness contract is profile-specific: each authored wake source names either complete bounded invalidation or bounded paid review. A parked-balance source follows §2.4 and does not require busy-state tracking or invalidation for unrelated changes to Available.
+Admission fixes initial ring order; service then preserves cyclic encounter order among residents. A successful Step whose continuation is due next round retains membership and advances the Service cursor. Every newly admitted, reentered, or replacement membership is placed behind all current residents as encountered from the persistent next-encounter cursor. After `A` advances in `A -> B -> C`, admitting `D` before the next block yields next-round order `B -> C -> A -> D`.
 
-Invalidation records only that recheck is owed. Repeated updates coalesce. Registration, evaluation, and acknowledgment MUST be atomic or revisioned so an update before, during, or after evaluation cannot disappear: acknowledgment clears only the exact covered revision, and a later revision leaves Pending. Pending saturation preserves one durable obligation. Disabled Actors and closed generations ignore ordinary wake hints. Every membership, wake, pending record, and cleanup cursor binds the exact generation; stale-generation work has no authority over a recreated Actor.
+Head, tail, and interior removal, Deadline transfer, parking, close, and additions preserve the encounter order of survivors. The valid Service head is authoritative: it cannot be bypassed, no cheap/heavy/System/User reordering exists, and when its complete transition does not fit, the pass stops and later residents remain untouched. Certified absence of current work is a distinct fully admitted transition and may detach the head. Empty, stale, already-served, and ineligible physical entries have explicit bounded traversal and cannot cause an infinite wrap.
 
-Each transition pre-admits its complete multidimensional Weight and economic charge before semantic mutation. Notification/invalidation, current activation checks, residence transfer, Attempt/effect, resource refusal, and reclamation are independently priced owners. No fee reserves future capacity or buys a second Cycle. A failed transfer preserves exactly one source or destination obligation. Close revokes execution and reclaims every bounded process resource synchronously in the same transaction without mutating sovereign custody.
+Level-sensitive recurrence checks current state after Cycle completion no earlier than the next round and cannot start twice in one block. While an Actor is Running, in retry Deadline, Pending, or Live, repeated Manual or source hints coalesce and create no second Cycle, cursor reset, retry reset, or fee claim. Cadence misses coalesce into one current check without catch-up. One-shot temporal service has no recurrence after its completed or terminal Cycle.
 
-### 2.4 Parked-balance activation decisions
+### 3.3 Wake and acknowledgment
 
-`ParkedBalance` is an explicitly authored recurring activation mode for an idle Parked generation. Its bounded plan names exact sovereign assets, an authored minimum delta for each asset, and the supported notification or paid-review capability. It is not combined with `Cadenced`; periodic recurrence remains a separate authored mode. A running Cycle, retry, Live continuation, Pending check, Disabled Actor, or closed generation owns no parked-balance registration or accumulator.
+Invalidation records only that a recheck is owed; repeated updates coalesce. Registration, evaluation, and acknowledgment MUST be atomic or revisioned so an update before, during, or after evaluation cannot disappear: acknowledgment clears only the exact covered revision, and a later revision leaves the check owed. Pending saturation preserves one durable obligation. Disabled Actors and closed generations ignore ordinary wake hints.
 
-The watched quantity is the host ledger's authoritative **total owned balance** for the exact sovereign account and asset: native `Inspect::total_balance`, or fungibles `Inspect::total_balance`. It includes held or frozen ownership and is deliberately distinct from reducible/spendable `Available`, which remains the sole basis for current Task amount resolution. A hold or freeze change alone therefore does not qualify. Hosts that cannot expose this quantity and its minimum coherently MUST reject this mode.
+Each transition pre-admits its complete multidimensional Weight and economic charge before mutation. Notification, current activation checks, residence transfer, Attempt and effect, resource refusal, and close are independently priced owners. No fee reserves future capacity or buys a second Cycle.
 
-For each watched asset `a`, admission computes with checked or widened arithmetic:
+### 3.4 Parked-balance activation
+
+`ParkedBalance` is an authored recurring activation mode for an Idle Parked generation. Its bounded plan names exact sovereign assets and a nonzero authored minimum delta for each. It excludes `Cadenced`; periodic recurrence remains a separate authored mode. A running Cycle, retry, Live continuation, Pending check, Disabled Actor, or closed generation owns no parked-balance registration.
+
+The watched quantity is the host ledger's authoritative total owned balance of the exact sovereign account and asset. It includes held or frozen ownership and is distinct from spendable `Available`, which remains the only basis for Task amounts. A hold or freeze change alone does not qualify. A host that cannot expose this quantity and its minimum balance coherently MUST reject the mode.
+
+For each watched asset `a`, with checked or widened arithmetic:
 
 ```text
 floor[a]     = 100 * minimum_balance[a]
@@ -160,23 +111,23 @@ delta[a]     = abs_diff(total_balance_now[a], anchor[a])
 qualified    = any(delta[a] >= threshold[a])
 ```
 
-Movement in either direction qualifies, equality at the threshold qualifies, and unrelated asset quantities are never summed. A missing, zero, changed, or unrepresentable minimum invalidates certification: zero/missing/overflow rejects admission, while a later minimum or authored-plan change requires an authorized reconfiguration with a new configuration identity. There is no silent saturation, native-unit substitution, or price conversion.
+Movement in either direction qualifies, equality at the threshold qualifies, and quantities of different assets are never summed. A missing, zero, or unrepresentable minimum rejects admission; a later minimum or plan change requires authorized reconfiguration under a new configuration identity. There is no saturation, unit substitution, or price conversion.
 
-Initial activation and explicit reconfiguration perform one atomic **arm without execution**: after all mutations of that transition commit, capture the current total-owned balances and publish the Park registration under the new generation/configuration identity. Earlier deposits form the initial anchor and are never replayed as activation. After every successfully completed balance-recurring Cycle, actual effects, actual fees, reservation release, and all transition-owned balance changes commit before one atomic anchor capture and Park publication. That completion creates a new monotone parking episode; no intermediate sample, notice, or failed check moves its anchor.
+Activation and reconfiguration perform one atomic arm without execution: after all mutations of that transition commit, the current total balances become the anchor and the Park registration is published. Earlier deposits are never replayed as activation. After each completed balance-recurring Cycle, all effects, fees, and reservation releases commit before one atomic anchor capture and Park publication, starting a new parking episode; no intermediate sample, notice, or failed check moves the anchor.
 
-A qualifying change creates one generation/episode-bound Pending check; repeated notices coalesce. A negative current start check returns to Park with the **same fixed anchor** and acknowledges only its covered revision. The unchanged covered state cannot enqueue itself again, while a later watched-balance revision or another explicitly certified start dependency creates one new check. A later revision racing evaluation remains owed. A qualifying observation that later reverses remains an owed check, but current conditions and current Available are revalidated before Cycle admission and effects.
+A qualifying change creates one generation- and episode-bound Pending check; repeated notices coalesce. A negative check returns to Park with the same anchor and acknowledges only its covered revision; a later revision creates one new check, and a revision racing evaluation remains owed. A qualifying change that later reverses remains an owed check, but current conditions and current `Available` are revalidated before Cycle admission and effects. Adapters that publish per-asset causal revisions after committed transfer, mint, and burn provide event-driven invalidation; every other mutation route is covered by mandatory timed review.
 
-The selected default mode is fixed-anchor absolute net change. Reference native and fungible adapters publish per-asset causal revisions after committed transfer, mint, and burn. One generation-bound Pending obligation coalesces notices while a racing source remains revision-different or joins the complete current recheck. Mandatory timed review remains authoritative for mutation routes outside that certified adapter contract; broader event-only coverage requires separate certification.
+### 3.5 Classification
 
-Failure of fixed-anchor cost or coverage gates may select exactly one fallback rather than silently changing semantics. The only permitted fallback is parked-period certified positive credit from a bounded nonempty whitelist of immediate authenticated producer/payer identities and exact assets. It sums committed credits per asset only within the current episode, caps retained evidence at that asset's threshold, applies the same inclusive `max(authored_min_delta, 100 * minimum_balance)` rule, coalesces one Pending check, and rolls back tentative evidence with the credit transaction.
+One pure classifier owns Active-state classification. It validates canonical partitions (§4.5), `CycleState` against the run (§6.1), and current Contract, run, and admission bindings (§4.4), computes stored-state terminal predicates (§10.2), and selects the execution phase in this order: circuit breaker, pause, terminal, block/retry/cadence-tick wait, signal wait, ready. The phases are `GlobalCircuitBreaker`, `Paused`, `WaitingRetry`, `WaitingBlock`, `WaitingCadenceTick`, `WaitingSignal`, and `Ready`.
 
-Unknown or absent sources, self-transfers, refunds, replayed callbacks, busy-period credits, and inferred upstream origin do not count. The whitelist qualifies wake only; execution still evaluates current conditions and spends current Available.
+Opening-specific fee and nonce checks belong to Opening (§6.2), not the classifier. Classification errors are typed and MUST NOT become absence, waiting, or `Ready` (§13.4).
 
 ---
 
-## 3. Actor Contract and canonical state
+## 4. Actor Contract and canonical state
 
-### 3.1 Public Contract model
+### 4.1 Public Contract model
 
 ```rust
 struct ActorContract<Trigger, BlockNumber, Steps, FundingPolicy, ParkedBalance> {
@@ -209,13 +160,13 @@ enum CompletionPolicy {
 enum InitialLifecycle { Dormant, Active }
 ```
 
-`steps.len()` MUST be in `0..=MaxContractSteps`. Zero Steps is first-class (§5.5). When present, `parked_balance_activation` MUST contain a nonempty bounded list of strictly asset-sorted unique watches with nonzero authored minimums, a nonempty Step plan, `Persistent` completion, and no cycle-nonce auto-close target; creation, activation, replacement, decoding, and reconstruction fail closed on any incompatible or noncanonical value.
+`steps.len()` MUST be in `0..=MaxContractSteps`; zero Steps is first-class (§6.5). A present `parked_balance_activation` MUST hold a nonempty bounded list of strictly asset-sorted unique watches with nonzero authored minimums, a nonempty Step plan, `Persistent` completion, and no cycle-nonce auto-close target; creation, activation, replacement, and decoding fail closed on any incompatible or noncanonical value.
 
-Every semantic Contract replacement replaces the complete authored value. Canonical equality is an exact no-op before rate limiting, cancellation, clocks, topology, writes, fees, or events.
+Contract replacement replaces the complete authored value. Canonical equality is an exact no-op before rate limiting, cancellation, clocks, topology, writes, fees, or events.
 
-### 3.2 Semantic identity
+### 4.2 Semantic identity
 
-The semantic Contract ID is the protocol-fixed digest of the admitted canonical authored typed SCALE bytes only:
+The semantic Contract ID is the protocol-fixed digest of the admitted canonical authored bytes only:
 
 ```text
 SemanticContractId = Blake2_256(
@@ -233,11 +184,7 @@ SemanticContractId = Blake2_256(
     ordered_steps,
   ))
 )
-```
 
-The body commitment is independent:
-
-```text
 BodyCommitment = Blake2_256(
   SCALE((
     b"DEOS_ACTOR_BODY", // fixed [u8; 15]
@@ -246,102 +193,28 @@ BodyCommitment = Blake2_256(
 )
 ```
 
-Indexes MUST be contiguous and equal the exact Step count. Predicate canonicalization (§6.2) occurs before identity derivation; whitelists are accepted only when already canonical (§4.1). JSON formatting, labels, comments, storage wrappers, Trigger runtime state, run state, tickets, topology, runtime Weight, and physical fragments MUST NOT affect either identity.
+Indexes MUST be contiguous and equal the exact Step count. Predicate canonicalization (§7.2) precedes identity derivation; whitelists are accepted only when already canonical (§5.1). Formatting, labels, storage wrappers, runtime state, topology, runtime Weight, and physical fragments MUST NOT affect either identity.
 
-### 3.3 C6 physical geometry
+### 4.3 Contract storage guarantees
 
-One semantic Contract is stored as:
+An admitted Contract is stored as a hot head plus a lazy tail. The head holds the authored header, Step count, Step 0 when present, both identities, admission authority (§4.4), and the per-Step resource envelopes. The tail holds Steps `1..N` in bounded, gap-free, non-overlapping chunks keyed by their first Step index; zero- and one-Step Contracts have no tail.
 
-```text
-Hot head:
-  authored header
-  step_count
-  first_step: Option<Step>
-  SemanticContractId
-  BodyCommitment
-  admission authority
-  fixed-size PipelineMachineEnvelope
-  bounded Opening-dependency chunk locator plan
-  fixed-size maximum run-state hold quote
+1. Ordinary execution loads only the head and, for Steps beyond 0, the one chunk holding the current Step.
+2. Unreached Steps MUST NOT add execution ProofSize merely because they exist, and `MaxContractSteps` MUST NOT enlarge the maximum current-Step read.
+3. Full reconstruction happens only in lifecycle mutation, runtime projection, integrity checks, and upgrades.
+4. Every fragment binds the Actor, semantic Contract ID, body commitment, and exact index range; missing, stale, overlapping, foreign, or orphan fragments fail closed.
 
-Lazy tail:
-  contiguous authority-bound chunks
-  each containing at most four Steps
-  beginning at Step 1
-```
+### 4.4 Admission authority and Pipeline envelope
 
-Rules:
+Each admitted Contract carries a runtime-owned admission certificate binding at least the semantic Contract ID, body commitment, runtime semantics version, production Weight identity, storage geometry version, and configured bounds. It is derived authority, not authored state. A stale certificate fails closed until bounded re-certification or authorized Contract replacement; re-certification preserves semantic identity when authored bytes are unchanged.
 
-1. `first_step == None` iff `step_count == 0`.
-2. `first_step == Some(Step 0)` iff `step_count > 0`.
-3. Zero-Step and one-Step Contracts have no tail chunk.
-4. Tail chunks are gap-free, non-overlapping, and keyed by their first covered Step index.
-5. Ordinary non-Opening execution loads only the current Step's head or one tail chunk. Opening MAY additionally load only fragments named by the exact Opening dependency plan (§5.3).
-6. Unreached Steps MUST NOT add ordinary execution ProofSize merely because they exist; only their explicitly authored Opening dependencies may affect Opening cost (§5.3).
-7. `MaxContractSteps` MUST NOT enlarge the maximum current-Step storage read.
-8. Full reconstruction is owned only by lifecycle mutation, runtime projection, integrity checks, and upgrade work (§12.3, §13.1, §13.2).
+Each Step carries one runtime-owned resource envelope with a maximum Actor Control Weight and a maximum Task-effect Weight, bound to its index, fragment, predicate and read geometry, Weight identity, and configured bounds.
 
-A fragment MUST bind Actor id, semantic Contract ID, body commitment, and exact index range. Missing, stale, overlapping, foreign, or orphan authority fails closed.
+The Pipeline envelope is the generated maximum **reachable** Actor Control work of one complete admitted Pipeline. It includes Opening exactly once (§6.2), each reachable current-Step control path (§7.1), retry control up to authored bounds (§7.5), and exactly one reachable completion or close branch including its cleanup (§6.6, §10.3). It excludes Trigger work (§5.2), Task effects (§12.1), and pre-Opening minimal apoptosis (§10.4). It MUST NOT be the sum of mutually exclusive Step maxima; Opening-only work is not multiplied by Step 0 retries and finalization-only work is not multiplied across Steps.
 
-### 3.4 Admission certificate and Pipeline Machine envelope
+Create and semantic update are the only envelope producers. Opening reads the fixed-size envelope in `O(1)` and MUST NOT load tail chunks to quote Pipeline service (§6.2, §8.4).
 
-```rust
-struct ActorAdmissionCertificate {
-  semantic_contract_id: Hash,
-  body_commitment: Hash,
-  runtime_actor_semantics_version: u32,
-  production_weight_identity: Hash,
-  body_geometry_version: u32,
-  configured_bounds_commitment: Hash,
-  admission_identity: Hash,
-}
-
-struct ActorStepResourceEnvelope {
-  control_weight_upper: Weight,
-  effect_weight_upper: Weight,
-}
-
-struct PipelineMachineEnvelope {
-  service_identity: Hash,
-  control_weight_upper: Weight,
-}
-```
-
-Each authored Step is stored with one runtime-owned `ActorStepResourceEnvelope`. The envelope is bound to the Step index, populated C6 fragment, predicate/read geometry, runtime Weight identity, and configured bounds. It is not authored state.
-
-```text
-AdmissionIdentity = Blake2_256(SCALE((
-  b"DEOS_ACTOR_ADMISSION", // fixed [u8; 20]
-  semantic_contract_id,
-  body_commitment,
-  runtime_actor_semantics_version,
-  production_weight_identity,
-  body_geometry_version,
-  configured_bounds_commitment,
-)))
-```
-
-The certificate is runtime-owned derived authority. It MUST bind the current semantic Contract, body, runtime semantics, production Weight identity, C6 geometry, and configured bounds.
-
-`PipelineMachineEnvelope.control_weight_upper` is the generated maximum **reachable** Actor Control work of one complete admitted Pipeline. Its derivation MUST include:
-
-- Opening exactly once (§5.2);
-- Each reachable current-Step control path (§6.1);
-- Repeatable retry control only up to authored bounds (§6.5);
-- At most one reachable finalization or close-control branch (§5.6, §9.3);
-- No Trigger work (§4.2);
-- No Task-effect work (§11.1);
-- No minimal pre-Opening apoptosis (§9.4).
-
-The envelope MUST NOT be the arithmetic sum of mutually exclusive Step maxima. Opening-only work MUST NOT be multiplied by Step 0 retries. Finalization-only work MUST NOT be multiplied across Steps.
-
-Create and semantic update are the sole generation owners. Opening reads the fixed-size envelope in `O(1)` and MUST NOT load tail chunks solely to quote Pipeline service (§5.2, §7.4).
-
-A stale certificate or envelope fails closed until bounded re-certification or authorized Contract replacement. Re-certification MUST preserve semantic identity when authored bytes are unchanged.
-
-### 3.5 Canonical partitions and semantic ownership
-
-The only canonical Actor partitions are:
+### 4.5 Canonical facts and partitions
 
 ```rust
 type ActorId = u64;
@@ -359,27 +232,6 @@ enum Mutability { Mutable, Immutable }
 enum ActiveLifecycle { Active, Paused }
 enum CycleState { Idle, Running, Suspended }
 
-struct ActorIdentity<AccountId, BlockNumber> {
-  sovereign_account: AccountId,
-  owner: AccountId,
-  actor_class: ActorClass,
-  mutability: Mutability,
-  cycle_nonce: u64,
-  last_control_mutation_block: BlockNumber,
-}
-
-struct ActorHot<BlockNumber> {
-  lifecycle: ActiveLifecycle,
-  cycle_state: CycleState,
-  trigger_runtime_state: TriggerRuntimeState,
-  unsuccessful_attempt_streak: u32,
-  pending_signal: bool,
-  trigger_wakeup: Option<TriggerWakeupPointer>,
-  schedule_anchor: BlockNumber,
-  last_cycle_block: Option<BlockNumber>,
-  terminal_at: Option<BlockNumber>,
-}
-
 struct OutcomeTotals {
   executed_steps: u32,
   committed_effectful_tasks: u32,
@@ -393,32 +245,26 @@ enum SuspensionReason { FundingUnavailable, Temporary }
 enum CycleResult { Completed, Failed, Cancelled }
 ```
 
-`ActorRunState` is defined only in §5.1.
+Each fact has one canonical owner; internal record layouts are implementation-owned:
 
-Semantic owners:
-
-| Fact | Sole canonical owner |
+| Fact | Canonical owner |
 | --- | --- |
-| Owner, class, mutability, sovereign account, latest terminated nonce | `ActorIdentity` |
-| Authored Contract, identities, Step count, first Step, admission authority, Pipeline envelope | C6 hot head (§3.3) |
-| Authored Steps 1..N | C6 tail chunks (§3.3) |
-| Lifecycle, cycle phase, Trigger phase, latch, failure streak, and clocks | `ActorHot` |
-| Funding authorization | Authored Contract policy |
-| Open-cycle cursor, outcomes, retry state, and bounded run payload | `ActorRunState` (§5.1) |
-| Generation-bound process status and primary residence | `ActorProcess` (§8.2) |
-| Physical Service, Deadline, Parked, detector, locator, and page authority | bounded topology (§8.2, §8.4, §10.2) |
+| Owner, class, mutability, sovereign account, latest terminated Cycle nonce, last control-mutation block | Actor identity |
+| Authored Contract, identities, admission authority, envelopes | Contract head and tail (§4.3, §4.4) |
+| Lifecycle, cycle phase, Trigger runtime state, latch, failure streak, schedule anchor, last Cycle block, terminal marker | Actor hot state |
+| Open-Cycle cursor, outcomes, retry state, and Contract binding | Run state (§6.1) |
+| Generation and residence | Actor process (§3.1) |
+| Service ring, deadlines, park registrations, and reverse handles | Bounded scheduler topology |
 
-`ActorType` is derived from `ActorClass` and MUST NOT be stored.
+`ActorType` is derived from `ActorClass` and MUST NOT be stored. Composite views and runtime API projections are read-only. No persistent cache may duplicate authored fields, Steps, cursor, outcomes, lifecycle, or latch.
 
-Composite Actor values and runtime API views are read-only and MUST NOT become write models.
-
-Dormant means only `ActorIdentity` and class locator/slot authority exist. Dormant Actors own no hot Contract, hot state, process, run state, detector membership, Service/Deadline/Parked residence, Trigger deadline, or Active-state hold. Public creation admits Dormant only as Mutable; a host genesis configuration MAY declare a sealed Immutable System identity, which can never activate or close through Actor control.
+Dormant means only the identity and its slot or locator exist. Dormant Actors own no Contract, hot state, process, run, detector membership, residence, Trigger deadline, or Active-state hold. Public creation admits Dormant only as Mutable; a host genesis configuration MAY declare a sealed Immutable System identity that can never activate or close through Actor control.
 
 ---
 
-## 4. Trigger machine
+## 5. Trigger machine
 
-### 4.1 Trigger families and runtime state
+### 5.1 Trigger families and runtime state
 
 ```rust
 enum Trigger<AccountId, AssetId> {
@@ -454,134 +300,90 @@ struct AddressEvent<AccountId, AssetId, Balance> {
 
 enum TriggerRuntimeState {
   Stateless,
-  AtTime {
-    anchor_tick: Option<u64>,
-    consumed: bool,
-  },
-  Cadenced {
-    anchor_tick: Option<u64>,
-  },
+  AtTime { anchor_tick: Option<u64>, consumed: bool },
+  Cadenced { anchor_tick: Option<u64> },
 }
 ```
 
-Compatibility is exact:
+`Manual` and `AddressEvent` require `Stateless`, `AtTime` requires AtTime state, and `Cadenced` requires cadence state; a mismatch is an Actor invariant failure (§13.4). Whitelists MUST be nonempty, duplicate-free, and strictly ordered by canonical typed SCALE bytes; admission rejects rather than normalizes noncanonical input.
 
-- `Manual` and `AddressEvent` require `Stateless`;
-- `AtTime` requires AtTime state;
-- `Cadenced` requires cadence state.
+Observation publication is never a Trigger source. An observation-reactive strategy composes a `Cadenced` or `AddressEvent` Trigger with a fresh-only observation precondition (§7.2).
 
-Mismatch is `ActorInvariant` (§12.4). Observation publication is never a Trigger source: Actors read observations only through Step predicates evaluated at the actual check or Attempt (§6.2), so an observation-reactive strategy composes a `Cadenced` or `AddressEvent` Trigger with a fresh-only observation precondition. Whitelists MUST be nonempty, duplicate-free, and strictly ordered by canonical typed SCALE bytes; runtime admission MUST reject rather than normalize noncanonical input.
-
-### 4.2 Useful Trigger occurrence
+### 5.2 Useful Trigger occurrence
 
 A Trigger occurrence is exactly one family-specific cause that:
 
-1. Passes source/detector authority;
+1. Passes source and detector authority;
 2. Is semantically relevant;
 3. Observes `pending_signal == false`;
-4. Successfully charges the User Trigger fee or is System fee-exempt (§7.3);
+4. Successfully charges the User Trigger fee, or is System fee-exempt (§8.3);
 5. Commits `pending_signal: false -> true`;
-6. Disables further Actor-specific occurrence work until re-arm (§4.3);
-7. Emits `TriggerOccurrenceProcessed` (§12.2).
+6. Disables further Actor-specific occurrence work until re-arm (§5.3);
+7. Emits `TriggerOccurrenceProcessed` (§13.2).
 
-A Trigger occurrence is not a Cycle and does not charge Pipeline service (§5.2, §7.4).
+An occurrence is not a Cycle and does not charge Pipeline service (§6.2, §8.4). Source publication, movement, or explicit-call work has its own owner (§8.6, §12.4); the occurrence owns only Actor-specific detection, matching, and materialization attributable to `false -> true`.
 
-Source publication, movement, or explicit-call work has its own owner (§7.7, §11.4). Trigger occurrence owns only Actor-specific detection/matching/materialization attributable to `false -> true`.
+### 5.3 Latch and redundant activity
 
-### 4.3 Latch and redundant activity
-
-`pending_signal` is the sole readiness latch.
+`pending_signal` is the sole readiness latch:
 
 ```text
 false -- useful occurrence --> true -- Opening --> false
 ```
 
-While `pending_signal == true`:
+While `pending_signal == true`, source activity MUST NOT create another occurrence, charge another Trigger fee, queue another Pipeline, accumulate Trigger history, or change any run cursor, current-state basis, or sovereign balance; where practical the Actor is absent from or disabled in the relevant detector topology. Source-owned state MAY keep changing, and economic ingress MAY still update custody (§7.4, §12.4).
 
-- Source activity MUST NOT create another Actor-specific occurrence;
-- No additional Trigger fee is charged;
-- No additional Pipeline is queued;
-- No Trigger history is accumulated for the Actor;
-- No run cursor, current-state basis, or sovereign balance is changed;
-- Where practical, the Actor MUST be absent or disabled in the relevant detector topology.
+The latch bounds one Actor to at most one open Pipeline and one paid Idle activation; no deferred Pipeline request or source history exists. No call clears the latch directly: Opening consumes it and deactivation or close deletes it (§6.2, §10.3). Running or Suspended source activity creates no latch and never alters the cursor, retry, or eligibility.
 
-Source-owned canonical state MAY continue changing. Economic ingress MAY still update custody and funding (§6.4, §11.4).
+### 5.4 Trigger underfunding and source advancement
 
-The latch bounds one Actor to at most one open Pipeline and one paid Idle activation. There is no deferred Pipeline request or retained source history.
-
-There is no direct latch-clear call. Opening consumes it; deactivation or Close deletes it (§5.2, §9.3). Running or Suspended source activity does not create another latch and never alters the current cursor, retry, or eligibility (§4.7).
-
-### 4.4 Trigger underfunding and source advancement
-
-User Trigger underfunding means the sovereign account cannot pay the current Trigger fee (§7.3). It MUST NOT create free polling or repeated charging of the same cause.
+User Trigger underfunding means the sovereign account cannot pay the current Trigger fee (§8.3). It MUST NOT create free polling or repeated charging of the same cause.
 
 | Family | Underfunded result |
 | --- | --- |
-| `Manual` | Reject the call; no Actors state/event/Trigger fee changes. Ordinary signed transaction payment remains. |
-| `AddressEvent` | The certified movement and independent funding semantics MAY commit; no latch or Trigger fee. The same movement is not retried as a Trigger. |
-| `AtTime` | The one-shot source is consumed. A User Actor undergoes minimal apoptosis with `TriggerAdmissionInsufficient` (§9.4). System is fee-exempt. |
+| `Manual` | Reject the call; no Actors state, event, or Trigger fee change. Ordinary signed transaction payment remains. |
+| `AddressEvent` | The certified movement and independent funding semantics MAY commit; no latch or Trigger fee. The movement is not retried as a Trigger. |
+| `AtTime` | The one-shot source is consumed. A User Actor undergoes minimal apoptosis with `TriggerAdmissionInsufficient` (§10.4). System is fee-exempt. |
 | `Cadenced` | The due point is skipped and the next future cadence point is installed; no latch or Trigger fee. |
 
-Fee-collector infrastructure failure is not underfunding. The shared Trigger charge boundary reports `TriggerFeeCollectionFailed`, never `InsufficientFee`, when the collector rejects collection after capacity admission. The owning occurrence/source transaction preserves the exact source obligation, records/returns its failure, and performs no occurrence mutation (§7.3, §8.4).
+Fee-collector failure is not underfunding. The Trigger charge reports `TriggerFeeCollectionFailed`, never `InsufficientFee`, when the collector rejects collection after capacity admission; the owning transaction preserves the exact source obligation and performs no occurrence mutation.
 
-### 4.5 Trigger re-arm
+### 5.5 Trigger re-arm
 
-Opening consumes the current latch and re-arms the Trigger (§5.2):
+Opening consumes the latch and re-arms the Trigger (§6.2):
 
 | Family | Re-arm rule |
 | --- | --- |
 | `Manual` | Stateless and enabled. |
 | `AddressEvent` | Stateless and enabled. |
-| `AtTime` | Never re-arm; `consumed == true`. |
-| `Cadenced` | Install the first canonical cadence deadline strictly after the current authoritative tick; no catch-up. |
+| `AtTime` | Never re-arms; `consumed == true`. |
+| `Cadenced` | Installs the first canonical cadence deadline strictly after the current authoritative tick; no catch-up. |
 
-These rules also apply when semantic Contract replacement preserves a latch acquired by the previous Trigger. Opening under `AtTime` consumes that one-shot source without installing another deadline.
+These rules also apply when Contract replacement preserves a latch acquired by the previous Trigger. A Running or Suspended Actor cannot acquire a latch for a second Cycle; after completion or abort, detector authority is derived again from current canonical state.
 
-A Running or Suspended Actor cannot acquire a latch for a second Cycle. After completion or abort, detector authority is derived again from current canonical state and only a later useful Idle occurrence may create new readiness (§5.1).
+### 5.6 Causal cohorts
 
-### 4.6 Causal cohort
+A causal cohort is a bounded ordered set of Actors affected by one shared Trigger cause, such as one Cadenced due tick. Cohort membership depends only on shared causal authority, never on Contract length, Actor class, Task kind, fee, or Weight.
 
-A causal cohort is a bounded ordered set of Actors affected by one shared Trigger cause.
+An implementation MAY amortize source traversal, candidate classification, and occurrence materialization across a cohort when every member follows the same generated control branch. Cohorting MUST NOT reorder candidates, create Task-shape affinity, or merge per-Actor obligations: each Actor keeps its own Trigger fee, latch, residence, events, Pipeline fee, and Step outcome, and after Step 0 each nonterminal member follows independent Service scheduling. Unreached Pipeline length MUST NOT add first-reaction work (§4.3).
 
-Cohort eligibility depends only on shared causal authority, not Contract length, Actor class, Task kind, fee, or Weight.
+### 5.7 Family semantics and time bounds
 
-The cohort MAY amortize:
+- `Manual`: only the authorized owner may call `manual_trigger` (§13.1). A useful call is an occurrence (§5.2); a latched call is an exact Actor no-op that retains ordinary transaction payment (§8.3).
+- `AddressEvent`: only certified positive non-self movement forms a cause (§12.4). Matching is independent of funding acceptance (§7.4). `SourceFilter::Any` accepts any source including absent; `OwnerOnly` requires a concrete source equal to the owner; `Whitelist` requires a concrete listed source. `AssetFilter::Whitelist` requires the exact listed asset.
+- `AtTime`: `after_ticks > 0`. One relative consensus-time deadline that fires at most once, never catches up, and never re-arms.
+- `Cadenced`: `every_ticks > 0`. Anchored at Active installation with ceiling quantization. A useful occurrence disables cadence detection until Opening re-arms it; missed latched-period points are forgotten.
 
-- Source/detector traversal;
-- Candidate classification;
-- Useful occurrence materialization (§4.2);
-- Grouped physical placement writes (§8.4);
-- First Opening/Step-0 control when generated branches remain compatible (§5.2, §6.1).
+`AtTime` and `Cadenced` use the host-configured consensus tick, disallow `cooldown_blocks` and `ScheduleWindow`, and MUST fit `MaxTemporalDelayTicks` (§14.3). Temporal arithmetic is constant-time and never iterates or replays missed points:
 
-Every Actor retains its own Trigger fee, latch, generation-bound process residence, events, Pipeline fee, and Step outcome.
+```text
+first_due = ceil(now_millis / tick_millis) + period
+next_due  = first canonical cadence point strictly greater than now_tick
+```
 
-After Step 0 commits, each nonterminal Actor leaves the initial cohort and follows independent Service scheduling (§6.1, §8.3). A zero-Step member ends at Opening (§5.5). A one-Step member is the degenerate case whose Step 0 also completes its Cycle.
+At genesis, temporal anchors are uninitialized; the first temporal service after the timestamp inherent installs the full future deadline without creating readiness.
 
-Unreached pipeline length MUST NOT add first-reaction work merely because it exists. First reaction may load only Step 0 plus exact authored Opening dependencies; unrelated tail fragments remain cold (§3.3, §5.3).
-
-### 4.7 Trigger-specific semantics
-
-#### Manual
-
-Only the authorized owner may call `manual_trigger` (§12.1). A useful call follows Trigger occurrence (§4.2). A latched call is an exact Actor no-op and retains ordinary transaction payment (§7.3).
-
-#### AddressEvent
-
-Only certified positive non-self movement may form an AddressEvent cause (§11.4). Trigger matching is independent from funding acceptance (§6.4). `SourceFilter::Any` accepts any source, including absent source; `OwnerOnly` requires concrete source equal to owner; `Whitelist` requires a concrete listed source. `AssetFilter::Whitelist` requires the exact listed asset.
-
-#### AtTime
-
-`after_ticks > 0`. The source is one relative consensus-time deadline. It fires at most once, never catches up, and never re-arms (§4.5).
-
-#### Cadenced
-
-`every_ticks > 0`. Cadence is anchored at Active installation using ceiling quantization. A useful occurrence disables cadence detection until Opening re-arms it (§4.5). Missed latched-period points are forgotten.
-
-#### Time bounds
-
-The reference tick is 500 ms. `AtTime` and `Cadenced` disallow `cooldown_blocks` and `ScheduleWindow`. Their delay/period MUST fit `MaxTemporalDelayTicks` (§13.3).
-
-For signal-driven Triggers, block eligibility is owned by:
+For signal-driven Triggers, block eligibility is:
 
 ```text
 cooldown_anchor = last_cycle_block.or(schedule_anchor)
@@ -594,160 +396,83 @@ signal_eligible_at(cause_floor) =
   max(cause_floor, cooldown_eligible_at, window.start when present)
 ```
 
-A ScheduleWindow is inclusive. Validation requires `end > start`, representable `end + 1`, inclusive length `>= MinWindowLength`, current block `<= end`, bounded future start delay, and first possible eligibility `<= end`. `terminal_at = end + 1` (§9.2). Active installation sets `schedule_anchor = max(now, window.start)` when a future window exists, otherwise `now`.
+A `ScheduleWindow` is inclusive. Validation requires `end > start`, representable `end + 1`, inclusive length `>= MinWindowLength`, current block `<= end`, bounded future start delay, and first possible eligibility `<= end`. `terminal_at = end + 1` (§10.2). Active installation sets `schedule_anchor = max(now, window.start)` for a future window, otherwise `now`.
 
-Temporal arithmetic is constant-time:
+### 5.8 Detection geometry
 
-```text
-first_due  = ceil(now_millis / tick_millis) + period
-next_due   = first canonical cadence point strictly greater than now_tick
-```
+Detection is source-specific: `Manual` through the direct call, `AddressEvent` through the certified destination and filter path, and `AtTime`/`Cadenced` through the temporal deadline index. A universal Trigger index is forbidden.
 
-Missed cadence points are never iterated or replayed. At genesis, AtTime/Cadenced anchors are uninitialized; the first ordinary temporal service after the timestamp inherent installs the full future deadline without creating readiness.
+Detector workers MUST preserve source revision and time order, inspect only exact affected candidates, admit complete multidimensional Weight before mutation, use bounded candidate and page counts, preserve one exact source obligation on refusal, and never skip corruption or let later source work overtake it.
 
 ---
 
-## 5. Pipeline and Cycle
+## 6. Pipeline and Cycle
 
-### 5.1 Cycle and run state
+### 6.1 Cycle and run state
 
-```rust
-struct ActorRunState<BlockNumber, AssetId, Balance> {
-  semantic_contract_id: Hash,
-  body_commitment: Hash,
-  admission_identity: Hash,
-  pipeline_service_identity: Hash,
-  cycle_nonce: u64,
-  cursor: u32,
-  unsuccessful_attempts_at_cursor: u32,
-  last_attempt_block: BlockNumber,
-  last_committed_step_block: Option<BlockNumber>,
-  eligible_at: BlockNumber,
-  cumulative_outcomes: OutcomeTotals,
-  last_step_outcome: Option<StepOutcome>,
-  suspension: Option<SuspensionReason>,
-}
-```
+A run exists iff `CycleState` is `Running` or `Suspended`. `Running` has no suspension, `Suspended` has exactly one `SuspensionReason`, and `Idle` has no run. The run binds the exact Contract, admission identity, and paid Pipeline envelope, and holds the open Cycle nonce, the cursor (the sole current Step index), unsuccessful attempts at the cursor, last attempt and committed-Step blocks, the eligibility block, cumulative outcomes, and the last Step outcome. Completed-run history is not retained in consensus state.
 
-`ActorRunState` exists iff `CycleState` is `Running` or `Suspended`.
+### 6.2 Opening
 
-- `Running` requires `suspension == None`.
-- `Suspended` requires `suspension == Some(_)`.
-- `Idle` requires no run.
-- `cursor` is the sole current Step index.
-- The run binds the exact semantic Contract, body, admission, paid Pipeline service, and open-cycle nonce.
-- Completed-run history is not retained in consensus state.
+Opening is the only transition that consumes paid readiness into one Cycle. It MUST execute in this order:
 
-### 5.2 Opening
+1. Validate the Actor, latch, residence, Contract, admission, and Pipeline envelope (§3.1, §3.5, §4.4).
+2. Apply Opening terminal checks (§10.2).
+3. Validate that the active-installed maximum run-state hold is present (§8.2).
+4. Check and charge the complete Pipeline Machine fee (§8.4).
+5. Derive `run.cycle_nonce = identity.cycle_nonce + 1` without changing the identity nonce (§6.4).
+6. Consume `pending_signal` (§5.3) and re-arm the Trigger (§5.5).
+7. Emit `CycleStarted` (§13.2).
+8. For a nonempty Contract, execute Step 0 in the same current-Step transaction (§7.1); for a zero-Step Contract, finalize atomically (§6.5).
 
-Opening is the sole transition that consumes paid pending readiness into one Cycle.
+Opening MUST NOT partially occur. Insufficient Pipeline payment invokes minimal apoptosis with `CycleAdmissionInsufficient` (§10.4); inconsistent hold authority fails closed as an Actor invariant; the prior Trigger fee remains final (§8.3). A Pipeline fee-collection failure despite valid capacity rolls back the entire Opening, keeps the latch consumable, and preserves the Service head.
 
-Opening MUST execute in this order:
+### 6.3 Current Attempt inputs
 
-1. Validate current Actor, latch, placement, Contract, admission, and Pipeline envelope (§3.4, §8.1, §8.2).
-2. Apply Opening-specific terminal checks (§9.2).
-3. Validate that the active-installed maximum run-state hold remains present (§7.2).
-4. Check and charge the complete Pipeline Machine fee (§7.4).
-5. Preserve the existing run-state hold without a Cycle-local hold mutation (§7.2).
-6. Derive `run.cycle_nonce = identity.cycle_nonce + 1` without changing `identity.cycle_nonce` (§5.4).
-7. Consume `pending_signal` (§4.3).
-8. Re-arm the Trigger (§4.5).
-9. Emit `CycleStarted` (§12.2).
-10. For a nonempty Contract, execute Step 0 in the same current-Step transaction (§6.1).
-11. For a zero-Step Contract, finalize atomically (§5.5).
+Cycle admission captures no predicate result, amount basis, or funding history. Each Attempt loads only its current Step and reads every predicate and dynamic amount from current authoritative state after its fee reservation; a retry repeats those reads. Every amount is exactly `Fixed(value)` or `Percent(perbill)`: `Fixed` is checked against current capacity without clipping, and `Percent` uses widened floor arithmetic over current `Available`. Every debit preserves the current Action-fee reservation and protected minimum (§8.5, §11.4).
 
-If the Actor cannot pay the Pipeline Machine fee, or its active-installed run-state hold authority is inconsistent, Opening MUST NOT partially occur. Insufficient Pipeline payment invokes minimal apoptosis with `CycleAdmissionInsufficient` (§9.4); inconsistent hold authority fails closed as an Actor invariant. The prior Trigger fee remains final (§7.3).
+### 6.4 Cycle nonce
 
-If Pipeline fee collection fails despite valid capacity, the entire Opening attempt rolls back, the latch remains consumable, and the Service head is preserved (§7.4, §8.3).
+The identity nonce is the latest terminated Cycle nonce. Opening derives `run.cycle_nonce = checked_add(identity.cycle_nonce, 1)` and does not mutate the identity nonce. Completion, failure, cancellation, or close assigns `identity.cycle_nonce = run.cycle_nonce` exactly once. Retry, suspension, Step progress, breaker deferral, and congestion change neither nonce.
 
-### 5.3 Current Attempt inputs
+### 6.5 Zero-Step Cycle
 
-Cycle admission captures no predicate result, amount basis, or funding history. Each Attempt loads only its current Step and reads every predicate and dynamic amount from current authoritative state after the required fee reservation. A retry repeats those reads at the later Attempt; it never reuses a cycle-admission value.
+A zero-Step Contract has no Task, Step event, tail, or run. A ready zero-Step Cycle consumes one Service encounter and atomically performs Opening (§6.2), charges the zero-Step Pipeline Machine fee (§8.4), emits `CycleStarted`, commits the new nonce (§6.4), emits `CycleSummary(Completed)`, and applies terminal policy (§10.2). `auto_close_at_cycle_nonce = Some(1)` makes a fresh zero-Step Contract one-shot.
 
-`Fixed` remains the authored artifact value but is checked against current task capacity at the Attempt. `Percent` reads current Available for the task's typed surface and uses widened floor arithmetic. Every debit independently preserves its current Action-fee reservation and protected minimum (§7.5, §10.4).
+### 6.6 Completion and cancellation
 
-### 5.4 Cycle nonce
+A Cycle completes at plan end or on successful `StopCycle` (§7.6). Finalization MUST record the final Step outcome when present (§7.5), emit the boundary events (§13.2), commit the run nonce (§6.4), delete the run while preserving the active-installed run-state hold (§8.2), update `last_cycle_block`, apply terminal precedence (§10.2), and otherwise return to Idle and recompute the Idle residence. Source activity that occurred while Running or Suspended creates no second Cycle or deferred readiness.
 
-`ActorIdentity.cycle_nonce` is the latest terminated Cycle nonce.
-
-Opening derives:
-
-```text
-run.cycle_nonce = checked_add(identity.cycle_nonce, 1)
-```
-
-Opening does not mutate the identity nonce. Final completion, failure, cancellation, or close assigns `identity.cycle_nonce = run.cycle_nonce` exactly once. Retry, suspension, Step progress, breaker deferral, and congestion do not change either nonce.
-
-### 5.5 Zero-Step Cycle
-
-A zero-Step Contract has no Task, Step event, Step fragment, Opening surface, or `ActorRunState`.
-
-A ready zero-Step Cycle consumes one Service encounter and atomically:
-
-1. Performs Opening (§5.2);
-2. Charges the zero-Step Pipeline Machine fee (§7.4);
-3. Emits `CycleStarted`;
-4. Commits the new Cycle nonce (§5.4);
-5. Emits `CycleSummary(Completed)`;
-6. Applies terminal policy (§9.2).
-
-`auto_close_at_cycle_nonce = Some(1)` makes a fresh zero-Step Contract one-shot.
-
-### 5.6 Completion and cancellation
-
-Cycle completion occurs at plan end or successful `StopCycle` (§6.6).
-
-Finalization MUST:
-
-1. Record the final Step outcome when present (§6.5);
-2. Emit the required boundary events (§12.2);
-3. Commit the run nonce (§5.4);
-4. Delete `ActorRunState` while preserving the active-installed run-state hold (§7.2);
-5. Update `last_cycle_block`;
-6. Apply terminal precedence (§9.2);
-7. Otherwise return to `Idle`;
-8. Recompute the canonical Idle process residence. No second Cycle or deferred readiness is created from source activity that occurred while Running or Suspended (§4.3, §8.2).
-
-Cancellation deletes the run without compensating or rolling back earlier committed Steps. It emits `CycleCancelled`, then `CycleSummary(Cancelled)`, commits the run nonce, and deletes the run. Contract replacement, deactivation, close, and incompatible upgrade own their cancellation reason (§9.3, §9.5, §13.2).
+Cancellation deletes the run without compensating earlier committed Steps: it emits `CycleCancelled`, then `CycleSummary(Cancelled)`, commits the run nonce, and deletes the run. Contract replacement, deactivation, explicit cancellation, close, and incompatible upgrade own their cancellation reasons (§10.3, §10.5, §14.2).
 
 ---
 
-## 6. Step execution
+## 7. Step execution
 
-### 6.1 One-Step attempt transaction
+### 7.1 One-Step attempt transaction
 
-An Attempt is one admitted execution of exactly one current Step. A retry is a later Attempt at the same cursor.
-
-Before reading any `Current` predicate or dynamic amount, the scheduler MUST reserve:
-
-- The exact current Step's maximum Actor Control Weight (§7.6);
-- The exact current Step's maximum Task-effect Weight (§7.6);
-- For User Actors, the maximum current Action fee (§7.5).
-
-If any reservation does not fit, the Attempt defers without semantic evaluation or mutation.
+An Attempt is one admitted execution of exactly one current Step; a retry is a later Attempt at the same cursor. Before reading any predicate or dynamic amount, the scheduler MUST reserve the current Step's maximum Actor Control Weight and maximum Task-effect Weight (§9.1) and, for User Actors, the maximum current Action fee (§8.5). If any reservation does not fit, the Attempt defers without evaluation or mutation.
 
 One current-Step transaction atomically owns:
 
 ```text
 generation/process/Service/Contract validation
 + optional Opening for cursor 0
-+ current-Step Precondition
++ current-Step precondition
 + amount resolution
 + at most one Task effect
 + Action fee settlement when a Task is invoked
-+ StepOutcome and counters
++ Step outcome and counters
 + cursor, suspension, completion, or close transition
-+ retained-Service, Deadline, Parked, Disabled, or close placement
++ retained Service, Deadline, Parked, Disabled, or close placement
 + Actors events
 ```
 
-A Task MUST NOT be split across blocks. Earlier committed Steps are never rolled back by later failure.
+A Task MUST NOT be split across blocks, and earlier committed Steps are never rolled back by later failure. After a committed Step, `last_committed_step_block` equals the current block; a second Step commit for the same Actor in that block MUST fail closed independently of residence correctness.
 
-After a committed Step, `last_committed_step_block` equals the current block. A second Step commit for the same Actor in that block MUST fail closed independently of residence correctness.
+An advancing Step with a successor sets eligibility to `current_block + 1` and retains one Live Service obligation (§3.1); it does not load or execute the successor. A retry suspension atomically moves the same process from Service to its exact Deadline.
 
-An advancing Step with a successor sets `eligible_at = current_block + 1` and retains one future Live Service obligation (§8.2). It does not load or execute the successor Step. A retry suspension atomically moves the same process from Service to its exact Deadline residence; no per-Step FIFO ticket exists.
-
-### 6.2 Precondition
+### 7.2 Precondition
 
 ```rust
 struct Precondition<P, MaxClauses, MaxPerClause> {
@@ -772,19 +497,13 @@ enum Predicate<AssetId, Balance, BlockNumber, FeedId> {
 }
 ```
 
-A present Precondition is nonempty DNF: outer clauses are OR; inner predicates are AND.
+A present Precondition is nonempty DNF: outer clauses are OR, inner predicates are AND. Admission canonicalizes predicates and clauses by canonical typed SCALE order, rejects duplicate clauses after predicate deduplication, and absorbs exact supersets under `A OR (A AND B) = A`.
 
-Admission canonicalizes predicates and clauses by canonical typed SCALE order, rejects duplicate clauses after predicate deduplication, and absorbs exact supersets under `A OR (A AND B) = A`.
+Every admitted predicate is evaluated with no short-circuit, because Weight MUST be data-independent. Evaluation happens immediately before the owning Step and observes prior committed Steps plus intervening external state.
 
-Every admitted predicate is evaluated; there is no short-circuit because Weight MUST be data-independent.
+`Above` is strict `>` and `Below` is strict `<`. An `Unavailable`, `Uninitialized`, or `Stale` observation evaluates false; a structurally invalid `Fresh` observation is `PredicateError::InvalidObservation`, a Permanent Step failure. `max_age_blocks` MUST be positive. Balance predicates read only the Actor sovereign account, subtract the current Action-fee reservation for the fee-native asset, and grant no spending authority (§8.5, §11.4). A false Precondition emits `StepSkipped(PreconditionFalse)` and advances (§7.5).
 
-Every predicate is evaluated immediately before the owning Step and observes prior committed Steps plus intervening external state.
-
-Predicate error is Permanent Step failure. False emits `StepSkipped(PreconditionFalse)` and advances (§6.5).
-
-`Above` is strict `>` and `Below` is strict `<`; equality satisfies neither. Observation `Unavailable`, `Uninitialized`, or `Stale` evaluates false. Structurally invalid `Fresh` observation is `PredicateError::InvalidObservation` and Permanent. `max_age_blocks` MUST be positive. Balance predicates read only the Actor sovereign account, subtract the current transient Action-fee reservation for the fee-native asset, and do not grant spending authority (§7.5, §10.4).
-
-### 6.3 Amount resolution
+### 7.3 Amount resolution
 
 ```rust
 enum AmountResolution<Balance> {
@@ -793,41 +512,21 @@ enum AmountResolution<Balance> {
 }
 ```
 
-Each Task field resolves to exactly one of:
+Each Task amount resolves to `Resolved(positive value)`, `Skipped`, or `FundingUnavailable`:
 
-```text
-Resolved(positive value)
-Skipped
-FundingUnavailable
-```
+- Percentages use widened floor division, and a dynamic zero is `Skipped`;
+- A positive exact debit above current capacity is `FundingUnavailable` and MUST NOT be silently reduced;
+- `Percent(100%)` is the only whole-current-available form and has no lifecycle privilege.
 
-Rules:
-
-- Percentages use widened floor division;
-- Dynamic zero is `Skipped`;
-- A positive exact debit above current capacity is `FundingUnavailable`;
-- A positive exact amount MUST NOT be silently reduced;
-- `Percent(100%)` is the only authored whole-current-available form and has no lifecycle privilege.
-
-For multiple amount fields:
-
-```text
-any FundingUnavailable -> FundingUnavailable
-else any Skipped       -> Skipped
-else                   -> Executable(all values)
-```
-
-Source-capacity calculations preserve the current Action-fee reservation and protected minimum (§7.5, §10.4).
+For multiple amount fields: any `FundingUnavailable` gives `FundingUnavailable`, else any `Skipped` gives `Skipped`, else the Task is executable with all values.
 
 | Resolution surface | Tasks | Current basis |
 | --- | --- | --- |
 | Preserve-source | Transfer, SplitTransfer, SwapIn, AddLiquidity, RemoveLiquidity, Burn, Stake, DonateLiquidity | current preservable balance |
-| Output-target | Mint, SwapOut | Current spendable target; percentage amounts forbidden |
+| Output-target | Mint, SwapOut | authored output; percentage amounts forbidden |
 | Share-spend | Unstake | current staking shares |
 
-Fixed source/share values MUST fit current capacity. Output-target values are bounded by their own authored/adaptor rules, not current target balance.
-
-### 6.4 Funding authorization
+### 7.4 Funding authorization
 
 ```rust
 enum FundingSourcePolicy<AccountId> {
@@ -838,20 +537,18 @@ enum FundingSourcePolicy<AccountId> {
 }
 ```
 
-A positive certified credit is authorized only when the funding policy accepts its source and provenance. Actors retain no amount accumulator or funding-history basis.
-
-Policy acceptance is exact:
+A positive certified credit is authorized only when the funding policy accepts its source and provenance:
 
 | Policy | Accepted source |
 | --- | --- |
 | `OwnerOnly` | signed provenance and concrete source equal to owner |
 | `SignedAllowlist` | signed provenance and concrete allowlisted source |
-| `RuntimePolicy` | configured authority accepts the exact source/provenance pair; all-`None` is denied |
-| `AnyVerifiedIngress` | concrete source or typed provenance exists; all-`None` is denied |
+| `RuntimePolicy` | the configured authority accepts the exact source/provenance pair; all-`None` is denied |
+| `AnyVerifiedIngress` | a concrete source or typed provenance exists; all-`None` is denied |
 
-Rejected credit remains custody only. Trigger matching is independent (§4.7). Accepted credit changes ordinary sovereign custody; every later amount resolution reads current Available rather than an Actor-maintained funding history. Close or deactivation does not move custody (§9.3).
+Rejected credit remains custody only; Trigger matching is independent (§5.7). Actors retain no amount accumulator or funding history: every later amount resolution reads current `Available`. Close and deactivation move no custody (§10.3).
 
-### 6.5 Step outcome and error policy
+### 7.5 Step outcome and error policy
 
 ```rust
 enum StepErrorPolicy {
@@ -871,7 +568,7 @@ enum StepOutcome {
 }
 ```
 
-`RetryLater.max_attempts` counts the first unsuccessful execution and all retries. It MUST be in `2..=MaxRetryAttempts`.
+`RetryLater.max_attempts` counts the first unsuccessful execution and all retries and MUST be in `2..=MaxRetryAttempts`.
 
 Each step whose enclosing scheduler attempt commits selects exactly one row from the closed transition table:
 
@@ -891,33 +588,23 @@ Each step whose enclosing scheduler attempt commits selects exactly one row from
 | `ST-12` | Permanent failure or predicate error | `ContinueNextStep` | Record failure; advance or complete. |
 | `ST-13` | Permanent failure or predicate error | `AbortCycle` or `RetryLater` | Record failure; terminate Failed. |
 
-A step increments at most one primary outcome counter.
+A step increments at most one primary outcome counter. The deltas are exact: precondition skip increments `precondition_skips`; resolution skip increments `skipped_resolution`; advancing funding skip increments `skipped_funding_unavailable`; successful effect increments `executed_steps` and `committed_effectful_tasks`; successful `StopCycle` increments `executed_steps`; invoked Task failure increments `failed_steps`.
 
-A Retry suspension increments cursor-local and global unsuccessful counters exactly once. Local bound wins when local and global bounds are reached by the same Attempt.
+`FundingUnavailable` is not a Task failure, and `AbortCycle` aborts on Task failure only. A retry suspension increments the cursor-local and global unsuccessful counters exactly once; the local bound wins when both are reached by the same Attempt. A terminal Failed Attempt increments the global streak once; a `ContinueNextStep` failure, deferral, pause, cancellation, exact no-op, and advancing funding skip do not. A completed Cycle resets the global streak.
 
 ```text
-next_local = previous suspension at same cursor ? previous + 1 : 1
+next_local  = previous suspension at same cursor ? previous + 1 : 1
 next_global = unsuccessful_attempt_streak + 1
-backoff(i) = min(2^i, 8 blocks)
-```
+backoff(i)  = min(2^i, 8) blocks
 
-`FundingUnavailable` is not a Task failure. `AbortCycle` aborts on Task failure, not unavailable funding.
-
-Outcome deltas are exact: precondition skip increments `precondition_skips`; resolution skip increments `skipped_resolution`; advancing funding skip increments `skipped_funding_unavailable`; successful effect increments `executed_steps` and `committed_effectful_tasks`; successful `StopCycle` increments `executed_steps`; invoked Task failure increments `failed_steps`. No other counter changes.
-
-A terminal Failed Attempt increments the global unsuccessful streak once. A `ContinueNextStep` failure does not. A completed Cycle resets the global unsuccessful streak. Deferral, pause, cancellation, exact no-op, and advancing funding skip do not increment it.
-
-Retry eligibility is:
-
-```text
 retry_eligible_at =
   last_attempt_block + max(cooldown_blocks, backoff(next_local - 1))
   bounded by [window.start, terminal_at] when a ScheduleWindow is present
 ```
 
-A retry suspension inside an active window therefore wakes at the window terminal (`end + 1`) rather than sleeping through its own cooldown. Because the persisted Run `eligible_at` uses this same owner, it agrees with the exact deadline destination and the suspension transition can commit.
+A retry suspension inside an active window therefore wakes at the window terminal rather than sleeping past it, and the persisted run eligibility equals the exact Deadline destination.
 
-### 6.6 Task semantics
+### 7.6 Task semantics
 
 ```rust
 struct SplitLeg<AccountId> { to: AccountId, share: Perbill }
@@ -940,30 +627,23 @@ enum Task<AccountId, AssetId, Balance> {
 }
 ```
 
-General rules:
+- At most one Task effect is invoked per Attempt (§7.1), through the canonical host operation (§12.1).
+- `Mint` is System-only. Self-transfer and duplicate split recipients are invalid.
+- Each Task contains at most two `AmountResolution` fields, and every debit preserves the protected minimum (§11.4).
+- `Transfer(Percent(100%))` has no close-specific privilege.
+- `CloseAfterProductiveCycle` observes only committed effectful Tasks (§10.2).
 
-- At most one Task effect is invoked per Attempt (§6.1);
-- `Mint` is System-only;
-- Self-transfer and duplicate split recipients are invalid;
-- Each Task contains at most two `AmountResolution` fields;
-- Every debit preserves the protected minimum (§10.4);
-- `Transfer(Percent(100%))` has no close-specific privilege;
-- `CloseAfterProductiveCycle` observes only committed effectful Tasks (§9.2);
-- Task effects use canonical host operations (§11.1).
+`SplitTransfer` requires `2..=MaxSplitTransferLegs` legs, positive unique shares, and total share `<= 1`. Each leg is floored and rounding dust remains with the Actor. Certified ingress to each recipient belongs to this Task effect, including synchronous finalization of a recipient whose window has expired (§12.4).
 
-`SplitTransfer` requires 2..=`MaxSplitTransferLegs`, positive unique shares, and total share `<= 1`. Each leg is floored; rounding dust remains with the Actor.
-
-`SwapIn` and `SwapOut` use current executable quotes inside the adapter boundary (§11.4). `InputLimit::Absolute` is a cap, not an admission gate.
-
-`AddLiquidity` amounts are debit caps; actual used amounts and LP output are returned. `RemoveLiquidity` debits the exact resolved LP amount. `DonateLiquidity` uses one authored asset-A cap plus one current derived cap on pre-existing asset-B debit (§11.4); the adapter may acquire asset B during the atomic operation, and its returned donated-B amount may therefore exceed that debit cap.
+`SwapIn` and `SwapOut` use current executable quotes inside the adapter boundary (§12.4); `InputLimit::Absolute` is a cap, not an admission gate. `AddLiquidity` amounts are debit caps and actual used amounts and LP output are returned; `RemoveLiquidity` debits the exact resolved LP amount. `DonateLiquidity` uses one authored asset-A cap plus one current derived cap on pre-existing asset-B debit; the adapter may acquire asset B within the atomic operation, so returned donated B may exceed that debit cap.
 
 ---
 
-## 7. Economics and block resources
+## 8. Economics
 
-### 7.1 Economic surfaces
+### 8.1 Economic surfaces
 
-Actors has four service-fee boundaries plus one refundable state resource:
+Actors has four service-fee boundaries and one refundable state resource:
 
 ```text
 committed User creation        -> ActorCreationFee
@@ -973,81 +653,45 @@ invoked Action attempt         -> ActionExecutionFee
 retained User Actor state      -> ActorStateHold
 ```
 
-Ordinary transaction payment remains owned by the host transaction-payment contract. Task-native protocol fees remain owned by their underlying mechanism (§11.1).
+Ordinary transaction payment remains owned by the host. Task-native protocol fees remain owned by their mechanism (§12.1). System Actors are exempt from Actors Creation, Trigger, Pipeline, and Action fees but consume identical block resources; Task-native fees MAY still apply. Every Actors fee transfer is ledger-only and MUST NOT create AddressEvent ingress, funding, readiness, or placement.
 
-System Actors are exempt from Actors Creation, Trigger, Pipeline, and Action fees, but consume identical block resources. Task-native protocol fees MAY still apply.
+### 8.2 Creation fee and state hold
 
-### 7.2 Creation fee and state hold
+`ActorCreationFee` is a fixed nonrefundable process-admission and anti-spam charge, paid by the signed creator only when User creation commits. It is not a second payment for create-call Weight. It economically backs the protocol obligation to perform minimal pre-Opening apoptosis (§10.4) and prepays no Trigger, Pipeline, or Action service; minimal apoptosis remains an obligation even if later cleanup cost exceeds the historical fee.
 
-`ActorCreationFee` is a fixed non-refundable process-admission and anti-spam charge. It is paid by the signed creator only when User creation commits.
+`ActorStateHold` is a refundable hold on the User owner account backed by actual retained geometry; it is not a fee and not rent:
 
-It MUST NOT be described as a second payment for create-call Weight. The ordinary transaction fee owns synchronous call computation.
+- Elapsed time does not change it and no recurring collection exists;
+- Zero- and one-Step Contracts MUST NOT reserve a maximum-size body footprint;
+- Active installation reserves one type-derived maximum run-state hold before autonomous service becomes possible, never a hand-maintained byte constant;
+- Opening, Step progress, retry, suspension, Cycle boundary, and cancellation MUST NOT mutate or release that run-state hold;
+- Deactivation releases Active Contract, topology, funding, and run holds atomically and retains only the Dormant identity hold; close releases every Actor-state hold (§10.3);
+- Inability to reserve rejects creation, activation, or replacement atomically;
+- Sovereign custody is not Actor state and is never held by this mechanism (§11.3).
 
-The Creation Fee also economically backs the protocol obligation to perform minimal pre-Opening apoptosis if later required (§9.4). It does not prepay Trigger, Pipeline, or Action service.
+System state is host-owned bounded capacity and MAY be hold-exempt; exemption grants no resource or scheduler preference.
 
-`ActorStateHold` is a refundable geometry-backed hold on the User owner account, not a fee and not rent.
-
-Rules:
-
-- Elapsed time does not change it;
-- No recurring collection exists;
-- Active identity, Contract, process, detector, and run state is held by actual retained geometry;
-- Zero/one-Step Contracts MUST NOT reserve a maximum-size body footprint;
-- Active installation reserves one type-derived maximum admitted run-state hold before autonomous Trigger service becomes possible;
-- The maximum is derived from bounded runtime types and MUST NOT use a hand-maintained byte constant;
-- Opening, Q1 progress, retry, suspension, Cycle boundary, and cancellation MUST NOT mutate or release the run-state hold;
-- Deactivation or Close releases the active-installed run-state hold atomically with removal of Active authority;
-- State transitions reserve/release all other exact hold deltas atomically;
-- Inability to reserve the active-installed run hold rejects creation, activation, or replacement atomically before autonomous service is admitted;
-- Close releases all Actor-state hold (§9.3);
-- Sovereign custody is not Actor state and is not held by this mechanism (§10.3).
-
-Deactivation releases Active Contract/topology/funding/run holds and retains only the Dormant identity hold (§3.5, §9.5). System state remains host-owned bounded capacity and MAY be hold-exempt, but exemption grants no resource or scheduler preference.
-
-Generated state descriptors own exact byte accounting. The fixed Creation Fee is not a cleanup escrow: minimal apoptosis remains a protocol obligation even if later cleanup cost exceeds the historical fee (§9.4).
-
-### 7.3 Trigger fee
+### 8.3 Trigger fee
 
 ```text
 TriggerFee = WeightToFee(maximum generated control Weight of one useful family-specific occurrence)
 ```
 
-A User Trigger fee is charged exactly once from fee-native balance above `MinUserBalance` before `pending_signal: false -> true` (§4.2, §10.4). Redundant latched-period activity performs no Actor-specific Trigger work and charges no Trigger fee (§4.3).
+A User Trigger fee is charged exactly once, from fee-native balance above `MinUserBalance`, before `pending_signal: false -> true` (§5.2, §11.4). Redundant latched-period activity charges nothing (§5.3). A useful User `manual_trigger` charges the complete generated Manual occurrence owner to the sovereign account and returns `Pays::No`; a redundant, rejected, underfunded, or System Manual call retains ordinary transaction payment and charges no Trigger fee. Automatic source producers pay their own source work; the Actor pays only its occurrence. Committed Trigger fees are nonrefundable and independent of later Pipeline admission.
 
-A useful User `manual_trigger` call charges the complete generated Manual Trigger owner to the sovereign account and returns `Pays::No`. A redundant, rejected, underfunded, or System Manual call retains ordinary transaction payment and charges no User Trigger fee. This is the complete no-double-charge rule for Manual.
-
-Automatic source ingress/publishers pay their own source work; the Actor pays only its occurrence materialization (§7.7, §11.4).
-
-Insufficient Trigger capacity follows the family table (§4.4). Trigger-fee collection failure rolls back occurrence materialization and preserves the exact source obligation (§4.4, §8.4).
-
-Committed Trigger fees are non-refundable and independent from later Pipeline admission.
-
-### 7.4 Pipeline Machine fee
+### 8.4 Pipeline Machine fee
 
 ```text
-PipelineMachineFee = WeightToFee(PipelineMachineEnvelope.control_weight_upper)
+PipelineMachineFee = WeightToFee(Pipeline envelope, §4.4)
 ```
 
-The envelope is defined in §3.4.
+The User fee is charged once at Opening from fee-native balance above `MinUserBalance` (§6.2, §11.4). It prepays all reachable Actor Control work of that Pipeline through its Cycle boundary, including exactly one reachable completion or close branch with its cleanup. Quotes MAY report the machine and cleanup components separately, but there is no separately charged cleanup fee, per-Step machine charge, remaining machine budget, hold or refund settlement, Trigger work, or Task-effect work in it. Running and Suspended Attempts consume paid machine authority without a balance predicate.
 
-The User fee is charged once from fee-native balance above `MinUserBalance` at Opening (§5.2, §10.4). It prepays all reachable Actor Control work of that Pipeline through its Cycle boundary, including reachable completion/close control. There is:
+Insufficient capacity causes minimal apoptosis before Opening (§10.4); collector failure rolls back Opening and preserves the latch (§6.2). Committed Pipeline fees are nonrefundable.
 
-- No separate `CleanupFee`;
-- No per-Step machine charge;
-- No remaining machine-budget ledger;
-- No hold/refund settlement;
-- No Trigger work in the quote;
-- No Task-effect work in the quote.
+### 8.5 Action fee
 
-Running and Suspended Attempts consume paid machine authority without a balance predicate.
-
-Insufficient current capacity causes minimal apoptosis before Opening (§9.4). Fee-collector infrastructure failure rolls back Opening and preserves the latch (§5.2).
-
-Committed Pipeline fees are non-refundable. Every Actors fee transfer is ledger-only: it MUST NOT create AddressEvent ingress, funding accumulation, Trigger readiness, or placement (§11.4).
-
-### 7.5 Action fee
-
-Before an Action-bearing Task is invoked, the current Attempt reserves the maximum Task-effect fee from the User Actor's fee-native balance above `MinUserBalance` (§10.4).
+Before an Action-bearing Task is invoked, the Attempt reserves the maximum Task-effect fee from the User Actor's fee-native balance above `MinUserBalance`:
 
 ```text
 cannot reserve -> FundingUnavailable; no Action invocation; no Action fee
@@ -1056,341 +700,125 @@ can reserve    -> invoke canonical effect
                   -> charge actual Action fee on success or typed failure
 ```
 
-A retry is a new independently charged Action attempt. Before a Suspended User Actor receives retry execution, the scheduler proves that its fee-native balance above `MinUserBalance` can cover the current Action maximum. The Step effect and actual-fee settlement remain one transaction, so unused maximum liability is released and no terminal consensus debt can survive rollback. Insufficient retry liability selects fee-free custody-neutral minimal apoptosis before invocation.
+A retry is a new independently charged Action attempt. Before a Suspended User Actor receives retry execution, the scheduler proves that its fee-native balance above `MinUserBalance` covers the current Action maximum; otherwise it selects fee-free custody-neutral minimal apoptosis before invocation (§10.4). Effect and actual-fee settlement form one transaction, so unused liability is released and no debt survives rollback. False precondition, skipped resolution, `FundingUnavailable`, and `StopCycle` invoke no Action and charge no Action fee. Invalid or greater-than-reserved actual Weight rolls back the current-Step transaction and fails closed.
 
-False Precondition, skipped resolution, `FundingUnavailable`, and `StopCycle` invoke no Action and charge no Action fee.
+### 8.6 No double charging
 
-Invalid or greater-than-reserved actual Weight rolls back the current-Step transaction and fails closed.
-
-### 7.6 Actor Control and Shared Economic meters
-
-The production block policy is component-wise:
-
-```text
-Actor Control hard ceiling = floor(SchedulableBlockWeight / 3)
-Shared Economic            = SchedulableBlockWeight - Actor Control
-Actor base turn            = floor(Shared Economic / 2)
-User base turn             = Shared Economic - Actor base turn
-```
-
-One third is the maximum permissible Actor Control share. Further throughput work MUST optimize inside that envelope and MUST NOT take additional guaranteed capacity from Actor effects or user dispatch. Deterministic floor/remainder ownership prevents resource loss in either Weight component.
-
-Actor Control owns:
-
-- Detector and Trigger occurrence work;
-- Latch and placement;
-- Pipeline Opening;
-- Precondition and amount resolution;
-- Run persistence, retry, completion, and close control;
-- Scheduler and bounded cleanup.
-
-Shared Economic owns:
-
-- Ordinary external economic calls;
-- Actor Task effects.
-
-A Task effect and its external equivalent use the same canonical host mechanism and effect Weight (§11.1).
-
-After mandatory Actor work is accounted, an explicit deterministic host policy MAY lend unused Actor Control capacity to Shared Economic work. Actor Control MUST NOT exceed its one-third ceiling or borrow Shared Economic capacity. Lending MUST NOT change Service encounter order, the next-block causal boundary, or Q1.
-
-### 7.7 No double charging
-
-No two economic surfaces may charge the same Weight or retained byte.
+No two economic surfaces may charge the same Weight or retained byte:
 
 | Work | Sole economic owner |
 | --- | --- |
-| External call dispatch/origin work | ordinary transaction fee |
-| User process admission | Actor Creation Fee (§7.2) |
-| Retained Actor state | Actor State Hold (§7.2) |
-| Useful readiness `false -> true` | Trigger Fee (§7.3) |
-| Complete admitted Pipeline control | Pipeline Machine Fee (§7.4) |
-| Invoked Task effect | Action Fee (§7.5) |
-| Router trading fee, staking fee, etc. | underlying host mechanism (§11.1) |
+| External call dispatch and origin work | ordinary transaction fee |
+| User process admission | Actor Creation Fee (§8.2) |
+| Retained Actor state | Actor State Hold (§8.2) |
+| Useful readiness `false -> true` | Trigger Fee (§8.3) |
+| Complete admitted Pipeline control | Pipeline Machine Fee (§8.4) |
+| Invoked Task effect | Action Fee (§8.5) |
+| Router trading, staking, and other native fees | underlying host mechanism (§12.1) |
 
 ---
 
-## 8. Scheduler and readiness
+## 9. Block resources and service passes
 
-### 8.1 Active Actor classification
+### 9.1 Meters
 
-One pure classifier owns structural Active-state classification.
-
-```rust
-enum ActorExecutionPhase<BlockNumber> {
-  GlobalCircuitBreaker,
-  Paused,
-  WaitingNextBlock(BlockNumber),
-  WaitingRetry(BlockNumber),
-  WaitingCadenceTick(u64),
-  WaitingSignal,
-  Ready,
-}
-
-struct ActorClassification<BlockNumber> {
-  terminal_reason: Option<CloseReason>,
-  execution_phase: ActorExecutionPhase<BlockNumber>,
-}
-```
-
-The classifier:
-
-1. validates canonical Active partitions (§3.5);
-2. validates `CycleState` against `ActorRunState` (§5.1);
-3. validates current Contract/run/admission bindings (§3.4, §5.1);
-4. computes stored-state terminal predicates (§9.2);
-5. computes phase in this order: breaker, pause, terminal-ready, next-block/retry/tick wait, signal wait, ready.
-
-Opening-specific fee and nonce checks are not classifier-owned; they belong to Opening (§5.2).
-
-Classification errors are typed and MUST NOT become absence, waiting, or Ready (§12.4).
-
-### 8.2 Process residence and temporal readiness
-
-Each Active Actor owns exactly one generation-bound process record. A serving process has one primary residence:
-
-- `Service(Pending)` for paid readiness awaiting Opening;
-- `Service(Live)` for an admitted Pipeline or an Idle Actor that remains serviceable;
-- `Deadline` for a suspended Pipeline that is not yet due;
-- `Parked` for one parked-balance wait (§2.4); or
-- No residence while Disabled.
-
-A temporal Trigger may additionally own one independent Trigger deadline for `AtTime` or `Cadenced`. This Trigger authority is not a process residence and cannot execute the Actor directly.
-
-```rust
-type WakeupPageId = u64;
-type WakeupSlot = u32;
-
-enum WakeupKey<BlockNumber> { Block(BlockNumber), Tick(u64) }
-
-struct ActorRef { actor_id: ActorId, generation: u64 }
-
-struct DeadlineHandle<BlockNumber> {
-  kind: DeadlineKind,
-  key: WakeupKey<BlockNumber>,
-  page_id: WakeupPageId,
-  slot: WakeupSlot,
-}
-
-struct ActorStepAuthority<BlockNumber> {
-  actor_id: ActorId,
-  cycle_nonce: u64,
-  cursor: u32,
-  eligible_at: BlockNumber,
-  semantic_contract_id: Hash,
-  body_commitment: Hash,
-}
-```
-
-The Service ring stores one node per resident Actor and orders every class and Step shape without priority. A current-Step authority is derived only after the Service head, generation, process, Contract, run, cursor, and admission identity agree; it carries no queue-position authority.
-
-A nonterminal successor remains Live in Service with `eligible_at >= current_block + 1`. A retry moves atomically from Service to the exact bounded Deadline slot and returns to Service only when due. A useful Idle occurrence moves or publishes the process as Pending with next-block eligibility. No retained next-cycle request exists (§4.3, §5.6).
-
-Every Deadline member has one exact generation-bound reverse handle. Placement pressure preserves the obligation transactionally: the complete transition either commits or leaves the former residence unchanged.
-
-### 8.3 Prepass, Service round, and Drain
-
-Every block contains exactly one mandatory Actor Prepass after required context inherents and before ordinary external extrinsics.
-
-Prepass:
-
-1. Services bounded due Deadline and detector obligations caused before the current block boundary;
-2. Materializes eligible readiness (§4.2, §8.4);
-3. Opens or resumes the current block's Service round at the persistent ring cursor;
-4. Encounters residents in ring order and admits each complete transition before mutation.
-
-After ordinary external dispatch, Actors Drain MAY continue from the same Service cursor and round using actual remaining meters (§7.6).
-
-Current-block publications use next-block eligibility. A resident already considered or attempted in the current round cannot execute again. These two facts prevent same-block Actor recursion without allocating a per-Step ticket.
-
-The valid Service head is authoritative:
-
-- It cannot be bypassed;
-- No cheap/heavy/System/User reordering exists;
-- If its complete current transition does not fit, the Actor pass stops;
-- Later residents remain untouched.
-
-A maximum valid Step may be the only Actor Step in a block. This is paid bounded service, not structural starvation. Pipeline- or Action-fee collector failure rolls back the current transition, preserves the Service head, and stops the pass; it is not a Task failure (§7.4, §7.5).
-
-### 8.4 Detector workers and cohorts
-
-Detector geometry is source-specific:
+Block Weight after the host's fixed and context envelope is schedulable and splits component-wise into two non-convertible meters:
 
 ```text
-Manual          -> direct call
-AddressEvent    -> certified destination/filter path
-AtTime/Cadenced -> temporal index
+ActorControlLimit   = floor(SchedulableBlockWeight * host_control_share)
+SharedEconomicLimit = SchedulableBlockWeight - ActorControlLimit
+ActorBaseTurn       = floor(SharedEconomicLimit / 2)
+UserBaseTurn        = SharedEconomicLimit - ActorBaseTurn
 ```
 
-A universal Trigger index is forbidden.
+The host configures `host_control_share` in `(0, 1]`; its integration documentation owns the selected value and the fixed envelope. Both components are compared, reserved, and released independently; neither converts into the other.
 
-Workers MUST:
+Actor Control pays only Actor-specific work: detection and occurrence materialization, latch and placement, Opening, precondition and amount evaluation, run persistence, retry, completion, close control, scheduler topology, and bounded cleanup. Shared Economic pays ordinary external economic dispatch and Actor Task effects; a Task effect and its external equivalent use the same host mechanism and effect Weight (§12.1). Actor Control MUST NOT borrow Shared Economic capacity and MUST NOT be lent to it; actual-Weight reclaim never moves Weight between the meters.
 
-- Preserve source revision/time order;
-- Inspect only exact affected candidates;
-- Admit complete multidimensional Weight before mutation;
-- Use bounded candidate/page/chunk counts;
-- Preserve one exact source obligation on refusal;
-- Never skip corruption or let later source work overtake it.
+### 9.2 Prepass, base pass, external phase, and Drain
 
-A homogeneous causal cohort (§4.6) MAY aggregate physical writes only when every included candidate follows the same generated control branch and compatible destination shape. Cohorting MUST NOT reorder candidates or create Task-shape affinity.
+Every block contains exactly one mandatory Actor Prepass inherent after required context inherents and before ordinary external extrinsics, including a block with no Actor work. It carries no author-selected scheduling, budget, or payload data. The Prepass:
 
-The reference profile MUST admit a homogeneous causal cohort of at least 128 candidates when its generated Actor Control Weight and destination capacity fit.
+1. Services bounded due Deadline and detector obligations caused before the current block boundary (§5.8);
+2. Materializes eligible readiness (§5.2);
+3. Opens or resumes the block's Service round at the persistent ring cursor (§3.2);
+4. Runs the Actor base pass: encounters residents in ring order and admits each complete transition before mutation, stopping at the first head whose control or effect envelope does not fit the remaining Actor Control meter or `ActorBaseTurn`.
 
-### 8.5 Scheduler liveness
+Ordinary external extrinsics then consume Shared Economic capacity, including any `ActorBaseTurn` the base pass left unused. After external dispatch, Actor Drain MAY continue from the same cursor and round using the remaining Actor Control meter and remaining Shared Economic capacity. Drain MUST NOT execute current-block readiness, grant a second Step to one Actor, reorder the head, or exceed the actual remainder.
 
-Given:
+Current-block publications use next-block eligibility, and a resident already considered in the current round cannot execute again; together these prevent same-block Actor recursion without any per-Step ticket. A maximum valid Step may be the only Actor Step in a block: this is paid bounded service, not starvation. Pipeline- or Action-fee collector failure rolls back the current transition, preserves the Service head, and stops the pass; it is not a Task failure.
 
-- A finite bounded Service population;
-- Recurring conforming Actor Control and Shared Economic capacity;
-- Finite stale churn;
-- Eventual placement capacity;
-- Successful fee collection when valid payment capacity exists;
-- No structural invariant fault;
+### 9.3 Liveness
 
-all eligible residents receive service in persistent ring order.
+Given a finite bounded Service population, recurring conforming Actor Control and Shared Economic capacity, finite stale churn, eventual placement capacity, successful fee collection when valid payment capacity exists, and no structural invariant fault, all eligible residents receive service in persistent ring order. No fixed block latency is promised; a larger runnable population MAY lengthen inter-Step gaps while preserving order and eventual service.
 
-The protocol promises no fixed block latency. Increasing runnable population MAY increase inter-Step service gaps while preserving order and eventual service.
-
-Without the fee-collection prerequisite, the Service head MAY prevent later service despite spare Weight. Only restored prerequisites or already-authorized lifecycle transitions can resolve that obstruction; liveness creates no additional close or scheduling authority.
-
-Starvation telemetry MUST NOT change priority, order, or execution authority.
+Without successful fee collection, the Service head MAY block later service despite spare Weight; only restored prerequisites or already-authorized lifecycle transitions resolve that obstruction. Starvation telemetry MUST NOT change priority, order, or execution authority.
 
 ---
 
-## 9. Lifecycle
+## 10. Lifecycle
 
-### 9.1 Class and mutability
+### 10.1 Class and mutability
 
-User creation is signed; the caller becomes owner and consumes one owner slot (§10.2). System creation requires `SystemOrigin` and consumes a System locator (§10.2).
-
-Actor-scoped authorization:
+User creation is signed; the caller becomes owner and consumes one owner slot (§11.2). System creation requires `SystemOrigin` and consumes a System locator (§11.2).
 
 | Actor | Authorized control |
 | --- | --- |
 | User | signed owner |
 | System | signed owner or `SystemOrigin` |
 
-User Mutable MAY update Contract, pause/resume, cancel a run, deactivate, reactivate, and explicitly close.
+A User Mutable Actor MAY update its Contract, pause and resume, cancel a run, deactivate, reactivate, and explicitly close. Public Dormant creation requires `Mutable`. Public Immutable creation MUST install an Active Contract because no later activation authority exists. A host genesis configuration MAY declare an Immutable Dormant System identity as a permanently sealed role; activation and owner close MUST reject it.
 
-Public Dormant creation requires `Mutable`. Public Immutable creation MUST install an Active Contract because no later activation authority exists. A host genesis configuration MAY declare an Immutable Dormant System identity as a permanently sealed no-Contract role; activation and owner close MUST reject it as Immutable.
+A User Immutable Actor rejects Contract replacement, pause and resume, activation and deactivation, cancellation, and owner close; MAY author a Manual Trigger; cannot author `RetryLater`; MUST set `auto_close_at_cycle_nonce = Some(1)` when authoring `AtTime`; and terminates only through authored or lifecycle terminal rules, one-shot Trigger underfunding (§5.4), Pipeline-admission apoptosis (§10.4), or deployed-lineage upgrade (§14.2).
 
-User Immutable:
+A System Immutable Actor rejects actor-scoped control, cannot author Manual or `RetryLater`, is Actors-fee-exempt, and remains Active until an independently owned terminal rule or upgrade removes it.
 
-- Rejects Contract replacement, pause/resume, activation/deactivation, cancellation, and owner close;
-- MAY use an authored Manual Trigger;
-- Cannot author `RetryLater`;
-- An authored `AtTime` Contract MUST set `auto_close_at_cycle_nonce = Some(1)`, so its consumed one-shot source cannot leave an owner-inaccessible inert process;
-- May terminate only through authored/lifecycle terminal rules, Trigger-underfunded one-shot apoptosis (§4.4, §9.4), Pipeline-admission apoptosis (§9.4), or deployed-lineage upgrade (§13.2).
+Immutability fixes policy and owner control, not runtime Weight, fee conversion, adapter behavior, or host economics. `auto_close_at_cycle_nonce` changes only through complete Mutable Contract replacement and MUST be strictly above the current terminated nonce within `MaxAutoCloseNonceHorizon`.
 
-System Immutable:
+### 10.2 Terminal precedence
 
-- Rejects actor-scoped control;
-- Cannot author Manual or `RetryLater`;
-- Is Actors-fee-exempt;
-- Remains Active until an independently owned terminal rule or upgrade removes it.
+Terminal predicates are evaluated only by their owning transition:
 
-Immutability fixes policy and owner control. It does not freeze runtime Weight, fee conversion, adapter behavior, or host economics. `auto_close_at_cycle_nonce` is changed only by complete Mutable Contract replacement and MUST be strictly above the current terminated nonce within `MaxAutoCloseNonceHorizon`.
+| Transition | Precedence |
+| --- | --- |
+| Stored-state classifier (§3.5) | `WindowExpired`; `RetryAttemptsExhausted`; `ConsecutiveFailures`; `AutoCloseNonceReached` while Idle; already-materialized permanent `SchedulerIndexExhausted` |
+| Opening (§6.2) | stored-state terminal reason; `CycleNonceExhausted`; `CycleAdmissionInsufficient` when the Pipeline Machine fee cannot be provided |
+| Step finalization (§7.5) | retry-local bound; global failure bound; `ProductiveCycleCompleted`; `AutoCloseNonceReached` after a non-suspended Cycle boundary; permanent deadline-placement `SchedulerIndexExhausted` |
+| Temporal Trigger service (§5.4) | `TriggerAdmissionInsufficient` for a due User `AtTime` source that cannot pay its Trigger fee |
 
-### 9.2 Terminal precedence
+`CloseAfterProductiveCycle` closes only after a complete Cycle reaches `Completed` with `committed_effectful_tasks > 0`. Active-state hold inconsistency at Opening fails as an Actor invariant rather than a close reason.
 
-Terminal predicates are evaluated only by their owning transition.
+### 10.3 Close
 
-#### Stored-state classifier precedence (§8.1)
+Close is lifecycle cleanup only. It MUST atomically cancel any open run (§6.6), revoke execution authority, remove the Contract, admission authority, hot state, run, detector memberships, residence, deadlines, reverse handles, and holds, release the User slot or mark the System locator vacant (§11.2), and emit `ActorClosed` (§13.2).
 
-1. `WindowExpired`;
-2. `RetryAttemptsExhausted`;
-3. `ConsecutiveFailures`;
-4. `AutoCloseNonceReached` while Idle;
-5. Already-materialized permanent `SchedulerIndexExhausted`.
+Close MUST NOT enumerate assets, transfer balances, unwind positions, invoke a Task, select a refund recipient, or alter sovereign custody. Explicit User close is available only to the signed owner of a Mutable User Actor; its ordinary transaction fee is paid by the caller and requires no Actor solvency.
 
-#### Opening precedence (§5.2)
+### 10.4 Minimal User apoptosis
 
-1. Stored-state terminal reason from classification (§8.1);
-2. `CycleNonceExhausted`;
-3. `CycleAdmissionInsufficient` when the Pipeline Machine fee cannot be provided (§7.4); active-installed run-hold inconsistency fails as an Actor invariant (§7.2).
+Minimal User apoptosis is automatic process-state collection with no custody effect. It occurs only for `TriggerAdmissionInsufficient` from one-shot User `AtTime` (§5.4), `CycleAdmissionInsufficient` before Opening (§6.2), or `CycleAdmissionInsufficient` before a Suspended User retry whose current maximum Action liability is unavailable (§8.5).
 
-#### Step-finalization precedence (§6.5)
+It MUST NOT occur after an Action effect or leave fee debt. Trigger and Pipeline funding never close a Running or Suspended Pipeline; only the bounded pre-invocation retry-liability rule may close a Suspended User Actor. Minimal apoptosis performs Close (§10.3) without a Task, custody scan, fee reserve, or economic policy; its cleanup obligation is backed by the committed Creation Fee (§8.2).
 
-1. Retry-local bound;
-2. Global failure bound;
-3. `ProductiveCycleCompleted` after complete productive Cycle;
-4. `AutoCloseNonceReached` after non-suspended Cycle boundary;
-5. Permanent successor-placement `SchedulerIndexExhausted`.
+### 10.5 Control transitions and circuit breaker
 
-#### Trigger-worker terminal (§4.4)
+Contract replacement, deactivation, explicit run cancellation, close, and incompatible upgrade MUST cancel the open run before changed meaning becomes executable (§6.6).
 
-A due User `AtTime` source that cannot pay its Trigger fee selects `TriggerAdmissionInsufficient` and minimal apoptosis (§9.4).
+Pause preserves the Contract, any open run, latch, clocks, failure state, and Trigger detector evolution, and moves the process to `Disabled`. Resume reconstructs the exact required residence (§3.1). An Idle paused Actor may retain one already-paid latch, but source activity creates no deferred readiness and no Step executes.
 
-`CloseAfterProductiveCycle` closes only after the complete Cycle reaches `Completed` and `committed_effectful_tasks > 0` (§5.6, §6.5).
+Active creation or activation installs a new Active epoch with `Active/Idle`, no run, `pending_signal = false`, zero failure streak, current Trigger runtime state, schedule clocks, terminal marker, generation-bound residence, detector topology, and exact state hold. Activation preserves the Dormant identity nonce. Deactivation cancels any run and removes the Active epoch while preserving identity, slot or locator, nonce, custody, and the persistent control clock. Dormant activation with an exhausted Cycle nonce closes the identity with `CycleNonceExhausted` instead of installing an unusable epoch.
 
-### 9.3 Close and cancellation cleanup
+Authorized Mutable control MAY repair a non-window stored terminal condition before the scheduler or sweep commits Close; `WindowExpired` substitutes Close before the requested mutation. Mutable control is limited to one committed semantic mutation per Actor per block; an exact no-op returns before rate limiting.
 
-Close is lifecycle cleanup only.
+While the global circuit breaker is active, Service Step effects and ordinary automatic terminal close do not run; mandatory minimal apoptosis, explicit close, bounded sweep, detector, Deadline, and stale-cleanup work MAY run; new Active creation and activation fail; authorized control over existing Mutable Actors remains available; and Service order and placement remain unchanged.
 
-It MUST atomically:
-
-1. Cancel any open run (§5.6);
-2. Revoke execution authority;
-3. Remove hot Contract head, tail chunks, payloads, admission certificate, hot state, run state, detector memberships, process residence, deadlines, reverse indexes, and holds;
-4. Release the User slot or mark the System locator vacant (§10.2);
-5. Emit `ActorClosed` (§12.2).
-
-Close MUST NOT:
-
-- Enumerate assets;
-- Transfer balances;
-- Unwind positions;
-- Invoke a Task;
-- Select a refund recipient;
-- Alter sovereign custody.
-
-Explicit User close is available only to the signed owner of a Mutable User Actor (§12.1). Its ordinary transaction fee is paid by the caller and does not require Actor solvency.
-
-### 9.4 Minimal User apoptosis
-
-Minimal User apoptosis is automatic process-state garbage collection with no custody effect.
-
-It occurs only for:
-
-- `TriggerAdmissionInsufficient` from one-shot User `AtTime` (§4.4);
-- `CycleAdmissionInsufficient` before Opening (§5.2); or
-- `CycleAdmissionInsufficient` before a Suspended User retry whose current maximum Action liability is unavailable (§7.5).
-
-It MUST NOT occur after an Action effect or leave fee debt. Trigger and Pipeline funding never close a Running or Suspended Pipeline; only the bounded pre-invocation retry-liability rule may close a Suspended User Actor.
-
-Minimal apoptosis performs Close (§9.3) without a Task, custody scan, fee reserve, or economic policy. Its protocol cleanup obligation is economically backed by the committed Actor Creation Fee (§7.2).
-
-There is no `ActorFundingWait` and no automatic whole-balance transfer.
-
-### 9.5 Control transitions and breaker
-
-Semantic Contract replacement, deactivation, explicit run cancellation, close, and incompatible upgrade MUST cancel the open run before changed meaning becomes executable (§5.6).
-
-Pause preserves Contract, any open run, latch, clocks, failure state, and Trigger detector evolution, but moves the process to Disabled and removes ordinary execution residence. Resume reconstructs the exact required residence (§8.2). An Idle paused Actor may retain one already-paid latch, but no source activity creates deferred readiness and no Step executes.
-
-Active creation or activation installs a new Active epoch with `Active/Idle`, no Run, `pending_signal = false`, zero failure streak, current Trigger runtime state, schedule clocks, terminal marker, generation-bound process residence, detector topology, and exact state hold (§3.5, §4.1, §7.2). Activation preserves the Dormant identity nonce. Deactivation cancels any run and removes the complete Active epoch while preserving identity, locator/slot, nonce, custody, and persistent control clock (§5.6, §10.3).
-
-Authorized Mutable control MAY repair a non-window stored terminal condition before scheduler or sweep commits Close. `WindowExpired` substitutes Close before the requested mutation (§9.2).
-
-Mutable control transitions are limited to one committed semantic mutation per Actor per block. Exact no-op returns before rate limiting.
-
-While the global breaker is active:
-
-- Service Step effects and ordinary automatic terminal close do not run;
-- Mandatory minimal apoptosis (§9.4), explicit close, and bounded sweep cleanup MAY run because they invoke no economic Task;
-- Bounded detector, Deadline, and stale-cleanup work MAY continue;
-- New Active creation and activation fail;
-- Authorized control over existing Mutable Actors remains available;
-- Explicit close and permissionless sweep of independently owned terminal state remain available;
-- Service encounter order and existing placement remain unchanged.
-
-Permissionless sweep is bounded and closes only stored-state terminal reasons (§9.2). It never predicts Trigger or Pipeline affordability. Actor-targeting control and certified ingress may substitute Close only for `WindowExpired`; all other terminal reasons remain scheduler/sweep owned. Dormant activation with exhausted Cycle nonce closes the identity with `CycleNonceExhausted` rather than installing an unusable Active epoch.
+Permissionless sweep is bounded and closes only stored-state terminal reasons (§10.2); it never predicts Trigger or Pipeline affordability. Actor-targeting control and certified ingress may substitute Close only for `WindowExpired`.
 
 ---
 
-## 10. Sovereign custody and identifiers
+## 11. Sovereign custody and identifiers
 
-### 10.1 Sovereign-account derivation
+### 11.1 Sovereign-account derivation
 
 ```text
 User seed   = Blake2_256(SCALE(ActorsPalletId, b"user", owner, owner_slot))
@@ -1400,165 +828,59 @@ account     = HostSovereignAccountDeriver(seed)
 
 Derivation MUST be total, deterministic, class-separated, and stable for every previously admitted custody identity.
 
-### 10.2 User slots and System locators
+### 11.2 User slots and System locators
 
-- User slots are owner-local.
-- `0 < MaxOwnerSlots <= 255`.
-- The reference profile exposes `0..=254`; `u8::MAX` is invalid.
-- Default User creation selects the lowest free slot.
-- Exact-slot creation requires that exact free slot.
-- User close releases the slot.
-- System creation allocates a unique locator.
-- System close marks its locator vacant.
-- Locator reuse creates a new Actor id but the same sovereign account.
-- Actor ids never repeat, and every Active epoch has a checked generation binding.
+User slots are owner-local with `0 < MaxOwnerSlots <= 255`; `u8::MAX` is never a valid slot. Default User creation selects the lowest free slot, exact-slot creation requires that exact free slot, and User close releases it. System creation allocates a unique locator and System close marks it vacant; locator reuse creates a new Actor id with the same sovereign account. Actor ids never repeat, and every Active epoch carries a checked generation.
 
-Sovereign custody at an unindexed derived account does not block exact reattachment. Reserved-account and live-collision errors remain distinct (§12.4). A previously registered vacant System locator remains reattachable even if later host policy classifies its derived account as reserved; the exception applies only to that exact locator. Custody identity survives host account-provider removal, although host dust/reaping policy may remove value independently.
+Sovereign custody at an unindexed derived account does not block exact reattachment. Reserved-account and live-collision errors remain distinct (§13.4). A previously registered vacant System locator remains reattachable even if later host policy classifies its account as reserved; the exception applies only to that locator. Custody identity survives host account-provider removal, although host dust or reaping policy may remove value independently.
 
-### 10.3 Custody reattachment and recovery
+### 11.3 Custody reattachment and recovery
 
-Process lifetime and custody lifetime are independent.
+Process lifetime and custody lifetime are independent. After Close the sovereign account, its balances, and adapter-exposed positions remain host-ledger state, and no Actors authority exists until reattachment. A fresh User Actor reattaches the same custody iff owner and exact slot equal those of the closed Actor; a fresh System Actor reattaches iff it reuses the same vacant locator. Reattachment inherits custody only, never Contract, mutability, nonce, Trigger state, lifecycle, run, or guarantees.
 
-After Close (§9.3):
+Recovery uses ordinary authored Contracts and Tasks (§7.6). Clients MAY automate exact-slot recreation, funding, recovery Contract generation, withdrawal, and re-close; Actors provides no direct recovery-transfer call.
 
-- The sovereign account remains;
-- Its balances and adapter-exposed positions remain host-ledger state;
-- No Actors authority exists until reattachment.
-
-A fresh User Actor reattaches the same custody iff owner and exact slot are equal to the closed Actor. A fresh System Actor reattaches the same custody iff it reuses the same vacant System locator.
-
-Reattachment inherits custody only. It does not inherit Contract, mutability, nonce, Trigger state, lifecycle, Run state, or guarantees.
-
-Recovery uses ordinary authored Contracts and Tasks (§6.6). Clients MAY automate exact-slot recreation, funding, recovery Contract generation, withdrawal, and re-close. Actors provides no direct recovery-transfer call.
-
-### 10.4 Protected minimum
-
-For User Actors and the fee-native asset:
+### 11.4 Protected minimum
 
 ```text
-protected_minimum = MinUserBalance
-```
-
-For other assets/classes:
-
-```text
-protected_minimum = host asset minimum balance
-```
-
-Current Action-fee reservation is also unavailable to Task debit (§7.5).
-
-```text
-spendable_balance = balance - current_action_fee_reservation
+protected_minimum   = MinUserBalance            for User Actors and the fee-native asset
+protected_minimum   = host asset minimum balance otherwise
+spendable_balance   = balance - current_action_fee_reservation
 preservable_balance = spendable_balance - protected_minimum
 ```
 
-All subtraction is saturating only where explicitly shown. Every authored debit, including `Percent(100%)`, uses preservable capacity. No lifecycle branch grants source-exhaustion privilege.
+Subtraction saturates only where shown. Every authored debit, including `Percent(100%)`, uses preservable capacity, and no lifecycle branch grants a source-exhaustion privilege.
 
 ---
 
-## 11. Host effects and adapters
+## 12. Host effects and adapters
 
-### 11.1 Canonical Task-effect ownership
+### 12.1 Canonical Task-effect ownership
 
-Each effectful Actor Task invokes the same canonical host economic mechanism as its external equivalent.
+Each effectful Task invokes the same canonical host economic mechanism as its external equivalent, with identical state-transition owner, atomicity boundary, synchronous consequences, typed failure classification, and production effect Weight. Actors MAY use narrow typed ports and need not construct a runtime call, but a cheaper shadow mechanism is forbidden. Actors owns orchestration control only; the host mechanism owns Task-effect Weight and Task-native fees.
 
-Equivalence means identical:
+### 12.2 Adapter obligations
 
-- State-transition owner;
-- Atomicity boundary;
-- Synchronous consequences;
-- Typed failure classification;
-- Production effect Weight.
+The host provides asset, DEX, liquidity, staking, fee-collection, observation, ingress, and account-policy adapters; the package embedding guide owns their exact trait surface. Every adapter MUST be deterministic and bounded, return typed `TaskFailure { error, retry: Temporary | Permanent }` rather than panicking, report actual Weight no greater than its reserved maximum, and fail closed when a mutation capability is missing. Fee collection is one atomic ledger-only movement into the host's collection account.
 
-Actors MAY use narrow typed ports and need not construct a `RuntimeCall`. A cheaper shadow mechanism is forbidden.
+### 12.3 Failure classification
 
-Actors owns orchestration control only. The host mechanism owns Task-effect Weight and task-native fees.
+Retryability MUST NOT derive from strings, module indexes, or broad token errors. Temporary covers dynamic slippage, current quote or cap insufficiency, stale reference, liquidity movement, recipient deposit unavailability, and recoverable placement capacity. Permanent covers malformed configuration, invalid provenance, missing static capability, monotonic namespace exhaustion, topology corruption, and invariant failure. Unknown downstream error is Permanent. `FundingUnavailable` is an amount or Action admission outcome, not a `TaskFailure` (§7.3, §8.5).
 
-### 11.2 Adapter interfaces
+### 12.4 Special rules
 
-```rust
-enum RetryClass { Temporary, Permanent }
-
-struct TaskFailure {
-  error: DispatchError,
-  retry: RetryClass,
-}
-
-struct ExecutionContext<'a, A> {
-  actor: &'a A,
-  actor_type: ActorType,
-}
-
-trait AssetOps<A, I, B> {
-  fn transfer(from: &A, to: &A, asset: I, amount: B) -> Result<(), TaskFailure>;
-  fn burn(who: &A, asset: I, amount: B) -> Result<(), TaskFailure>;
-  fn mint(to: &A, asset: I, amount: B) -> Result<(), TaskFailure>;
-  fn balance(who: &A, asset: I) -> B;
-  fn minimum_balance(asset: I) -> B;
-  fn preflight_transfer(from: &A, to: &A, asset: I, amount: B) -> Result<(), TaskFailure>;
-}
-
-trait DexOps<A, I, B> {
-  fn swap_exact_in(context: ExecutionContext<'_, A>, asset_in: I, asset_out: I, amount_in: B, tolerance: Perbill) -> Result<B, TaskFailure>;
-  fn swap_exact_out(context: ExecutionContext<'_, A>, asset_in: I, asset_out: I, amount_out: B, authored_input_cap: B, tolerance: Perbill) -> Result<B, TaskFailure>;
-}
-
-trait LiquidityOps<A, I, B> {
-  fn lp_assets(lp: I) -> Option<(I, I)>;
-  fn add_liquidity(who: &A, a: I, b: I, max_a: B, max_b: B, min_lp: B) -> Result<(B, B, B), TaskFailure>;
-  fn remove_liquidity(who: &A, lp: I, a: I, b: I, amount: B, min_a: B, min_b: B) -> Result<(B, B), TaskFailure>;
-  fn donate_liquidity(who: &A, a: I, b: I, max_a: B, max_b: B, max_ratio_error: Perbill) -> Result<(B, B), TaskFailure>;
-}
-
-trait StakingOps<A, I, B> {
-  fn stake(who: &A, asset: I, amount: B) -> Result<(), TaskFailure>;
-  fn unstake(who: &A, asset: I, shares: B) -> Result<(), TaskFailure>;
-  fn share_balance(who: &A, asset: I) -> B;
-  fn share_asset(asset: I) -> Option<I>;
-}
-
-trait FeeCollector<A, I, B> {
-  fn collect_fee(payer: &A, sink: &A, fee_asset: I, amount: B) -> DispatchResult;
-}
-```
-
-Missing mutation capability fails closed.
-
-### 11.3 Failure classification
-
-Retryability MUST NOT derive from strings, module indexes, or broad token errors.
-
-Temporary includes dynamic slippage, current quote/cap insufficiency, stale reference, liquidity movement, recipient deposit unavailability, and recoverable placement capacity.
-
-Permanent includes malformed configuration, invalid provenance, missing static capability, monotonic namespace exhaustion, topology corruption, and invariant failure.
-
-Unknown downstream error is Permanent.
-
-`FundingUnavailable` is amount/action admission outcome, not `TaskFailure` (§6.3, §7.5).
-
-### 11.4 Special rules
-
-#### Swap
-
-`DexOps` obtains a current executable quote internally, applies authored cap/tolerance, invokes the canonical Router, validates actual amounts, and returns typed failure. Actors exposes no independent quote surface.
-
-For `SwapOut`:
+**Swap.** The DEX adapter obtains a current executable quote internally, applies the authored cap and tolerance, invokes the canonical router, validates actual amounts, and returns typed failure; Actors exposes no independent quote surface. For `SwapOut`:
 
 ```text
-capacity_cap = preservable input balance
-
-authored_cap =
-  capacity_cap                         for LiveQuote
-  min(capacity_cap, absolute_cap)      for Absolute
-
+capacity_cap     = preservable input balance
+authored_cap     = capacity_cap                       for LiveQuote
+                   min(capacity_cap, absolute_cap)    for Absolute
 effective_max_in = min(authored_cap, quote + ceil(quote * tolerance))
 ```
 
-Zero or insufficient cap is `FundingUnavailable` or Temporary according to whether dispatch was invoked (§6.3, §11.3). `SwapIn` requires positive actual output and output no worse than the authored tolerance relative to its current executable quote; 100% tolerance never permits zero output.
+A zero or insufficient cap is `FundingUnavailable` or Temporary according to whether dispatch was invoked. `SwapIn` requires positive actual output no worse than the authored tolerance against its current executable quote; 100% tolerance never permits zero output.
 
-#### System swap guard
-
-User swaps have no Actors-specific reference guard. System swaps require fresh nonzero directed reference values and MUST satisfy, before mutation and against returned actual amounts when they differ from quote:
+**System swap guard.** User swaps have no Actors-specific reference guard. System swaps require fresh nonzero directed reference values and MUST satisfy, before mutation and against returned actual amounts when they differ from the quote:
 
 ```text
 exec_out * ref_in * Perbill::ACCURACY
@@ -1566,21 +888,13 @@ exec_out * ref_in * Perbill::ACCURACY
 (Perbill::ACCURACY - max_deviation) * ref_out * exec_in
 ```
 
-All products use widened checked arithmetic. Missing/stale/zero reference or excessive negative deviation is Temporary. The Router does not own or reinterpret this guard.
+All products use widened checked arithmetic. A missing, stale, or zero reference or excessive negative deviation is Temporary. The router neither owns nor reinterprets this guard.
 
-#### Liquidity
+**Liquidity.** Ordered LP identity is validated at admission and execution. Add and Donate actual debits MUST stay within supplied caps, and RemoveLiquidity MUST debit the exact resolved LP amount. For `DonateLiquidity`, Actors derives `max_b = preservable_balance(asset_b)` as the cap on pre-existing asset-B debit; the adapter MUST enforce it, and Actors independently verifies the returned asset-A spend.
 
-Ordered LP identity is validated at admission and execution. Add/Donate actual debits MUST remain within supplied caps. RemoveLiquidity MUST debit the exact resolved LP amount.
+**Staking.** Staking-share identity is admitted and stable. `Unstake(Percent(100%))` resolves to the full current share balance. Transferable staking receipts remain ordinary custody (§11.3).
 
-For `DonateLiquidity`, Actors derives `max_b = preservable_balance(asset_b)` as the cap on pre-existing asset-B debit. Zero `max_b` forbids debiting pre-existing asset B but does not forbid an atomic adapter from acquiring and donating new asset B; the adapter MUST enforce the debit cap, and Actors independently verifies the returned asset-A spend.
-
-#### Staking
-
-Staking-share identity is admitted and stable. `Unstake(Percent(100%))` resolves to the full current share balance. Transferable staking receipts/NFTs, when provided by the host, remain ordinary custody (§10.3).
-
-#### Certified AddressEvent ingress
-
-Only generated certified producers create AddressEvent semantics (§4.7). Permitted protocol shapes are:
+**Certified AddressEvent ingress.** Only certified producers create AddressEvent semantics (§5.7):
 
 | Protocol | Ordering and atomicity owner |
 | --- | --- |
@@ -1588,26 +902,15 @@ Only generated certified producers create AddressEvent semantics (§4.7). Permit
 | `BlockAtomicPostDispatch` | read-only preflight, successful dispatch, one notify; block/import state transaction |
 | `XcmTransactionalPrecommit` | read-only preflight, Actors precommit, consume/deposit holding; asset-transactor storage transaction |
 
-Every certified protocol defines:
+Every certified protocol defines its source and provenance, read-only preflight, atomicity owner, Actors consequence owner, failure mapping, and complete Weight. Uncertified movement, an absent or Dormant destination, and zero, self, or no-op movement are balance-only. Terminal substitution happens before any funding or readiness consequence (§10.2). Fee collection is never certified ingress.
 
-- Source/provenance;
-- Read-only preflight;
-- Atomicity owner;
-- Actors consequence owner;
-- Failure mapping;
-- Complete Weight.
-
-Uncertified movement is balance-only. Absent or Dormant destination is balance-only. Zero and self/no-op movement create no Actors ingress. Terminal substitution occurs before funding/readiness consequence (§9.2). Fee collection is never certified AddressEvent ingress.
-
-#### Observation publication
-
-Observation publication creates no Actors ingress, subscription, Pending obligation, or Trigger cause. Its cost and revision semantics belong to the observation owner; Actors read the committed current value only when an authored predicate is evaluated (§6.2).
+**Observation publication.** Observation publication creates no Actors ingress, subscription, Pending obligation, or Trigger cause. Its cost and revision semantics belong to the observation owner; Actors read the committed current value only when an authored predicate is evaluated (§7.2).
 
 ---
 
-## 12. Calls, events, APIs, and errors
+## 13. Calls, events, APIs, and errors
 
-### 12.1 Calls and authorization
+### 13.1 Calls and authorization
 
 Canonical calls:
 
@@ -1631,25 +934,19 @@ permissionless_sweep_many
 actor_prepass
 ```
 
-Authorization:
-
 | Call | Origin |
 | --- | --- |
 | User creation | signed creator |
-| System creation/locator reuse/active limit | `SystemOrigin` |
-| breaker | configured control origin |
-| User control | signed owner, subject to mutability (§9.1) |
-| System control | signed owner or `SystemOrigin`, subject to mutability (§9.1) |
-| sweep | any signed origin |
-| prepass | mandatory unsigned inherent origin |
+| System creation, locator reuse, active limit | `SystemOrigin` |
+| Circuit breaker | configured control origin |
+| User control | signed owner, subject to mutability (§10.1) |
+| System control | signed owner or `SystemOrigin`, subject to mutability (§10.1) |
+| Sweep | any signed origin |
+| Prepass | mandatory unsigned inherent origin |
 
-Creation charges ordinary transaction fee, Actor Creation Fee, and state-hold delta (§7.2).
+Creation charges the ordinary transaction fee, Actor Creation Fee, and state-hold delta (§8.2). `manual_trigger` follows Manual semantics (§5.7, §8.3). `close_actor` is signed Mutable User control and follows Close (§10.3).
 
-`manual_trigger` follows Manual semantics (§4.7, §7.3).
-
-`close_actor` is signed Mutable User control and follows Close (§9.3).
-
-### 12.2 Events and ordering
+### 13.2 Events and ordering
 
 The ordered event ABI is normative:
 
@@ -1694,86 +991,35 @@ enum Event<AccountId, AssetId, Balance> {
 
 Ordering:
 
-1. Useful Trigger fee and latch commit before `TriggerOccurrenceProcessed` (§4.2, §7.3).
-2. Opening emits `PipelineFeeCharged`, then `CycleStarted` (§5.2, §7.4).
-3. A Step event precedes any Cycle boundary event caused by that Step (§6.5).
-4. Cancellation emits `CycleCancelled`, then `CycleSummary(Cancelled)` (§5.6).
-5. A closing Cycle boundary emits `CycleSummary`, then `ActorClosed` (§9.3); pure Idle close emits only `ActorClosed`.
-6. `ActionFeeCharged` is the final receipt of a committed Action-bearing Attempt (§7.5).
+1. Useful Trigger fee and latch commit before `TriggerOccurrenceProcessed` (§5.2).
+2. Opening emits `PipelineFeeCharged`, then `CycleStarted` (§6.2).
+3. A Step event precedes any Cycle boundary event caused by that Step (§7.5).
+4. Cancellation emits `CycleCancelled`, then `CycleSummary(Cancelled)` (§6.6).
+5. A closing Cycle boundary emits `CycleSummary`, then `ActorClosed` (§10.3); pure Idle close emits only `ActorClosed`.
+6. `ActionFeeCharged` is the final receipt of a committed Action-bearing Attempt (§8.5).
 7. Fee-collection or enclosing transaction failure emits no rolled-back event.
-8. Zero-Step Opening emits `CycleStarted`, then `CycleSummary(Completed)`, then optional `ActorClosed` (§5.5).
-9. Redundant latched activity emits no Trigger event (§4.3).
-10. Active creation emits `ActorCreated` only; Dormant-to-Active emits `ActorActivated`. Contract replacement or deactivation emits cancellation events first when a run exists, then `ContractUpdated` or `ActorDeactivated` (§5.6, §9.5).
+8. Zero-Step Opening emits `CycleStarted`, then `CycleSummary(Completed)`, then optional `ActorClosed` (§6.5).
+9. Redundant latched activity emits no Trigger event (§5.3).
+10. Active creation emits `ActorCreated` only; Dormant-to-Active emits `ActorActivated`. Contract replacement or deactivation emits cancellation events first when a run exists, then `ContractUpdated` or `ActorDeactivated` (§6.6, §10.5).
 
 Exact fields and discriminants come from metadata.
 
-### 12.3 Runtime APIs
+### 13.3 Runtime APIs
 
-```rust
-enum TriggerFamily { Manual, AddressEvent, AtTime, Cadenced }
+The runtime MUST expose read-only APIs for:
 
-enum RunPhase<BlockNumber> {
-  WaitingNextBlock { not_before: BlockNumber },
-  WaitingRetry { not_before: BlockNumber },
-  WaitingCadenceTick { due_tick: u64 },
-  WaitingSignal,
-  Paused,
-  Breaker,
-  Ready,
-}
+| Capability | Content |
+| --- | --- |
+| Simulation | At most one current Step of a fresh plan or the current run, rollback-only, under an explicit synthetic Actor Control and Shared Economic budget |
+| Cost quote | Creation fee, prospective Trigger fee, prospective Pipeline Machine fee with its components, maximum next Action fee, and Actor state hold |
+| Block resources | Configured budget, current-block meter state, and the last finalized block snapshot |
+| Eligibility | Absence, dormancy, or the Active classification (§3.5) with latch and residence placement |
 
-enum ActorEligibility<BlockNumber> {
-  NotRegistered,
-  Dormant,
-  Active { terminal_reason: Option<CloseReason>, phase: RunPhase<BlockNumber> },
-}
+Simulation MUST use the same classifier, precondition, amount, Task, fee, outcome, and policy owners as production (§3.5, §7, §8). A waiting Actor returns not-ready, insufficient synthetic resource returns resource deferral, and fee-collector failure returns its typed error; simulation persists no state or event. No API exposes a remaining Pipeline Machine budget, because none exists (§8.4). Exact request and response types come from metadata.
 
-struct TriggerFeeBreakdown<TriggerFamily, Balance> {
-  trigger_family: TriggerFamily,
-  trigger_fee: Balance,
-}
+Clients MUST NOT assemble semantic Contracts from raw storage heads, chunks, or pages; authored Contracts are verified against their semantic Contract ID (§4.2).
 
-struct PipelineFeeBreakdown<Balance> {
-  pipeline_machine_fee: Balance,
-}
-
-struct ActionFeeBreakdown<Balance> {
-  maximum_effect_fee: Balance,
-  actual_effect_fee: Option<Balance>,
-}
-
-struct StepProgress<BlockNumber> {
-  terminal_reason: Option<CloseReason>,
-  phase: RunPhase<BlockNumber>,
-  cycle_nonce: u64,
-  cursor: Option<u32>,
-  total_steps: u32,
-  completed_steps: u32,
-  next_eligibility: Option<BlockNumber>,
-  suspension: Option<SuspensionReason>,
-  last_step_outcome: Option<StepOutcome>,
-}
-```
-
-The runtime MUST expose named structures for:
-
-- Complete semantic Contract and identities;
-- Actor progress and current phase;
-- Current control/effect maxima;
-- Prospective Trigger fee;
-- Prospective Pipeline Machine fee;
-- Maximum next Action fee and last actual Action fee;
-- Actor state hold and body footprint;
-- Block resource limits/counters;
-- Current bounded Service/Deadline counters.
-
-Clients MUST NOT assemble semantic Contracts from raw heads, chunks, pages, or locators.
-
-No API exposes remaining Pipeline Machine budget because none exists (§7.4).
-
-Simulation MUST be rollback-only and simulate at most one current Step under an explicit synthetic Actor Control and Shared Economic budget (§6.1, §7.6). It MUST use the same classifier, precondition, amount, Task, fee, outcome, and policy owners (§8.1, §6.2-§6.6, §7.4-§7.5). Waiting state returns `NotReady`; insufficient synthetic resource returns a resource-deferral result; fee-collector failure returns its typed simulation error. Simulation persists no state or event.
-
-### 12.4 Errors and projections
+### 13.4 Errors and projections
 
 Core classification errors:
 
@@ -1785,7 +1031,7 @@ enum ActorClassificationError {
 }
 ```
 
-They project exactly to dispatch/runtime-API/simulation errors and MUST NOT become absence, dormancy, waiting, or scheduler exhaustion.
+They project exactly to dispatch, runtime-API, and simulation errors and MUST NOT become absence, dormancy, waiting, or scheduler exhaustion.
 
 ```rust
 enum Error {
@@ -1812,33 +1058,27 @@ enum Error {
 }
 ```
 
-Required distinguishable failure domains, represented either by a dedicated variant or by the documented classification projection, include:
-
-- Absence/dormancy/active-state mismatch;
-- Authorization/mutability;
-- Invalid Contract/Trigger/Predicate/amount/trade/retry/window;
-- Capacity and bound overflow;
-- Slot/locator/collision/reserved account;
-- State hold and fee collection;
-- Service/Deadline/detector invariant failures and monotonic exhaustion;
-- Stale admission or body authority projects to `ActorInvariant`; stale run authority projects to `ActorRunInvariant`;
-- Control rate limit and breaker;
-- Prepass/round/resource protocol failure.
-
-Required Close reasons include:
+The error surface MUST distinguish absence, dormancy, and active-state mismatch; authorization and mutability; invalid Contract, Trigger, predicate, amount, trade, retry, and window; capacity and bound overflow; slot, locator, collision, and reserved account; state hold and fee collection; Service, Deadline, and detector invariant failure and monotonic exhaustion; control rate limit and circuit breaker; and Prepass, round, and resource protocol failure. Stale admission or body authority projects to `ActorInvariant`, and stale run authority to `ActorRunInvariant`.
 
 ```rust
 enum CloseReason {
   OwnerInitiated,
-  TriggerAdmissionInsufficient,
   CycleAdmissionInsufficient,
+  TriggerAdmissionInsufficient,
+  ConsecutiveFailures,
   WindowExpired,
   CycleNonceExhausted,
-  RetryAttemptsExhausted,
-  ConsecutiveFailures,
-  ProductiveCycleCompleted,
   AutoCloseNonceReached,
+  RetryAttemptsExhausted,
+  ProductiveCycleCompleted,
   SchedulerIndexExhausted,
+}
+
+enum CancellationReason {
+  Explicit,
+  ContractReplaced,
+  Deactivated,
+  Closing(CloseReason),
 }
 ```
 
@@ -1846,114 +1086,60 @@ Resolution outcomes are not pallet errors. `TaskFailure.error` MAY carry a stabl
 
 ---
 
-## 13. Storage, upgrades, configuration, and conformance
+## 14. Storage, upgrades, configuration, and conformance
 
-### 13.1 Storage and integrity
+### 14.1 Storage and integrity
 
-Generated descriptors own exact keys, hashers, prefixes, values, and page geometry.
+Generated descriptors own exact keys, hashers, prefixes, values, and page geometry. Normatively, storage MUST hold only the canonical facts of §4.5 and the run of §6.1, keep every collection bounded with exact reverse ownership, hold one residence per serving process plus bounded Trigger deadline authority (§3.1), retain no unbounded execution history, fee cache, remaining Pipeline budget, or generic cache-revalidation workset, and reconcile holds exactly (§8.2).
 
-Normatively required:
+`try_state` MUST verify Contract, body, and admission bindings, run, latch, residence, detector topology, counters, slots, locators, and orphans. Orphan physical records are never semantic authority and are integrity failures unless they are transaction-local writes that roll back.
 
-- Only canonical partitions from §3.5 and `ActorRunState` from §5.1;
-- Bounded collections and exact reverse ownership;
-- One exact process residence plus bounded process/Trigger Deadline authority per §8.2;
-- No unbounded execution history;
-- No persistent execution cache duplicating authored fields, Steps, cursor, snapshots, outcomes, lifecycle, or latch;
-- No remaining Pipeline budget, fee cache, or generic cache-revalidation workset;
-- Exact hold/state reconciliation (§7.2);
-- `try_state` verification of Contract/body/admission, Run, latch, process residence, detector topology, counters, slots, locators, and orphans.
+### 14.2 Runtime upgrades
 
-Orphan physical records are never semantic authority and are integrity failures unless they are transaction-local writes that roll back.
+Before first production genesis, a fresh canonical baseline MAY replace storage or ABI without migration compatibility. After deployed production lineage, every storage or semantic rewrite MUST define source and target schemas, a bounded migration unit and progress owner, an execution gate, Weight, interruption, resume, and idempotence, Actor and custody disposition, an open-run `Cancel | PreserveWithProof` policy, admission re-certification, and the storage-version transition.
 
-### 13.2 Runtime upgrades
+A Weight or fee-policy change may alter admission identity but MUST NOT alter semantic Contract identity (§4.2, §4.4). Open paid Pipelines retain their paid service identity through the Cycle boundary unless the migration proves another disposition. A deployed change MUST NOT make previously reattachable custody unreachable without explicit custody disposition (§11.3).
 
-Before first production genesis, a fresh canonical baseline MAY replace storage or ABI without migration compatibility.
-
-After deployed production lineage, every storage or semantic rewrite MUST define:
-
-- Source and target schemas;
-- Bounded migration unit and progress owner;
-- Execution gate;
-- Weight;
-- Interruption/resume/idempotence;
-- Actor and custody disposition;
-- Open-run `Cancel | PreserveWithProof` policy;
-- Admission re-certification;
-- Storage-version transition.
-
-A Weight or fee-policy change may alter runtime admission identity but MUST NOT alter semantic Contract identity (§3.2, §3.4). Open paid Pipelines retain their paid service identity through the Cycle boundary unless the migration specification proves another disposition.
-
-A deployed change MUST NOT make previously reattachable custody unreachable without explicit custody disposition (§10.3).
-
-### 13.3 Runtime configuration
+### 14.3 Runtime configuration
 
 Required relations:
 
-1. `0 < MaxContractSteps <= 255`; each host runtime selects its bounded value.
-2. `0 < MaxOwnerSlots <= 255`; reference is 255.
-3. `MaxRetryAttempts >= 2`; reference is 10.
-4. `MaxContractSteps * MaxRetryAttempts` fits outcome counters.
-5. Current-Step predicate and amount-read bounds cover every admitted Contract.
-6. Every Service, Deadline, detector, cohort, sweep, and worker bound is nonzero and owns one complete worst-case unit.
-7. One maximum current-Step control/effect transition fits the guaranteed base pass (§7.6, §8.3).
-8. Maximum admitted create, activate, update, deactivate, cancel, and close paths remain dispatchable under their owning call limits.
-9. `MinUserBalance >= host minimum balance`.
-10. `ActorCreationFee > 0`.
-11. `WeightToFee` maps every nonzero User Trigger, Pipeline, and Action Weight upper bound to positive fee.
-12. Trigger and Pipeline fee owners are disjoint (§7.3, §7.4).
-13. Actor Control is floor one third of schedulable Weight; Shared Economic owns the remainder and its two base turns split floor/remainder (§7.6).
-14. `MaxTemporalDelayTicks` and `MaxExecutionDelayBlocks` are clock-specific and representable.
-15. `MaxSplitTransferLegs >= 2`.
+1. `0 < MaxContractSteps <= 255`; each host selects its bounded value.
+2. `0 < MaxOwnerSlots <= 255`.
+3. `MaxRetryAttempts >= 2`, and `MaxContractSteps * MaxRetryAttempts` fits the outcome counters.
+4. Current-Step predicate and amount-read bounds cover every admitted Contract.
+5. Every Service, Deadline, detector, sweep, and worker bound is nonzero and owns one complete worst-case unit.
+6. One maximum current-Step control and effect transition fits the guaranteed base pass (§9.2).
+7. Maximum admitted create, activate, update, deactivate, cancel, and close paths remain dispatchable under their call limits.
+8. `MinUserBalance >= host minimum balance` and `ActorCreationFee > 0`.
+9. `WeightToFee` maps every nonzero User Trigger, Pipeline, and Action Weight upper bound to a positive fee.
+10. `host_control_share` is in `(0, 1]` and the meters split as in §9.1.
+11. `MaxTemporalDelayTicks` and `MaxExecutionDelayBlocks` are clock-specific and representable, and the consensus tick is positive.
+12. `MaxSplitTransferLegs >= 2`.
 
-Reference profile:
+The host's integration documentation owns concrete values, page sizes, worker counts, and generated fee-envelope identities.
 
-```text
-TargetBlockTime = 6 seconds
-CadenceTick = 500 milliseconds
-MaxActiveActors = 10_000
-MaxOwnerSlots = 255
-MaxContractSteps = 12
-MaxRetryAttempts = 10
-MaxConsecutiveFailures = 10
-MaxPreconditionClauses = 4
-MaxPredicatesPerClause = 4
-MaxPredicatesPerStep = 4
-MaxWhitelistSize = 16
-MaxSplitTransferLegs = 4
-MaxQueueLength = 10_000
-MaxSweepBatch = 5
-MinUserBalance = 5 * existential deposit
-ActorCreationFee = 2 * existential deposit
-MaxTemporalDelayTicks = 631_152_000
-MaxExecutionDelayBlocks = 52_596_000
-ActorControlLimit = floor(SchedulableBlockWeight / 3)
-SharedEconomicLimit = SchedulableBlockWeight - ActorControlLimit
-ActorBaseTurn = floor(SharedEconomicLimit / 2)
-UserBaseTurn = SharedEconomicLimit - ActorBaseTurn
-```
-
-Measured runtime descriptors own page sizes, per-block worker counts, exact Weight limits, adapter maxima, and generated fee-envelope identities.
-
-### 13.4 Conformance
+### 14.4 Conformance
 
 A runtime conforms iff:
 
-1. Metadata exposes only canonical public shapes;
-2. Every semantic function follows its sole owner (§1.2);
-3. Every cross-reference uses, rather than redefines, the owned function;
-4. Every reachable transition is bounded, pre-admitted, and transactionally atomic at its defined boundary;
-5. Trigger occurrence, latch, re-arm, and underfunding follow §4;
-6. Opening, current Attempt inputs, nonce, zero-Step, and Cycle boundaries follow §5;
-7. Q1 Step execution, error policies, and Tasks follow §6;
-8. Creation, Trigger, Pipeline, Action, state-hold, and resource ownership follow §7 without overlap;
-9. Classification, Service rounds, cohorts, and liveness follow §8;
-10. Mutability, terminal precedence, close, apoptosis, and breaker follow §9;
-11. Sovereign custody survives process deletion and exact reattachment follows §10;
-12. Each Task effect maps to one canonical host owner and typed failure surface (§11);
-13. Calls, events, APIs, and errors follow §12;
-14. Storage integrity and deployed upgrades follow §13.1-§13.2;
-15. Generated Weight upper-bounds every admitted control/effect branch in both dimensions;
-16. Simulation is rollback-only and observationally equivalent to zero or one production current-Step transition.
+1. Metadata exposes only the canonical public shapes of this specification;
+2. Every semantic function follows its owning section, and every cross-reference uses rather than redefines it (§1);
+3. Every reachable transition is bounded, pre-admitted, and transactionally atomic at its defined boundary;
+4. Residence, rounds, wake, parking, and classification follow §3;
+5. Contract storage, identity, and admission follow §4;
+6. Trigger occurrence, latch, re-arm, underfunding, and detection follow §5;
+7. Opening, Attempt inputs, nonce, zero-Step, and Cycle boundaries follow §6;
+8. Q1 Step execution, error policies, and Tasks follow §7;
+9. Creation, Trigger, Pipeline, Action, and state-hold ownership follow §8 without overlap;
+10. Meters, block passes, and liveness follow §9;
+11. Mutability, terminal precedence, close, apoptosis, and the circuit breaker follow §10;
+12. Sovereign custody survives process deletion and exact reattachment follows §11;
+13. Each Task effect maps to one canonical host owner and typed failure surface (§12);
+14. Calls, events, APIs, and errors follow §13;
+15. Storage integrity and deployed upgrades follow §14.1 and §14.2;
+16. Generated Weight upper-bounds every admitted control and effect branch in both dimensions;
+17. Simulation is rollback-only and observationally equivalent to zero or one production current-Step transition.
 
 ---
 

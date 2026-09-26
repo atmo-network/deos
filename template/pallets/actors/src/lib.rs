@@ -11048,7 +11048,7 @@ pub mod pallet {
       // host-reserved account fails ReservedSovereignAccount; reattachment to an
       // existing registered Vacant locator is allowed for that exact locator even
       // when its account belongs to the genesis System custody range, so the locator
-      // is not permanently unrecoverable after close (spec 5.4).
+      // is not permanently unrecoverable after close.
       let is_registered_reattachment =
         SystemSovereigns::<T>::get(actor_id) == Some(SystemSovereignState::Vacant);
       if !is_registered_reattachment && T::SovereignAccountPolicy::is_reserved(&sovereign_account) {
@@ -11731,9 +11731,7 @@ pub mod pallet {
             }
           }
         }
-        if let Err(error) =
-          Self::remove_active_actor_with_admission(actor_id, Some(&admission))
-        {
+        if let Err(error) = Self::remove_active_actor_with_admission(actor_id, Some(&admission)) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         let Some(expected) = ActorSemanticStates::<T>::get(actor_id) else {
@@ -13111,7 +13109,7 @@ pub mod pallet {
         }
         // Terminal membership is derived from the schedule window: `terminal_at` is the sole
         // terminal-membership authority and must equal the window's exact terminal block, or be
-        // absent without a window (spec 5.1).
+        // absent without a window.
         let program_window = contract.window;
         let expected_terminal_at = program_window.map(|window| Self::window_terminal_at(&window));
         if hot.terminal_at != expected_terminal_at {

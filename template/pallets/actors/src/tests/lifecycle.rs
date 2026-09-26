@@ -3585,7 +3585,7 @@ fn eligibility_projection_reports_failure_limit_auto_close_and_nonce_exhaustion(
       1
     );
     // A failed terminal cycle leaves the incremented nonce at the target without
-    // closing; the next admission closes before any further cycle (spec 2.4).
+    // closing; the next admission closes before any further cycle.
     let mut contract = Actors::load_actor_contract(actor_id).expect("active Actor Contract");
     contract.auto_close_at_cycle_nonce = Some(1);
     // `store_actor_contract` is the transactional geometry-rotation owner; a direct test call

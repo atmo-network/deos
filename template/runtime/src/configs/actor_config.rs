@@ -1033,7 +1033,7 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
           }
         }
         // A certified destination ingress consequence keeps its closed retry
-        // classification through TaskFailure (spec 6.1): recoverable queue/wakeup
+        // classification through TaskFailure: recoverable queue/wakeup
         // capacity is Temporary, exhaustion/corruption/invariant failure is
         // Permanent, so the owning task retries rather than aborting.
         RuntimeAddressEventIngress::on_internal_inbound(to, asset, amount, from)
@@ -1409,7 +1409,7 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
         let lp_after = liquidity_lp_balance(who, asset_a, asset_b);
         let lp_minted = lp_after.saturating_sub(lp_before);
         // Factual outcomes: measure the actual asset debits and LP output rather than
-        // returning the authored caps as if fully consumed (spec 3.4).
+        // returning the authored caps as if fully consumed.
         let used_a = a_before.saturating_sub(TmctolAssetOps::balance(who, asset_a));
         let used_b = b_before.saturating_sub(TmctolAssetOps::balance(who, asset_b));
         if lp_minted < min_lp_out {
@@ -1559,7 +1559,7 @@ impl TmctolDexOps {
       .ok_or_else(|| {
         TaskFailure::temporary(DispatchError::Other("SystemReferencePriceUnavailable"))
       })?;
-    // Checked cross-multiplication deviation guard (spec 5.3): the scaled reference
+    // Checked cross-multiplication deviation guard: the scaled reference
     // price is ref_out/ref_in * PRECISION; comparing without division requires
     //   abs(exec_out * ref_in - ref_out * exec_in) * ACCURACY
     //     <= deviation * ref_out * exec_in

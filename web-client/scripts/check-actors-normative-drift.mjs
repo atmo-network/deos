@@ -1,7 +1,7 @@
 /*
 Domain: Actors normative surface drift gate
-Owns: Comparison of the named public contract in specification Sections 3 and
-7-10 with the metadata-derived ABI manifest (calls, events, errors, variants,
+Owns: Comparison of the named public contract in specification Sections 4, 5, 7,
+and 13 with the metadata-derived ABI manifest (calls, events, errors, variants,
 constants). Detects missing/extra variants, field-name drift, stale task
 shapes, stale bounds, and stale host-contract declarations.
 Excludes: Numeric index pinning (metadata-owned before launch), semantic
@@ -51,8 +51,8 @@ function specEvents() {
 
 function specErrors() {
   const block = specSection(
-    '### 12.4 Errors and projections',
-    '## 13. Storage, upgrades, configuration, and conformance',
+    '### 13.4 Errors and projections',
+    '## 14. Storage, upgrades, configuration, and conformance',
   );
   const body = block.match(/enum Error\s*\{([\s\S]*?)\}/)?.[1];
   assert.ok(body, 'spec Error enum body is missing');
@@ -138,8 +138,8 @@ function specStructFields(name) {
 
 function specCalls() {
   const block = specSection(
-    '### 12.1 Calls and authorization',
-    '### 12.2 Events',
+    '### 13.1 Calls and authorization',
+    '### 13.2 Events',
   );
   const contract = block.match(/```text\n([\s\S]*?)```/);
   assert.ok(contract, 'calls contract block not found');

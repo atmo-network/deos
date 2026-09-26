@@ -31,7 +31,7 @@ impl RuntimeAddressEventIngress {
     crate::Actors::sovereign_index(recipient)
   }
 
-  /// Sole certified-producer inventory accessor (spec 5.3). The generated ingress
+  /// Sole certified-producer inventory accessor. The generated ingress
   /// evidence parses the same constant; the runtime test binds both.
   #[allow(dead_code)] // evidence surface consumed by runtime tests and generated drift checks
   pub const fn certified_producer_inventory() -> &'static [AddressEventProducer] {
@@ -130,7 +130,7 @@ impl RuntimeAddressEventIngress {
   }
 }
 
-/// Certified movement ordering at the owning atomicity boundary (spec 5.3).
+/// Certified movement ordering at the owning atomicity boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)] // evidence surface consumed by runtime tests and generated drift checks
 pub enum CertifiedMovementProtocol {
@@ -139,7 +139,7 @@ pub enum CertifiedMovementProtocol {
   XcmTransactionalPrecommit,
 }
 
-/// One named certified AddressEvent movement path (spec 5.3).
+/// One named certified AddressEvent movement path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)] // evidence surface consumed by runtime tests and generated drift checks
 pub struct AddressEventProducer {

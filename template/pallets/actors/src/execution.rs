@@ -15,7 +15,7 @@ use polkadot_sdk::sp_runtime::{
 /// Checked increment for protocol-semantic counters. The admitted bound
 /// (`MaxContractSteps * (MaxRetryAttempts + 1)` for outcome totals) precludes
 /// overflow; a violation fails closed before mutation with an invariant error rather
-/// than silently saturating (spec 4.4).
+/// than silently saturating.
 fn checked_semantic_increment(counter: u32) -> Result<u32, DispatchError> {
   counter
     .checked_add(1)

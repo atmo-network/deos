@@ -79,7 +79,11 @@ The package stores each actor identity once and decomposes each active epoch int
 
 Package internals reconstruct execution state from the canonical semantic owner, process residence, certified Contract geometry, current sovereign ledger state, and optional `ActorRunState`. `active_actor_state` exposes canonical semantic partitions without synchronized mirrors.
 
-This is intentionally more concrete than the paired specification: the spec defines the required logical field groups, while this document records the current package storage realization.
+This is intentionally more concrete than the paired specification: the spec (§4.5) defines each canonical fact and its owner, while this document records the current package storage realization.
+
+- `Hot record residue`: `ActorHotState` still carries `queue_ticket` and `wakeup_pointer` from the pre-cutover carrier. Canonical Actors keep both `None`; they have no semantic authority and are removal candidates together with the compatibility stores below.
+- `Pipeline envelope components`: the stored Pipeline envelope keeps separate machine and cleanup fee upper bounds; Opening charges their sum as the one Pipeline Machine fee (specification §8.4), and cost quotes report both components.
+- `Compatibility absence reads`: canonical transition paths still test `ActorControlLocators` and `ActorUnsignaledControlCells` for absence (about seventy production call sites) before choosing the canonical branch. Fresh-genesis state never populates them, so each test is a proof of absence that costs a storage read and ProofSize without deciding anything; removing the compatibility stores removes these reads.
 
 ### Contract Steps Structure
 
@@ -519,7 +523,7 @@ Every other Trigger fails with `ManualSourceDisabled`; paused calls fail with `A
 
 ## Storage Topology
 
-Primary storage follows explicit owners. Section 13's stable behavioral stores constrain compatibility, while bounded scheduler and ingress machinery remains replaceable implementation state. No synchronized readiness mirror remains.
+Primary storage follows explicit owners. The specification's storage and integrity rules (§14.1) constrain compatibility, while bounded scheduler and ingress machinery remains replaceable implementation state. No synchronized readiness mirror remains.
 
 - `NextActorId`: monotonic actor ID allocator
 - `ActorSemanticStates`: canonical dormant-or-active semantic and Contract-generation records. Lifecycle writers publish, checked-increment, preserve, replace, and remove them transactionally. Active records expose the nonzero generation-bound `ActorRef` required by every process carrier
@@ -641,7 +645,7 @@ Parked Balance and a retained Run are mutually exclusive: Park publication occur
 
 `cadenced_terminal_cleanup_populated` starts from the same maximum legal User Contract/header and populated deep-index geometry, then makes canonical identity terminal before due service. The worker removes source and transient rearm authority, detaches the exact process publication, closes identity/Contract/hold state, preserves sovereign custody and collector balance, and leaves every peer handle intact. Wasm smoke proves reachability. This exposed retained `ActorProcesses` after temporal close; terminal classification and underfunded AtTime apoptosis now use `remove_actor_publication_and_finalize`. Focused AtTime and try-state assertions reject any surviving Service or deadline authority.
 
-`busy_cadenced_occurrence_rearms_without_fees_or_future_cycle` covers ordinary User/System Running, resident Suspended, and deadline-owned Suspended states, with funded and depleted custody. It preserves complete Run bytes, identity, Service order/eligibility and retry authority while advancing to one future aligned Tick deadline. An enabled collector-failure injection is never reached: busy coalescing charges no Trigger/Pipeline fee, executes no Task and creates no deferred Cycle. Specification §2.3 owns this behavior and supersedes older deferred-latch prose.
+`busy_cadenced_occurrence_rearms_without_fees_or_future_cycle` covers ordinary User/System Running, resident Suspended, and deadline-owned Suspended states, with funded and depleted custody. It preserves complete Run bytes, identity, Service order/eligibility and retry authority while advancing to one future aligned Tick deadline. An enabled collector-failure injection is never reached: busy coalescing charges no Trigger/Pipeline fee, executes no Task and creates no deferred Cycle. Specification §3.2 owns this behavior and supersedes older deferred-latch prose.
 
 `cadenced_running_rearm`, `cadenced_suspended_service_rearm` and `cadenced_suspended_deadline_rearm` are separate generated production owners over a deep Tick index. Each combines the maximum admitted Contract/Parked Balance header with a real maximum module-error Run. The Service-suspended and deadline-suspended profiles use ordinary `RetryLater`; Running uses `ContinueNextStep`, retains a live suffix, and subtracts only the impossible suspension payload from the type-derived Run maximum. The Block deadline remains future under Block-first service. Unsupported hosts reject the real below-minimum-recipient asset fixture rather than fabricate a module error.
 
@@ -681,7 +685,7 @@ The package ships a fresh-genesis storage baseline and no historical `OnRuntimeU
 
 The alignment auditor maintains exact allowlists for remaining assertions. Execution sites are owned by canonical loading, bounded admission, exhaustive control mapping, integrity checks, or transactional finalization; pallet sites are owned by genesis-construction failure, integrity checks, or admitted helper preconditions. Any differently worded Actors pallet or execution panic site fails the full-tree audit.
 
-The independent zero-topology runtime proves exact bounded-DNF SCALE round trips, metadata names, nonempty present-Precondition `try_state`, and Executive-submitted absent and present Precondition plans. The package test suite uses a names-and-order SCALE contract instead of isolated numeric pins; the metadata-derived Actors ABI manifest plus PAPI descriptors own variant indices, and the pallet error surface matches the corrected spec §12.2 list in both directions. Default, try-runtime, no-std, and runtime-benchmark profiles remain independent of DEOS types.
+The independent zero-topology runtime proves exact bounded-DNF SCALE round trips, metadata names, nonempty present-Precondition `try_state`, and Executive-submitted absent and present Precondition plans. The package test suite uses a names-and-order SCALE contract instead of isolated numeric pins; the metadata-derived Actors ABI manifest plus PAPI descriptors own variant indices, and the pallet error surface matches the specification §13.4 list in both directions. Default, try-runtime, no-std, and runtime-benchmark profiles remain independent of DEOS types.
 
 ## Lifecycle State Machine
 

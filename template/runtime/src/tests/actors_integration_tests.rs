@@ -2097,7 +2097,7 @@ fn lowest_free_owner_slot(owner: &crate::AccountId) -> u8 {
   panic!("fixture owner has no free User owner slot");
 }
 
-/// Pre-funds the deterministic User sovereign so Active creation/activation admits (spec 7.1)
+/// Pre-funds the deterministic User sovereign so Active creation/activation admits
 /// without mutating any pallet state.
 fn prefund_user_sovereign(owner: &crate::AccountId, slot: u8, plan: &RuntimeContractSteps) {
   let sovereign = Actors::sovereign_account_id(owner, slot);
@@ -6748,7 +6748,7 @@ fn genesis_system_locator_is_recoverable_after_close_through_reattachment() {
     System::set_block_number(1);
     // A genesis System locator (the Fee Sink) is host-reserved for fresh derivation
     // but MUST be recoverable by reattaching a fresh actor to its exact registered
-    // Vacant locator after close (spec 5.4): context-aware reservation.
+    // Vacant locator after close: context-aware reservation.
     let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
     let sovereign = crate::Actors::sovereign_account_id_system(fee_sink_id);
     let original_sovereign_balance_before = Balances::free_balance(&sovereign);

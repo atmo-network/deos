@@ -91,7 +91,7 @@ impl From<DispatchError> for TaskFailure {
   }
 }
 
-/// Typed rejection of one certified AddressEvent ingress movement (spec 6.2).
+/// Typed rejection of one certified AddressEvent ingress movement.
 ///
 /// `retry` carries the same closed classification as `TaskFailure`: recoverable
 /// queue/wakeup capacity or placement unavailability is Temporary, while monotonic

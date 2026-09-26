@@ -4065,7 +4065,7 @@ impl<T: Config> Pallet<T> {
   /// The Active-epoch block anchor. Set to the current block (clamped to window
   /// start) at Active installation and schedule replacement; reactivation with
   /// `cycle_nonce > 0` uses it as the conservative cooldown anchor when no
-  /// active-epoch `last_cycle_block` exists (spec 4.3).
+  /// active-epoch `last_cycle_block` exists.
   pub(crate) fn schedule_anchor_at(
     schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
     now: BlockNumberFor<T>,
@@ -5448,7 +5448,7 @@ impl<T: Config> Pallet<T> {
     provenance: Option<&FundingProvenance>,
     cause_provenance: TriggerCauseProvenance,
   ) -> DispatchResult {
-    // Zero or self/no-op movement creates no Actors ingress (spec 5.3).
+    // Zero or self/no-op movement creates no Actors ingress.
     if amount.is_zero() {
       return Ok(());
     }
