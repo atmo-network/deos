@@ -6,6 +6,7 @@
 
 ## Gate 0 — Feasibility
 
+- [ ] `Actors/Current Baseline Measurement`: Before any optimization or Weight rebinding, measure the post-cut tree as is and record it as the reference coordinates for every later comparison: regenerated Actors benchmark coefficients under both `MaxEncodedLen` and measured ProofSize; per block, the fixed Actor Control overhead with zero Steps, the marginal Control per admitted Step and the Task-effect cost, each in RefTime and ProofSize; distinct storage keys read and written per Step, attributed to owner (process, ring, deadline, run, Contract, fee, effect); and Steps per block at saturation for the W1 Transfer ledger. Exit with one reproducible local command set and a table of those coordinates, not a new Experiment Record.
 - [ ] `Actors/Prepass Budget Feasibility`: Certify in both Weight dimensions that the mandatory Prepass (cutoff, one Block-then-Tick Deadline quantum, the bounded parked-balance dependency scan and finalization headroom) plus one maximum admitted Service Step fits the exact one-third Actor Control cap (`303,433,283,909` RefTime / `676,150` ProofSize) under the current block ceiling, preserving fixed/context work and both Shared Economic base turns. The retained `183,080` ProofSize screen is a stale-coefficient necessary check, not the certificate. This is the release go/no-go: if no fit exists without weakening semantics, stop for an explicit architecture decision rather than tune a ratio or raise a single ceiling.
 
 ## Gate 1 — Service Weight Ownership
