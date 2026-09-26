@@ -506,18 +506,10 @@ fn current_predicates_and_amounts_require_no_frozen_cycle_snapshot() {
 #[test]
 fn every_trigger_family_round_trips_dormant_and_active_lifecycle() {
   new_test_ext().execute_with(|| {
-    set_observation(
-      7,
-      crate::ScalarObservationState::Fresh {
-        value: 50,
-        observed_at: 1,
-      },
-    );
     let triggers = [
       RuntimeTrigger::manual(),
       RuntimeTrigger::address_event(SourceFilter::OwnerOnly, AssetFilter::Any),
-      RuntimeTrigger::observation_change(7),
-      RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
+      RuntimeTrigger::at_time(10),
       RuntimeTrigger::cadenced(10),
     ];
     for (index, trigger) in triggers.into_iter().enumerate() {
@@ -565,8 +557,9 @@ fn every_trigger_family_round_trips_dormant_and_active_lifecycle() {
       ));
       assert!(Actors::actor_hot(actor_id).is_none());
       assert!(Actors::load_actor_contract(actor_id).is_none());
-      assert!(Actors::crossing_membership(actor_id).is_none());
-      assert!(Actors::actor_observation_feeds(actor_id).is_none());
+      assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+        actor_id
+      ));
     }
   });
 }
@@ -3590,9 +3583,6 @@ fn user_retry_admits_and_charges_only_each_current_step() {
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_actor_state_probe())
       .saturating_add(retry_weight)
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_on_idle_base())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::materialization_coordinator_base())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::crossing_worker_base())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::observation_fanout_base())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::block_resource_finalize());
     run_idle(retry_budget);
     run_next_idle(retry_budget);
@@ -5454,13 +5444,12 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
           )
           .expect("Fresh target and suffix fit")
         };
-        let schedule = if case.stimulus == StepParityStimulus::PredicateError {
-          observation_schedule(vec![1])
-        } else if case.actor_type == ActorType::System && case.mutability == Mutability::Immutable {
-          timer_schedule(1)
-        } else {
-          manual_schedule()
-        };
+        let schedule =
+          if case.actor_type == ActorType::System && case.mutability == Mutability::Immutable {
+            timer_schedule(1)
+          } else {
+            manual_schedule()
+          };
         let expected_contract = match case.actor_type {
           ActorType::User => user_active_contract(schedule.clone(), None, steps.clone()),
           ActorType::System => system_active_contract(schedule.clone(), None, steps.clone()),
@@ -5493,12 +5482,6 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
           frame_system::Pallet::<Test>::set_block_number(due);
           service_canonical_temporal_frontiers(due);
           occurrence_block = due.checked_add(1).expect("cadence occurrence block");
-        } else if case.stimulus == StepParityStimulus::PredicateError {
-          assert!(
-            latch_canonical_occurrence(actor_id, TriggerFamily::ObservationChange),
-            "{} observation latch publishes a canonical occurrence",
-            case.name
-          );
         } else {
           assert_ok!(Actors::manual_trigger(
             RuntimeOrigin::signed(ALICE),
@@ -6185,7 +6168,7 @@ fn simulation_rejects_contract_and_mode_mismatch_without_execution() {
         ActorType::System,
         Mutability::Mutable,
         ActorContract {
-          trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 100,),
+          trigger: RuntimeTrigger::at_time(0),
           ..system_active_contract(manual_schedule(), None, contract_steps.clone())
             .expect("direct Actor Contract")
         },

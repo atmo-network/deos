@@ -31,8 +31,6 @@ export type ActorCostVectors = {
 const TRIGGER_FAMILIES = new Set<ActorTriggerFeeView['family']>([
   'Manual',
   'AddressEvent',
-  'ObservationChange',
-  'ObservationCrossing',
   'AtTime',
   'Cadenced',
 ]);

@@ -23,7 +23,6 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     validateActorAuthoringContract,
   } from '$lib/automation/authoring';
   import type { ActorContractArtifact } from '$lib/automation/contract-artifact';
-  import type { ActorMaterializationProjection } from '$lib/automation/materialization';
   import type {
     ActorResourceProjection,
     ActorResourceWeight,
@@ -107,10 +106,6 @@ Zone: Presentation widget; composes system projections, automation capabilities,
         return 'Manual';
       case 'AddressEvent':
         return 'Address event';
-      case 'ObservationChange':
-        return 'Observation change';
-      case 'ObservationCrossing':
-        return `Observation crossing · ${trigger.direction}`;
       case 'AtTime':
         return `At time · after ${trigger.afterTicks} ticks`;
       case 'Cadenced':
@@ -169,14 +164,6 @@ Zone: Presentation widget; composes system projections, automation capabilities,
           return `wakeup tick ${eligibility.placement.tick}`;
       }
     })();
-    if (trigger.type === 'ObservationCrossing') {
-      const phase = trigger.phase === 'Armed' ? 'armed' : 'waiting for rearm';
-      return `${trigger.direction} · ${phase} · fire ${trigger.threshold} / rearm ${trigger.rearmThreshold} · ${trigger.pendingRevisions} revision${trigger.pendingRevisions === 1 ? '' : 's'} · ${placement}`;
-    }
-    if (trigger.type === 'ObservationChange') {
-      const cost = trigger.subscriberCount >= 1_000 ? 'High fanout' : 'Broad';
-      return `${cost} · ${trigger.subscriberCount} subscriber${trigger.subscriberCount === 1 ? '' : 's'} · ${placement}`;
-    }
     return placement;
   }
 
@@ -282,19 +269,10 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   async function loadObservationInspection(
     feed: ObservationFeedIdentity,
     maxAgeBlocks: number,
-    actorId?: number,
   ) {
     const load = systemStore.adapter.getObservationInspection;
     if (!load) throw new Error('Canonical observation state unavailable');
-    return await load.call(systemStore.adapter, feed, maxAgeBlocks, actorId);
-  }
-
-  async function loadActorMaterialization(
-    feed: ObservationFeedIdentity,
-  ): Promise<ActorMaterializationProjection> {
-    const load = systemStore.adapter.getActorMaterializationProjection;
-    if (!load) throw new Error('Actor materialization state unavailable');
-    return await load.call(systemStore.adapter, feed);
+    return await load.call(systemStore.adapter, feed, maxAgeBlocks);
   }
 
   $effect(() => {
@@ -689,16 +667,11 @@ Zone: Presentation widget; composes system projections, automation capabilities,
       <ObservationInspector
         refreshKey={systemStore.snapshot?.blockNumber ?? 0}
         compact={compactPane}
-        actorOptions={actors.map(({ actorId, label }) => ({ actorId, label }))}
         loadFeeds={systemStore.adapter.getObservationFeeds
           ? loadObservationFeeds
           : null}
         loadInspection={systemStore.adapter.getObservationInspection
           ? loadObservationInspection
-          : null}
-        loadMaterialization={systemStore.adapter
-          .getActorMaterializationProjection
-          ? loadActorMaterialization
           : null}
       />
     {:else}

@@ -1,6 +1,6 @@
 /*
 Domain: Actors deterministic feedback-analysis validation
-Owns: Structural self/cross-actor loops, observation provenance, signal/shared-asset/actuator paths, bounds, and epistemic limits.
+Owns: Structural self/cross-actor loops through pull-time observation reads, observation provenance, signal/shared-asset/actuator paths, bounds, and epistemic limits.
 Excludes: Runtime execution, economic stability, probability, causal strength, scoring, and consensus behavior.
 Zone: Web-client validation entrypoint; consumes the automation feedback-analysis contract only.
 */
@@ -8,15 +8,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { analyzeActorFeedback } from '../src/lib/automation/feedback-analysis.ts';
-import { DEOS_OBSERVATION_RUNTIME_EVIDENCE } from '../src/lib/observation/runtime-evidence.generated.ts';
 
-const runtimeEvidence = DEOS_OBSERVATION_RUNTIME_EVIDENCE;
-const verifiedRuntimeIdentity = `${runtimeEvidence.runtime.specName}@spec-${runtimeEvidence.runtime.specVersion} · code:${runtimeEvidence.runtimeCodeHash} · metadata:${runtimeEvidence.metadataHash}`;
-const schedulerEvidence = {
-  maxServiceUnitsPerBlock: runtimeEvidence.fanout.maxServiceUnitsPerBlock,
-  maxActiveDirtyFeeds: runtimeEvidence.fanout.maxActiveDirtyFeeds,
-  maxSubscriberPagesPerFeed: runtimeEvidence.fanout.maxSubscriberPagesPerFeed,
-};
+const verifiedRuntimeIdentity = 'deos@spec-1 · code:fixture · metadata:fixture';
+const weightIdentity = 'weights:fixture';
 
 const native = { type: 'Native', value: { $none: true } };
 const bldr = {
@@ -86,11 +80,24 @@ function observationCondition(
 }
 
 function analysis({
-  triggerFeeds = [],
+  readFeeds = [],
   steps = [],
   actorType = 'User',
   cooldownBlocks = 0,
 } = {}) {
+  if (readFeeds.length > 0) {
+    const [first = projectionStep(), ...rest] = steps;
+    steps = [
+      {
+        ...first,
+        predicates: [
+          ...first.predicates,
+          ...readFeeds.map((feed) => observationCondition(feed)),
+        ],
+      },
+      ...rest,
+    ];
+  }
   return {
     provenance: 'StaticStructuralProjection',
     identity: {
@@ -109,7 +116,10 @@ function analysis({
     actorType,
     cooldownBlocks,
     trigger: {
-      observationFeeds: triggerFeeds,
+      kind: 'Cadenced',
+      afterTicks: null,
+      everyTicks: 10,
+      sourceKinds: [],
     },
     steps,
     economicSurface: {
@@ -166,7 +176,7 @@ test('price to swap to price is a structural endogenous self-feedback path', () 
       {
         id: 'liquidity',
         analysis: analysis({
-          triggerFeeds: [priceFeed],
+          readFeeds: [priceFeed],
           steps: [
             projectionStep({ task: 'SwapIn', reads: [native], writes: [bldr] }),
           ],
@@ -222,7 +232,7 @@ test('price to swap to price is a structural endogenous self-feedback path', () 
         ],
       ],
       [
-        'ObservationTrigger',
+        'ObservationConditionRead',
         'ReactiveCausal',
         'ArtifactDerived',
         ['artifact:test-plan', 'state:observation-fixture'],
@@ -256,7 +266,7 @@ test('reactive findings bind timing and policy claims to identified evidence', (
         analysis: analysis({
           actorType: 'System',
           cooldownBlocks: 5,
-          triggerFeeds: [priceFeed],
+          readFeeds: [priceFeed],
           steps: [
             projectionStep({
               task: 'SwapIn',
@@ -301,31 +311,14 @@ test('reactive findings bind timing and policy claims to identified evidence', (
       },
     ],
     evidence: {
-      identity: 'runtime-weights-cadence:fixture-1',
+      identity: 'runtime-weights:fixture-1',
       runtimeIdentity: verifiedRuntimeIdentity,
       runtimeVerification: {
         status: 'Verified',
         observedIdentity: verifiedRuntimeIdentity,
-        scheduler: schedulerEvidence,
         reasons: [],
       },
-      weightIdentity: runtimeEvidence.weightIdentity,
-      cadenceIdentity: 'cadence:fixture-1',
-      estimatedDeliveryBlocks: 12,
-      estimatedDeliveryEvidence: {
-        provenance: 'RuntimeDerived',
-        identity: 'runtime-weights-cadence:fixture-1',
-      },
-      observationCadences: [
-        {
-          observationId: 'price',
-          minimumUpdateIntervalBlocks: 1,
-          evidence: {
-            provenance: 'RuntimeDerived',
-            identity: 'cadence:fixture-1',
-          },
-        },
-      ],
+      weightIdentity,
       actorPolicies: [
         {
           actorId: 'system-market',
@@ -334,41 +327,29 @@ test('reactive findings bind timing and policy claims to identified evidence', (
             provenance: 'Declared',
             identity: 'gain:declared-fixture-1',
           },
-          reactiveIngressPriority: 'Ordinary',
-          reactiveIngressPriorityEvidence: {
-            provenance: 'RuntimeDerived',
-            identity: verifiedRuntimeIdentity,
-          },
         },
       ],
     },
   });
   const kinds = new Set(model.findings.map((finding) => finding.kind));
   for (const kind of [
-    'FreshnessWindowBelowEstimatedDeliveryEnvelope',
     'EndogenousObservationFeedback',
     'ReactiveSelfCycle',
     'ThresholdChatterRisk',
     'MissingHysteresisOrPersistence',
     'HighGainActuation',
-    'CooldownFeedRateMismatch',
     'SharedObservationActuatorContention',
-    'SystemActorWithoutReactiveIngressPriority',
   ]) {
     assert(kinds.has(kind), `missing ${kind}`);
   }
-  assert.equal(model.evidenceIdentity, 'runtime-weights-cadence:fixture-1');
+  assert.equal(model.evidenceIdentity, 'runtime-weights:fixture-1');
   assert.equal(model.evidenceSnapshot.runtimeIdentity, verifiedRuntimeIdentity);
-  assert.equal(
-    model.evidenceSnapshot.weightIdentity,
-    runtimeEvidence.weightIdentity,
-  );
+  assert.equal(model.evidenceSnapshot.weightIdentity, weightIdentity);
   assert.equal(model.evidenceStatus, 'Verified');
-  assert.equal(model.evidenceSnapshot.cadenceIdentity, 'cadence:fixture-1');
   for (const finding of model.findings.filter(
     (candidate) => 'evidenceIdentity' in candidate,
   )) {
-    assert.equal(finding.evidenceIdentity, 'runtime-weights-cadence:fixture-1');
+    assert.equal(finding.evidenceIdentity, 'runtime-weights:fixture-1');
   }
   for (const finding of model.findings.filter(
     (candidate) =>
@@ -393,7 +374,7 @@ test('fee funding to downstream market action to price forms a cross-actor path'
           $hex: `0x${'11'.repeat(32)}`,
         }),
         analysis: analysis({
-          triggerFeeds: [priceFeed],
+          readFeeds: [priceFeed],
           steps: [
             projectionStep({
               task: 'SplitTransfer',
@@ -607,7 +588,7 @@ test('typed parameter actuators remain explicit structural nodes', () => {
       {
         id: 'treasury-policy',
         analysis: analysis({
-          triggerFeeds: [priceFeed],
+          readFeeds: [priceFeed],
           steps: [projectionStep({ task: 'Transfer', reads: [native] })],
         }),
       },
@@ -648,7 +629,7 @@ test('exogenous and unmatched observations do not synthesize feedback', () => {
       {
         id: 'release',
         analysis: analysis({
-          triggerFeeds: [treasuryFeed],
+          readFeeds: [treasuryFeed],
           steps: [projectionStep({ task: 'Transfer', reads: [native] })],
         }),
       },
@@ -680,7 +661,7 @@ test('deactivated runtime observations preserve identity without causal recurren
       {
         id: 'market',
         analysis: analysis({
-          triggerFeeds: [priceFeed],
+          readFeeds: [priceFeed],
           steps: [projectionStep({ task: 'SwapIn', writes: [bldr] })],
         }),
       },
@@ -719,7 +700,7 @@ test('deactivated runtime observations preserve identity without causal recurren
 test('timing and policy evidence rejects provenance and identity substitution', () => {
   const actor = {
     id: 'actor',
-    analysis: analysis({ triggerFeeds: [priceFeed] }),
+    analysis: analysis({ readFeeds: [priceFeed] }),
   };
   const observation = {
     id: 'price',
@@ -738,33 +719,14 @@ test('timing and policy evidence rejects provenance and identity substitution', 
     runtimeVerification: {
       status: 'Verified',
       observedIdentity: verifiedRuntimeIdentity,
-      scheduler: schedulerEvidence,
       reasons: [],
     },
-    weightIdentity: runtimeEvidence.weightIdentity,
-    cadenceIdentity: 'cadence:one',
-    estimatedDeliveryBlocks: 1,
-    estimatedDeliveryEvidence: {
-      provenance: 'RuntimeDerived',
-      identity: 'evidence:combined',
-    },
-    observationCadences: [
-      {
-        observationId: 'price',
-        minimumUpdateIntervalBlocks: 1,
-        evidence: { provenance: 'RuntimeDerived', identity: 'cadence:one' },
-      },
-    ],
+    weightIdentity,
     actorPolicies: [
       {
         actorId: 'actor',
         gain: 'Unknown',
         gainEvidence: { provenance: 'Unknown', identity: null },
-        reactiveIngressPriority: 'Unknown',
-        reactiveIngressPriorityEvidence: {
-          provenance: 'Unknown',
-          identity: null,
-        },
       },
     ],
   };
@@ -776,7 +738,6 @@ test('timing and policy evidence rejects provenance and identity substitution', 
     runtimeVerification: {
       status: 'EvidenceMismatch',
       observedIdentity: 'runtime:drifted',
-      scheduler: schedulerEvidence,
       reasons: ['runtime code mismatch'],
     },
   };
@@ -797,15 +758,9 @@ test('timing and policy evidence rejects provenance and identity substitution', 
         evidence: {
           ...evidence,
           runtimeIdentity: 'runtime:forged',
-          runtimeVerification: {
-            status: 'Verified',
-            observedIdentity: 'runtime:forged',
-            scheduler: schedulerEvidence,
-            reasons: [],
-          },
         },
       }),
-    /differs from generated truth/,
+    /Runtime verification identity mismatch/,
   );
   assert.throws(
     () =>
@@ -815,48 +770,11 @@ test('timing and policy evidence rejects provenance and identity substitution', 
           ...evidence,
           runtimeVerification: {
             ...evidence.runtimeVerification,
-            scheduler: {
-              ...schedulerEvidence,
-              maxServiceUnitsPerBlock:
-                schedulerEvidence.maxServiceUnitsPerBlock + 1,
-            },
+            reasons: ['forged'],
           },
         },
       }),
-    /differs from generated truth/,
-  );
-  assert.throws(
-    () =>
-      analyzeActorFeedback({
-        ...input,
-        evidence: {
-          ...evidence,
-          estimatedDeliveryEvidence: {
-            provenance: 'Declared',
-            identity: 'declaration:estimate',
-          },
-        },
-      }),
-    /Estimated delivery uses disallowed evidence provenance/,
-  );
-  assert.throws(
-    () =>
-      analyzeActorFeedback({
-        ...input,
-        evidence: {
-          ...evidence,
-          observationCadences: [
-            {
-              ...evidence.observationCadences[0],
-              evidence: {
-                provenance: 'RuntimeDerived',
-                identity: 'cadence:other',
-              },
-            },
-          ],
-        },
-      }),
-    /cadence evidence identity mismatch/,
+    /Verified runtime evidence cannot carry mismatch reasons/,
   );
   assert.throws(
     () =>
@@ -883,7 +801,7 @@ test('feedback projection is deterministic and fails closed at graph bounds', ()
       {
         id: 'actor',
         analysis: analysis({
-          triggerFeeds: [priceFeed],
+          readFeeds: [priceFeed],
           steps: [projectionStep({ task: 'SwapIn', writes: [bldr] })],
         }),
       },

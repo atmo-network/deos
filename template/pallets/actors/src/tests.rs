@@ -1,19 +1,17 @@
 use crate::{
-  ActiveLifecycle, ActorActivationPlacement, ActorClass, ActorClassification,
-  ActorClassificationError, ActorContract, ActorControlLocators, ActorEligibility,
-  ActorExecutionPhase, ActorId, ActorIdentities, ActorRunAuthority, ActorRunStateStore,
-  ActorTriggerActivation, ActorType, AmountResolution, AssetFilter, AssetFilterOf,
-  AttemptDisposition, CancellationReason, CloseReason, CrossingDirection, CrossingMemberPages,
-  CrossingMemberships, CrossingPhase, CrossingTransition, CycleResult, CycleState, Error, Event,
+  ActiveLifecycle, ActorClass, ActorClassification, ActorClassificationError, ActorContract,
+  ActorControlLocators, ActorEligibility, ActorExecutionPhase, ActorId, ActorIdentities,
+  ActorRunAuthority, ActorRunStateStore, ActorType, AmountResolution, AssetFilter, AssetFilterOf,
+  AttemptDisposition, CancellationReason, CloseReason, CycleResult, CycleState, Error, Event,
   FeeChargeKind, FeeEnvelopeError, FeeEnvelopeInput, FundingSourcePolicy, GlobalCircuitBreaker,
   IdleStarvationPhase, IdleStarvationState, InitialLifecycle, InputLimit, LoadedActorStateOf,
-  Mutability, NextActorId, ObservationCrossing, ObservationSubscriberPageList, OutcomeTotals,
-  OwnerSlotBitmaps, Precondition, Predicate, RetryClass, ScheduleWindow, SimulationError,
-  SimulationMode, SimulationStepRecord, SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg,
-  SplitTransferLegsOf, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, SuspensionReason,
-  SystemSovereignState, Task, TaskFailure, TaskOf, Trigger, TriggerFamily, TriggerRuntimeState,
-  WakeupClock, WakeupKey, WakeupPage, WakeupPointer, adapters::AssetOps,
-  compose_attempt_fee_envelope, fee_native_protected_minimum, mock::*, settle_attempt_fee_step,
+  Mutability, NextActorId, OutcomeTotals, OwnerSlotBitmaps, Precondition, Predicate, RetryClass,
+  ScheduleWindow, SimulationError, SimulationMode, SimulationStepRecord, SourceFilter,
+  SourceFilterOf, SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf,
+  StepOutcome, StepSkippedReason, SuspensionReason, SystemSovereignState, Task, TaskFailure,
+  TaskOf, Trigger, TriggerFamily, TriggerRuntimeState, WakeupClock, WakeupKey, WakeupPage,
+  WakeupPointer, adapters::AssetOps, compose_attempt_fee_envelope, fee_native_protected_minimum,
+  mock::*, settle_attempt_fee_step,
 };
 use alloc::collections::BTreeSet;
 
@@ -33,24 +31,6 @@ fn address_event_trigger_fee() -> Balance {
     ActorType::User,
     TriggerFamily::AddressEvent,
     <TestWeightInfo as crate::WeightInfo>::address_event_trigger_occurrence(),
-  )
-  .trigger_fee
-}
-
-fn observation_change_trigger_fee() -> Balance {
-  Actors::trigger_fee_for_weight(
-    ActorType::User,
-    TriggerFamily::ObservationChange,
-    <TestWeightInfo as crate::WeightInfo>::observation_change_trigger_occurrence(),
-  )
-  .trigger_fee
-}
-
-fn observation_crossing_trigger_fee() -> Balance {
-  Actors::trigger_fee_for_weight(
-    ActorType::User,
-    TriggerFamily::ObservationCrossing,
-    <TestWeightInfo as crate::WeightInfo>::observation_crossing_trigger_occurrence(),
   )
   .trigger_fee
 }
@@ -199,57 +179,6 @@ fn enqueue_latched_actor(actor_id: ActorId) -> bool {
   result.is_ok()
 }
 
-/// Canonical equivalent of the legacy `enqueue_latched_actor` fixture for triggers whose manual
-/// source is disabled (`AtTime` and observation schedules). Fresh-genesis publication owns no
-/// legacy paged-FIFO entry, so a witness that needs a real production Service head must latch
-/// through the canonical Trigger owner instead, which publishes one `Service(Pending)` occurrence
-/// eligible at the following block.
-fn latch_canonical_occurrence(actor_id: ActorId, family: TriggerFamily) -> bool {
-  let Some(crate::ActorSemanticState::Active(record)) =
-    crate::ActorSemanticStates::<Test>::get(actor_id)
-  else {
-    return false;
-  };
-  let actor = crate::ActorRef {
-    actor_id,
-    generation: record.generation,
-  };
-  let actor_type = record.identity.actor_class.actor_type();
-  let breakdown = Actors::trigger_fee_for_weight(
-    actor_type,
-    family,
-    <TestWeightInfo as crate::WeightInfo>::manual_trigger(),
-  );
-  polkadot_sdk::frame_support::storage::with_transaction(|| {
-    let Some((state, _, _)) = Actors::load_frame_actor_service_state(actor_id) else {
-      return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok::<
-        bool,
-        DispatchError,
-      >(false));
-    };
-    let sovereign = state.identity.sovereign_account;
-    let result = Actors::commit_canonical_trigger_occurrence_with_authority(
-      actor,
-      actor_type,
-      &sovereign,
-      breakdown,
-      state,
-      frame_system::Pallet::<Test>::block_number(),
-    );
-    match result {
-      Ok(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
-        bool,
-        DispatchError,
-      >(true)),
-      Err(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok::<
-        bool,
-        DispatchError,
-      >(false)),
-    }
-  })
-  .unwrap_or(false)
-}
-
 fn scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
   let hot = Actors::actor_hot(actor_id).and_then(|hot| {
     hot
@@ -336,74 +265,6 @@ fn assert_variant_names<T: TypeInfo>(expected: &[&str]) {
   assert_eq!(actual, expected);
 }
 
-fn prepare_crossing_pair_after_sparse_open() {
-  frame_system::Pallet::<Test>::set_block_number(1);
-  set_observation(
-    7,
-    crate::ScalarObservationState::Fresh {
-      value: 50,
-      observed_at: 1,
-    },
-  );
-  for owner in [ALICE, BOB, CHARLIE] {
-    create_system_with(
-      owner,
-      Schedule {
-        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
-        cooldown_blocks: 0,
-      },
-      None,
-      contract_steps_with_step(make_step(Task::StopCycle)),
-    );
-  }
-  assert_ok!(Actors::note_observation_transition(
-    7,
-    crate::ObservationTransition {
-      revision: 2,
-      previous: Some(50),
-      current: 150,
-    },
-  ));
-  assert_ok!(Actors::crossing_work_unit());
-  assert_eq!(
-    Actors::classify_crossing_work(),
-    crate::CrossingWorkPlan::FireCohortPlacedBatch
-  );
-}
-
-fn crossing_phase(actor_id: ActorId) -> CrossingPhase {
-  match Actors::active_actor_view(actor_id)
-    .expect("active Crossing actor")
-    .trigger_runtime_state
-  {
-    TriggerRuntimeState::ObservationCrossing { phase, .. } => phase,
-    TriggerRuntimeState::Stateless
-    | TriggerRuntimeState::AtTime { .. }
-    | TriggerRuntimeState::Cadenced { .. } => {
-      panic!("actor does not own Crossing runtime state")
-    }
-  }
-}
-
-/// Canonical observable of latched crossings: the number of `Service(Pending)` ring members a
-/// Crossing cohort publishes, which replaces the legacy paged `ActorReadyOccupancy` observable.
-fn canonical_service_occupancy() -> u32 {
-  crate::ServiceHeader::<Test>::get().count
-}
-
-fn drain_crossing_work() -> u32 {
-  drain_crossing_work_with_limit(512)
-}
-
-fn drain_crossing_work_with_limit(limit: u32) -> u32 {
-  for unit in 1..=limit {
-    if !Actors::crossing_work_unit().expect("Crossing worker remains valid") {
-      return unit;
-    }
-  }
-  panic!("Crossing work did not converge within the bounded fixture");
-}
-
 fn ordinary_transfer_to_actor(
   origin: RuntimeOrigin,
   actor_id: u64,
@@ -448,16 +309,6 @@ fn percentage_trigger_schedule() -> RuntimeSchedule {
 
 fn signal_percentage_trigger(actor_id: ActorId, asset: TestAsset) {
   assert_ok!(Actors::notify_address_event(actor_id, asset, 1, &ALICE));
-}
-
-fn observation_schedule(feeds: Vec<u32>) -> RuntimeSchedule {
-  let [feed]: [u32; 1] = feeds
-    .try_into()
-    .expect("one observation trigger feed is required");
-  Schedule {
-    trigger: RuntimeTrigger::observation_change(feed),
-    cooldown_blocks: 0,
-  }
 }
 
 fn at_time_schedule(after_ticks: u32) -> RuntimeSchedule {
@@ -885,7 +736,6 @@ fn service_canonical_temporal_frontiers(now: MockBlockNumber) {
     now,
     now,
     Some(WakeupKey::Block(now.saturating_add(1))),
-    Some(WakeupKey::Tick(now.saturating_add(1))),
   );
 }
 
@@ -1087,9 +937,8 @@ mod proptest_actor {
   };
   use crate::{
     ActorControlLocators, ActorIdentities, ActorRunStateStore, AmountResolution, AssetFilter,
-    CrossingDirection, CrossingPhase, CrossingTransition, CycleState, Event, FundingSourcePolicy,
-    Mutability, ObservationCrossing, SourceFilter, StepErrorPolicy, StepOf, SystemSovereignState,
-    SystemSovereigns, Task, Trigger, mock::*,
+    CycleState, Event, FundingSourcePolicy, Mutability, SourceFilter, StepErrorPolicy, StepOf,
+    SystemSovereignState, SystemSovereigns, Task, Trigger, mock::*,
   };
   use codec::Encode;
   use polkadot_sdk::frame_support::{
@@ -1104,66 +953,6 @@ mod proptest_actor {
 
   type RuntimeSchedule = Schedule;
   type RuntimeStep = StepOf<Test>;
-
-  #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-  struct CrossingReferenceModel {
-    direction: CrossingDirection,
-    threshold: u128,
-    rearm_threshold: u128,
-    phase: CrossingPhase,
-    revision: u64,
-    current: u128,
-    latched: bool,
-  }
-
-  impl CrossingReferenceModel {
-    fn apply(&mut self, revision: u64, current: u128) -> Result<CrossingTransition, ()> {
-      if revision <= self.revision {
-        return Err(());
-      }
-      let transition = match (self.direction, self.phase) {
-        (CrossingDirection::Rising, CrossingPhase::Armed)
-          if self.current < self.threshold && current >= self.threshold =>
-        {
-          CrossingTransition::Fire
-        }
-        (CrossingDirection::Rising, CrossingPhase::WaitingForRearm)
-          if self.current > self.rearm_threshold && current <= self.rearm_threshold =>
-        {
-          CrossingTransition::Rearm
-        }
-        (CrossingDirection::Falling, CrossingPhase::Armed)
-          if self.current > self.threshold && current <= self.threshold =>
-        {
-          CrossingTransition::Fire
-        }
-        (CrossingDirection::Falling, CrossingPhase::WaitingForRearm)
-          if self.current < self.rearm_threshold && current >= self.rearm_threshold =>
-        {
-          CrossingTransition::Rearm
-        }
-        _ => CrossingTransition::None,
-      };
-      self.revision = revision;
-      self.current = current;
-      match transition {
-        CrossingTransition::Fire => {
-          self.phase = CrossingPhase::WaitingForRearm;
-          self.latched = true;
-        }
-        CrossingTransition::Rearm => self.phase = CrossingPhase::Armed,
-        CrossingTransition::None => {}
-      }
-      Ok(transition)
-    }
-
-    fn obligation(&self) -> (u128, CrossingPhase) {
-      match self.phase {
-        CrossingPhase::Armed => (self.threshold, CrossingPhase::Armed),
-        CrossingPhase::WaitingForRearm => (self.rearm_threshold, CrossingPhase::WaitingForRearm),
-      }
-    }
-  }
 
   fn timer_schedule_pt(every_ticks: u32) -> RuntimeSchedule {
     Schedule {
@@ -1389,13 +1178,11 @@ mod proptest_actor {
     Suspend,
     Continue,
     Cancel,
-    UpdateCrossing,
-    PublishObservation,
-    MaterializeCrossing,
+    UpdateAddressEvent,
   }
 
   fn model_op() -> impl Strategy<Value = ModelOp> {
-    (0u8..21).prop_map(|index| match index {
+    (0u8..19).prop_map(|index| match index {
       0 => ModelOp::Create,
       1 => ModelOp::Activate,
       2 => ModelOp::Deactivate,
@@ -1414,9 +1201,7 @@ mod proptest_actor {
       15 => ModelOp::Suspend,
       16 => ModelOp::Continue,
       17 => ModelOp::Cancel,
-      18 => ModelOp::UpdateCrossing,
-      19 => ModelOp::PublishObservation,
-      _ => ModelOp::MaterializeCrossing,
+      _ => ModelOp::UpdateAddressEvent,
     })
   }
 
@@ -1446,12 +1231,7 @@ mod proptest_actor {
   }
 
   fn system_contract(
-    trigger: Trigger<
-      AccountId,
-      TestAsset,
-      <Test as crate::Config>::MaxWhitelistSize,
-      <Test as crate::Config>::ObservationFeedId,
-    >,
+    trigger: Trigger<AccountId, TestAsset, <Test as crate::Config>::MaxWhitelistSize>,
   ) -> Option<crate::ActorContractOf<Test>> {
     Some(crate::ActorContract {
       trigger,
@@ -1591,79 +1371,6 @@ mod proptest_actor {
   }
 
   proptest! {
-    #![proptest_config(ProptestConfig::with_cases(96))]
-
-    #[test]
-    fn crossing_reference_model_matches_hysteresis_revision_and_latch_semantics(
-      rising in any::<bool>(),
-      threshold in 100u16..65_000u16,
-      gap in 1u16..100u16,
-      initial in any::<u16>(),
-      updates in prop::collection::vec((0u8..3u8, any::<u16>()), 0..128),
-    ) {
-      let direction = if rising {
-        CrossingDirection::Rising
-      } else {
-        CrossingDirection::Falling
-      };
-      let threshold = u128::from(threshold);
-      let rearm_threshold = if rising {
-        threshold - u128::from(gap)
-      } else {
-        threshold + u128::from(gap)
-      };
-      let crossing = ObservationCrossing {
-        feed: 7u32,
-        direction,
-        threshold,
-        rearm_threshold,
-      };
-      let initial = u128::from(initial);
-      let mut model = CrossingReferenceModel {
-        direction,
-        threshold,
-        rearm_threshold,
-        phase: crossing.initial_phase(initial),
-        revision: 1,
-        current: initial,
-        latched: false,
-      };
-      for (revision_delta, next) in updates {
-        let revision = model.revision.saturating_add(u64::from(revision_delta));
-        let before = model;
-        let next = u128::from(next);
-        let expected = model.apply(revision, next);
-        if revision_delta == 0 {
-          prop_assert_eq!(expected, Err(()));
-          prop_assert_eq!(model, before);
-          continue;
-        }
-        let actual = crossing.transition(before.phase, before.current, next);
-        prop_assert_eq!(expected, Ok(actual));
-        prop_assert_eq!(
-          model.phase,
-          match actual {
-            CrossingTransition::Fire => CrossingPhase::WaitingForRearm,
-            CrossingTransition::Rearm => CrossingPhase::Armed,
-            CrossingTransition::None => before.phase,
-          }
-        );
-        prop_assert_eq!(model.latched, before.latched || actual == CrossingTransition::Fire);
-        let (obligation_threshold, obligation_phase) = model.obligation();
-        prop_assert_eq!(obligation_phase, model.phase);
-        prop_assert_eq!(
-          obligation_threshold,
-          if model.phase == CrossingPhase::Armed {
-            threshold
-          } else {
-            rearm_threshold
-          }
-        );
-      }
-    }
-  }
-
-  proptest! {
     #![proptest_config(ProptestConfig::with_cases(50))]
 
     /// For any number of actors (2..max), every actor executes within bounded blocks
@@ -1779,8 +1486,6 @@ mod proptest_actor {
             observed_at: 1,
           },
         );
-        let mut observation_revision = 1u64;
-        let mut observation_value = 50u128;
         let system_id = 0;
         let system_sovereign = Actors::sovereign_account_id_system(system_id);
         let user_sovereign = Actors::sovereign_account_id(&ALICE, 0);
@@ -1949,37 +1654,12 @@ mod proptest_actor {
               let schedule = timer_schedule_pt(2);
               let _ = update_contract_partial!(RuntimeOrigin::root(), system_id, schedule, None);
             }
-            ModelOp::UpdateCrossing if !closed && is_active() => {
+            ModelOp::UpdateAddressEvent if !closed && is_active() => {
               let schedule = Schedule {
-                trigger: Trigger::observation_crossing(
-                  9,
-                  CrossingDirection::Rising,
-                  100,
-                  80,
-                ),
+                trigger: Trigger::address_event(SourceFilter::Any, AssetFilter::Any),
                 cooldown_blocks: 0,
               };
               let _ = update_contract_partial!(RuntimeOrigin::root(), system_id, schedule, None);
-            }
-            ModelOp::PublishObservation => {
-              let next = if observation_value < 100 { 150 } else { 50 };
-              let next_revision = observation_revision.saturating_add(1);
-              if Actors::note_observation_transition(
-                9,
-                crate::ObservationTransition {
-                  revision: next_revision,
-                  previous: Some(observation_value),
-                  current: next,
-                },
-              )
-              .is_ok()
-              {
-                observation_revision = next_revision;
-                observation_value = next;
-              }
-            }
-            ModelOp::MaterializeCrossing => {
-              let _ = Actors::service_crossing_transitions(Weight::MAX);
             }
             ModelOp::Execute => {
               let _ = Actors::on_idle(block, Weight::MAX);
@@ -2047,12 +1727,6 @@ mod proptest_actor {
           }
           let events = frame_system::Pallet::<Test>::events();
           let event_delta = &events[before_event_count..];
-          if matches!(operation, ModelOp::PublishObservation | ModelOp::MaterializeCrossing) {
-            assert!(
-              event_delta.is_empty(),
-              "observation ingress and deferred Crossing materialization are event-silent"
-            );
-          }
           let actor_event_delta = event_delta
             .iter()
             .filter_map(|record| match &record.event {
@@ -2068,7 +1742,7 @@ mod proptest_actor {
               | ModelOp::Resume
               | ModelOp::UpdateContract
               | ModelOp::Wakeup
-              | ModelOp::UpdateCrossing
+              | ModelOp::UpdateAddressEvent
               | ModelOp::Close
           ) {
             assert!(actor_event_delta.iter().all(|event| match operation {
@@ -2082,7 +1756,7 @@ mod proptest_actor {
               ),
               ModelOp::Pause => matches!(event, Event::ActorPaused { actor_id } if *actor_id == system_id),
               ModelOp::Resume => matches!(event, Event::ActorResumed { actor_id } if *actor_id == system_id),
-              ModelOp::UpdateContract | ModelOp::Wakeup | ModelOp::UpdateCrossing => matches!(
+              ModelOp::UpdateContract | ModelOp::Wakeup | ModelOp::UpdateAddressEvent => matches!(
                 event,
                 Event::ContractUpdated { actor_id }
                   | Event::CycleCancelled { actor_id, .. }
@@ -2648,7 +2322,7 @@ fn observed_attempt_projection(
 
 // --- Eligibility Projection API (spec 7.3) ---
 
-fn eligibility(actor_id: ActorId) -> ActorEligibility<u32, u64> {
+fn eligibility(actor_id: ActorId) -> ActorEligibility<u64> {
   Actors::actor_eligibility(actor_id).expect("eligibility computes")
 }
 
@@ -2659,15 +2333,11 @@ fn active_eligibility(actor_id: ActorId) -> ActorClassification<u64> {
   }
 }
 
-#[cfg(feature = "runtime-benchmarks")]
-mod candidate_geometry;
 mod core;
-mod crossing;
 mod execution;
 mod fees_and_funding;
 mod lifecycle;
 mod market_tasks;
-mod observations;
 mod scheduling;
 mod storage_and_api;
 mod wakeups;

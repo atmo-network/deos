@@ -225,32 +225,17 @@ export type ActorStaticSuffixEnvelope = {
 };
 
 export type ActorStaticTriggerAnalysis = {
-  kind:
-    | 'Manual'
-    | 'AddressEvent'
-    | 'ObservationChange'
-    | 'ObservationCrossing'
-    | 'AtTime'
-    | 'Cadenced';
+  kind: 'Manual' | 'AddressEvent' | 'AtTime' | 'Cadenced';
   afterTicks: number | null;
   everyTicks: number | null;
-  sourceKinds: Array<
-    'Manual' | 'AddressEvent' | 'ObservationChange' | 'ObservationCrossing'
-  >;
-  observationFeeds: ActorContractProjection[];
+  sourceKinds: Array<'Manual' | 'AddressEvent'>;
 };
 
 export type ActorStaticFinding =
   | {
       kind: 'ExternallySignalledAdmission';
-      trigger:
-        | 'Manual'
-        | 'AddressEvent'
-        | 'ObservationChange'
-        | 'ObservationCrossing';
-      sourceKinds: Array<
-        'Manual' | 'AddressEvent' | 'ObservationChange' | 'ObservationCrossing'
-      >;
+      trigger: 'Manual' | 'AddressEvent';
+      sourceKinds: Array<'Manual' | 'AddressEvent'>;
     }
   | { kind: 'OneShotTemporalAdmission'; afterTicks: number }
   | { kind: 'PeriodicAdmission'; everyTicks: number }
@@ -1137,7 +1122,6 @@ function parseTrigger(
         afterTicks: null,
         everyTicks: null,
         sourceKinds: ['Manual'],
-        observationFeeds: [],
       };
     case 'AddressEvent':
       return {
@@ -1145,52 +1129,7 @@ function parseTrigger(
         afterTicks: null,
         everyTicks: null,
         sourceKinds: ['AddressEvent'],
-        observationFeeds: [],
       };
-    case 'ObservationChange':
-      return {
-        kind: 'ObservationChange',
-        afterTicks: null,
-        everyTicks: null,
-        sourceKinds: ['ObservationChange'],
-        observationFeeds: [
-          member(trigger.value, 'feed', 'Trigger.ObservationChange'),
-        ],
-      };
-    case 'ObservationCrossing': {
-      const direction = variant(
-        member(trigger.value, 'direction', 'Trigger.ObservationCrossing'),
-        'Trigger.ObservationCrossing.direction',
-      );
-      if (direction.type !== 'Rising' && direction.type !== 'Falling') {
-        throw new Error(
-          `Unsupported CrossingDirection variant: ${direction.type}`,
-        );
-      }
-      const threshold = unsignedBigInt(
-        member(trigger.value, 'threshold', 'Trigger.ObservationCrossing'),
-        'Trigger.ObservationCrossing.threshold',
-      );
-      const rearmThreshold = unsignedBigInt(
-        member(trigger.value, 'rearm_threshold', 'Trigger.ObservationCrossing'),
-        'Trigger.ObservationCrossing.rearm_threshold',
-      );
-      if (
-        (direction.type === 'Rising' && rearmThreshold >= threshold) ||
-        (direction.type === 'Falling' && rearmThreshold <= threshold)
-      ) {
-        throw new Error('Trigger.ObservationCrossing has invalid hysteresis');
-      }
-      return {
-        kind: 'ObservationCrossing',
-        afterTicks: null,
-        everyTicks: null,
-        sourceKinds: ['ObservationCrossing'],
-        observationFeeds: [
-          member(trigger.value, 'feed', 'Trigger.ObservationCrossing'),
-        ],
-      };
-    }
     case 'AtTime': {
       const afterTicks = safeInteger(
         member(trigger.value, 'after_ticks', 'Trigger.AtTime'),
@@ -1204,7 +1143,6 @@ function parseTrigger(
         afterTicks,
         everyTicks: null,
         sourceKinds: [],
-        observationFeeds: [],
       };
     }
     case 'Cadenced': {
@@ -1220,7 +1158,6 @@ function parseTrigger(
         afterTicks: null,
         everyTicks,
         sourceKinds: [],
-        observationFeeds: [],
       };
     }
     default:
@@ -1403,11 +1340,7 @@ function findings(
   }
   for (const dependency of dependencies) {
     const reader = steps[dependency.toStep];
-    if (
-      reader.amounts.some(
-        (amount) => amount.resolution === 'Percent',
-      )
-    ) {
+    if (reader.amounts.some((amount) => amount.resolution === 'Percent')) {
       results.push({
         kind: 'PreExistingBalanceMixedWithCurrentRunOutput',
         writer: dependency.fromStep,

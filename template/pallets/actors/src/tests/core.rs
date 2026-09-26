@@ -2,66 +2,6 @@ use super::*;
 use crate::{ActorProcesses, ActorSemanticState, ActorSemanticStates};
 
 #[test]
-fn active_dirty_list_rotates_fairly_and_repairs_cursor_on_removal() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actors = [1u32, 2, 3].map(|feed| {
-      create_system_with(
-        ALICE,
-        observation_schedule(vec![feed]),
-        None,
-        inert_contract_steps(),
-      )
-    });
-    for feed in [1u32, 2, 3] {
-      assert_ok!(Actors::note_observation_changed(feed, 1));
-    }
-    let list = Actors::dirty_observation_list();
-    assert_eq!(
-      (list.head, list.tail, list.cursor, list.count),
-      (Some(1), Some(3), Some(1), 3)
-    );
-    assert_eq!(
-      Actors::dirty_observation_feeds(2)
-        .expect("middle dirty feed")
-        .previous_dirty_feed,
-      Some(1)
-    );
-
-    assert!(crate::Pallet::<Test>::do_fanout_dirty_observation_page().expect("first page"));
-    assert!(Actors::dirty_observation_feeds(1).is_none());
-    assert_eq!(Actors::dirty_observation_list().cursor, Some(2));
-    assert!(Actors::pending_signal(actors[0]));
-
-    assert_ok!(Actors::deactivate_actor(
-      RuntimeOrigin::signed(ALICE),
-      actors[1]
-    ));
-    let repaired = Actors::dirty_observation_list();
-    assert_eq!(
-      (
-        repaired.head,
-        repaired.tail,
-        repaired.cursor,
-        repaired.count
-      ),
-      (Some(3), Some(3), Some(3), 1)
-    );
-    let last = Actors::dirty_observation_feeds(3).expect("last dirty feed");
-    assert_eq!(
-      (last.previous_dirty_feed, last.next_dirty_feed),
-      (None, None)
-    );
-
-    assert!(!crate::Pallet::<Test>::do_fanout_dirty_observation_page().expect("last page"));
-    assert_eq!(Actors::dirty_observation_list(), Default::default());
-    assert!(Actors::pending_signal(actors[2]));
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
 fn reactivation_with_positive_nonce_uses_schedule_anchor_for_cooldown() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -145,10 +85,7 @@ fn create_admission_enforces_both_idle_weight_dimensions_before_charging() {
     let contract_steps = transfer_contract_steps(BOB, 10);
     let required = Actors::contract_steps_admission_weight_upper(ActorType::User, &contract_steps);
     let fixed = <TestWeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::materialization_coordinator_base())
-      .saturating_add(Actors::scheduler_complete_outer_weight_upper())
-      .saturating_add(TestCrossingWorkerWeightLimit::get())
-      .saturating_add(TestObservationFanoutWeightLimit::get());
+      .saturating_add(Actors::scheduler_complete_outer_weight_upper());
     let gross_required = required.saturating_add(fixed);
     set_guaranteed_on_idle_weight(gross_required);
     prefund_active_user_creation(ALICE, &contract_steps);
@@ -186,10 +123,7 @@ fn maximum_contract_admission_uses_one_step_envelope_instead_of_suffix_sum() {
     .expect("maximum Contract Steps fit");
     let required = Actors::contract_steps_admission_weight_upper(ActorType::User, &contract_steps);
     let fixed = <TestWeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::materialization_coordinator_base())
-      .saturating_add(Actors::scheduler_complete_outer_weight_upper())
-      .saturating_add(TestCrossingWorkerWeightLimit::get())
-      .saturating_add(TestObservationFanoutWeightLimit::get());
+      .saturating_add(Actors::scheduler_complete_outer_weight_upper());
     set_guaranteed_on_idle_weight(required.saturating_add(fixed));
     prefund_active_user_creation(ALICE, &contract_steps);
     assert_ok!(Actors::create_user_actor(
@@ -261,15 +195,8 @@ fn test_weight_fallback_equals_reference_interface_for_all_classes() {
     resume_actor,
     manual_trigger,
     address_event_trigger_occurrence,
-    observation_change_trigger_occurrence,
-    observation_crossing_trigger_occurrence,
     at_time_trigger_occurrence,
     cadenced_trigger_occurrence,
-    observation_change_ingress,
-    observation_fanout_base,
-    observation_fanout_page,
-    record_crossing_worker_fault,
-    record_observation_fanout_worker_fault,
     close_actor,
     fee_collection,
     task_transfer,
@@ -290,7 +217,6 @@ fn test_weight_fallback_equals_reference_interface_for_all_classes() {
     scheduler_on_idle_base,
     service_member_to_deadline_new_key,
     scheduler_inner_zero_step_complete,
-    scheduler_paged_zero_step_user_crossing_unavailable,
     scheduler_actor_state_probe,
     transaction_extension_ingress_base,
     transaction_extension_ingress_notify,

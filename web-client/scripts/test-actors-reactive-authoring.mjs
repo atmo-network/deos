@@ -10,7 +10,6 @@ import test from 'node:test';
 
 import { analyzeActorContract } from '../src/lib/automation/analysis.ts';
 import { createActorArtifactFromAuthoring } from '../src/lib/automation/authoring.ts';
-import { actorReactiveCapacityFailureMessage } from '../src/lib/automation/capacity-failure.ts';
 import { inspectActorContractArtifact } from '../src/lib/automation/contract-artifact.ts';
 import { composeActorRuntimeCall } from '../src/lib/automation/governance-composition.ts';
 import { runActorMatchingWasmSimulation } from '../src/lib/automation/matching-wasm.ts';
@@ -42,7 +41,7 @@ const canonicalContract = {
   actorType: 'User',
   mutability: 'Mutable',
   completionPolicy: 'CloseAfterProductiveCycle',
-  trigger: { type: 'ObservationChange', feed },
+  trigger: { type: 'Cadenced', everyTicks: 12 },
   cooldownBlocks: 0,
   scheduleWindow: null,
   fundingPolicy: { type: 'OwnerOnly' },
@@ -150,7 +149,7 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
   );
   assert.equal(inspection.valid, true);
   if (!inspection.valid) return;
-  assert.equal(inspection.projection.trigger.type, 'ObservationChange');
+  assert.equal(inspection.projection.trigger.type, 'Cadenced');
   assert.deepEqual(
     inspection.projection.steps[0].precondition[0].map(
       (predicate) => predicate.type,
@@ -171,7 +170,9 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
     weightModel,
   });
   assert.equal(analysis.identity.contractId, artifact.contractId);
-  assert.equal(analysis.trigger.sourceKinds[0], 'ObservationChange');
+  assert.equal(analysis.trigger.kind, 'Cadenced');
+  assert.equal(analysis.trigger.everyTicks, 12);
+  assert.deepEqual(analysis.trigger.sourceKinds, []);
   assert.equal(analysis.steps[0].precondition.mode, 'AnyOf');
   assert.equal(analysis.steps[0].precondition.clauseCount, 1);
   assert.equal(analysis.steps[0].precondition.atomicCount, 2);
@@ -197,7 +198,7 @@ test('reactive strategy preserves topology under persistent lifecycle policy', (
   assert.equal(inspection.valid, true);
   if (!inspection.valid) return;
   assert.equal(inspection.projection.completion.type, 'Persistent');
-  assert.equal(inspection.projection.trigger.type, 'ObservationChange');
+  assert.equal(inspection.projection.trigger.type, 'Cadenced');
   assert.equal(inspection.projection.steps[0].task.type, 'SwapIn');
   assert.notEqual(persistentArtifact.contractId, artifact.contractId);
 });
@@ -341,17 +342,6 @@ test('matching-Wasm contract accepts canonical productive closure for the fixtur
   assert.equal(response.outcome.closeReason, 'ProductiveCycleCompleted');
 });
 
-test('reactive capacity failures preserve typed User and total admission boundaries', () => {
-  assert.match(
-    actorReactiveCapacityFailureMessage('CrossingUserCapacityExceeded'),
-    /System reserve cannot be consumed by User Actors/,
-  );
-  assert.match(
-    actorReactiveCapacityFailureMessage('CrossingIndexCapacityExceeded'),
-    /Total Crossing capacity.*fails atomically/,
-  );
-});
-
 test('reactive authoring UI exposes every canonical fixture control', async () => {
   const sources = await Promise.all(
     [
@@ -366,17 +356,12 @@ test('reactive authoring UI exposes every canonical fixture control', async () =
   assert(sources[1].includes('ACTORS_AUTHORING_CONDITION_TYPES'));
   assert(!sources[3].includes('disabled={total === 1}'));
   for (const control of [
-    'ObservationChange',
+    'Cadenced',
     'SwapIn',
     'RetryLater',
     'Close after productive cycle',
     'Zero-Step Contract',
     'Persistent',
-    'CrossingUserCapacityExceeded',
-    'CrossingIndexCapacityExceeded',
-    'Service cost scales boundedly with subscribed pages',
-    'Repeated fires while already latched coalesce',
-    'backpressure may defer service',
   ]) {
     assert(source.includes(control), `${control} control is missing`);
   }

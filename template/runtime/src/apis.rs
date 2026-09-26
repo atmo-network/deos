@@ -245,33 +245,15 @@ impl_runtime_apis! {
   }
 }
 
-impl pallet_deos_actors::ActorEligibilityApi<Block, primitives::OracleFeedId, BlockNumber>
-        for Runtime {
+impl pallet_deos_actors::ActorEligibilityApi<Block, BlockNumber> for Runtime {
         fn actor_eligibility(
             actor_id: pallet_deos_actors::ActorId,
         ) -> Result<
-            pallet_deos_actors::ActorEligibility<primitives::OracleFeedId, BlockNumber>,
+            pallet_deos_actors::ActorEligibility<BlockNumber>,
             pallet_deos_actors::ActorClassificationError,
         > {
             Actors::actor_eligibility(actor_id)
         }
-
-        fn materialization_faults() -> pallet_deos_actors::MaterializationFaults<primitives::OracleFeedId> {
-            pallet_deos_actors::MaterializationFaults {
-                crossing: Actors::crossing_worker_fault(),
-                fanout: Actors::observation_fanout_worker_fault(),
-            }
-        }
-
-        fn crossing_capacity(feed: primitives::OracleFeedId) -> pallet_deos_actors::CrossingCapacity {
-            pallet_deos_actors::CrossingCapacity {
-                user_limit: <crate::configs::actor_config::ActorMaxUserCrossingMembersPerFeed as polkadot_sdk::frame_support::traits::Get<u32>>::get(),
-                total_limit: <crate::configs::actor_config::ActorMaxCrossingMembersPerFeed as polkadot_sdk::frame_support::traits::Get<u32>>::get(),
-                user_memberships: Actors::crossing_user_feed_membership_count(feed),
-                total_memberships: Actors::crossing_feed_membership_count(feed),
-            }
-        }
-
     }
 
     impl primitives::TmctolReadModelApi<Block, AccountId, Balance> for Runtime {

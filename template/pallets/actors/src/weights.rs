@@ -21,7 +21,6 @@ use polkadot_sdk::frame_support::{
 
 pub trait WeightInfo {
   fn create_user_actor() -> Weight;
-  fn create_user_actor_crossing_new_page() -> Weight;
   fn create_user_actor_at_slot() -> Weight;
   fn create_system_actor() -> Weight;
   fn create_system_actor_at_sovereign_id() -> Weight;
@@ -31,41 +30,18 @@ pub trait WeightInfo {
   fn pause_actor() -> Weight;
   fn resume_actor() -> Weight;
   fn manual_trigger() -> Weight;
-  fn manual_observation_park() -> Weight;
   fn address_event_trigger_occurrence() -> Weight;
-  fn observation_change_trigger_occurrence() -> Weight;
-  fn observation_crossing_trigger_occurrence() -> Weight;
   fn at_time_trigger_occurrence() -> Weight;
   fn cadenced_trigger_occurrence() -> Weight;
   fn cadenced_running_rearm() -> Weight { Self::cadenced_trigger_occurrence() }
   fn cadenced_suspended_service_rearm() -> Weight { Self::cadenced_trigger_occurrence() }
   fn cadenced_suspended_deadline_rearm() -> Weight { Self::cadenced_trigger_occurrence() }
-  fn observation_change_ingress() -> Weight;
-  fn observation_fanout_base() -> Weight;
-  fn observation_fanout_branch_probe() -> Weight;
-  fn observation_fanout_page() -> Weight;
-  fn observation_fanout_wakeup_page() -> Weight;
-  fn observation_fanout_coalesced_page() -> Weight;
-  fn observation_fanout_blocked_page() -> Weight;
-  fn observation_fanout_terminal() -> Weight;
-  fn record_crossing_worker_fault() -> Weight;
-  fn record_observation_fanout_worker_fault() -> Weight;
-  fn process_due_observation_availability_review() -> Weight;
-  fn process_due_observation_availability_review_deep_index() -> Weight {
-    Self::process_due_observation_availability_review()
-  }
   fn process_due_parked_balance_review() -> Weight;
   fn process_due_parked_balance_review_deep_index() -> Weight {
     Self::process_due_parked_balance_review()
   }
   fn complete_cycle_to_parked_balance() -> Weight;
   fn process_pending_parked_balance_event() -> Weight;
-  fn process_pending_observation_availability_event() -> Weight;
-  fn process_pending_observation_predicate_event() -> Weight;
-  fn process_due_observation_predicate_review() -> Weight;
-  fn process_due_observation_predicate_review_deep_index() -> Weight {
-    Self::process_due_observation_predicate_review()
-  }
   fn dependency_scan_source_probe() -> Weight;
   fn process_dependency_scan_unit() -> Weight;
   fn process_dependency_scan_completion_unit() -> Weight;
@@ -74,50 +50,6 @@ pub trait WeightInfo {
   fn deadline_destination_search(p: u32) -> Weight;
   fn return_due_block_deadline_to_service() -> Weight;
   fn return_due_block_deadline_to_service_deep_index() -> Weight;
-  fn crossing_worker_base() -> Weight { Weight::from_parts(25_000_000, 8_000) }
-  fn crossing_work_probe() -> Weight { Weight::from_parts(400_000_000, 20_000) }
-  fn crossing_selection_probe() -> Weight { Weight::from_parts(50_000_000, 0) }
-  fn crossing_search_probe() -> Weight { Weight::from_parts(400_000_000, 100_000) }
-  fn crossing_fire_probe() -> Weight { Weight::from_parts(1_000_000_000, 300_000) }
-  fn crossing_tail_refill_probe() -> Weight { Weight::from_parts(50_000_000, 10_000) }
-  fn crossing_fire_pair_probe() -> Weight { Weight::from_parts(2_000_000_000, 500_000) }
-  fn crossing_fire_cohort_preflight(c: u32) -> Weight {
-    Weight::from_parts(100_000_000, 40_000)
-      .saturating_mul(c.into())
-  }
-  fn crossing_coalesced_cohort_preflight(c: u32) -> Weight {
-    Weight::from_parts(100_000_000, 40_000)
-      .saturating_mul(c.into())
-  }
-  fn crossing_terminal_cohort_preflight(c: u32) -> Weight {
-    Weight::from_parts(100_000_000, 40_000)
-      .saturating_mul(c.into())
-  }
-  fn crossing_skip_cohort_preflight(c: u32) -> Weight {
-    Weight::from_parts(30_000_000, 10_000)
-      .saturating_mul(c.into())
-  }
-  fn crossing_rearm_cohort_preflight(c: u32) -> Weight {
-    Weight::from_parts(40_000_000, 20_000)
-      .saturating_mul(c.into())
-  }
-  fn crossing_rearm_pair_probe() -> Weight { Weight::from_parts(1_500_000_000, 400_000) }
-  fn crossing_skip_pair_probe() -> Weight { Weight::from_parts(1_000_000_000, 300_000) }
-  fn crossing_transition_unit() -> Weight { Weight::from_parts(75_000_000, 24_000) }
-  fn crossing_leaf_unit() -> Weight { Weight::from_parts(500_000_000, 180_000) }
-  fn crossing_page_unit() -> Weight { Weight::from_parts(100_000_000, 48_000) }
-  fn crossing_rearm_unit() -> Weight { Weight::from_parts(750_000_000, 250_000) }
-  fn crossing_rearm_pair_unit() -> Weight { Weight::from_parts(1_200_000_000, 400_000) }
-  fn crossing_coalesced_unit() -> Weight { Weight::from_parts(750_000_000, 250_000) }
-  fn crossing_coalesced_pair_unit() -> Weight { Weight::from_parts(1_200_000_000, 400_000) }
-  fn crossing_placed_unit() -> Weight { Weight::from_parts(650_000_000, 220_000) }
-  fn crossing_placed_pair_unit() -> Weight { Weight::from_parts(1_300_000_000, 400_000) }
-  fn crossing_placed_maximum_unit() -> Weight { Weight::from_parts(2_600_000_000, 800_000) }
-  fn crossing_placed_non_tail_emptied_unit() -> Weight { Weight::from_parts(2_600_000_000, 800_000) }
-  fn crossing_placed_non_tail_trimmed_unit() -> Weight { Weight::from_parts(2_600_000_000, 800_000) }
-  fn crossing_skip_unit() -> Weight { Weight::from_parts(500_000_000, 180_000) }
-  fn crossing_skip_pair_unit() -> Weight { Weight::from_parts(750_000_000, 250_000) }
-  fn crossing_actor_unit() -> Weight { Weight::from_parts(750_000_000, 250_000) }
   fn pipeline_admission_apoptosis() -> Weight;
   fn close_actor() -> Weight;
   fn fee_collection() -> Weight;
@@ -148,7 +80,6 @@ pub trait WeightInfo {
   fn current_step_plan_running_tail(steps_in_chunk: u32) -> Weight;
   fn scheduler_on_initialize_cutoff() -> Weight;
   fn scheduler_on_idle_base() -> Weight;
-  fn materialization_coordinator_base() -> Weight;
   fn service_member_publish_empty() -> Weight;
   fn service_member_publish_populated() -> Weight;
   fn service_member_retire_singleton() -> Weight;
@@ -171,12 +102,6 @@ pub trait WeightInfo {
   fn dependency_publication_coalesced_active_source() -> Weight;
   fn service_member_to_deadline_new_key() -> Weight;
   fn scheduler_inner_zero_step_complete() -> Weight;
-  /// Complete state-preserving FIFO refusal for a paid zero-Step User Crossing whose current
-  /// observation is unavailable. The conservative fallback exists only until the host regenerates
-  /// this benchmark-owned method with its complete production Weight artifact.
-  fn scheduler_paged_zero_step_user_crossing_unavailable() -> Weight {
-    Self::scheduler_paged_execute_opening_max()
-  }
   fn scheduler_paged_execute_opening_max() -> Weight;
   fn scheduler_inner_opening_failed_min(tail_chunks: u32) -> Weight;
   fn scheduler_inner_opening_failed_max(tail_chunks: u32) -> Weight;
@@ -226,8 +151,6 @@ pub trait WeightInfo {
   fn run_cancel() -> Weight;
   fn update_contract() -> Weight;
   fn set_global_circuit_breaker() -> Weight;
-  fn clear_crossing_worker_fault() -> Weight;
-  fn clear_observation_fanout_worker_fault() -> Weight;
   fn set_active_actor_limit() -> Weight;
   fn permissionless_sweep() -> Weight;
   fn permissionless_sweep_many(batch: u32) -> Weight;
@@ -243,10 +166,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Weight::from_parts(25_000_000, 2000)
       .saturating_add(T::DbWeight::get().reads(4))
       .saturating_add(T::DbWeight::get().writes(5))
-  }
-
-  fn create_user_actor_crossing_new_page() -> Weight {
-    Self::create_user_actor()
   }
 
   fn create_user_actor_at_slot() -> Weight {
@@ -297,26 +216,10 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(5))
   }
 
-  fn manual_observation_park() -> Weight {
-    Self::manual_trigger().saturating_add(Self::complete_cycle_to_parked_balance())
-  }
-
   fn address_event_trigger_occurrence() -> Weight {
     Weight::from_parts(169_927_000, 8_366)
       .saturating_add(T::DbWeight::get().reads(14))
       .saturating_add(T::DbWeight::get().writes(7))
-  }
-
-  fn observation_change_trigger_occurrence() -> Weight {
-    Weight::from_parts(117_615_000, 8_295)
-      .saturating_add(T::DbWeight::get().reads(13))
-      .saturating_add(T::DbWeight::get().writes(7))
-  }
-
-  fn observation_crossing_trigger_occurrence() -> Weight {
-    Weight::from_parts(499_862_000, 164_106)
-      .saturating_add(T::DbWeight::get().reads(89))
-      .saturating_add(T::DbWeight::get().writes(80))
   }
 
   fn at_time_trigger_occurrence() -> Weight {
@@ -329,53 +232,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Weight::from_parts(195_070_000, 8_325)
       .saturating_add(T::DbWeight::get().reads(17))
       .saturating_add(T::DbWeight::get().writes(11))
-  }
-
-  fn observation_change_ingress() -> Weight {
-    Weight::from_parts(75_000_000, 24_000)
-  }
-
-  fn observation_fanout_base() -> Weight {
-    Weight::from_parts(15_000_000, 4_000)
-  }
-
-  fn observation_fanout_branch_probe() -> Weight {
-    Weight::from_parts(20_000_000, 6_000)
-  }
-
-  fn observation_fanout_page() -> Weight {
-    Weight::from_parts(150_000_000_000, 750_000)
-  }
-
-  fn observation_fanout_wakeup_page() -> Weight {
-    Weight::from_parts(8_000_000_000, 750_000)
-  }
-
-  fn observation_fanout_coalesced_page() -> Weight {
-    Weight::from_parts(8_000_000_000, 750_000)
-  }
-
-  fn observation_fanout_blocked_page() -> Weight {
-    Weight::from_parts(150_000_000_000, 400_000)
-  }
-
-  fn observation_fanout_terminal() -> Weight {
-    Weight::from_parts(8_000_000_000, 750_000)
-  }
-
-  fn record_crossing_worker_fault() -> Weight {
-    Weight::from_parts(16_000_000, 1_529)
-      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
-  }
-
-  fn record_observation_fanout_worker_fault() -> Weight {
-    Weight::from_parts(16_000_000, 1_529)
-      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
-  }
-
-  fn process_due_observation_availability_review() -> Weight {
-    Weight::from_parts(1_500_000_000, 400_000)
-      .saturating_add(T::DbWeight::get().reads_writes(24, 20))
   }
 
   fn process_due_parked_balance_review() -> Weight {
@@ -394,20 +250,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Weight::from_parts(667_554_000, 43_950)
       .saturating_add(T::DbWeight::get().reads(92))
       .saturating_add(T::DbWeight::get().writes(74))
-  }
-
-  fn process_pending_observation_availability_event() -> Weight {
-    Weight::from_parts(204_638_000, 4_570)
-      .saturating_add(T::DbWeight::get().reads(28))
-      .saturating_add(T::DbWeight::get().writes(19))
-  }
-
-  fn process_pending_observation_predicate_event() -> Weight {
-    Self::process_pending_observation_availability_event()
-  }
-
-  fn process_due_observation_predicate_review() -> Weight {
-    Self::process_due_observation_availability_review()
   }
 
   fn dependency_scan_source_probe() -> Weight {
@@ -628,12 +470,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   fn scheduler_on_idle_base() -> Weight {
     Weight::from_parts(25_000_000, 2_500)
       .saturating_add(T::DbWeight::get().reads(7))
-      .saturating_add(T::DbWeight::get().writes(1))
-  }
-
-  fn materialization_coordinator_base() -> Weight {
-    Weight::from_parts(20_000_000, 4_000)
-      .saturating_add(T::DbWeight::get().reads(1))
       .saturating_add(T::DbWeight::get().writes(1))
   }
 
@@ -1163,16 +999,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(1))
   }
 
-  fn clear_crossing_worker_fault() -> Weight {
-    Weight::from_parts(16_000_000, 1_529)
-      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
-  }
-
-  fn clear_observation_fanout_worker_fault() -> Weight {
-    Weight::from_parts(16_000_000, 1_529)
-      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
-  }
-
   fn set_active_actor_limit() -> Weight {
     Weight::from_parts(10_000_000, 800)
       .saturating_add(T::DbWeight::get().reads(1))
@@ -1225,7 +1051,6 @@ impl WeightInfo for TestWeightInfo {
   fn scheduler_service_terminal_retain_close() -> Weight { Weight::from_parts(278_880_000, 6_302) }
   fn scheduler_service_minimal_apoptosis() -> Weight { Weight::from_parts(288_170_000, 9_072) }
   fn create_user_actor() -> Weight { Weight::from_parts(25_000_000, 2000) }
-  fn create_user_actor_crossing_new_page() -> Weight { Self::create_user_actor() }
   fn create_user_actor_at_slot() -> Weight { Self::create_user_actor() }
   fn create_system_actor() -> Weight { Weight::from_parts(25_000_000, 2000) }
   fn create_system_actor_at_sovereign_id() -> Weight { Weight::from_parts(100_642_000, 174_945) }
@@ -1235,35 +1060,12 @@ impl WeightInfo for TestWeightInfo {
   fn pause_actor() -> Weight { Weight::from_parts(15_000_000, 1200) }
   fn resume_actor() -> Weight { Weight::from_parts(15_000_000, 1200) }
   fn manual_trigger() -> Weight { Weight::from_parts(113_494_000, 9_635) }
-  fn manual_observation_park() -> Weight {
-    Self::manual_trigger().saturating_add(Self::complete_cycle_to_parked_balance())
-  }
   fn address_event_trigger_occurrence() -> Weight { Weight::from_parts(169_927_000, 8_366) }
-  fn observation_change_trigger_occurrence() -> Weight { Weight::from_parts(117_615_000, 8_295) }
-  fn observation_crossing_trigger_occurrence() -> Weight { Weight::from_parts(499_862_000, 164_106) }
   fn at_time_trigger_occurrence() -> Weight { Weight::from_parts(157_425_000, 8_317) }
   fn cadenced_trigger_occurrence() -> Weight { Weight::from_parts(195_070_000, 8_325) }
-  fn observation_change_ingress() -> Weight { Weight::from_parts(75_000_000, 24_000) }
-  fn observation_fanout_base() -> Weight { Weight::from_parts(15_000_000, 4_000) }
-  fn observation_fanout_branch_probe() -> Weight { Weight::zero() }
-  fn observation_fanout_page() -> Weight { Weight::from_parts(150_000_000_000, 750_000) }
-  fn observation_fanout_wakeup_page() -> Weight { Weight::from_parts(8_000_000_000, 750_000) }
-  fn observation_fanout_coalesced_page() -> Weight { Weight::from_parts(8_000_000_000, 750_000) }
-  fn observation_fanout_blocked_page() -> Weight { Weight::from_parts(150_000_000_000, 400_000) }
-  fn observation_fanout_terminal() -> Weight { Weight::from_parts(8_000_000_000, 750_000) }
-  fn record_crossing_worker_fault() -> Weight { Weight::from_parts(16_000_000, 1_529) }
-  fn record_observation_fanout_worker_fault() -> Weight { Weight::from_parts(16_000_000, 1_529) }
-  fn process_due_observation_availability_review() -> Weight { Weight::from_parts(1_500_000_000, 400_000) }
   fn process_due_parked_balance_review() -> Weight { Weight::from_parts(740_190_000, 43_950) }
   fn complete_cycle_to_parked_balance() -> Weight { Weight::from_parts(680_824_000, 43_950) }
   fn process_pending_parked_balance_event() -> Weight { Weight::from_parts(667_554_000, 43_950) }
-  fn process_pending_observation_availability_event() -> Weight { Weight::from_parts(204_638_000, 4_570) }
-  fn process_pending_observation_predicate_event() -> Weight {
-    Self::process_pending_observation_availability_event()
-  }
-  fn process_due_observation_predicate_review() -> Weight {
-    Self::process_due_observation_availability_review()
-  }
   fn dependency_scan_source_probe() -> Weight { Weight::from_parts(6_774_000, 1_498) }
   fn process_dependency_scan_unit() -> Weight { Weight::from_parts(63_417_000, 4_570) }
   fn process_dependency_scan_completion_unit() -> Weight { Weight::from_parts(23_886_000, 3_523) }
@@ -1335,7 +1137,6 @@ impl WeightInfo for TestWeightInfo {
   }
   fn scheduler_on_initialize_cutoff() -> Weight { Weight::from_parts(7_543_000, 1_493) }
   fn scheduler_on_idle_base() -> Weight { Weight::from_parts(25_000_000, 2_500) }
-  fn materialization_coordinator_base() -> Weight { Weight::from_parts(20_000_000, 4_000) }
   fn service_member_publish_empty() -> Weight { Weight::from_parts(150_000_000, 24_000) }
   fn service_member_publish_populated() -> Weight { Weight::from_parts(200_000_000, 32_000) }
   fn service_member_retire_singleton() -> Weight { Weight::from_parts(34_851_000, 3_948) }
@@ -1421,15 +1222,7 @@ impl WeightInfo for TestWeightInfo {
   fn run_cancel() -> Weight { Weight::from_parts(56_782_000, 8_120) }
   fn update_contract() -> Weight { Weight::from_parts(162_733_000, 10_181) }
   fn set_global_circuit_breaker() -> Weight { Weight::from_parts(8_000_000, 600) }
-  fn clear_crossing_worker_fault() -> Weight { Weight::from_parts(16_000_000, 1_529) }
-  fn clear_observation_fanout_worker_fault() -> Weight { Weight::from_parts(16_000_000, 1_529) }
   fn set_active_actor_limit() -> Weight { Weight::from_parts(10_000_000, 800) }
-  fn crossing_placed_non_tail_emptied_unit() -> Weight {
-    Weight::from_parts(2_700_000_000, 850_000)
-  }
-  fn crossing_placed_non_tail_trimmed_unit() -> Weight {
-    Weight::from_parts(2_800_000_000, 900_000)
-  }
   fn permissionless_sweep() -> Weight { Weight::from_parts(18_000_000, 1200) }
   fn permissionless_sweep_many(batch: u32) -> Weight {
     let bounded = u64::from(batch.min(3));

@@ -142,20 +142,6 @@ pub(crate) fn market_execution_failure(error: DispatchError) -> pallet_deos_rout
 
 fn oracle_publication_failure(error: DispatchError) -> pallet_deos_router::AdapterFailure {
   let retryable = error == pallet_oracle::Error::<Runtime>::FeedPaused.into();
-  if error == pallet_deos_actors::Error::<Runtime>::DirtyObservationCapacityExceeded.into() {
-    return router_adapter_failure(
-      error,
-      pallet_deos_router::RouterFailureClass::IngressRejected,
-      pallet_deos_router::RetryDisposition::RetryLater,
-    );
-  }
-  if error == pallet_deos_actors::Error::<Runtime>::DirtyObservationInvariant.into() {
-    return router_adapter_failure(
-      error,
-      pallet_deos_router::RouterFailureClass::IngressRejected,
-      pallet_deos_router::RetryDisposition::Permanent,
-    );
-  }
   router_adapter_failure(
     error,
     pallet_deos_router::RouterFailureClass::PublicationRejected,
@@ -955,9 +941,7 @@ impl pallet_deos_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
         },
       );
     }
-    <super::oracle_config::OraclePublicationBenchmarkHelper as pallet_oracle::PublicationBenchmarkHelper<
-      primitives::OracleFeedId,
-    >>::prepare_changed_hook(feed, pallet_oracle::ChangedHookBenchmarkTopology::Combined)
+    Ok(())
   }
 
   fn create_tmc_curve(

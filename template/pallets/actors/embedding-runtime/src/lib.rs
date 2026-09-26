@@ -449,17 +449,6 @@ impl pallet_deos_actors::SovereignAccountDeriver<AccountId> for RuntimeSovereign
 /// embedding behavior fixture uses an explicit finite high-ceiling idle reserve
 /// so generated production Weight growth cannot silently turn portability tests
 /// into an unrelated throughput gate.
-pub struct ObservationFanoutWeightLimit;
-impl Get<Weight> for ObservationFanoutWeightLimit {
-  fn get() -> Weight {
-    let max_block = <() as polkadot_sdk::frame_support::traits::Get<
-      polkadot_sdk::frame_system::limits::BlockWeights,
-    >>::get()
-    .max_block;
-    polkadot_sdk::sp_runtime::Perbill::from_percent(20) * max_block
-  }
-}
-
 pub struct WakeupWeightLimit;
 impl Get<Weight> for WakeupWeightLimit {
   fn get() -> Weight {
@@ -468,17 +457,6 @@ impl Get<Weight> for WakeupWeightLimit {
     >>::get()
     .max_block;
     polkadot_sdk::sp_runtime::Perbill::from_percent(20) * max_block
-  }
-}
-
-pub struct CrossingWorkerWeightLimit;
-impl Get<Weight> for CrossingWorkerWeightLimit {
-  fn get() -> Weight {
-    let max_block = <() as polkadot_sdk::frame_support::traits::Get<
-      polkadot_sdk::frame_system::limits::BlockWeights,
-    >>::get()
-    .max_block;
-    polkadot_sdk::sp_runtime::Perbill::from_percent(5) * max_block
   }
 }
 
@@ -719,19 +697,7 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxQueueLength = ConstU32<128>;
   type QueuePageSize = ConstU32<8>;
   type WakeupPageSize = ConstU32<8>;
-  type ObservationPageSize = ConstU32<8>;
-  type CrossingPageSize = ConstU32<8>;
-  type MaxCrossingTransitionsPerFeed = ConstU32<8>;
-  type MaxCrossingMembersPerFeed = ConstU32<16>;
-  type MaxUserCrossingMembersPerFeed = ConstU32<12>;
-  type MaxCrossingTransitionsPerBlock = ConstU32<2>;
-  type MaxCrossingLeavesPerBlock = ConstU32<4>;
-  type MaxCrossingPagesPerBlock = ConstU32<4>;
-  type MaxCrossingActorsPerBlock = ConstU32<8>;
-  type CrossingWorkerWeightLimit = CrossingWorkerWeightLimit;
   type MaxQueueEntriesScannedPerBlock = ConstU32<128>;
-  type MaxObservationFanoutPagesPerBlock = ConstU32<8>;
-  type ObservationFanoutWeightLimit = ObservationFanoutWeightLimit;
   type WakeupWeightLimit = WakeupWeightLimit;
   type MaxWakeupsPerBlock = ConstU32<16>;
   type MaxSweepBatch = ConstU32<4>;

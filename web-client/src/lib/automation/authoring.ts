@@ -195,14 +195,6 @@ export type ActorAuthoringTrigger =
         | { type: 'Any' }
         | { type: 'Whitelist'; assets: ActorAuthoringAsset[] };
     }
-  | { type: 'ObservationChange'; feed: ActorAuthoringObservationFeed }
-  | {
-      type: 'ObservationCrossing';
-      feed: ActorAuthoringObservationFeed;
-      direction: 'Rising' | 'Falling';
-      threshold: string;
-      rearmThreshold: string;
-    }
   | { type: 'AtTime'; afterTicks: number }
   | { type: 'Cadenced'; everyTicks: number };
 
@@ -824,50 +816,6 @@ function validateTrigger(
         });
       }
       return;
-    case 'ObservationChange':
-      validateObservationFeed(trigger.feed, 'trigger.feed', issues);
-      return;
-    case 'ObservationCrossing': {
-      validateObservationFeed(trigger.feed, 'trigger.feed', issues);
-      const threshold = validateObservationValue(
-        trigger.threshold,
-        'trigger.threshold',
-        'Fire threshold',
-        issues,
-      );
-      const rearm = validateObservationValue(
-        trigger.rearmThreshold,
-        'trigger.rearmThreshold',
-        'Rearm threshold',
-        issues,
-      );
-      if (threshold != null && rearm != null) {
-        const valid =
-          trigger.direction === 'Rising'
-            ? rearm < threshold
-            : trigger.direction === 'Falling' && rearm > threshold;
-        if (!valid) {
-          issues.push({
-            path: 'trigger.rearmThreshold',
-            message:
-              trigger.direction === 'Rising'
-                ? 'Rising crossings require the rearm threshold below the fire threshold'
-                : trigger.direction === 'Falling'
-                  ? 'Falling crossings require the rearm threshold above the fire threshold'
-                  : 'Crossing direction must be Rising or Falling',
-          });
-        }
-      } else if (
-        trigger.direction !== 'Rising' &&
-        trigger.direction !== 'Falling'
-      ) {
-        issues.push({
-          path: 'trigger.direction',
-          message: 'Crossing direction must be Rising or Falling',
-        });
-      }
-      return;
-    }
     case 'AtTime':
       if (
         !Number.isSafeInteger(trigger.afterTicks) ||
@@ -891,6 +839,12 @@ function validateTrigger(
           message: `Cadence must be within 1..${limits.maxTemporalTicks} timestamp ticks`,
         });
       }
+      return;
+    default:
+      issues.push({
+        path: 'trigger.type',
+        message: 'Trigger must be Manual, AddressEvent, AtTime, or Cadenced',
+      });
   }
 }
 
@@ -1329,17 +1283,6 @@ function lowerTrigger(trigger: ActorAuthoringTrigger) {
         asset_filter: assetFilter,
       });
     }
-    case 'ObservationChange':
-      return runtimeVariant('ObservationChange', {
-        feed: lowerObservationFeed(trigger.feed),
-      });
-    case 'ObservationCrossing':
-      return runtimeVariant('ObservationCrossing', {
-        feed: lowerObservationFeed(trigger.feed),
-        direction: runtimeVariant(trigger.direction),
-        threshold: BigInt(trigger.threshold),
-        rearm_threshold: BigInt(trigger.rearmThreshold),
-      });
     case 'AtTime':
       return runtimeVariant('AtTime', {
         after_ticks: BigInt(trigger.afterTicks),

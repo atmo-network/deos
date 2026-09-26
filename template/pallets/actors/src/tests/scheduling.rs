@@ -958,7 +958,6 @@ fn canonical_cadenced_deadline_publishes_pending_service() {
       2,
       2,
       Some(WakeupKey::Block(3)),
-      Some(WakeupKey::Tick(3)),
     )
     .expect("canonical deadline frontiers are admitted");
     assert_eq!(
@@ -1043,13 +1042,7 @@ fn temporal_deadline_dispatch_preserves_source_on_resource_refusal() {
       ] {
         let mut meter = WeightMeter::with_limit(limit);
         assert_eq!(
-          Actors::process_next_due_tick_deadline(
-            &mut meter,
-            ServiceResidenceKind::Pending,
-            2,
-            2,
-            None,
-          ),
+          Actors::process_next_due_tick_deadline(&mut meter, 2),
           Err(crate::DependencyReviewWorkerError::InsufficientWeight)
         );
         assert_eq!(meter.consumed(), consumed);
@@ -1067,13 +1060,7 @@ fn temporal_deadline_dispatch_preserves_source_on_resource_refusal() {
       // This proves the declared admission boundary, not sufficiency of retained coefficients.
       let mut meter = WeightMeter::with_limit(complete);
       assert_eq!(
-        Actors::process_next_due_tick_deadline(
-          &mut meter,
-          ServiceResidenceKind::Pending,
-          2,
-          2,
-          None,
-        ),
+        Actors::process_next_due_tick_deadline(&mut meter, 2),
         Ok(crate::DueTickDeadlineMutation::TemporalTriggerProcessed(
           source.actor
         ))
@@ -1112,13 +1099,7 @@ fn temporal_deadline_transaction_restores_source_after_loading_refusal() {
       let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
       let mut meter = WeightMeter::with_limit(Weight::MAX);
       assert_eq!(
-        Actors::process_next_due_tick_deadline(
-          &mut meter,
-          ServiceResidenceKind::Pending,
-          2,
-          2,
-          None,
-        ),
+        Actors::process_next_due_tick_deadline(&mut meter, 2),
         Err(crate::DependencyReviewWorkerError::TemporalOccurrence)
       );
       assert_eq!(
@@ -1907,10 +1888,13 @@ fn exhausted_actor_control_prevents_on_idle_housekeeping_mutation() {
       .expect("remaining Actor Control is exactly reservable"); // deos-bypass: panic-owner — maximum equals the checked residual of the same limit and usage.
     assert_eq!(state.settle(&mut reservation, remaining), Ok(()));
     crate::CurrentBlockResourceState::<Test>::put(state);
-    let cursor_before = Actors::materialization_family_cursor();
+    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
 
     assert_eq!(Actors::on_idle(1, Weight::MAX), Weight::zero());
-    assert_eq!(Actors::materialization_family_cursor(), cursor_before);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+      root_before
+    );
   });
 }
 
@@ -2081,37 +2065,6 @@ fn queue_quartet_commit_applies_one_aggregate_plan_exactly_once() {
       assert!(hot.pending_signal);
       assert_eq!(hot.queue_ticket, Some(index as u64));
     }
-  });
-}
-
-#[test]
-fn queue_cohort_preflight_rejects_more_than_runtime_maximum_without_mutation() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let cohort_cap = <<Test as crate::Config>::MaxCrossingActorsPerBlock as Get<u32>>::get();
-    let actors = (0..=cohort_cap)
-      .map(|offset| {
-        create_system_with(
-          20_000 + u64::from(offset),
-          manual_schedule(),
-          None,
-          contract_steps_with_step(make_step(Task::StopCycle)),
-        )
-      })
-      .collect();
-    let root_before =
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-
-    assert_eq!(
-      Actors::test_preflight_queue_over_cap(actors),
-      Err(crate::scheduler::EnqueueOutcome::CapacityUnavailable)
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      root_before
-    );
-    assert_eq!(Actors::next_queue_ticket(), 0);
-    assert_eq!(Actors::queue_occupancy(), 0);
   });
 }
 
@@ -3632,7 +3585,6 @@ fn mandatory_prepass_deadline_reservation_refuses_each_dimension_before_mutation
       let finalization = W::scheduler_on_idle_base().saturating_add(W::block_resource_finalize());
       let minimum = W::scheduler_on_initialize_cutoff()
         .saturating_add(Actors::deadline_service_weight_upper())
-        .saturating_add(W::materialization_coordinator_base())
         .saturating_add(W::dependency_scan_source_probe())
         .saturating_add(
           W::process_dependency_scan_unit().max(W::process_dependency_scan_completion_unit()),
@@ -4887,117 +4839,6 @@ fn zero_on_idle_budget_performs_no_storage_or_telemetry_work() {
 }
 
 #[test]
-fn shared_materialization_remainder_follows_rotated_first_family_after_reserving_minima() {
-  new_test_ext().execute_with(|| {
-    let shared = Actors::materialization_weight_limit();
-    let minima = [
-      Actors::materialization_family_minimum(0),
-      Actors::materialization_family_minimum(1),
-    ];
-    let lendable = shared.saturating_sub(minima[0]).saturating_sub(minima[1]);
-    assert!(lendable.ref_time() > 0 && lendable.proof_size() > 0);
-    assert_eq!(
-      Actors::materialization_family_budget(
-        0,
-        0,
-        lendable,
-        crate::MaterializationMinimumReservation::Unavailable,
-      ),
-      lendable
-    );
-
-    for cursor in 0u8..2 {
-      let first = Actors::materialization_family_budget(
-        cursor,
-        0,
-        shared,
-        crate::MaterializationMinimumReservation::ReserveAllFamilies,
-      );
-      assert_eq!(first, minima[usize::from(cursor)].saturating_add(lendable));
-      let next = cursor.saturating_add(1) % 2;
-      let after_first = shared.saturating_sub(first);
-      assert_eq!(
-        Actors::materialization_family_budget(
-          cursor,
-          1,
-          after_first,
-          crate::MaterializationMinimumReservation::ReserveAllFamilies,
-        ),
-        minima[usize::from(next)]
-      );
-    }
-  });
-}
-
-#[test]
-fn empty_materialization_families_charge_only_their_measured_probes_and_yield() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let expected = <TestWeightInfo as crate::WeightInfo>::scheduler_on_initialize_cutoff()
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::dependency_scan_source_probe())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_on_idle_base())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::materialization_coordinator_base())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::crossing_worker_base())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::observation_fanout_base())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::block_resource_finalize())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::classify_due_block_deadline())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::classify_due_tick_deadline())
-      // Prepass and Drain each own their admitted empty-round discovery.
-      .saturating_add(
-        <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated().saturating_mul(2),
-      )
-      .saturating_add(
-        <TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible().saturating_mul(2),
-      );
-
-    let prepass = Actors::actor_prepass(RuntimeOrigin::none())
-      .unwrap()
-      .actual_weight
-      .unwrap();
-    assert_eq!(
-      prepass.saturating_add(Actors::on_idle(1, Weight::MAX)),
-      expected
-    );
-    assert_eq!(Actors::materialization_family_cursor(), 1);
-    assert_eq!(Actors::queue_occupancy(), 0);
-    assert_eq!(Actors::crossing_pending_feed_list().count, 0);
-    assert_eq!(Actors::dirty_observation_list().count, 0);
-  });
-}
-
-#[test]
-fn materialization_family_cursor_rotates_deterministically_and_corruption_fails_closed() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let fixed = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_on_idle_base(
-    )
-    .saturating_add(
-      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::materialization_coordinator_base(
-      ),
-    )
-    .saturating_add(
-      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::block_resource_finalize(),
-    );
-    for expected in [1u8, 0] {
-      let used = Actors::on_idle(1, Weight::MAX);
-      assert!(fixed.all_lte(used));
-      assert_eq!(Actors::materialization_family_cursor(), expected);
-    }
-
-    crate::MaterializationFamilyCursor::<Test>::put(2);
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    assert_eq!(Actors::on_idle(1, Weight::MAX), fixed);
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before,
-      "invalid coordinator state must not run or rewrite any materialization family"
-    );
-    #[cfg(feature = "try-runtime")]
-    assert!(crate::Pallet::<Test>::do_try_state().is_err());
-  });
-}
-
-#[test]
 fn bounded_idle_scan_preserves_healthy_pass_exit() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -5783,13 +5624,7 @@ fn temporal_collection_failure_preserves_exact_source_and_retries_once() {
       set_fail_fee_sink_transfer(true);
       let mut meter = WeightMeter::with_limit(Weight::MAX);
       assert_eq!(
-        Actors::process_next_due_tick_deadline(
-          &mut meter,
-          ServiceResidenceKind::Pending,
-          2,
-          2,
-          None,
-        ),
+        Actors::process_next_due_tick_deadline(&mut meter, 2),
         Err(crate::DependencyReviewWorkerError::TemporalOccurrence)
       );
       set_fail_fee_sink_transfer(false);
@@ -5807,13 +5642,7 @@ fn temporal_collection_failure_preserves_exact_source_and_retries_once() {
       assert_eq!(native_balance(&TestFeeSink::get()), sink_balance);
       clear_fee_collections();
       assert_eq!(
-        Actors::process_next_due_tick_deadline(
-          &mut meter,
-          ServiceResidenceKind::Pending,
-          2,
-          2,
-          None,
-        ),
+        Actors::process_next_due_tick_deadline(&mut meter, 2),
         Ok(crate::DueTickDeadlineMutation::TemporalTriggerProcessed(
           source.actor
         ))
@@ -5830,13 +5659,7 @@ fn temporal_collection_failure_preserves_exact_source_and_retries_once() {
         ));
       }
       assert_eq!(
-        Actors::process_next_due_tick_deadline(
-          &mut meter,
-          ServiceResidenceKind::Pending,
-          2,
-          2,
-          None,
-        ),
+        Actors::process_next_due_tick_deadline(&mut meter, 2),
         Err(crate::DependencyReviewWorkerError::Deadline(
           crate::DeadlineMutationError::MemberMissing
         ))
@@ -5996,13 +5819,7 @@ fn temporal_bootstrap_rearm_respects_independent_resource_dimensions() {
       ] {
         let mut meter = WeightMeter::with_limit(limit);
         assert_eq!(
-          Actors::process_next_due_tick_deadline(
-            &mut meter,
-            ServiceResidenceKind::Pending,
-            100,
-            100,
-            None,
-          ),
+          Actors::process_next_due_tick_deadline(&mut meter, 100),
           Err(crate::DependencyReviewWorkerError::InsufficientWeight)
         );
         assert_eq!(meter.consumed(), selector);
@@ -6018,13 +5835,7 @@ fn temporal_bootstrap_rearm_respects_independent_resource_dimensions() {
 
       let mut meter = WeightMeter::with_limit(complete);
       assert_eq!(
-        Actors::process_next_due_tick_deadline(
-          &mut meter,
-          ServiceResidenceKind::Pending,
-          100,
-          100,
-          None,
-        ),
+        Actors::process_next_due_tick_deadline(&mut meter, 100),
         Ok(crate::DueTickDeadlineMutation::TemporalTriggerProcessed(
           source.actor
         ))
@@ -6603,13 +6414,7 @@ fn cadenced_occurrence_wakes_parked_balance_and_removes_review_deadline() {
     set_fail_fee_sink_transfer(true);
     let mut meter = WeightMeter::with_limit(Weight::MAX);
     assert_eq!(
-      Actors::process_next_due_tick_deadline(
-        &mut meter,
-        ServiceResidenceKind::Pending,
-        11,
-        11,
-        None,
-      ),
+      Actors::process_next_due_tick_deadline(&mut meter, 11),
       Err(crate::DependencyReviewWorkerError::TemporalOccurrence)
     );
     set_fail_fee_sink_transfer(false);
@@ -6636,13 +6441,7 @@ fn cadenced_occurrence_wakes_parked_balance_and_removes_review_deadline() {
     clear_fee_collections();
     let mut meter = WeightMeter::with_limit(Weight::MAX);
     assert_eq!(
-      Actors::process_next_due_tick_deadline(
-        &mut meter,
-        ServiceResidenceKind::Pending,
-        11,
-        11,
-        None,
-      ),
+      Actors::process_next_due_tick_deadline(&mut meter, 11),
       Ok(crate::DueTickDeadlineMutation::TemporalTriggerProcessed(
         actor
       ))
@@ -6710,13 +6509,7 @@ fn busy_cadenced_rearm_refuses_each_resource_dimension_before_mutation() {
       ] {
         let mut meter = WeightMeter::with_limit(limit);
         assert_eq!(
-          Actors::process_next_due_tick_deadline(
-            &mut meter,
-            ServiceResidenceKind::Pending,
-            11,
-            11,
-            None,
-          ),
+          Actors::process_next_due_tick_deadline(&mut meter, 11),
           Err(crate::DependencyReviewWorkerError::InsufficientWeight)
         );
         assert_eq!(meter.consumed(), consumed);
@@ -6818,13 +6611,7 @@ fn busy_cadenced_occurrence_rearms_without_fees_or_future_cycle() {
             System::set_block_number(now);
             let mut meter = WeightMeter::with_limit(Weight::MAX);
             assert_eq!(
-              Actors::process_next_due_tick_deadline(
-                &mut meter,
-                ServiceResidenceKind::Pending,
-                now,
-                now,
-                None
-              ),
+              Actors::process_next_due_tick_deadline(&mut meter, now),
               Ok(crate::DueTickDeadlineMutation::TemporalTriggerProcessed(
                 actor
               ))

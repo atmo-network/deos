@@ -20,20 +20,17 @@ use crate::{
   DependencyRevisionError, DependencyRevisionMutation, DependencyRevisionState,
   DependencyRevisions, DependencyScanError, DependencyScanMutation, DependencyScanSourceError,
   DependencyScanSourceList, DependencyScanSourceListState, DependencyScanSourceMutation,
-  DependencyScanSourceNode, DependencyScanSourceNodes, DependencyScanWorkerError,
-  DependencySourceAllocator, DependencySourceAllocatorState, DependencySourceBalances,
-  DependencySourceError, DependencySourceMutation, DependencySourceObservations,
-  DependencyTimedReview, DependencyTimedReviewMutation, DependencyTimedReviews,
-  DormantActorSemanticRecord, DueBlockDeadlineMutation, DueTickDeadlineMutation,
-  LegacyProcessPlacement, LegacyProcessTransition, ObservationDependencySources, ParkEvidence,
-  ParkNegativeReason, ParkedBalanceActivation, ParkedBalanceActivationError,
-  ParkedBalanceActivationOf, ParkedBalanceCertificationError, ParkedBalanceClassificationError,
-  ParkedBalanceEpisodes, ParkedBalanceQualification, ParkedBalanceRule,
-  ParkedBalanceTransitionError, PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent,
-  PendingDependencyEvents, PendingDependencyReviews, PipelineMachineFeeStrategy,
-  ProcessCompileError, ProcessDisableCause, ProcessDisablement, ProcessPublicationError,
-  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
-  ProcessTransitionObligation, ScalarObservationState, ServiceHeader, ServiceHeaderRecord,
+  DependencyScanSourceNode, DependencyScanSourceNodes, DependencySourceAllocator,
+  DependencySourceBalances, DependencyTimedReview, DependencyTimedReviewMutation,
+  DependencyTimedReviews, DormantActorSemanticRecord, DueBlockDeadlineMutation,
+  LegacyProcessPlacement, LegacyProcessTransition, ParkEvidence, ParkNegativeReason,
+  ParkedBalanceActivation, ParkedBalanceActivationError, ParkedBalanceActivationOf,
+  ParkedBalanceCertificationError, ParkedBalanceClassificationError, ParkedBalanceEpisodes,
+  ParkedBalanceQualification, ParkedBalanceRule, ParkedBalanceTransitionError, PendingCheckOwner,
+  PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents, PendingDependencyReviews,
+  PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
+  ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
+  ProcessTransitionError, ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord,
   ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind, ServiceRetirementError,
   ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis,
   UnsignaledProcessEvidence, apply_actor_semantic_mutation, certify_parked_balance_watch,
@@ -431,11 +428,10 @@ fn completed_authored_contract_captures_anchor_and_enters_park() {
     assert!(PendingDependencyEvents::<Test>::contains_key(actor_id));
     frame_system::Pallet::<Test>::set_block_number(3);
     let due_weight = event_weight
-      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review())
-      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review());
+      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review());
     let mut positive_event_meter = WeightMeter::with_limit(due_weight);
     assert_eq!(
-      Actors::process_next_due_block_observation_availability_review(
+      Actors::process_next_due_block_dependency_review(
         &mut positive_event_meter,
         ServiceResidenceKind::Live,
         3,
@@ -606,11 +602,10 @@ fn parked_balance_episode_publishes_atomically_and_positive_review_reclaims_it()
     assert!(Actors::load_canonical_actor_semantic_state(actor).is_ok());
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let review_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review()
-      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review());
+    let review_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review();
     let mut no_weight = WeightMeter::with_limit(Weight::zero());
     assert_eq!(
-      Actors::process_next_due_block_observation_availability_review(
+      Actors::process_next_due_block_dependency_review(
         &mut no_weight,
         ServiceResidenceKind::Live,
         2,
@@ -623,7 +618,7 @@ fn parked_balance_episode_publishes_atomically_and_positive_review_reclaims_it()
     set_asset_minimum_balance(2);
     let mut drift_meter = WeightMeter::with_limit(review_weight);
     assert_eq!(
-      Actors::process_next_due_block_observation_availability_review(
+      Actors::process_next_due_block_dependency_review(
         &mut drift_meter,
         ServiceResidenceKind::Live,
         2,
@@ -644,7 +639,7 @@ fn parked_balance_episode_publishes_atomically_and_positive_review_reclaims_it()
     set_asset_minimum_balance(1);
     let mut negative_meter = WeightMeter::with_limit(review_weight);
     assert_eq!(
-      Actors::process_next_due_block_observation_availability_review(
+      Actors::process_next_due_block_dependency_review(
         &mut negative_meter,
         ServiceResidenceKind::Live,
         2,
@@ -689,7 +684,7 @@ fn parked_balance_episode_publishes_atomically_and_positive_review_reclaims_it()
     frame_system::Pallet::<Test>::set_block_number(3);
     let mut positive_meter = WeightMeter::with_limit(review_weight);
     assert_eq!(
-      Actors::process_next_due_block_observation_availability_review(
+      Actors::process_next_due_block_dependency_review(
         &mut positive_meter,
         ServiceResidenceKind::Live,
         3,
@@ -2074,1063 +2069,6 @@ fn positive_due_review_wakes_only_the_exact_current_park_episode() {
 }
 
 #[test]
-fn bounded_due_review_worker_admits_one_atomic_oracle_attempt() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let ActorSemanticState::Active(record) =
-      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
-    else {
-      panic!("created Actor is active");
-    };
-    let actor = actor_ref(actor_id, record.generation);
-    ActorControlLocators::<Test>::remove(actor_id);
-    ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
-    let source = 30;
-    let feed = 8;
-    ObservationDependencySources::<Test>::insert(feed, source);
-    DependencySourceObservations::<Test>::insert(source, feed);
-    set_observation(feed, ScalarObservationState::Unavailable);
-    let owner = PendingCheckOwner {
-      actor,
-      plan_revision: 12,
-    };
-    let evidence = ParkEvidence {
-      plan_identity: record.admission.admission_identity,
-      reason: ParkNegativeReason::SourceUnavailable,
-      review_at: Some(2),
-    };
-    Actors::transfer_service_member_to_park(
-      actor,
-      ServiceResidenceKind::Live,
-      owner.plan_revision,
-      evidence.reason,
-      evidence.review_at,
-      &[DependencyPlanSource {
-        source,
-        observed_revision: 0,
-      }],
-      Some(WakeupKey::Block(2)),
-    )
-    .unwrap();
-    let review = DependencyTimedReview {
-      owner,
-      deadline: WakeupKey::Block(2),
-    };
-    let weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review();
-    let mut meter = WeightMeter::with_limit(weight);
-    assert_eq!(
-      Actors::process_due_observation_availability_review(
-        &mut meter,
-        review,
-        evidence,
-        ServiceResidenceKind::Live,
-        1,
-        Some(WakeupKey::Block(3)),
-      ),
-      Err(DependencyReviewWorkerError::Publication(
-        DependencyDueReviewError::NotDue
-      ))
-    );
-    assert_eq!(meter.consumed(), weight);
-    assert_eq!(DependencyTimedReviews::<Test>::get(actor_id), Some(review));
-    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let mut no_weight = WeightMeter::with_limit(Weight::zero());
-    assert_eq!(
-      Actors::process_due_observation_availability_review(
-        &mut no_weight,
-        review,
-        evidence,
-        ServiceResidenceKind::Live,
-        2,
-        Some(WakeupKey::Block(3)),
-      ),
-      Err(DependencyReviewWorkerError::InsufficientWeight)
-    );
-    assert_eq!(DependencyTimedReviews::<Test>::get(actor_id), Some(review));
-
-    let mut admitted = WeightMeter::with_limit(weight);
-    assert!(matches!(
-      Actors::process_due_observation_availability_review(
-        &mut admitted,
-        review,
-        evidence,
-        ServiceResidenceKind::Live,
-        2,
-        Some(WakeupKey::Block(3)),
-      ),
-      Ok(DependencyReviewMutation::Rearmed(_))
-    ));
-    assert_eq!(
-      DependencyTimedReviews::<Test>::get(actor_id),
-      Some(DependencyTimedReview {
-        owner,
-        deadline: WakeupKey::Block(3),
-      })
-    );
-
-    frame_system::Pallet::<Test>::set_block_number(3);
-    let next = DependencyTimedReview {
-      owner,
-      deadline: WakeupKey::Block(3),
-    };
-    PendingDependencyEvents::<Test>::insert(
-      actor_id,
-      PendingDependencyEvent {
-        owner,
-        source,
-        revision: 0,
-      },
-    );
-    let mut occupied = WeightMeter::with_limit(weight);
-    assert_eq!(
-      Actors::process_due_observation_availability_review(
-        &mut occupied,
-        next,
-        evidence,
-        ServiceResidenceKind::Live,
-        3,
-        None,
-      ),
-      Err(DependencyReviewWorkerError::Publication(
-        DependencyDueReviewError::DestinationOccupied
-      ))
-    );
-    assert_eq!(DependencyTimedReviews::<Test>::get(actor_id), Some(next));
-    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
-    PendingDependencyEvents::<Test>::remove(actor_id);
-
-    set_observation(feed, ScalarObservationState::Uninitialized);
-    let mut refused = WeightMeter::with_limit(weight);
-    assert_eq!(
-      Actors::process_due_observation_availability_review(
-        &mut refused,
-        next,
-        evidence,
-        ServiceResidenceKind::Live,
-        3,
-        None,
-      ),
-      Err(DependencyReviewWorkerError::Interpretation(
-        DependencyRegistrationError::SourceUninitialized
-      ))
-    );
-    assert_eq!(DependencyTimedReviews::<Test>::get(actor_id), Some(next));
-    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
-
-    set_observation(
-      feed,
-      ScalarObservationState::Fresh {
-        value: 1,
-        observed_at: 3,
-      },
-    );
-    let mut wake = WeightMeter::with_limit(weight);
-    assert_eq!(
-      Actors::process_due_observation_availability_review(
-        &mut wake,
-        next,
-        evidence,
-        ServiceResidenceKind::Live,
-        3,
-        None,
-      ),
-      Ok(DependencyReviewMutation::Woke)
-    );
-    assert!(ServiceNodes::<Test>::contains_key(actor_id));
-    assert!(!DependencyTimedReviews::<Test>::contains_key(actor_id));
-  });
-}
-
-#[test]
-fn due_review_deadline_traversal_is_weight_gated_and_atomic() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let ActorSemanticState::Active(record) =
-      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
-    else {
-      panic!("created Actor is active");
-    };
-    let actor = actor_ref(actor_id, record.generation);
-    ActorControlLocators::<Test>::remove(actor_id);
-    ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
-    let source = 31;
-    let feed = 9;
-    ObservationDependencySources::<Test>::insert(feed, source);
-    DependencySourceObservations::<Test>::insert(source, feed);
-    set_observation(feed, ScalarObservationState::Unavailable);
-    let owner = PendingCheckOwner {
-      actor,
-      plan_revision: 13,
-    };
-    let evidence = ParkEvidence {
-      plan_identity: record.admission.admission_identity,
-      reason: ParkNegativeReason::SourceUnavailable,
-      review_at: Some(2),
-    };
-    Actors::transfer_service_member_to_park(
-      actor,
-      ServiceResidenceKind::Live,
-      owner.plan_revision,
-      evidence.reason,
-      evidence.review_at,
-      &[DependencyPlanSource {
-        source,
-        observed_revision: 0,
-      }],
-      Some(WakeupKey::Block(2)),
-    )
-    .unwrap();
-    let first_handle =
-      DeadlineHandles::<Test>::get(actor_id).expect("parking publishes timed review deadline");
-    assert_eq!(first_handle.key, WakeupKey::Block(2));
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let mut no_weight = WeightMeter::with_limit(Weight::zero());
-    assert_eq!(
-      Actors::process_next_due_block_observation_availability_review(
-        &mut no_weight,
-        ServiceResidenceKind::Live,
-        2,
-        Some(WakeupKey::Block(3)),
-      ),
-      Err(DependencyReviewWorkerError::InsufficientWeight)
-    );
-    assert_eq!(DeadlineHandles::<Test>::get(actor_id), Some(first_handle));
-    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
-    assert_eq!(
-      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
-      Some(Some(ProcessResidence::Parked(evidence)))
-    );
-
-    let selector_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_block_deadline();
-    let review_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review()
-      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review());
-    let retry_weight = Actors::deadline_return_weight_upper();
-    let mut branch_refused =
-      WeightMeter::with_limit(selector_weight.saturating_add(retry_weight));
-    assert_eq!(
-      Actors::process_next_due_block_deadline(
-        &mut branch_refused,
-        ServiceResidenceKind::Live,
-        2,
-        Some(WakeupKey::Block(3)),
-      ),
-      Err(DependencyReviewWorkerError::InsufficientWeight)
-    );
-    assert_eq!(DeadlineHandles::<Test>::get(actor_id), Some(first_handle));
-    assert_eq!(
-      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
-      Some(Some(ProcessResidence::Parked(evidence)))
-    );
-    let weight = selector_weight.saturating_add(review_weight);
-    let mut admitted = WeightMeter::with_limit(weight);
-    assert!(matches!(
-      Actors::process_next_due_block_deadline(
-        &mut admitted,
-        ServiceResidenceKind::Live,
-        2,
-        Some(WakeupKey::Block(3)),
-      ),
-      Ok(DueBlockDeadlineMutation::ReviewProcessed(
-        current,
-        DependencyReviewMutation::Rearmed(_)
-      )) if current == actor
-    ));
-    let rearmed_handle = DeadlineHandles::<Test>::get(actor_id).expect("review stays indexed");
-    assert_eq!(rearmed_handle.key, WakeupKey::Block(3));
-    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
-
-    frame_system::Pallet::<Test>::set_block_number(3);
-    set_observation(feed, ScalarObservationState::Uninitialized);
-    let mut refused = WeightMeter::with_limit(weight);
-    assert_eq!(
-      Actors::process_next_due_block_observation_availability_review(
-        &mut refused,
-        ServiceResidenceKind::Live,
-        3,
-        None,
-      ),
-      Err(DependencyReviewWorkerError::Interpretation(
-        DependencyRegistrationError::SourceUninitialized
-      ))
-    );
-    assert_eq!(DeadlineHandles::<Test>::get(actor_id), Some(rearmed_handle));
-    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
-    assert_eq!(
-      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
-      Some(Some(ProcessResidence::Parked(evidence)))
-    );
-
-    set_observation(
-      feed,
-      ScalarObservationState::Fresh {
-        value: 1,
-        observed_at: 3,
-      },
-    );
-    let mut wake = WeightMeter::with_limit(weight);
-    assert_eq!(
-      Actors::process_next_due_block_observation_availability_review(
-        &mut wake,
-        ServiceResidenceKind::Live,
-        3,
-        None,
-      ),
-      Ok((actor, DependencyReviewMutation::Woke))
-    );
-    assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
-    assert!(ServiceNodes::<Test>::contains_key(actor_id));
-    assert!(!DependencyTimedReviews::<Test>::contains_key(actor_id));
-  });
-}
-
-#[test]
-fn due_tick_review_uses_its_own_frontier_and_preserves_refused_work() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let ActorSemanticState::Active(record) =
-      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
-    else {
-      panic!("created Actor is active");
-    };
-    let actor = actor_ref(actor_id, record.generation);
-    ActorControlLocators::<Test>::remove(actor_id);
-    ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
-    let source = 32;
-    let feed = 10;
-    ObservationDependencySources::<Test>::insert(feed, source);
-    DependencySourceObservations::<Test>::insert(source, feed);
-    set_observation(feed, ScalarObservationState::Unavailable);
-    let evidence = ParkEvidence {
-      plan_identity: record.admission.admission_identity,
-      reason: ParkNegativeReason::SourceUnavailable,
-      review_at: Some(2),
-    };
-    Actors::transfer_service_member_to_park(
-      actor,
-      ServiceResidenceKind::Live,
-      14,
-      evidence.reason,
-      evidence.review_at,
-      &[DependencyPlanSource { source, observed_revision: 0 }],
-      Some(WakeupKey::Tick(7)),
-    )
-    .unwrap();
-    let retained = DeadlineHandles::<Test>::get(actor_id).expect("Tick review is indexed");
-    frame_system::Pallet::<Test>::set_block_number(7);
-    assert!(matches!(Actors::classify_next_due_block_deadline(7), Err(DeadlineMutationError::MemberMissing)));
-    assert!(matches!(Actors::classify_next_due_tick_deadline(6), Err(DeadlineMutationError::InvalidDestination)));
-
-    let selector_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_tick_deadline();
-    let review_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review()
-      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review());
-    let mut selector_refused = WeightMeter::with_limit(Weight::zero());
-    assert_eq!(
-      Actors::process_next_due_tick_deadline(&mut selector_refused, ServiceResidenceKind::Live, 7, 7, Some(WakeupKey::Tick(8))),
-      Err(DependencyReviewWorkerError::InsufficientWeight)
-    );
-    let mut branch_refused = WeightMeter::with_limit(selector_weight);
-    assert_eq!(
-      Actors::process_next_due_tick_deadline(&mut branch_refused, ServiceResidenceKind::Live, 7, 7, Some(WakeupKey::Tick(8))),
-      Err(DependencyReviewWorkerError::InsufficientWeight)
-    );
-    assert_eq!(DeadlineHandles::<Test>::get(actor_id), Some(retained));
-    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
-
-    let block_selector = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_block_deadline();
-    let retry_weight = Actors::deadline_return_weight_upper();
-    let complete = block_selector
-      .saturating_add(retry_weight.max(review_weight))
-      .saturating_add(selector_weight)
-      .saturating_add(review_weight);
-    let mut admitted = WeightMeter::with_limit(complete);
-    let pass = Actors::service_due_deadline_frontiers(
-      &mut admitted,
-      ServiceResidenceKind::Live,
-      7,
-      7,
-      None,
-      Some(WakeupKey::Tick(8)),
-    )
-    .unwrap();
-    assert_eq!(
-      pass.block,
-      Err(DependencyReviewWorkerError::Deadline(
-        DeadlineMutationError::MemberMissing
-      ))
-    );
-    assert!(matches!(
-      pass.tick,
-      Ok(DueTickDeadlineMutation::ReviewProcessed(current, DependencyReviewMutation::Rearmed(_))) if current == actor
-    ));
-    assert_eq!(DeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key), Some(WakeupKey::Tick(8)));
-    assert!(matches!(Actors::classify_next_due_block_deadline(7), Err(DeadlineMutationError::MemberMissing)));
-  });
-}
-
-#[test]
-fn mandatory_deadline_service_reserves_both_independent_frontiers() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(6);
-    let mut actors = Vec::new();
-    for (source, feed, deadline) in [
-      (41, 11, WakeupKey::Block(7)),
-      (42, 12, WakeupKey::Tick(7)),
-    ] {
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-      let ActorSemanticState::Active(record) =
-        ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
-      else {
-        panic!("created Actor is active");
-      };
-      let actor = actor_ref(actor_id, record.generation);
-      ActorControlLocators::<Test>::remove(actor_id);
-      ActorUnsignaledControlCells::<Test>::remove(actor_id);
-      publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
-      ObservationDependencySources::<Test>::insert(feed, source);
-      DependencySourceObservations::<Test>::insert(source, feed);
-      set_observation(feed, ScalarObservationState::Unavailable);
-      Actors::transfer_service_member_to_park(
-        actor,
-        ServiceResidenceKind::Live,
-        u64::from(source),
-        ParkNegativeReason::SourceUnavailable,
-        Some(7),
-        &[DependencyPlanSource { source, observed_revision: 0 }],
-        Some(deadline),
-      )
-      .unwrap();
-      set_observation(
-        feed,
-        ScalarObservationState::Fresh {
-          value: 1,
-          observed_at: 7,
-        },
-      );
-      actors.push(actor);
-    }
-    frame_system::Pallet::<Test>::set_block_number(7);
-
-    let block_selector = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_block_deadline();
-    let tick_selector = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_tick_deadline();
-    let review = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review()
-      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review());
-    let retry = Actors::deadline_return_weight_upper();
-    let complete = block_selector
-      .saturating_add(retry.max(review))
-      .saturating_add(tick_selector)
-      .saturating_add(review);
-    let mut refused = WeightMeter::with_limit(complete.saturating_sub(Weight::from_parts(1, 0)));
-    assert_eq!(
-      Actors::service_due_deadline_frontiers(
-        &mut refused,
-        ServiceResidenceKind::Live,
-        7,
-        7,
-        None,
-        None,
-      ),
-      Err(DependencyReviewWorkerError::InsufficientWeight)
-    );
-    assert!(actors.iter().all(|actor| DeadlineHandles::<Test>::contains_key(actor.actor_id)));
-
-    let mut admitted = WeightMeter::with_limit(complete);
-    let pass = Actors::service_due_deadline_frontiers(
-      &mut admitted,
-      ServiceResidenceKind::Live,
-      7,
-      7,
-      None,
-      None,
-    )
-    .unwrap();
-    assert_eq!(
-      pass.block,
-      Ok(DueBlockDeadlineMutation::ReviewProcessed(
-        actors[0],
-        DependencyReviewMutation::Woke,
-      ))
-    );
-    assert_eq!(
-      pass.tick,
-      Ok(DueTickDeadlineMutation::ReviewProcessed(
-        actors[1],
-        DependencyReviewMutation::Woke,
-      ))
-    );
-    assert!(actors.iter().all(|actor| !DeadlineHandles::<Test>::contains_key(actor.actor_id)));
-  });
-}
-
-#[test]
-fn mandatory_prepass_services_due_reviews_on_both_current_clocks() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(6);
-    let mut actors = Vec::new();
-    for (source, feed, deadline) in [(51, 21, WakeupKey::Block(7)), (52, 22, WakeupKey::Tick(7))] {
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-      let ActorSemanticState::Active(record) =
-        ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
-      else {
-        panic!("created Actor is active");
-      };
-      let actor = actor_ref(actor_id, record.generation);
-      ActorControlLocators::<Test>::remove(actor_id);
-      ActorUnsignaledControlCells::<Test>::remove(actor_id);
-      publish_test_service_member(actor, ServiceResidenceKind::Live, 6).unwrap();
-      ObservationDependencySources::<Test>::insert(feed, source);
-      DependencySourceObservations::<Test>::insert(source, feed);
-      set_observation(feed, ScalarObservationState::Unavailable);
-      Actors::transfer_service_member_to_park(
-        actor,
-        ServiceResidenceKind::Live,
-        u64::from(source),
-        ParkNegativeReason::SourceUnavailable,
-        Some(7),
-        &[DependencyPlanSource {
-          source,
-          observed_revision: 0,
-        }],
-        Some(deadline),
-      )
-      .unwrap();
-      set_observation(
-        feed,
-        ScalarObservationState::Fresh {
-          value: 1,
-          observed_at: 7,
-        },
-      );
-      actors.push(actor);
-    }
-    frame_system::Pallet::<Test>::set_block_number(7);
-
-    assert_eq!(Actors::on_idle(7, Weight::zero()), Weight::zero());
-    assert!(
-      actors
-        .iter()
-        .all(|actor| DeadlineHandles::<Test>::contains_key(actor.actor_id))
-    );
-
-    let consumed = Actors::actor_prepass(RuntimeOrigin::none())
-      .unwrap()
-      .actual_weight
-      .unwrap();
-    assert_ne!(consumed, Weight::zero());
-    assert!(
-      actors
-        .iter()
-        .all(|actor| ServiceNodes::<Test>::contains_key(actor.actor_id))
-    );
-    assert!(
-      actors
-        .iter()
-        .all(|actor| !DeadlineHandles::<Test>::contains_key(actor.actor_id))
-    );
-  });
-}
-
-#[test]
-fn due_review_interpreter_routes_one_snapshot_without_consuming_refusals() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let ActorSemanticState::Active(record) =
-      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
-    else {
-      panic!("created Actor is active");
-    };
-    let actor = actor_ref(actor_id, record.generation);
-    ActorControlLocators::<Test>::remove(actor_id);
-    ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
-    let source = 29;
-    let feed = 7;
-    ObservationDependencySources::<Test>::insert(feed, source);
-    DependencySourceObservations::<Test>::insert(source, feed);
-    set_observation(feed, ScalarObservationState::Unavailable);
-    let initial = [DependencyPlanSource {
-      source,
-      observed_revision: 0,
-    }];
-    let owner = PendingCheckOwner {
-      actor,
-      plan_revision: 11,
-    };
-    let evidence = ParkEvidence {
-      plan_identity: record.admission.admission_identity,
-      reason: ParkNegativeReason::SourceUnavailable,
-      review_at: Some(2),
-    };
-    Actors::transfer_service_member_to_park(
-      actor,
-      ServiceResidenceKind::Live,
-      owner.plan_revision,
-      evidence.reason,
-      evidence.review_at,
-      &initial,
-      Some(WakeupKey::Block(2)),
-    )
-    .unwrap();
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let first = DependencyTimedReview {
-      owner,
-      deadline: WakeupKey::Block(2),
-    };
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      assert_eq!(
-        Actors::publish_due_dependency_review(first),
-        Ok(DependencyDueReviewMutation::Published)
-      );
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-
-    assert_eq!(
-      Actors::interpret_pending_observation_availability_review(
-        first,
-        evidence,
-        ServiceResidenceKind::Live,
-        2,
-        Some(WakeupKey::Block(3)),
-      ),
-      Ok(DependencyReviewMutation::Rearmed(DependencyPlanMutation {
-        retained: 1,
-        timed_review: DependencyTimedReviewMutation::Installed,
-        ..Default::default()
-      }))
-    );
-    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
-    assert_eq!(
-      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
-      Some(Some(ProcessResidence::Parked(evidence)))
-    );
-
-    frame_system::Pallet::<Test>::set_block_number(3);
-    let second = DependencyTimedReview {
-      owner,
-      deadline: WakeupKey::Block(3),
-    };
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      assert_eq!(
-        Actors::publish_due_dependency_review(second),
-        Ok(DependencyDueReviewMutation::Published)
-      );
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-    let stale_evidence = ParkEvidence {
-      plan_identity: [7; 32],
-      ..evidence
-    };
-    assert_eq!(
-      Actors::interpret_pending_observation_availability_review(
-        second,
-        stale_evidence,
-        ServiceResidenceKind::Live,
-        3,
-        None,
-      ),
-      Err(DependencyRegistrationError::StoredPlanMismatch)
-    );
-
-    set_observation(feed, ScalarObservationState::Uninitialized);
-    assert_eq!(
-      Actors::interpret_pending_observation_availability_review(
-        second,
-        evidence,
-        ServiceResidenceKind::Live,
-        3,
-        None,
-      ),
-      Err(DependencyRegistrationError::SourceUninitialized)
-    );
-
-    DependencySourceObservations::<Test>::remove(source);
-    assert_eq!(
-      Actors::interpret_pending_observation_availability_review(
-        second,
-        evidence,
-        ServiceResidenceKind::Live,
-        3,
-        None,
-      ),
-      Err(DependencyRegistrationError::StoredPlanMismatch)
-    );
-    DependencySourceObservations::<Test>::insert(source, feed);
-    ObservationDependencySources::<Test>::insert(feed, source + 1);
-    assert_eq!(
-      Actors::interpret_pending_observation_availability_review(
-        second,
-        evidence,
-        ServiceResidenceKind::Live,
-        3,
-        None,
-      ),
-      Err(DependencyRegistrationError::StoredPlanMismatch)
-    );
-    ObservationDependencySources::<Test>::insert(feed, source);
-
-    set_observation(
-      feed,
-      ScalarObservationState::Fresh {
-        value: 1,
-        observed_at: 3,
-      },
-    );
-    race_observation_source_revision_once(source);
-    assert_eq!(
-      Actors::interpret_pending_observation_availability_review(
-        second,
-        evidence,
-        ServiceResidenceKind::Live,
-        3,
-        None,
-      ),
-      Err(DependencyRegistrationError::RevisionMismatch)
-    );
-    assert_eq!(DependencyRevisions::<Test>::get(source).revision, 0);
-
-    ServiceNodes::<Test>::insert(
-      actor_id,
-      ServiceNode {
-        generation: actor.generation,
-        previous: actor,
-        next: actor,
-        kind: ServiceResidenceKind::Live,
-        eligible_from: 2,
-        last_considered: 2,
-      },
-    );
-    assert_eq!(
-      Actors::interpret_pending_observation_availability_review(
-        second,
-        evidence,
-        ServiceResidenceKind::Live,
-        3,
-        None,
-      ),
-      Err(DependencyRegistrationError::StoredPlanMismatch)
-    );
-    ServiceNodes::<Test>::remove(actor_id);
-
-    assert_eq!(
-      PendingDependencyReviews::<Test>::get(actor_id),
-      Some(second)
-    );
-    assert_eq!(DependencyPlans::<Test>::get(actor_id).len(), 1);
-    assert!(DependencyRegistrations::<Test>::contains_key(
-      source, actor_id
-    ));
-    assert_eq!(
-      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
-      Some(Some(ProcessResidence::Parked(evidence)))
-    );
-
-    assert_eq!(
-      Actors::interpret_pending_observation_availability_review(
-        second,
-        evidence,
-        ServiceResidenceKind::Live,
-        3,
-        None,
-      ),
-      Ok(DependencyReviewMutation::Woke)
-    );
-    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
-    assert!(ServiceNodes::<Test>::contains_key(actor_id));
-  });
-}
-
-#[test]
-fn manual_observation_profile_parks_on_false_and_age_review_rechecks_current_predicate() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    set_observation(
-      12,
-      ScalarObservationState::Fresh {
-        value: 5,
-        observed_at: 1,
-      },
-    );
-    let mut steps = inert_contract_steps();
-    steps[0].precondition = all_conditions(vec![Predicate::ObservationAbove {
-      feed: 12,
-      threshold: 10,
-      max_age_blocks: 1,
-    }]);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, steps);
-    let post = Actors::manual_trigger(RuntimeOrigin::root(), actor_id)
-      .expect("Manual observation occurrence enters Park");
-    assert_eq!(
-      post.actual_weight,
-      Some(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::manual_observation_park())
-    );
-    let ActorSemanticState::Active(record) =
-      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
-    else {
-      panic!("created Actor is active");
-    };
-    let actor = actor_ref(actor_id, record.generation);
-    let Some(ProcessResidence::Parked(evidence)) =
-      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence)
-    else {
-      panic!("false Manual observation profile enters Park");
-    };
-    assert_eq!(evidence.reason, ParkNegativeReason::PredicateFalse);
-    assert_eq!(evidence.review_at, Some(2));
-    let parked_record = match ActorSemanticStates::<Test>::get(actor_id) {
-      Some(ActorSemanticState::Active(record)) => record,
-      _ => panic!("parked Actor remains active"),
-    };
-    assert_eq!(evidence.plan_identity, parked_record.admission.admission_identity);
-    assert!(
-      Actors::load_contract_geometry_with_admission(actor_id, &parked_record.admission).is_some()
-    );
-    assert_eq!(DependencyPlans::<Test>::get(actor_id).len(), 1);
-    assert_eq!(
-      DependencyTimedReviews::<Test>::get(actor_id).map(|review| review.deadline),
-      Some(WakeupKey::Block(2))
-    );
-
-    set_observation(12, ScalarObservationState::Stale);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let due_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review()
-      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_pending_observation_availability_event());
-    let mut due_meter = WeightMeter::with_limit(due_weight);
-    assert_eq!(
-      Actors::process_next_due_block_observation_availability_review(
-        &mut due_meter,
-        ServiceResidenceKind::Pending,
-        2,
-        Some(WakeupKey::Block(3)),
-      ),
-      Ok((
-        actor,
-        DependencyReviewMutation::Rearmed(DependencyPlanMutation {
-          retained: 1,
-          timed_review: DependencyTimedReviewMutation::Installed,
-          ..Default::default()
-        })
-      ))
-    );
-    assert_eq!(
-      DependencyTimedReviews::<Test>::get(actor_id).map(|review| review.deadline),
-      Some(WakeupKey::Block(3))
-    );
-
-    set_observation(
-      12,
-      ScalarObservationState::Fresh {
-        value: 20,
-        observed_at: 2,
-      },
-    );
-    let source = DependencyPlans::<Test>::get(actor_id)[0].source;
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      Actors::publish_dependency_event_with_source_retention(source)
-        .expect("equal-value freshness advances the causal revision");
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-    let scan_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_dependency_scan_unit();
-    let mut member_meter = WeightMeter::with_limit(scan_weight);
-    assert_eq!(
-      Actors::process_next_dependency_scan_unit(&mut member_meter),
-      Ok(Some(DependencyScanMutation::Advanced(1)))
-    );
-    let mut completion_meter = WeightMeter::with_limit(scan_weight);
-    assert_eq!(
-      Actors::process_next_dependency_scan_unit(&mut completion_meter),
-      Ok(Some(DependencyScanMutation::Completed))
-    );
-    let pending = PendingDependencyEvents::<Test>::get(actor_id).expect("causal event exists");
-    let Some(ProcessResidence::Parked(current_evidence)) =
-      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence)
-    else {
-      panic!("negative age review remains parked");
-    };
-    let event_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_pending_observation_availability_event();
-    let mut event_meter = WeightMeter::with_limit(event_weight);
-    assert!(matches!(
-      Actors::process_pending_observation_availability_event(
-        &mut event_meter,
-        pending,
-        current_evidence,
-        ServiceResidenceKind::Pending,
-        2,
-      ),
-      Ok(DependencyReviewMutation::Woke)
-    ));
-    assert_eq!(
-      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
-      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
-    );
-  });
-}
-
-#[test]
-fn causal_observation_pending_rearms_current_snapshot_or_wakes_service() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let ActorSemanticState::Active(record) =
-      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
-    else {
-      panic!("created Actor is active");
-    };
-    let actor = actor_ref(actor_id, record.generation);
-    ActorControlLocators::<Test>::remove(actor_id);
-    ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
-    let source = 33;
-    let feed = 11;
-    ObservationDependencySources::<Test>::insert(feed, source);
-    DependencySourceObservations::<Test>::insert(source, feed);
-    set_observation(feed, ScalarObservationState::Unavailable);
-    let owner = PendingCheckOwner {
-      actor,
-      plan_revision: 12,
-    };
-    let evidence = ParkEvidence {
-      plan_identity: record.admission.admission_identity,
-      reason: ParkNegativeReason::SourceUnavailable,
-      review_at: Some(3),
-    };
-    Actors::transfer_service_member_to_park(
-      actor,
-      ServiceResidenceKind::Live,
-      owner.plan_revision,
-      evidence.reason,
-      evidence.review_at,
-      &[DependencyPlanSource {
-        source,
-        observed_revision: 0,
-      }],
-      Some(WakeupKey::Block(3)),
-    )
-    .unwrap();
-
-    let publish_and_scan = || {
-      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-        Actors::publish_dependency_event_with_source_retention(source)
-          .expect("revision publication enters the source selector");
-        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-      });
-      let scan_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_dependency_scan_unit();
-      let mut no_scan_weight = WeightMeter::with_limit(Weight::zero());
-      assert_eq!(
-        Actors::process_next_dependency_scan_unit(&mut no_scan_weight),
-        Err(DependencyScanWorkerError::InsufficientWeight)
-      );
-      assert_eq!(DependencyScanSourceListState::<Test>::get().count, 1);
-      let mut member_meter = WeightMeter::with_limit(scan_weight);
-      assert_eq!(
-        Actors::process_next_dependency_scan_unit(&mut member_meter),
-        Ok(Some(DependencyScanMutation::Advanced(1)))
-      );
-      let mut completion_meter = WeightMeter::with_limit(scan_weight);
-      assert_eq!(
-        Actors::process_next_dependency_scan_unit(&mut completion_meter),
-        Ok(Some(DependencyScanMutation::Completed))
-      );
-    };
-
-    publish_and_scan();
-    let unavailable = PendingDependencyEvents::<Test>::get(actor_id).expect("Pending event");
-    let event_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_pending_observation_availability_event();
-    let mut no_weight = WeightMeter::with_limit(Weight::zero());
-    assert_eq!(
-      Actors::process_pending_observation_availability_event(
-        &mut no_weight,
-        unavailable,
-        evidence,
-        ServiceResidenceKind::Live,
-        1,
-      ),
-      Err(DependencyReviewWorkerError::InsufficientWeight)
-    );
-    assert_eq!(PendingDependencyEvents::<Test>::get(actor_id), Some(unavailable));
-    let mut event_meter = WeightMeter::with_limit(event_weight);
-    assert_eq!(
-      Actors::process_pending_observation_availability_event(
-        &mut event_meter,
-        unavailable,
-        evidence,
-        ServiceResidenceKind::Live,
-        1,
-      ),
-      Ok(DependencyReviewMutation::Rearmed(DependencyPlanMutation {
-        retained: 1,
-        timed_review: DependencyTimedReviewMutation::Retained,
-        ..Default::default()
-      }))
-    );
-    assert_eq!(
-      DependencyRegistrations::<Test>::get(source, actor_id)
-        .map(|registration| registration.acknowledged_revision),
-      Some(1)
-    );
-    assert_eq!(
-      DependencyTimedReviews::<Test>::get(actor_id).map(|review| review.deadline),
-      Some(WakeupKey::Block(3))
-    );
-
-    set_observation(
-      feed,
-      ScalarObservationState::Fresh {
-        value: 7,
-        observed_at: 1,
-      },
-    );
-    publish_and_scan();
-    let available = PendingDependencyEvents::<Test>::get(actor_id).expect("Pending event");
-    race_observation_source_revision_once(source);
-    assert_eq!(
-      Actors::interpret_pending_observation_availability_event(
-        available,
-        evidence,
-        ServiceResidenceKind::Live,
-        1,
-      ),
-      Err(DependencyRegistrationError::RevisionMismatch)
-    );
-    assert_eq!(
-      PendingDependencyEvents::<Test>::get(actor_id),
-      Some(available)
-    );
-    publish_and_scan();
-    frame_system::Pallet::<Test>::set_block_number(3);
-    let due_weight = event_weight
-      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review())
-      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review())
-      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_pending_parked_balance_event());
-    let mut due_meter = WeightMeter::with_limit(due_weight);
-    assert_eq!(
-      Actors::process_next_due_block_observation_availability_review(
-        &mut due_meter,
-        ServiceResidenceKind::Live,
-        3,
-        None,
-      ),
-      Ok((actor, DependencyReviewMutation::Woke))
-    );
-    assert!(!PendingDependencyEvents::<Test>::contains_key(actor_id));
-    assert!(!DependencyTimedReviews::<Test>::contains_key(actor_id));
-    assert!(ServiceNodes::<Test>::contains_key(actor_id));
-    assert_eq!(
-      ServiceNodes::<Test>::get(actor_id).map(|node| node.eligible_from),
-      Some(4)
-    );
-  });
-}
-
-#[test]
 fn canonical_service_semantics_reject_stale_generation_and_residence_without_mutation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -3265,7 +2203,6 @@ fn canonical_zero_step_service_attempt_commits_semantics_before_ring_advance() {
       state,
       &record.admission,
       2,
-      None,
     )
     .expect("canonical zero-Step attempt commits");
     let stored = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
@@ -4660,149 +3597,6 @@ fn canonical_service_ring_is_transactional_generation_bound_and_structurally_com
     });
     assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
     assert!(!ServiceNodes::<Test>::contains_key(rolled_back.actor_id));
-  });
-}
-
-#[test]
-fn observation_dependency_sources_are_bijective_transactional_and_nonwrapping() {
-  new_test_ext().execute_with(|| {
-    assert_eq!(
-      Actors::resolve_observation_dependency_source(41),
-      Err(DependencySourceError::TransactionRequired)
-    );
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      assert_eq!(
-        Actors::resolve_observation_dependency_source(41),
-        Ok(DependencySourceMutation::Allocated(0))
-      );
-      assert_eq!(
-        Actors::resolve_observation_dependency_source(41),
-        Ok(DependencySourceMutation::Existing(0))
-      );
-      assert_eq!(
-        Actors::resolve_observation_dependency_source(42),
-        Ok(DependencySourceMutation::Allocated(1))
-      );
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-    assert_eq!(ObservationDependencySources::<Test>::get(41), Some(0));
-    assert_eq!(DependencySourceObservations::<Test>::get(0), Some(41));
-
-    let rolled_back = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      let outcome = Actors::resolve_observation_dependency_source(43);
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(outcome)
-    });
-    assert_eq!(rolled_back, Ok(DependencySourceMutation::Allocated(2)));
-    assert_eq!(ObservationDependencySources::<Test>::get(43), None);
-    assert_eq!(DependencySourceAllocatorState::<Test>::get().next, 2);
-
-    DependencySourceObservations::<Test>::insert(2, 98);
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      assert_eq!(
-        Actors::resolve_observation_dependency_source(43),
-        Err(DependencySourceError::SourceOccupied)
-      );
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-    DependencySourceObservations::<Test>::remove(2);
-
-    DependencySourceObservations::<Test>::remove(0);
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      assert_eq!(
-        Actors::resolve_observation_dependency_source(41),
-        Err(DependencySourceError::ReverseMissing)
-      );
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-    DependencySourceObservations::<Test>::insert(0, 99);
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      assert_eq!(
-        Actors::resolve_observation_dependency_source(41),
-        Err(DependencySourceError::ReverseMismatch)
-      );
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-
-    DependencySourceAllocatorState::<Test>::put(DependencySourceAllocator {
-      next: u64::MAX,
-      exhausted: false,
-    });
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      assert_eq!(
-        Actors::resolve_observation_dependency_source(44),
-        Ok(DependencySourceMutation::Allocated(u64::MAX))
-      );
-      assert!(DependencySourceAllocatorState::<Test>::get().exhausted);
-      assert_eq!(
-        Actors::resolve_observation_dependency_source(44),
-        Ok(DependencySourceMutation::Existing(u64::MAX))
-      );
-      assert_eq!(
-        Actors::resolve_observation_dependency_source(45),
-        Err(DependencySourceError::Exhausted)
-      );
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-  });
-}
-
-#[test]
-fn observation_dependency_event_ingress_allocates_reuses_publishes_and_rolls_back() {
-  new_test_ext().execute_with(|| {
-    assert_eq!(
-      <Actors as crate::DependencyEventIngress<u32>>::note_dependency_event(51),
-      Err(DispatchError::Other(
-        "dependency event requires transaction"
-      ))
-    );
-
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      assert_ok!(<Actors as crate::DependencyEventIngress<u32>>::note_dependency_event(51));
-      assert_ok!(<Actors as crate::DependencyEventIngress<u32>>::note_dependency_event(51));
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-    assert_eq!(ObservationDependencySources::<Test>::get(51), Some(0));
-    assert_eq!(DependencySourceObservations::<Test>::get(0), Some(51));
-    assert_eq!(DependencyRevisions::<Test>::get(0).revision, 2);
-
-    let rolled_back = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      assert_ok!(<Actors as crate::DependencyEventIngress<u32>>::note_dependency_event(52));
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
-    });
-    assert_eq!(rolled_back, ());
-    assert_eq!(ObservationDependencySources::<Test>::get(52), None);
-    assert_eq!(DependencySourceAllocatorState::<Test>::get().next, 1);
-
-    DependencyRevisions::<Test>::insert(
-      1,
-      DependencyRevisionState {
-        exhausted: true,
-        ..Default::default()
-      },
-    );
-    let failed = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      let outcome = <Actors as crate::DependencyEventIngress<u32>>::note_dependency_event(52);
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(outcome)
-    });
-    assert_eq!(
-      failed,
-      Err(DispatchError::Other("dependency revision exhausted"))
-    );
-    assert_eq!(ObservationDependencySources::<Test>::get(52), None);
-    assert_eq!(DependencySourceAllocatorState::<Test>::get().next, 1);
-
-    DependencySourceAllocatorState::<Test>::put(DependencySourceAllocator {
-      next: u64::MAX,
-      exhausted: true,
-    });
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      assert_eq!(
-        <Actors as crate::DependencyEventIngress<u32>>::note_dependency_event(53),
-        Err(DispatchError::Other("dependency source identity exhausted"))
-      );
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-    assert_eq!(ObservationDependencySources::<Test>::get(53), None);
   });
 }
 
@@ -9369,7 +8163,7 @@ fn actor_identity_resolves_lifecycle_owner_and_fails_closed_on_missing_primary()
 
 #[test]
 fn public_api_error_signatures_use_shared_typed_cores() {
-  let _: fn(ActorId) -> Result<ActorEligibility<u32, u64>, ActorClassificationError> =
+  let _: fn(ActorId) -> Result<ActorEligibility<u64>, ActorClassificationError> =
     Actors::actor_eligibility;
   let _: fn(ActorId) -> Result<crate::ActorCostQuote<Balance>, ActorCostQuoteError> =
     Actors::actor_cost_quote;
@@ -10865,23 +9659,9 @@ fn public_reachability_inventory_is_closed_and_canonical() {
   assert_variant_names::<crate::PredicateError>(&["InvalidObservation"]);
   assert_variant_names::<RuntimeSourceFilter>(&["Any", "OwnerOnly", "Whitelist"]);
   assert_variant_names::<RuntimeAssetFilter>(&["Any", "Whitelist"]);
-  assert_variant_names::<RuntimeTrigger>(&[
-    "Manual",
-    "AddressEvent",
-    "ObservationChange",
-    "ObservationCrossing",
-    "AtTime",
-    "Cadenced",
-  ]);
+  assert_variant_names::<RuntimeTrigger>(&["Manual", "AddressEvent", "AtTime", "Cadenced"]);
   assert_variant_names::<Trigger<AccountId, TestAsset, <Test as crate::Config>::MaxWhitelistSize>>(
-    &[
-      "Manual",
-      "AddressEvent",
-      "ObservationChange",
-      "ObservationCrossing",
-      "AtTime",
-      "Cadenced",
-    ],
+    &["Manual", "AddressEvent", "AtTime", "Cadenced"],
   );
   assert_variant_names::<ActorType>(&["User", "System"]);
   assert_variant_names::<ActorClass>(&["User", "System"]);
@@ -10944,7 +9724,7 @@ fn public_reachability_inventory_is_closed_and_canonical() {
     "Fresh",
     "Stale",
   ]);
-  assert_variant_names::<ActorEligibility<u32, u64>>(&["NotRegistered", "Dormant", "Active"]);
+  assert_variant_names::<ActorEligibility<u64>>(&["NotRegistered", "Dormant", "Active"]);
   assert_variant_names::<SimulationMode>(&["FreshCurrentPlan", "CurrentRun"]);
   assert_variant_names::<SimulationError>(&[
     "TransactionDepthExceeded",
@@ -10998,7 +9778,6 @@ fn actor_storage_schema_is_explicit() {
     [
       ("NextActorId", false, false),
       ("ActorContractHead", true, true),
-      ("ActorActivationAuthority", true, true),
       ("ActorContractTailChunk", true, true),
       ("ActorRunState", true, true),
       ("ActorIdentities", true, true),
@@ -11007,8 +9786,6 @@ fn actor_storage_schema_is_explicit() {
       ("ServiceHeader", false, false),
       ("ServiceNodes", true, true),
       ("DependencySourceAllocatorState", false, false),
-      ("ObservationDependencySources", true, true),
-      ("DependencySourceObservations", true, true),
       ("BalanceDependencySources", true, true),
       ("DependencySourceBalances", true, true),
       ("DependencyRevisions", false, true),
@@ -11058,32 +9835,6 @@ fn actor_storage_schema_is_explicit() {
       ("SovereignIndex", true, true),
       ("ActiveActorLimit", false, false),
       ("IndexedTriggerDetectionDisabled", true, true),
-      ("ActorObservationFeeds", true, true),
-      ("ObservationSubscriptionSlot", true, true),
-      ("ObservationSubscriptionSlotOwner", true, true),
-      ("NextObservationSubscriptionSlot", false, false),
-      ("ObservationFreeSlotLen", false, false),
-      ("ObservationFreeSlotPages", true, true),
-      ("ObservationSubscriberPages", true, true),
-      ("ObservationSubscriberPageLists", true, true),
-      ("ObservationSubscriberCount", false, true),
-      ("ObservationSubscriptionCount", false, false),
-      ("ObservationIngressRevisions", true, true),
-      ("DirtyObservationFeeds", true, true),
-      ("DirtyObservationListState", false, false),
-      ("ObservationFanoutWorkerFaultState", true, false),
-      ("CrossingMemberships", true, true),
-      ("CrossingMemberPages", true, true),
-      ("CrossingLeafStates", true, true),
-      ("CrossingRadixNodes", true, true),
-      ("CrossingFeedMembershipCount", false, true),
-      ("CrossingUserFeedMembershipCount", false, true),
-      ("CrossingTransitionQueues", true, true),
-      ("CrossingPendingFeeds", true, true),
-      ("CrossingPendingFeedListState", false, false),
-      ("CrossingRangeCursors", true, true),
-      ("CrossingWorkerFaultState", true, false),
-      ("MaterializationFamilyCursor", false, false),
       ("GlobalCircuitBreaker", false, false),
       ("IdleStarvationState", false, false),
     ]
@@ -11118,9 +9869,6 @@ fn actor_storage_schema_is_explicit() {
   assert_plain_storage_type::<u64>(entry("NextActorId"));
   assert_map_storage_types::<u64, crate::ActorContractHeadOf<Test>>(entry("ActorContractHead"));
 
-  assert_map_storage_types::<u64, crate::ActorActivationAuthorityOf<Test>>(entry(
-    "ActorActivationAuthority",
-  ));
   assert_map_storage_types::<u64, crate::ActorControlCellOf<Test>>(entry(
     "ActorUnsignaledControlCells",
   ));
@@ -11203,8 +9951,6 @@ fn actor_storage_schema_is_explicit() {
   );
   assert_map_storage_types::<u64, crate::ActorIdentityOf<Test>>(entry("ActorIdentities"));
   assert_plain_storage_type::<DependencySourceAllocator>(entry("DependencySourceAllocatorState"));
-  assert_map_storage_types::<u32, u64>(entry("ObservationDependencySources"));
-  assert_map_storage_types::<u64, u32>(entry("DependencySourceObservations"));
   assert_map_storage_types::<TestAsset, u64>(entry("BalanceDependencySources"));
   assert_map_storage_types::<u64, TestAsset>(entry("DependencySourceBalances"));
   assert_plain_storage_type::<u32>(entry("ActorIdentityCount"));
@@ -11219,63 +9965,6 @@ fn actor_storage_schema_is_explicit() {
   assert_map_storage_types::<AccountId, [u8; 32]>(entry("OwnerSlotBitmaps"));
   assert_map_storage_types::<AccountId, u64>(entry("SovereignIndex"));
   assert_plain_storage_type::<u32>(entry("ActiveActorLimit"));
-  assert_map_storage_types::<u64, crate::ActorObservationFeedsOf<Test>>(entry(
-    "ActorObservationFeeds",
-  ));
-  assert_map_storage_types::<u64, u32>(entry("ObservationSubscriptionSlot"));
-  assert_map_storage_types::<u32, u64>(entry("ObservationSubscriptionSlotOwner"));
-  assert_plain_storage_type::<u32>(entry("NextObservationSubscriptionSlot"));
-  assert_plain_storage_type::<u32>(entry("ObservationFreeSlotLen"));
-  assert_map_storage_types::<u32, crate::ObservationFreeSlotPageOf<Test>>(entry(
-    "ObservationFreeSlotPages",
-  ));
-  assert_map_storage_types::<(u32, u32), crate::ObservationSubscriberPageOf<Test>>(entry(
-    "ObservationSubscriberPages",
-  ));
-  assert_map_storage_types::<u32, ObservationSubscriberPageList>(entry(
-    "ObservationSubscriberPageLists",
-  ));
-  assert_map_storage_types::<u32, u32>(entry("ObservationSubscriberCount"));
-  assert_plain_storage_type::<u32>(entry("ObservationSubscriptionCount"));
-  assert_map_storage_types::<u32, u64>(entry("ObservationIngressRevisions"));
-  assert_map_storage_types::<
-    u32,
-    crate::types::DirtyObservationState<
-      u32,
-      polkadot_sdk::frame_system::pallet_prelude::BlockNumberFor<Test>,
-    >,
-  >(entry("DirtyObservationFeeds"));
-  assert_plain_storage_type::<crate::types::DirtyObservationList<u32>>(entry(
-    "DirtyObservationListState",
-  ));
-  assert_plain_storage_type::<crate::ObservationFanoutWorkerFault<u32>>(entry(
-    "ObservationFanoutWorkerFaultState",
-  ));
-  assert_map_storage_types::<u64, crate::CrossingMembershipLocatorOf<Test>>(entry(
-    "CrossingMemberships",
-  ));
-  assert_map_storage_types::<
-    (crate::CrossingLeafKeyOf<Test>, u32),
-    crate::CrossingMemberPageOf<Test>,
-  >(entry("CrossingMemberPages"));
-  assert_map_storage_types::<crate::CrossingLeafKeyOf<Test>, crate::CrossingLeafState>(entry(
-    "CrossingLeafStates",
-  ));
-  assert_map_storage_types::<crate::CrossingRadixNodeKeyOf<Test>, u16>(entry("CrossingRadixNodes"));
-  assert_map_storage_types::<u32, u32>(entry("CrossingFeedMembershipCount"));
-  assert_map_storage_types::<u32, u32>(entry("CrossingUserFeedMembershipCount"));
-  assert_map_storage_types::<u32, crate::CrossingTransitionQueueOf<Test>>(entry(
-    "CrossingTransitionQueues",
-  ));
-  assert_map_storage_types::<u32, crate::CrossingPendingFeedState<u32>>(entry(
-    "CrossingPendingFeeds",
-  ));
-  assert_plain_storage_type::<crate::CrossingPendingFeedList<u32>>(entry(
-    "CrossingPendingFeedListState",
-  ));
-  assert_map_storage_types::<u32, crate::CrossingRangeCursor>(entry("CrossingRangeCursors"));
-  assert_plain_storage_type::<crate::CrossingWorkerFault<u32>>(entry("CrossingWorkerFaultState"));
-  assert_plain_storage_type::<u8>(entry("MaterializationFamilyCursor"));
   assert_plain_storage_type::<bool>(entry("GlobalCircuitBreaker"));
   assert_plain_storage_type::<IdleStarvationPhase>(entry("IdleStarvationState"));
 }
@@ -11672,36 +10361,6 @@ fn try_state_rejects_contract_tail_keys_outside_the_admitted_geometry() {
       assert_ok!(Actors::do_try_state());
     });
   }
-}
-
-#[cfg(feature = "try-runtime")]
-#[test]
-fn try_state_rejects_orphan_activation_authority() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let head = ActorContractHeads::<Test>::get(actor_id).expect("admitted Contract");
-    assert_ok!(Actors::do_try_state());
-    let orphan_id = actor_id + 100;
-    crate::ActorActivationAuthorities::<Test>::insert(
-      orphan_id,
-      crate::ActorActivationAuthority {
-        feed: 1,
-        cooldown_blocks: head.header.cooldown_blocks,
-        window: head.header.window,
-        auto_close_at_cycle_nonce: head.header.auto_close_at_cycle_nonce,
-        semantic_contract_id: head.header.semantic_contract_id,
-        body_commitment: head.header.body_commitment,
-        admission_identity: head.header.admission_identity,
-      },
-    );
-    assert!(
-      Actors::do_try_state().is_err(),
-      "orphan activation authority was accepted"
-    );
-    crate::ActorActivationAuthorities::<Test>::remove(orphan_id);
-    assert_ok!(Actors::do_try_state());
-  });
 }
 
 #[cfg(feature = "try-runtime")]

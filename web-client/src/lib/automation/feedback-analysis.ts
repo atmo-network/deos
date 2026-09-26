@@ -10,9 +10,7 @@ import type {
 } from './analysis.ts';
 import type { ActorContractProjection } from './contract-artifact.ts';
 
-import { DEOS_OBSERVATION_RUNTIME_EVIDENCE } from '../observation/runtime-evidence.generated.ts';
-
-export const ACTORS_FEEDBACK_ANALYZER_VERSION = '3' as const;
+export const ACTORS_FEEDBACK_ANALYZER_VERSION = '4' as const;
 
 export type ActorObservationProvenance = 'Endogenous' | 'Exogenous' | 'Unknown';
 
@@ -117,7 +115,6 @@ export type ActorFeedbackEdge = {
   provenance: ActorFeedbackEvidenceProvenance;
   evidenceIdentities: string[];
   kind:
-    | 'ObservationTrigger'
     | 'ObservationConditionRead'
     | 'ActorEffectOnObservation'
     | 'ActorSignal'
@@ -154,11 +151,6 @@ export type ActorFeedbackComponent = {
 
 export type ActorFeedbackRuntimeVerification = {
   observedIdentity: string;
-  scheduler: {
-    maxServiceUnitsPerBlock: number;
-    maxActiveDirtyFeeds: number;
-    maxSubscriberPagesPerFeed: number;
-  };
 } & (
   | { status: 'Verified'; reasons: [] }
   | { status: 'EvidenceMismatch'; reasons: string[] }
@@ -169,33 +161,14 @@ export type ActorFeedbackEvidenceSnapshot = {
   runtimeIdentity: string;
   runtimeVerification: ActorFeedbackRuntimeVerification;
   weightIdentity: string;
-  cadenceIdentity: string;
-  estimatedDeliveryBlocks: number;
-  estimatedDeliveryEvidence: ActorFeedbackEvidenceReference;
-  observationCadences: Array<{
-    observationId: string;
-    minimumUpdateIntervalBlocks: number;
-    evidence: ActorFeedbackEvidenceReference;
-  }>;
   actorPolicies: Array<{
     actorId: string;
     gain: 'High' | 'NotHigh' | 'Unknown';
     gainEvidence: ActorFeedbackEvidenceReference;
-    reactiveIngressPriority: 'Explicit' | 'Ordinary' | 'Unknown';
-    reactiveIngressPriorityEvidence: ActorFeedbackEvidenceReference;
   }>;
 };
 
 export type ActorReactiveFinding =
-  | {
-      kind: 'FreshnessWindowBelowEstimatedDeliveryEnvelope';
-      actorId: string;
-      observationId: string;
-      step: number;
-      maxAgeBlocks: number;
-      estimatedDeliveryBlocks: number;
-      evidenceIdentity: string;
-    }
   | {
       kind: 'EndogenousObservationFeedback';
       actorIds: string[];
@@ -250,24 +223,10 @@ export type ActorReactiveFinding =
       gainEvidenceIdentity: string;
     }
   | {
-      kind: 'CooldownFeedRateMismatch';
-      actorId: string;
-      observationId: string;
-      cooldownBlocks: number;
-      minimumUpdateIntervalBlocks: number;
-      evidenceIdentity: string;
-    }
-  | {
       kind: 'SharedObservationActuatorContention';
       observationId: string;
       actorIds: string[];
       interpretation: 'StructuralPossibility';
-    }
-  | {
-      kind: 'SystemActorWithoutReactiveIngressPriority';
-      actorId: string;
-      observationIds: string[];
-      evidenceIdentity: string;
     };
 
 export type ActorFeedbackModel = {
@@ -293,14 +252,11 @@ export type ActorFeedbackLimits = {
 
 const DEFAULT_MAX_NODES = 256;
 const DEFAULT_MAX_EDGES = 2_048;
-const EXPECTED_RUNTIME_EVIDENCE = DEOS_OBSERVATION_RUNTIME_EVIDENCE;
-const EXPECTED_OBSERVED_RUNTIME_IDENTITY = `${EXPECTED_RUNTIME_EVIDENCE.runtime.specName}@spec-${EXPECTED_RUNTIME_EVIDENCE.runtime.specVersion} · code:${EXPECTED_RUNTIME_EVIDENCE.runtimeCodeHash} · metadata:${EXPECTED_RUNTIME_EVIDENCE.metadataHash}`;
 
 function edgeEvidence(
   kind: ActorFeedbackEdge['kind'],
 ): Pick<ActorFeedbackEdge, 'family' | 'provenance'> {
   switch (kind) {
-    case 'ObservationTrigger':
     case 'ObservationConditionRead':
       return { family: 'ReactiveCausal', provenance: 'ArtifactDerived' };
     case 'ActorEffectOnObservation':
@@ -689,7 +645,6 @@ export function analyzeActorFeedback(input: {
       ['Evidence', evidence.identity],
       ['Runtime', evidence.runtimeIdentity],
       ['Weight', evidence.weightIdentity],
-      ['Cadence', evidence.cadenceIdentity],
     ]) {
       if (identity.trim().length === 0)
         throw new Error(`${label} identity is required`);
@@ -705,68 +660,13 @@ export function analyzeActorFeedback(input: {
           'Verified runtime evidence cannot carry mismatch reasons',
         );
       }
-      if (
-        evidence.runtimeIdentity !== EXPECTED_OBSERVED_RUNTIME_IDENTITY ||
-        evidence.weightIdentity !== EXPECTED_RUNTIME_EVIDENCE.weightIdentity ||
-        evidence.runtimeVerification.scheduler.maxServiceUnitsPerBlock !==
-          EXPECTED_RUNTIME_EVIDENCE.fanout.maxServiceUnitsPerBlock ||
-        evidence.runtimeVerification.scheduler.maxActiveDirtyFeeds !==
-          EXPECTED_RUNTIME_EVIDENCE.fanout.maxActiveDirtyFeeds ||
-        evidence.runtimeVerification.scheduler.maxSubscriberPagesPerFeed !==
-          EXPECTED_RUNTIME_EVIDENCE.fanout.maxSubscriberPagesPerFeed
-      ) {
-        throw new Error(
-          'Verified runtime evidence differs from generated truth',
-        );
-      }
     } else if (evidence.runtimeVerification.reasons.length === 0) {
       throw new Error('Runtime evidence mismatch requires reasons');
     }
-    requireEvidenceProvenance(
-      evidence.estimatedDeliveryEvidence,
-      ['RuntimeDerived'],
-      evidence.identity,
-      'Estimated delivery',
-    );
-    if (
-      !Number.isSafeInteger(evidence.estimatedDeliveryBlocks) ||
-      evidence.estimatedDeliveryBlocks < 0
-    ) {
-      throw new Error(
-        'estimatedDeliveryBlocks must be a non-negative safe integer',
-      );
-    }
-    requireUniqueIds(
-      evidence.observationCadences.map(({ observationId }) => ({
-        id: observationId,
-      })),
-      'Observation cadence',
-    );
     requireUniqueIds(
       evidence.actorPolicies.map(({ actorId }) => ({ id: actorId })),
       'Actor policy',
     );
-    for (const cadence of evidence.observationCadences) {
-      if (!observationById.has(cadence.observationId)) {
-        throw new Error(
-          `Unknown cadence observation: ${cadence.observationId}`,
-        );
-      }
-      requireEvidenceProvenance(
-        cadence.evidence,
-        ['RuntimeDerived'],
-        evidence.cadenceIdentity,
-        `Observation ${cadence.observationId} cadence`,
-      );
-      if (
-        !Number.isSafeInteger(cadence.minimumUpdateIntervalBlocks) ||
-        cadence.minimumUpdateIntervalBlocks < 1
-      ) {
-        throw new Error(
-          'minimumUpdateIntervalBlocks must be a positive safe integer',
-        );
-      }
-    }
     for (const policy of evidence.actorPolicies) {
       if (!actorById.has(policy.actorId)) {
         throw new Error(`Unknown evidence actor: ${policy.actorId}`);
@@ -777,25 +677,11 @@ export function analyzeActorFeedback(input: {
         null,
         `Actor ${policy.actorId} gain`,
       );
-      requireEvidenceProvenance(
-        policy.reactiveIngressPriorityEvidence,
-        ['RuntimeDerived', 'Unknown'],
-        evidence.runtimeIdentity,
-        `Actor ${policy.actorId} reactive ingress priority`,
-      );
       if (
         (policy.gain === 'Unknown') !==
         (policy.gainEvidence.provenance === 'Unknown')
       ) {
         throw new Error(`Actor ${policy.actorId} gain evidence disagrees`);
-      }
-      if (
-        (policy.reactiveIngressPriority === 'Unknown') !==
-        (policy.reactiveIngressPriorityEvidence.provenance === 'Unknown')
-      ) {
-        throw new Error(
-          `Actor ${policy.actorId} reactive ingress evidence disagrees`,
-        );
       }
     }
   }
@@ -898,7 +784,6 @@ export function analyzeActorFeedback(input: {
     provenanceOverride?: ActorFeedbackEvidenceProvenance,
   ) => {
     const artifactKinds = new Set<ActorFeedbackEdge['kind']>([
-      'ObservationTrigger',
       'ObservationConditionRead',
       'ActorEffectOnObservation',
       'ActorSignal',
@@ -949,20 +834,6 @@ export function analyzeActorFeedback(input: {
   );
 
   for (const actor of input.actors) {
-    for (const feed of actor.analysis.trigger?.observationFeeds ?? []) {
-      const observationId = feedToObservation.get(fingerprint(feed));
-      if (observationId != null) {
-        addEdge(
-          {
-            from: observationNode(observationId),
-            to: actorNode(actor.id),
-            kind: 'ObservationTrigger',
-            actorId: actor.id,
-          },
-          [observationEvidenceIdentity.get(observationId) ?? null],
-        );
-      }
-    }
     for (const step of actor.analysis.steps) {
       for (const condition of step.predicates) {
         if (condition.observation !== 'scalar-observation') continue;
@@ -1303,22 +1174,11 @@ export function analyzeActorFeedback(input: {
   }
 
   if (evidence?.runtimeVerification.status === 'Verified') {
-    const cadenceByObservation = new Map(
-      evidence.observationCadences.map((cadence) => [
-        cadence.observationId,
-        cadence,
-      ]),
-    );
     const policyByActor = new Map(
       evidence.actorPolicies.map((policy) => [policy.actorId, policy]),
     );
     for (const actor of input.actors) {
       const policy = policyByActor.get(actor.id);
-      const triggeredObservationIds = uniqueStrings(
-        (actor.analysis.trigger?.observationFeeds ?? [])
-          .map((feed) => feedToObservation.get(fingerprint(feed)))
-          .filter((id): id is string => id != null),
-      );
       const thresholdSteps = new Map<string, number[]>();
       for (const step of actor.analysis.steps) {
         for (const condition of step.predicates) {
@@ -1331,17 +1191,6 @@ export function analyzeActorFeedback(input: {
             fingerprint(surface.feed),
           );
           if (observationId == null) continue;
-          if (surface.maxAgeBlocks < evidence.estimatedDeliveryBlocks) {
-            findings.push({
-              kind: 'FreshnessWindowBelowEstimatedDeliveryEnvelope',
-              actorId: actor.id,
-              observationId,
-              step: step.index,
-              maxAgeBlocks: surface.maxAgeBlocks,
-              estimatedDeliveryBlocks: evidence.estimatedDeliveryBlocks,
-              evidenceIdentity: evidence.identity,
-            });
-          }
           if (
             condition.type === 'ObservationAbove' ||
             condition.type === 'ObservationBelow'
@@ -1378,36 +1227,6 @@ export function analyzeActorFeedback(input: {
           interpretation: 'DeclaredEvidence',
           evidenceIdentity: evidence.identity,
           gainEvidenceIdentity: policy.gainEvidence.identity!,
-        });
-      }
-      if (actor.analysis.cooldownBlocks != null) {
-        for (const observationId of triggeredObservationIds) {
-          const cadence = cadenceByObservation.get(observationId);
-          if (
-            cadence != null &&
-            actor.analysis.cooldownBlocks > cadence.minimumUpdateIntervalBlocks
-          ) {
-            findings.push({
-              kind: 'CooldownFeedRateMismatch',
-              actorId: actor.id,
-              observationId,
-              cooldownBlocks: actor.analysis.cooldownBlocks,
-              minimumUpdateIntervalBlocks: cadence.minimumUpdateIntervalBlocks,
-              evidenceIdentity: evidence.identity,
-            });
-          }
-        }
-      }
-      if (
-        actor.analysis.actorType === 'System' &&
-        triggeredObservationIds.length > 0 &&
-        policy?.reactiveIngressPriority === 'Ordinary'
-      ) {
-        findings.push({
-          kind: 'SystemActorWithoutReactiveIngressPriority',
-          actorId: actor.id,
-          observationIds: triggeredObservationIds,
-          evidenceIdentity: evidence.identity,
         });
       }
     }

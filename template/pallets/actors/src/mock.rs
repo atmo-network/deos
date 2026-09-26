@@ -173,7 +173,6 @@ thread_local! {
   static OBSERVATIONS: RefCell<
     alloc::collections::BTreeMap<u32, crate::ScalarObservationState<u64>>,
   > = RefCell::new(alloc::collections::BTreeMap::new());
-  static OBSERVATION_REVISION_RACE_SOURCE: RefCell<Option<u64>> = const { RefCell::new(None) };
   static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_DEX_FAILURE: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_ADD_LIQUIDITY_FAILURE: RefCell<bool> = RefCell::new(false);
@@ -263,7 +262,6 @@ pub fn reset_mock_adapters() {
   FAIL_TRANSFER_TO.with(|v| *v.borrow_mut() = None);
   ASSET_MINIMUM_BALANCE.with(|v| *v.borrow_mut() = 1);
   OBSERVATIONS.with(|values| values.borrow_mut().clear());
-  OBSERVATION_REVISION_RACE_SOURCE.with(|source| *source.borrow_mut() = None);
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
   TEMPORARY_DEX_FAILURE.with(|v| *v.borrow_mut() = false);
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = false);
@@ -288,16 +286,9 @@ pub fn staking_share_balance_reads() -> u32 {
   STAKING_SHARE_BALANCE_READS.with(|reads| *reads.borrow())
 }
 
-pub fn race_observation_source_revision_once(source: u64) {
-  OBSERVATION_REVISION_RACE_SOURCE.with(|value| *value.borrow_mut() = Some(source));
-}
-
 pub struct MockObservationProvider;
 impl crate::ObservationProvider<u32, u64> for MockObservationProvider {
   fn current(feed: &u32) -> crate::CanonicalObservationState {
-    if let Some(source) = OBSERVATION_REVISION_RACE_SOURCE.with(|value| value.borrow_mut().take()) {
-      crate::DependencyRevisions::<Test>::mutate(source, |state| state.revision += 1);
-    }
     match Self::observe(feed, 0, u32::MAX) {
       crate::ScalarObservationState::Fresh { value, .. } => {
         #[cfg(feature = "runtime-benchmarks")]
@@ -908,15 +899,6 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
       let revision = revision
         .checked_add(1)
         .ok_or(DispatchError::Other("BenchmarkRevisionOverflow"))?;
-      Actors::note_observation_transition_with_provenance(
-        feed,
-        crate::ObservationTransition {
-          revision,
-          previous: Some(previous),
-          current: value,
-        },
-        crate::TriggerCauseProvenance::ExternalPhase,
-      )?;
       BENCHMARK_OBSERVATION_REVISIONS
         .with(|revisions| revisions.borrow_mut().insert(feed, revision));
     }
@@ -1276,20 +1258,6 @@ impl Get<u32> for TestMaxIdleStarvationBlocks {
   }
 }
 
-pub struct TestObservationFanoutWeightLimit;
-impl Get<polkadot_sdk::sp_weights::Weight> for TestObservationFanoutWeightLimit {
-  fn get() -> polkadot_sdk::sp_weights::Weight {
-    polkadot_sdk::sp_weights::Weight::from_parts(1_000_000_000_000, 100_000_000)
-  }
-}
-
-pub struct TestCrossingWorkerWeightLimit;
-impl Get<polkadot_sdk::sp_weights::Weight> for TestCrossingWorkerWeightLimit {
-  fn get() -> polkadot_sdk::sp_weights::Weight {
-    polkadot_sdk::sp_weights::Weight::from_parts(10_000_000_000, 2_000_000)
-  }
-}
-
 pub struct TestWakeupWeightLimit;
 impl Get<polkadot_sdk::sp_weights::Weight> for TestWakeupWeightLimit {
   fn get() -> polkadot_sdk::sp_weights::Weight {
@@ -1542,34 +1510,7 @@ impl pallet_deos_actors::Config for Test {
   type MaxQueueLength = ConstU32<1024>;
   type QueuePageSize = ConstU32<32>;
   type WakeupPageSize = ConstU32<32>;
-  type ObservationPageSize = ConstU32<16>;
-  #[cfg(not(feature = "runtime-benchmarks"))]
-  type CrossingPageSize = ConstU32<16>;
-  #[cfg(feature = "runtime-benchmarks")]
-  type CrossingPageSize = ConstU32<128>;
-  type MaxCrossingTransitionsPerFeed = ConstU32<4>;
-  type MaxCrossingMembersPerFeed = ConstU32<10_000>;
-  #[cfg(not(feature = "runtime-benchmarks"))]
-  type MaxUserCrossingMembersPerFeed = ConstU32<8>;
-  #[cfg(feature = "runtime-benchmarks")]
-  type MaxUserCrossingMembersPerFeed = ConstU32<128>;
-  type MaxCrossingTransitionsPerBlock = ConstU32<4>;
-  #[cfg(not(feature = "runtime-benchmarks"))]
-  type MaxCrossingLeavesPerBlock = ConstU32<8>;
-  #[cfg(feature = "runtime-benchmarks")]
-  type MaxCrossingLeavesPerBlock = ConstU32<64>;
-  #[cfg(not(feature = "runtime-benchmarks"))]
-  type MaxCrossingPagesPerBlock = ConstU32<8>;
-  #[cfg(feature = "runtime-benchmarks")]
-  type MaxCrossingPagesPerBlock = ConstU32<64>;
-  #[cfg(not(feature = "runtime-benchmarks"))]
-  type MaxCrossingActorsPerBlock = ConstU32<16>;
-  #[cfg(feature = "runtime-benchmarks")]
-  type MaxCrossingActorsPerBlock = ConstU32<128>;
-  type CrossingWorkerWeightLimit = TestCrossingWorkerWeightLimit;
   type MaxQueueEntriesScannedPerBlock = TestMaxQueueEntriesScannedPerBlock;
-  type MaxObservationFanoutPagesPerBlock = ConstU32<64>;
-  type ObservationFanoutWeightLimit = TestObservationFanoutWeightLimit;
   type WakeupWeightLimit = TestWakeupWeightLimit;
   type MaxWakeupsPerBlock = ConstU32<64>;
   type MaxSweepBatch = TestMaxSweepBatch;

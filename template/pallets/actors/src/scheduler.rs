@@ -1,8 +1,8 @@
 use super::pallet::*;
 use super::{
   AddressEvent, AssetOps, BlockResourceDomain, BlockResourceLimits, BlockResourceState,
-  CanonicalObservationState, IngressFailure, RetryClass, StepControlExecution, StepControlOutcome,
-  StepControlPhase, StepControlPlacement, StepControlWeightContext, StepControlWeightProvider as _,
+  IngressFailure, RetryClass, StepControlExecution, StepControlOutcome, StepControlPhase,
+  StepControlPlacement, StepControlWeightContext, StepControlWeightProvider as _,
   TaskEffectWeightProvider as _, weights::WeightInfo,
 };
 #[cfg(test)]
@@ -147,25 +147,7 @@ pub enum EnqueueOutcome {
 /// pending latch and FIFO/wakeup substrate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ActivationOutcome {
-  IgnoredStale,
   Latched,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ObservationActivationOutcome {
-  Ordinary(ActivationOutcome),
-}
-
-/// Typed activation failure. Permanent corruption fails the enclosing transition closed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ActivationFailure {
-  Permanent(DispatchError),
-}
-
-impl From<DispatchError> for ActivationFailure {
-  fn from(error: DispatchError) -> Self {
-    Self::Permanent(error)
-  }
 }
 
 const MAX_RETRY_BACKOFF_BLOCKS: u32 = 8;
@@ -174,8 +156,6 @@ const MAX_RETRY_BACKOFF_BLOCKS: u32 = 8;
 std::thread_local! {
   static FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
   static QUEUE_APPEND_COMMITS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
-  static CROSSING_CURSOR_COMMITS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
-  static FIRST_CROSSING_BRANCH_WEIGHT: core::cell::Cell<Option<Weight>> = const { core::cell::Cell::new(None) };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -572,7 +552,6 @@ impl<T: Config> Pallet<T> {
     opening: &ActiveActorViewOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     mut hot: ActorHotStateOf<T>,
-    opening_observation: Option<CanonicalObservationState>,
   ) -> Result<ActorHotStateOf<T>, AttemptTransactionError> {
     match &opening.trigger {
       Trigger::AtTime { .. } => {
@@ -608,22 +587,6 @@ impl<T: Config> Pallet<T> {
       }
       Trigger::Cadenced { .. } => {
         Self::prepare_cadenced_rearm_hot(actor_id, opening, admission, hot)
-      }
-      Trigger::ObservationCrossing { .. } => {
-        Self::prepare_crossing_rearm_hot(actor_id, opening, admission, opening_observation)
-          .map_err(|_| AttemptTransactionError::Invariant)
-          .map(|replacement| match replacement {
-            Some(mut replacement) => {
-              // Detector rearming precedes the common Opening core's latch consumption.
-              replacement.pending_signal = hot.pending_signal;
-              replacement
-            }
-            None => hot,
-          })
-      }
-      Trigger::ObservationChange { .. } => {
-        IndexedTriggerDetectionDisabled::<T>::remove(actor_id);
-        Ok(hot)
       }
       Trigger::Manual | Trigger::AddressEvent { .. } => Ok(hot),
     }
@@ -665,14 +628,11 @@ impl<T: Config> Pallet<T> {
     mut state: ActiveActorStateOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
-    opening_observation: Option<CanonicalObservationState>,
   ) -> Result<ZeroStepTransition<T>, AttemptTransactionError> {
     if !matches!(
       state.contract.trigger,
       Trigger::Manual
         | Trigger::AddressEvent { .. }
-        | Trigger::ObservationChange { .. }
-        | Trigger::ObservationCrossing { .. }
         | Trigger::AtTime { .. }
         | Trigger::Cadenced { .. }
     ) || !state.contract.steps.is_empty()
@@ -688,13 +648,7 @@ impl<T: Config> Pallet<T> {
       state.hot.clone(),
       state.contract.clone(),
     );
-    state.hot = Self::prepare_opening_rearm_hot(
-      actor_id,
-      &opening,
-      admission,
-      state.hot,
-      opening_observation,
-    )?;
+    state.hot = Self::prepare_opening_rearm_hot(actor_id, &opening, admission, state.hot)?;
     Self::charge_pipeline_opening(actor_id, &opening)?;
     let cycle_nonce = state
       .identity
@@ -741,7 +695,6 @@ impl<T: Config> Pallet<T> {
     state: ActiveActorStateOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
-    opening_observation: Option<CanonicalObservationState>,
   ) -> Result<ActorAttemptEvidence, AttemptTransactionError> {
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       let result = (|| {
@@ -754,13 +707,7 @@ impl<T: Config> Pallet<T> {
         {
           return Err(AttemptTransactionError::Invariant);
         }
-        let transition = Self::execute_zero_step_transition(
-          actor.actor_id,
-          state,
-          admission,
-          now,
-          opening_observation,
-        )?;
+        let transition = Self::execute_zero_step_transition(actor.actor_id, state, admission, now)?;
         let ZeroStepTransition {
           next_residence,
           cycle_nonce,
@@ -857,7 +804,7 @@ impl<T: Config> Pallet<T> {
     if execution_instance.cycle_state == CycleState::Idle {
       plan.hot.queue_ticket = None;
       plan.hot =
-        Self::prepare_opening_rearm_hot(actor_id, &execution_instance, admission, plan.hot, None)?;
+        Self::prepare_opening_rearm_hot(actor_id, &execution_instance, admission, plan.hot)?;
     }
     Self::charge_pipeline_opening(actor_id, &execution_instance)?;
     let (mut plan, effect_execution, disposition, outcomes, eligible_at) =
@@ -1894,7 +1841,7 @@ impl<T: Config> Pallet<T> {
   pub(crate) fn preflight_paged_enqueue_cohort_with_authority(
     actors: Vec<(ActorId, ActorHotStateOf<T>)>,
   ) -> Result<QueueAppendPlan<T>, EnqueueOutcome> {
-    if actors.is_empty() || actors.len() > T::MaxCrossingActorsPerBlock::get() as usize {
+    if actors.is_empty() || actors.len() > T::MaxQueueLength::get() as usize {
       return Err(EnqueueOutcome::CapacityUnavailable);
     }
     let mut plan = Self::new_queue_append_plan()?;
@@ -2022,9 +1969,6 @@ impl<T: Config> Pallet<T> {
     admission: &ActorAdmissionCertificateOf<T>,
     resources: ActorStepResourceEnvelope,
   ) -> Result<(), EnqueueOutcome> {
-    if plan.publications.len() >= T::MaxCrossingActorsPerBlock::get() as usize {
-      return Err(EnqueueOutcome::CapacityUnavailable);
-    }
     if hot.queue_ticket.is_some()
       || plan.publications.iter(/* deos-bypass: bounded-iter */)
         .any(|publication| publication.cell.actor_id == actor_id)
@@ -2078,10 +2022,6 @@ impl<T: Config> Pallet<T> {
         Err(EnqueueOutcome::CapacityUnavailable)
       };
     };
-    // Preserve the single-member cohort admission boundary before queue topology checks.
-    if T::MaxCrossingActorsPerBlock::get() == 0 {
-      return Err(EnqueueOutcome::CapacityUnavailable);
-    }
     Self::preflight_paged_enqueue_actor_state(actor_id, &state, &admission, loaded_step.as_ref())
   }
 
@@ -2148,53 +2088,6 @@ impl<T: Config> Pallet<T> {
     }
     let plan = Self::preflight_paged_enqueue_cohort_with_authority(cohort)?;
     Self::commit_paged_enqueue(plan)
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_preflight_queue_over_cap(actors: Vec<ActorId>) -> Result<(), EnqueueOutcome> {
-    let mut cohort = Vec::new();
-    for actor_id in actors {
-      let hot = match Self::load_actor_state(actor_id) {
-        LoadedActorStateOf::Active(state) => state.hot,
-        _ => return Err(EnqueueOutcome::CorruptedTopology),
-      };
-      cohort.push((actor_id, hot));
-    }
-    Self::preflight_paged_enqueue_cohort_with_authority(cohort).map(|_| ())
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_reset_crossing_cursor_commits() {
-    CROSSING_CURSOR_COMMITS.with(|count| count.set(0));
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_crossing_cursor_commits() -> u32 {
-    CROSSING_CURSOR_COMMITS.with(core::cell::Cell::get)
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_record_crossing_cursor_commit() {
-    CROSSING_CURSOR_COMMITS.with(|count| count.set(count.get().saturating_add(1)));
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_reset_first_crossing_branch_weight() {
-    FIRST_CROSSING_BRANCH_WEIGHT.with(|weight| weight.set(None));
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_first_crossing_branch_weight() -> Option<Weight> {
-    FIRST_CROSSING_BRANCH_WEIGHT.with(core::cell::Cell::get)
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_record_first_crossing_branch_weight(weight: Weight) {
-    FIRST_CROSSING_BRANCH_WEIGHT.with(|recorded| {
-      if recorded.get().is_none() {
-        recorded.set(Some(weight));
-      }
-    });
   }
 
   #[cfg(test)]
@@ -2404,12 +2297,6 @@ impl<T: Config> Pallet<T> {
         | EnqueueOutcome::SchedulerIndexExhausted
         | EnqueueOutcome::WakeupIndexExhausted
     )
-  }
-
-  pub(crate) fn activation_failure_error(error: ActivationFailure) -> DispatchError {
-    match error {
-      ActivationFailure::Permanent(error) => error,
-    }
   }
 
   /// Maps a placement result to the public error surface for extrinsic boundaries.
@@ -3715,11 +3602,7 @@ impl<T: Config> Pallet<T> {
           .transpose()?
           .unwrap_or(0),
       ),
-      Trigger::Manual
-      | Trigger::AddressEvent { .. }
-      | Trigger::ObservationChange { .. }
-      | Trigger::ObservationCrossing { .. }
-      | Trigger::AtTime { .. } => None,
+      Trigger::Manual | Trigger::AddressEvent { .. } | Trigger::AtTime { .. } => None,
     })
   }
 
@@ -3876,10 +3759,7 @@ impl<T: Config> Pallet<T> {
         TriggerFamily::Cadenced,
         T::WeightInfo::cadenced_trigger_occurrence(),
       ),
-      Trigger::Manual
-      | Trigger::AddressEvent { .. }
-      | Trigger::ObservationChange { .. }
-      | Trigger::ObservationCrossing { .. } => {
+      Trigger::Manual | Trigger::AddressEvent { .. } => {
         return Err(DispatchError::Other("tick wakeup owner is not temporal"));
       }
     };
@@ -4072,9 +3952,7 @@ impl<T: Config> Pallet<T> {
           return Ok(true);
         }
       }
-      TriggerRuntimeState::AtTime { consumed: true, .. }
-      | TriggerRuntimeState::Stateless
-      | TriggerRuntimeState::ObservationCrossing { .. } => {
+      TriggerRuntimeState::AtTime { consumed: true, .. } | TriggerRuntimeState::Stateless => {
         return Err(DispatchError::Other(
           "temporal runtime state is incompatible",
         ));
@@ -5196,107 +5074,6 @@ impl<T: Config> Pallet<T> {
     Self::classify_actor_loaded(instance, run_state.as_ref())
   }
 
-  #[cfg(test)]
-  pub(crate) fn classify_observation_activation_compact(
-    state: &ObservationActivationState<T>,
-  ) -> Result<ActorClassification<BlockNumberFor<T>>, ActorClassificationError> {
-    let now = frame_system::Pallet::<T>::block_number();
-    let run_state = state.run_state.as_ref();
-    let terminal_reason = if state
-      .authority
-      .window
-      .is_some_and(|window| now > window.end)
-    {
-      Some(CloseReason::WindowExpired)
-    } else if state.hot.cycle_state == CycleState::Idle && state.identity.cycle_nonce == u64::MAX {
-      Some(CloseReason::CycleNonceExhausted)
-    } else if run_state.is_some_and(|run| {
-      state.loaded_step.as_ref().is_some_and(|loaded_step| {
-        loaded_step
-          .step
-          .on_error
-          .retry_max_attempts()
-          .is_some_and(|max_attempts| run.unsuccessful_attempts_at_cursor >= max_attempts)
-      })
-    }) {
-      Some(CloseReason::RetryAttemptsExhausted)
-    } else if Self::failure_limit_reached(state.hot.unsuccessful_attempt_streak) {
-      Some(CloseReason::ConsecutiveFailures)
-    } else if state.hot.cycle_state == CycleState::Idle
-      && state
-        .authority
-        .auto_close_at_cycle_nonce
-        .is_some_and(|target| state.identity.cycle_nonce >= target)
-    {
-      Some(CloseReason::AutoCloseNonceReached)
-    } else {
-      None
-    };
-
-    let execution_phase = if GlobalCircuitBreaker::<T>::get() {
-      ActorExecutionPhase::GlobalCircuitBreaker
-    } else if state.hot.lifecycle.is_paused() {
-      ActorExecutionPhase::Paused
-    } else if terminal_reason.is_some() {
-      ActorExecutionPhase::Ready
-    } else if state.hot.cycle_state == CycleState::Running {
-      let run = run_state.ok_or(ActorClassificationError::RunInvariant)?;
-      if run.eligible_at > now {
-        ActorExecutionPhase::WaitingBlock(run.eligible_at)
-      } else {
-        ActorExecutionPhase::Ready
-      }
-    } else if state.hot.cycle_state == CycleState::Suspended {
-      let run = run_state.ok_or(ActorClassificationError::RunInvariant)?;
-      let expected = Self::suspension_eligible_at(
-        state.authority.cooldown_blocks,
-        state.authority.window,
-        run.last_attempt_block,
-        run.unsuccessful_attempts_at_cursor,
-      )
-      .map_err(|outcome| match outcome {
-        EnqueueOutcome::SchedulerIndexExhausted => ActorClassificationError::ComputationOverflow,
-        _ => ActorClassificationError::RunInvariant,
-      })?;
-      if expected != run.eligible_at {
-        return Err(ActorClassificationError::RunInvariant);
-      }
-      if run.eligible_at > now {
-        ActorExecutionPhase::WaitingRetry(run.eligible_at)
-      } else {
-        ActorExecutionPhase::Ready
-      }
-    } else {
-      let cooldown_anchor = state
-        .hot
-        .last_cycle_block
-        .unwrap_or(state.hot.schedule_anchor);
-      let cooldown_eligible_at =
-        if state.identity.cycle_nonce == 0 && state.hot.last_cycle_block.is_none() {
-          state.hot.schedule_anchor
-        } else {
-          cooldown_anchor
-            .checked_add(&state.authority.cooldown_blocks.into())
-            .ok_or(ActorClassificationError::ComputationOverflow)?
-        };
-      let window_floor = state
-        .authority
-        .window
-        .map(|window| window.start)
-        .unwrap_or_else(Zero::zero);
-      let eligible_at = now.max(cooldown_eligible_at).max(window_floor);
-      if eligible_at > now {
-        ActorExecutionPhase::WaitingBlock(eligible_at)
-      } else {
-        ActorExecutionPhase::Ready
-      }
-    };
-    Ok(ActorClassification {
-      terminal_reason,
-      execution_phase,
-    })
-  }
-
   pub(crate) fn classify_actor_loaded(
     instance: &ActiveActorViewOf<T>,
     run_state: Option<&ActorRunStateOf<T>>,
@@ -5423,8 +5200,7 @@ impl<T: Config> Pallet<T> {
   /// Projects the canonical actor classifier without stripping temporal payloads.
   pub fn actor_eligibility(
     actor_id: ActorId,
-  ) -> Result<ActorEligibility<T::ObservationFeedId, BlockNumberFor<T>>, ActorClassificationError>
-  {
+  ) -> Result<ActorEligibility<BlockNumberFor<T>>, ActorClassificationError> {
     let state = match Self::load_actor_state_for_frame_control(actor_id) {
       LoadedActorStateOf::NotRegistered => return Ok(ActorEligibility::NotRegistered),
       LoadedActorStateOf::Dormant(_) => return Ok(ActorEligibility::Dormant),
@@ -5454,49 +5230,6 @@ impl<T: Config> Pallet<T> {
     let trigger = match &state.contract.trigger {
       Trigger::Manual => ActorTriggerActivation::Manual,
       Trigger::AddressEvent { .. } => ActorTriggerActivation::AddressEvent,
-      Trigger::ObservationChange { feed } => {
-        let feeds = ActorObservationFeeds::<T>::get(actor_id)
-          .ok_or(ActorClassificationError::ActorInvariant)?;
-        if feeds.as_slice() != [*feed] || !ObservationSubscriptionSlot::<T>::contains_key(actor_id)
-        {
-          return Err(ActorClassificationError::ActorInvariant);
-        }
-        ActorTriggerActivation::ObservationChange {
-          feed: *feed,
-          subscriber_count: ObservationSubscriberCount::<T>::get(feed),
-          pending_revision: DirtyObservationFeeds::<T>::get(feed)
-            .map(|dirty| dirty.latest_revision),
-        }
-      }
-      Trigger::ObservationCrossing { .. } => {
-        let crossing = Self::crossing_from_trigger(&state.contract.trigger)
-          .ok_or(ActorClassificationError::ActorInvariant)?;
-        let locator = CrossingMemberships::<T>::get(actor_id)
-          .ok_or(ActorClassificationError::ActorInvariant)?;
-        let TriggerRuntimeState::ObservationCrossing {
-          phase,
-          installed_at_revision,
-        } = state.hot.trigger_runtime_state
-        else {
-          return Err(ActorClassificationError::ActorInvariant);
-        };
-        let (key, _) = Self::crossing_obligation(&crossing, phase);
-        if locator.key != key {
-          return Err(ActorClassificationError::ActorInvariant);
-        }
-        ActorTriggerActivation::ObservationCrossing {
-          feed: crossing.feed,
-          direction: crossing.direction,
-          threshold: crossing.threshold,
-          rearm_threshold: crossing.rearm_threshold,
-          phase,
-          installed_at_revision,
-          pending_revisions: CrossingTransitionQueues::<T>::get(crossing.feed)
-            .map_or(0, |queue| queue.len() as u32),
-          processing_revision: CrossingRangeCursors::<T>::get(crossing.feed)
-            .map(|cursor| cursor.revision),
-        }
-      }
       Trigger::AtTime { after_ticks } => {
         let TriggerRuntimeState::AtTime { consumed, .. } = state.hot.trigger_runtime_state else {
           return Err(ActorClassificationError::ActorInvariant);

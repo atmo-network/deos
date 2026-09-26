@@ -580,7 +580,6 @@ fn router_oracle_burn_success_path_commits_once_without_scheduler_or_reward_resi
     let burn_before = Actors::active_actor_state(burn_actor_id).expect("Burn Actor exists");
     let target_cycle_nonce = burn_before.identity.cycle_nonce.saturating_add(1);
     assert!(burn_before.contract.trigger.address_event_source_enabled());
-    assert_eq!(Actors::dirty_observation_feed_count(), 0);
 
     System::set_block_number(31);
     assert_ok!(crate::DeosRouter::swap(
@@ -652,7 +651,6 @@ fn router_oracle_burn_success_path_commits_once_without_scheduler_or_reward_resi
     assert!(hot.queue_ticket.is_none());
     assert!(hot.wakeup_pointer.is_none());
     assert!(Actors::actor_run_state(burn_actor_id).is_none());
-    assert_eq!(Actors::dirty_observation_feed_count(), 0);
     assert_eq!(
       crate::Staking::native_security_reward_liability(),
       reward_liability_before,

@@ -8,18 +8,16 @@ use super::{
   common::{ALICE, ASSET_A},
 };
 use crate::{
-  Actors, Assets, Balances, Block, Executive, Header, InherentDataExt, Oracle, Runtime,
-  RuntimeCall, RuntimeEvent, RuntimeGenesisConfig, RuntimeOrigin, System,
-  configs::BlockResourceBudgetValue,
+  Actors, Assets, Balances, Block, Executive, Header, InherentDataExt, Runtime, RuntimeCall,
+  RuntimeEvent, RuntimeGenesisConfig, RuntimeOrigin, System, configs::BlockResourceBudgetValue,
 };
 use codec::Encode;
 use cumulus_primitives_parachain_inherent::{INHERENT_IDENTIFIER, ParachainInherentData};
 use cumulus_test_relay_sproof_builder::RelayStateSproofBuilder;
 use pallet_deos_actors::{
-  ActorId, AmountResolution, CloseReason, CompletionPolicy, ContractSteps, CrossingDirection,
-  CycleResult, CycleState, Event, InputLimit, Precondition, Predicate, ProcessResidence,
-  ScheduleWindow, StepErrorPolicy, StepOf, Task, Trigger, TriggerFamily, WakeupClock, WakeupKey,
-  WeightInfo,
+  ActorId, AmountResolution, CloseReason, CompletionPolicy, ContractSteps, CycleResult, CycleState,
+  Event, InputLimit, ProcessResidence, ScheduleWindow, StepErrorPolicy, StepOf, Task, Trigger,
+  TriggerFamily, WakeupClock, WakeupKey, WeightInfo,
 };
 use polkadot_sdk::frame_support::{
   BoundedVec, assert_ok,
@@ -60,11 +58,6 @@ const W4_STOP_CYCLE_ACTORS: u32 = 100;
 const W5_BLOCK_LIMIT: u32 = 10;
 const W6_BLOCK_LIMIT: u32 = 16;
 const W6_RANDOM_SEED: u64 = 0x0066_c10c_5eed;
-const CURRENT_W6_SUBSCRIBERS: u32 = 1_024;
-const CURRENT_W6_REGISTRATION_PAGES: u32 = 32;
-const CURRENT_W6_UPDATES_PER_BLOCK: u32 = 4;
-const CURRENT_W6_UPDATE_BLOCKS: u32 = 32;
-const CURRENT_W6_DRAIN_BLOCKS: u32 = 32;
 const CURRENT_W7_SLEEPERS: u32 = 1_024;
 const CURRENT_W7_DEADLINE_KEYS: u32 = 32;
 const CURRENT_W7_MEMBERS_PER_KEY: u32 = 32;
@@ -83,14 +76,6 @@ const W8_DUE_ACTORS: u32 = 100;
 const W9_DUE_ACTORS: u32 = 100;
 const CONTROL_ATTRIBUTION_ACTORS: u32 = 100;
 const CONTROL_ATTRIBUTION_BLOCKS: u32 = 9;
-const P53_COHORT_MEMBERS: u32 = 48;
-const P53_COHORT_BLOCK_LIMIT: u32 = 64;
-const P53_PUBLICATION_BLOCK: u32 = 2;
-const P53_FEED_REGISTRY: u32 = 8_200;
-const P53_RELEASE_SAMPLE: u128 = 1_000_000_000_000;
-const P53_CROSSING_SAMPLE: u128 = 100_000_000_000_000;
-const P53_CROSSING_THRESHOLD: u128 = 1_500_000_000_000;
-const P53_CROSSING_REARM: u128 = 800_000_000_000;
 /// SHA-256 of the production Wasm accepted for the retained release tree, rebuilt by
 /// `scripts/03-build-runtime.sh`. Every exact-Wasm regression profile binds this identity and
 /// fails closed when the caller selects different bytes; update it together with the accepted
@@ -180,7 +165,6 @@ struct PreparedW5Fixture {
 
 struct PreparedW6Fixture {
   actors: PreparedActorFixture,
-  feed: primitives::OracleFeedId,
   dense_manual: Vec<ActorId>,
   sparse_block: Vec<ActorId>,
   sparse_tick: Vec<ActorId>,
@@ -188,9 +172,6 @@ struct PreparedW6Fixture {
   randomized_periods: Vec<u64>,
   paused_actor: ActorId,
   closed_actor: ActorId,
-  crossing_actor: ActorId,
-  crossing_generation: u64,
-  crossing_replacement: pallet_deos_actors::ActorContractOf<Runtime>,
 }
 
 struct PreparedW7Fixture {
@@ -250,7 +231,6 @@ struct FullExecutiveBlockMetrics {
   paused_actors: Vec<ActorId>,
   resumed_actors: Vec<ActorId>,
   trigger_occurrences: Vec<(ActorId, TriggerFamily)>,
-  actor_faults: u32,
   user_calls: u32,
   next_user_weight: Option<Weight>,
   prepass_steps: u32,
@@ -913,7 +893,6 @@ fn prepare_w6_fixture(wasm: &[u8]) -> PreparedW6Fixture {
   let (
     actor_ids,
     actor_profiles,
-    feed,
     dense_manual,
     sparse_block,
     sparse_tick,
@@ -921,9 +900,6 @@ fn prepare_w6_fixture(wasm: &[u8]) -> PreparedW6Fixture {
     randomized_periods,
     paused_actor,
     closed_actor,
-    crossing_actor,
-    crossing_generation,
-    crossing_replacement,
   ) = ext.execute_with(|| {
     System::set_block_number(1);
     assert_ok!(Balances::force_set_balance(
@@ -931,29 +907,6 @@ fn prepare_w6_fixture(wasm: &[u8]) -> PreparedW6Fixture {
       MultiAddress::Id(owner.clone()),
       u128::MAX / 4,
     ));
-    let feed = crate::configs::oracle_config::deos_router_pool_feed(
-      primitives::AssetKind::Native,
-      primitives::AssetKind::Local(66),
-    );
-    assert_ok!(Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      owner.clone(),
-      feed.meaning(),
-      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
-      feed.scale,
-      pallet_oracle::Aggregation::Ema {
-        half_life_blocks: 100,
-      },
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    ));
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(owner.clone()),
-      feed,
-      1_000_000_000_000,
-    ));
-
     let steps = actors_integration_tests::transfer_contract_steps(
       super::common::BOB,
       primitives::AssetKind::Native,
@@ -1028,27 +981,6 @@ fn prepare_w6_fixture(wasm: &[u8]) -> PreparedW6Fixture {
         )
       })
       .collect::<Vec<_>>();
-    let crossing_actor = add_actor(
-      actors_integration_tests::observation_crossing_schedule(
-        feed,
-        CrossingDirection::Rising,
-        1_500_000_000_000,
-        800_000_000_000,
-      ),
-      None,
-      false,
-    );
-    let crossing_generation = Actors::crossing_membership(crossing_actor)
-      .expect("W6 crossing membership exists")
-      .generation;
-    let mut crossing_replacement =
-      Actors::actor_contract(crossing_actor).expect("W6 crossing Contract exists");
-    crossing_replacement.trigger = Trigger::observation_crossing(
-      feed,
-      CrossingDirection::Rising,
-      4_000_000_000_000,
-      3_000_000_000_000,
-    );
     let paused_actor = sparse_block[1];
     let closed_actor = sparse_block[2];
     assert_eq!(
@@ -1060,7 +992,6 @@ fn prepare_w6_fixture(wasm: &[u8]) -> PreparedW6Fixture {
     (
       actor_ids,
       actor_profiles,
-      feed,
       dense_manual,
       sparse_block,
       sparse_tick,
@@ -1068,9 +999,6 @@ fn prepare_w6_fixture(wasm: &[u8]) -> PreparedW6Fixture {
       randomized_periods,
       paused_actor,
       closed_actor,
-      crossing_actor,
-      crossing_generation,
-      crossing_replacement,
     )
   });
   ext
@@ -1086,7 +1014,6 @@ fn prepare_w6_fixture(wasm: &[u8]) -> PreparedW6Fixture {
       next_control_maximum: Weight::zero(),
       next_effect_maximum: Weight::zero(),
     },
-    feed,
     dense_manual,
     sparse_block,
     sparse_tick,
@@ -1094,9 +1021,6 @@ fn prepare_w6_fixture(wasm: &[u8]) -> PreparedW6Fixture {
     randomized_periods,
     paused_actor,
     closed_actor,
-    crossing_actor,
-    crossing_generation,
-    crossing_replacement,
   }
 }
 
@@ -1556,13 +1480,8 @@ fn authored_metrics(
   let mut paused_actors = Vec::new();
   let mut resumed_actors = Vec::new();
   let mut trigger_occurrences = Vec::new();
-  let mut actor_faults = 0u32;
   for record in System::events() {
     let (actor_id, step_index, successful, observed_task) = match record.event {
-      RuntimeEvent::Actors(Event::ActorFaultRecorded { .. }) => {
-        actor_faults = actor_faults.saturating_add(1);
-        continue;
-      }
       RuntimeEvent::Actors(Event::ActorPaused { actor_id })
         if workload_profiles.contains_key(&actor_id) =>
       {
@@ -1731,7 +1650,6 @@ fn authored_metrics(
     paused_actors,
     resumed_actors,
     trigger_occurrences,
-    actor_faults,
     user_calls,
     next_user_weight,
     prepass_steps,
@@ -3847,595 +3765,6 @@ fn run_w4_heterogeneous_effect_campaign(wasm: &[u8], demand: UserDemand) {
   );
 }
 
-fn run_current_w6_wake_storm(wasm: &[u8]) {
-  let mut ext = TestExternalities::new_with_code_and_state(
-    wasm,
-    reference_genesis_storage(wasm),
-    crate::VERSION.state_version(),
-  );
-  let signer = sr25519::Pair::from_seed(&[67u8; 32]);
-  let owner = crate::AccountId::from(signer.public());
-  let (actor_ids, actor_profiles, feed) = ext.execute_with(|| {
-    System::set_block_number(1);
-    assert_ok!(Balances::force_set_balance(
-      RuntimeOrigin::root(),
-      MultiAddress::Id(owner.clone()),
-      u128::MAX / 4,
-    ));
-    let feed = crate::configs::oracle_config::deos_router_pool_feed(
-      primitives::AssetKind::Native,
-      primitives::AssetKind::Local(67),
-    );
-    assert_ok!(Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      owner.clone(),
-      feed.meaning(),
-      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
-      feed.scale,
-      pallet_oracle::Aggregation::LastValue,
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    ));
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(owner.clone()),
-      feed,
-      1_000_000_000_000,
-    ));
-    let precondition = Precondition {
-      clauses: BoundedVec::try_from(vec![
-        BoundedVec::try_from(vec![Predicate::ObservationAbove {
-          feed,
-          threshold: 2_000_000_000_000,
-          max_age_blocks: 1_000,
-        }])
-        .expect("one W6 observation predicate fits"),
-      ])
-      .expect("one W6 observation clause fits"),
-    };
-    let steps = BoundedVec::try_from(vec![StepOf::<Runtime> {
-      precondition: Some(precondition),
-      task: Task::StopCycle,
-      on_error: StepErrorPolicy::AbortCycle,
-    }])
-    .expect("one W6 Step fits");
-    let mut actor_ids = Vec::with_capacity(CURRENT_W6_SUBSCRIBERS as usize);
-    let mut actor_profiles = BTreeMap::new();
-    for _ in 0..CURRENT_W6_SUBSCRIBERS {
-      let actor_id = actors_integration_tests::create_system(
-        owner.clone(),
-        actors_integration_tests::manual_schedule(),
-        None,
-        steps.clone(),
-      );
-      assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
-      actor_ids.push(actor_id);
-      actor_profiles.insert(
-        actor_id,
-        WorkloadActorProfile {
-          step_count: 1,
-          opening_predicates_per_step: 1,
-          task: Some(WorkloadTask::StopCycle),
-        },
-      );
-    }
-    (actor_ids, actor_profiles, feed)
-  });
-  ext
-    .commit_all()
-    .expect("prepared current W6 fixture commits before block authoring");
-  let mut pre_state = ext.execute_with(current_top_storage);
-  let mut parent = parent_header_for(pre_state.clone(), wasm, 1);
-  let mut next_block = 2u32;
-  let mut setup_blocks = 0u32;
-  let mut setup_control_ref_time = Vec::new();
-  let mut setup_control_proof_size = Vec::new();
-  let mut setup_execution_storage_proof = Vec::new();
-  let mut setup_execution_compact_proof = Vec::new();
-
-  loop {
-    let authored = author_complete_block_after(
-      pre_state,
-      wasm,
-      &parent,
-      next_block,
-      UserDemand::ActorOnly,
-      &signer,
-      0,
-      &actor_profiles,
-    );
-    assert_eq!(authored.metrics.actor_faults, 0);
-    setup_control_ref_time.push(authored.metrics.actor_control.ref_time());
-    setup_control_proof_size.push(authored.metrics.actor_control.proof_size());
-    let proof = replay_complete_block_in_wasm(
-      &authored,
-      wasm,
-      &format!("current-W6-park-setup-{next_block}"),
-    );
-    setup_execution_storage_proof.push(proof.execution_storage_proof_bytes);
-    setup_execution_compact_proof.push(proof.execution_compact_proof_bytes);
-    parent = authored.block.header.clone();
-    pre_state = authored.post_state;
-    setup_blocks = setup_blocks.saturating_add(1);
-    let parked = {
-      let mut state = TestExternalities::new_with_code_and_state(
-        wasm,
-        pre_state.clone(),
-        crate::VERSION.state_version(),
-      );
-      state.execute_with(|| {
-        actor_ids
-          .iter()
-          .filter(|actor_id| {
-            matches!(
-              pallet_deos_actors::ActorProcesses::<Runtime>::get(**actor_id)
-                .and_then(|process| process.residence),
-              Some(ProcessResidence::Parked(_))
-            )
-          })
-          .count() as u32
-      })
-    };
-    next_block = next_block.saturating_add(1);
-    if parked == CURRENT_W6_SUBSCRIBERS {
-      break;
-    }
-    assert!(setup_blocks < 64, "W6 Park preparation must remain bounded");
-  }
-
-  let (source, initial_revision_state) = {
-    let mut state = TestExternalities::new_with_code_and_state(
-      wasm,
-      pre_state.clone(),
-      crate::VERSION.state_version(),
-    );
-    state.execute_with(|| {
-      let source = pallet_deos_actors::ObservationDependencySources::<Runtime>::get(feed)
-        .expect("W6 feed owns one dependency source");
-      let header = pallet_deos_actors::DependencyRegistrationHeaders::<Runtime>::get(source);
-      assert_eq!(header.count, CURRENT_W6_SUBSCRIBERS);
-      assert_eq!(header.next_index, u64::from(CURRENT_W6_SUBSCRIBERS));
-      assert_eq!(header.free_count, 0);
-      for page_id in 0..u64::from(CURRENT_W6_REGISTRATION_PAGES) {
-        let page = pallet_deos_actors::DependencyRegistrationPages::<Runtime>::get(source, page_id)
-          .expect("W6 owns every declared fixed registration page");
-        assert_eq!(page.entries.len(), 32);
-        assert!(page.entries.iter().all(Option::is_some));
-      }
-      (
-        source,
-        pallet_deos_actors::DependencyRevisions::<Runtime>::get(source),
-      )
-    })
-  };
-  let initial_revision = initial_revision_state.revision;
-  assert_eq!(initial_revision_state.scan_target, Some(initial_revision));
-  assert_eq!(initial_revision_state.scan_cursor, 0);
-  assert_eq!(
-    initial_revision_state.scan_end,
-    u64::from(CURRENT_W6_SUBSCRIBERS)
-  );
-  let initial_entries = actors_storage_entries(&pre_state);
-  let initial_storage_bytes = persistent_storage_bytes(&initial_entries);
-  let first_update_block = next_block;
-  let last_update_block = first_update_block + CURRENT_W6_UPDATE_BLOCKS - 1;
-  let final_block = last_update_block + CURRENT_W6_DRAIN_BLOCKS;
-  let mut signer_nonce = 0;
-  let mut progressed = BTreeSet::new();
-  let mut progress_counts = BTreeMap::<ActorId, u32>::new();
-  let mut wake_blocks = BTreeMap::<ActorId, u32>::new();
-  let mut wake_to_step_blocks = Vec::new();
-  let mut total_cycles = 0u32;
-  let mut total_steps = 0u32;
-  let mut trigger_occurrences = 0u32;
-  let mut update_window_steps = 0u32;
-  let mut drain_steps = 0u32;
-  let mut control_ref_time = Vec::new();
-  let mut control_proof_size = Vec::new();
-  let mut effect_ref_time = Vec::new();
-  let mut effect_proof_size = Vec::new();
-  let mut execution_storage_proof = Vec::new();
-  let mut execution_compact_proof = Vec::new();
-  let mut verification_storage_proof = Vec::new();
-  let mut verification_compact_proof = Vec::new();
-  let mut registration_counts = Vec::new();
-  let mut pending_counts = Vec::new();
-  let mut process_counts = Vec::new();
-  let mut scan_cursors = Vec::new();
-  let mut scan_targets = Vec::new();
-  let mut scan_pending_blocks = 0u32;
-  let mut update_end_scan_cursor = None;
-  let mut storage_bytes = vec![initial_storage_bytes];
-  let mut persistent_mutation_samples = Vec::new();
-
-  for block_number in first_update_block..=final_block {
-    let in_update_window = block_number <= last_update_block;
-    let calls = if in_update_window {
-      (0..CURRENT_W6_UPDATES_PER_BLOCK)
-        .map(|offset| {
-          let update_block = block_number.saturating_sub(first_update_block);
-          let sequence = u128::from(update_block)
-            .saturating_mul(u128::from(CURRENT_W6_UPDATES_PER_BLOCK))
-            .saturating_add(u128::from(offset))
-            .saturating_add(1);
-          RuntimeCall::Oracle(pallet_oracle::Call::publish {
-            feed,
-            sample: 3_000_000_000_000u128.saturating_add(sequence),
-          })
-        })
-        .collect::<Vec<_>>()
-    } else {
-      Vec::new()
-    };
-    let before_entries = actors_storage_entries(&pre_state);
-    let authored = author_complete_block_after_with_calls(
-      pre_state,
-      wasm,
-      &parent,
-      block_number,
-      UserDemand::ActorOnly,
-      &signer,
-      signer_nonce,
-      &actor_profiles,
-      &calls,
-    );
-    assert_eq!(authored.metrics.non_successful_steps, 0);
-    assert_eq!(
-      authored.metrics.actor_steps,
-      authored.metrics.distinct_actors
-    );
-    assert_eq!(authored.metrics.actor_faults, 0);
-    for (actor_id, _) in &authored.metrics.progressed_steps {
-      let count = progress_counts.entry(*actor_id).or_default();
-      if *count == 0 {
-        let woke_at = wake_blocks
-          .get(actor_id)
-          .copied()
-          .expect("W6 service follows observed Pending publication");
-        assert!(block_number > woke_at, "W6 wake preserves the B+1 floor");
-        wake_to_step_blocks.push(u64::from(block_number - woke_at));
-        progressed.insert(*actor_id);
-      }
-      *count = count.saturating_add(1);
-    }
-    total_cycles = total_cycles.saturating_add(authored.metrics.completed_cycles);
-    total_steps = total_steps.saturating_add(authored.metrics.actor_steps);
-    trigger_occurrences =
-      trigger_occurrences.saturating_add(authored.metrics.trigger_occurrences.len() as u32);
-    if in_update_window {
-      update_window_steps = update_window_steps.saturating_add(authored.metrics.actor_steps);
-    } else {
-      drain_steps = drain_steps.saturating_add(authored.metrics.actor_steps);
-    }
-    control_ref_time.push(authored.metrics.actor_control.ref_time());
-    control_proof_size.push(authored.metrics.actor_control.proof_size());
-    effect_ref_time.push(authored.metrics.actor_effect.ref_time());
-    effect_proof_size.push(authored.metrics.actor_effect.proof_size());
-    signer_nonce = signer_nonce.saturating_add(calls.len() as crate::Nonce);
-    let after_entries = actors_storage_entries(&authored.post_state);
-    persistent_mutation_samples.push(persistent_mutations(&before_entries, &after_entries));
-    storage_bytes.push(persistent_storage_bytes(&after_entries));
-    let (
-      newly_pending,
-      registration_count,
-      pending_count,
-      process_count,
-      scan_pending,
-      scan_cursor,
-      scan_target,
-    ) = {
-      let mut state = TestExternalities::new_with_code_and_state(
-        wasm,
-        authored.post_state.clone(),
-        crate::VERSION.state_version(),
-      );
-      state.execute_with(|| {
-        let newly_pending = actor_ids
-          .iter()
-          .filter(|actor_id| !wake_blocks.contains_key(actor_id))
-          .filter(|actor_id| {
-            matches!(
-              pallet_deos_actors::ActorProcesses::<Runtime>::get(**actor_id)
-                .and_then(|process| process.residence),
-              Some(ProcessResidence::Service(_))
-            )
-          })
-          .copied()
-          .collect::<Vec<_>>();
-        let registration_count =
-          pallet_deos_actors::DependencyRegistrationHeaders::<Runtime>::get(source).count;
-        let pending_count = actor_ids
-          .iter()
-          .filter(|actor_id| Actors::actor_hot(**actor_id).is_some_and(|hot| hot.pending_signal))
-          .count() as u32;
-        let process_count = actor_ids
-          .iter()
-          .filter(|actor_id| {
-            pallet_deos_actors::ActorProcesses::<Runtime>::contains_key(**actor_id)
-          })
-          .count() as u32;
-        let revision_state = pallet_deos_actors::DependencyRevisions::<Runtime>::get(source);
-        (
-          newly_pending,
-          registration_count,
-          pending_count,
-          process_count,
-          pallet_deos_actors::DependencyScanSourceNodes::<Runtime>::contains_key(source),
-          revision_state.scan_cursor,
-          revision_state.scan_target,
-        )
-      })
-    };
-    for actor_id in newly_pending {
-      wake_blocks.insert(actor_id, block_number);
-    }
-    registration_counts.push(u64::from(registration_count));
-    pending_counts.push(u64::from(pending_count));
-    process_counts.push(u64::from(process_count));
-    scan_cursors.push(scan_cursor);
-    scan_targets.push(scan_target);
-    if block_number == last_update_block {
-      update_end_scan_cursor = Some(scan_cursor);
-    }
-    if scan_pending {
-      scan_pending_blocks = scan_pending_blocks.saturating_add(1);
-    }
-    let proof = replay_complete_block_in_wasm(
-      &authored,
-      wasm,
-      &format!("current-W6-wake-storm-{block_number}"),
-    );
-    execution_storage_proof.push(proof.execution_storage_proof_bytes);
-    execution_compact_proof.push(proof.execution_compact_proof_bytes);
-    verification_storage_proof.push(proof.verification_storage_proof_bytes);
-    verification_compact_proof.push(proof.verification_compact_proof_bytes);
-    parent = authored.block.header.clone();
-    pre_state = authored.post_state;
-  }
-
-  let final_entries = actors_storage_entries(&pre_state);
-  let final_storage_bytes = persistent_storage_bytes(&final_entries);
-  let (
-    final_revision,
-    acknowledged_current_revision,
-    acknowledged_revisions,
-    final_pending,
-    remaining_active,
-    remaining_dormant,
-    remaining_processes,
-    remaining_dependency_plans,
-    remaining_pending_events,
-    remaining_pending_reviews,
-    remaining_timed_reviews,
-    final_revision_state,
-    source_scan_pending,
-    final_header,
-  ) = {
-    let mut final_ext =
-      TestExternalities::new_with_code_and_state(wasm, pre_state, crate::VERSION.state_version());
-    final_ext.execute_with(|| {
-      let final_revision = pallet_deos_actors::DependencyRevisions::<Runtime>::get(source).revision;
-      let acknowledged_revisions = (0..u64::from(CURRENT_W6_REGISTRATION_PAGES))
-        .flat_map(|page_id| {
-          pallet_deos_actors::DependencyRegistrationPages::<Runtime>::get(source, page_id)
-            .expect("W6 registration page survives")
-            .entries
-            .into_iter()
-        })
-        .flatten()
-        .map(|handle| handle.acknowledged_revision)
-        .collect::<Vec<_>>();
-      let acknowledged = acknowledged_revisions
-        .iter()
-        .filter(|revision| **revision == final_revision)
-        .count() as u32;
-      let pending = actor_ids
-        .iter()
-        .filter(|actor_id| Actors::actor_hot(**actor_id).is_some_and(|hot| hot.pending_signal))
-        .count() as u32;
-      let remaining_active = actor_ids
-        .iter()
-        .filter(|actor_id| {
-          matches!(
-            Actors::actor_semantic_states(**actor_id),
-            Some(pallet_deos_actors::ActorSemanticState::Active(_))
-          )
-        })
-        .count() as u32;
-      let remaining_dormant = actor_ids
-        .iter()
-        .filter(|actor_id| {
-          matches!(
-            Actors::actor_semantic_states(**actor_id),
-            Some(pallet_deos_actors::ActorSemanticState::Dormant(_))
-          )
-        })
-        .count() as u32;
-      let remaining_processes = actor_ids
-        .iter()
-        .filter(|actor_id| pallet_deos_actors::ActorProcesses::<Runtime>::contains_key(**actor_id))
-        .count() as u32;
-      let remaining_dependency_plans = actor_ids
-        .iter()
-        .filter(|actor_id| pallet_deos_actors::DependencyPlans::<Runtime>::contains_key(**actor_id))
-        .count() as u32;
-      let remaining_pending_events = actor_ids
-        .iter()
-        .filter(|actor_id| {
-          pallet_deos_actors::PendingDependencyEvents::<Runtime>::contains_key(**actor_id)
-        })
-        .count() as u32;
-      let remaining_pending_reviews = actor_ids
-        .iter()
-        .filter(|actor_id| {
-          pallet_deos_actors::PendingDependencyReviews::<Runtime>::contains_key(**actor_id)
-        })
-        .count() as u32;
-      let remaining_timed_reviews = actor_ids
-        .iter()
-        .filter(|actor_id| {
-          pallet_deos_actors::DependencyTimedReviews::<Runtime>::contains_key(**actor_id)
-        })
-        .count() as u32;
-      (
-        final_revision,
-        acknowledged,
-        acknowledged_revisions,
-        pending,
-        remaining_active,
-        remaining_dormant,
-        remaining_processes,
-        remaining_dependency_plans,
-        remaining_pending_events,
-        remaining_pending_reviews,
-        remaining_timed_reviews,
-        pallet_deos_actors::DependencyRevisions::<Runtime>::get(source),
-        pallet_deos_actors::DependencyScanSourceNodes::<Runtime>::contains_key(source),
-        pallet_deos_actors::DependencyRegistrationHeaders::<Runtime>::get(source),
-      )
-    })
-  };
-  assert_eq!(
-    final_revision,
-    initial_revision.saturating_add(u64::from(
-      CURRENT_W6_UPDATES_PER_BLOCK.saturating_mul(CURRENT_W6_UPDATE_BLOCKS),
-    )),
-    "every feed update advances exact causal revision"
-  );
-  assert_eq!(final_header.count, CURRENT_W6_SUBSCRIBERS);
-  assert_eq!(final_header.next_index, u64::from(CURRENT_W6_SUBSCRIBERS));
-  assert_eq!(final_header.free_count, 0);
-  assert!(wake_blocks.len() <= CURRENT_W6_SUBSCRIBERS as usize);
-  assert!(progressed.len() <= wake_blocks.len());
-  assert_eq!(total_steps, total_cycles);
-  let active_target = final_revision_state
-    .scan_target
-    .expect("W6 bounded horizon retains one fixed scan target");
-  let active_target_covered = acknowledged_revisions
-    .iter()
-    .filter(|revision| **revision >= active_target)
-    .count() as u32;
-  let update_end_scan_cursor =
-    update_end_scan_cursor.expect("W6 records the update-horizon cursor");
-  let drain_cursor_advance = final_revision_state
-    .scan_cursor
-    .saturating_sub(update_end_scan_cursor);
-  let target_met = final_pending == 0
-    && !source_scan_pending
-    && progressed.len() == CURRENT_W6_SUBSCRIBERS as usize;
-  let bounded_maintenance_met = active_target == initial_revision
-    && active_target_covered == CURRENT_W6_SUBSCRIBERS
-    && update_end_scan_cursor == u64::from(CURRENT_W6_UPDATE_BLOCKS)
-    && drain_cursor_advance == u64::from(CURRENT_W6_DRAIN_BLOCKS);
-  assert!(
-    bounded_maintenance_met,
-    "W6 fixed-target traversal must make one covered-position unit of progress per block"
-  );
-
-  let inserted = persistent_mutation_samples
-    .iter()
-    .map(|sample| sample.inserted)
-    .collect::<Vec<_>>();
-  let removed = persistent_mutation_samples
-    .iter()
-    .map(|sample| sample.removed)
-    .collect::<Vec<_>>();
-  let changed = persistent_mutation_samples
-    .iter()
-    .map(|sample| sample.changed)
-    .collect::<Vec<_>>();
-  let wake_from_first_update = wake_blocks
-    .values()
-    .map(|block| u64::from(block.saturating_sub(first_update_block)))
-    .collect::<Vec<_>>();
-  let acknowledgement_lag = acknowledged_revisions
-    .iter()
-    .map(|revision| final_revision.saturating_sub(*revision))
-    .collect::<Vec<_>>();
-  let cycles_per_actor = progress_counts
-    .values()
-    .copied()
-    .map(u64::from)
-    .collect::<Vec<_>>();
-  println!(
-    "CURRENT_W6_WAKE_STORM_V1 {}",
-    serde_json::json!({
-      "subscribers": CURRENT_W6_SUBSCRIBERS,
-      "registrationPages": CURRENT_W6_REGISTRATION_PAGES,
-      "setupBlocks": setup_blocks,
-      "updatesPerBlock": CURRENT_W6_UPDATES_PER_BLOCK,
-      "updateBlocks": CURRENT_W6_UPDATE_BLOCKS,
-      "drainBlocks": CURRENT_W6_DRAIN_BLOCKS,
-      "targetMet": target_met,
-      "boundedMaintenanceMet": bounded_maintenance_met,
-      "initialRevision": initial_revision,
-      "finalRevision": final_revision,
-      "causalRevisionDelta": final_revision.saturating_sub(initial_revision),
-      "activeTargetCoveredRegistrations": active_target_covered,
-      "coalescedRevisionDistance": final_revision.saturating_sub(active_target),
-      "triggerOccurrencesDuringWakeAndDrain": trigger_occurrences,
-      "completedCycles": total_cycles,
-      "distinctProgressedActors": progressed.len(),
-      "updateWindowSteps": update_window_steps,
-      "drainSteps": drain_steps,
-      "finalPendingSignals": final_pending,
-      "finalRegistrations": final_header.count,
-      "finalCurrentRevisionAcknowledgements": acknowledged_current_revision,
-      "finalAcknowledgementLag": observed_distribution(&acknowledgement_lag),
-      "remainingActiveActors": remaining_active,
-      "remainingDormantActors": remaining_dormant,
-      "remainingProcesses": remaining_processes,
-      "remainingDependencyPlans": remaining_dependency_plans,
-      "remainingPendingEvents": remaining_pending_events,
-      "remainingPendingReviews": remaining_pending_reviews,
-      "remainingTimedReviews": remaining_timed_reviews,
-      "sourceScan": {
-        "pending": source_scan_pending,
-        "target": final_revision_state.scan_target,
-        "cursor": final_revision_state.scan_cursor,
-        "updateEndCursor": update_end_scan_cursor,
-        "drainCursorAdvance": drain_cursor_advance,
-        "end": final_revision_state.scan_end,
-        "exhausted": final_revision_state.exhausted,
-        "cursorDistribution": observed_distribution(&scan_cursors),
-        "targetChanges": scan_targets.windows(2).filter(|pair| pair[0] != pair[1]).count(),
-      },
-      "wakeFromFirstUpdateBlocks": observed_distribution(&wake_from_first_update),
-      "wakeToStepBlocks": observed_distribution(&wake_to_step_blocks),
-      "cyclesPerActor": observed_distribution(&cycles_per_actor),
-      "registrationsRemaining": observed_distribution(&registration_counts),
-      "pendingSignals": observed_distribution(&pending_counts),
-      "processes": observed_distribution(&process_counts),
-      "sourceScanPendingBlocks": scan_pending_blocks,
-      "setupControlRefTime": observed_distribution(&setup_control_ref_time),
-      "setupControlProofSize": observed_distribution(&setup_control_proof_size),
-      "setupExecutionStorageProof": observed_distribution(&setup_execution_storage_proof),
-      "setupExecutionCompactProof": observed_distribution(&setup_execution_compact_proof),
-      "controlRefTime": observed_distribution(&control_ref_time),
-      "controlProofSize": observed_distribution(&control_proof_size),
-      "effectRefTime": observed_distribution(&effect_ref_time),
-      "effectProofSize": observed_distribution(&effect_proof_size),
-      "actorsPersistentStorage": {
-        "initialBytes": initial_storage_bytes,
-        "finalBytes": final_storage_bytes,
-        "minBytes": storage_bytes.iter().min(),
-        "maxBytes": storage_bytes.iter().max(),
-      },
-      "actorsPersistentKeyMutationsPerBlock": {
-        "inserted": observed_distribution(&inserted),
-        "removed": observed_distribution(&removed),
-        "changed": observed_distribution(&changed),
-      },
-      "exactWasmProofs": {
-        "executionStorage": observed_distribution(&execution_storage_proof),
-        "executionCompact": observed_distribution(&execution_compact_proof),
-        "verificationStorage": observed_distribution(&verification_storage_proof),
-        "verificationCompact": observed_distribution(&verification_compact_proof),
-      },
-    })
-  );
-}
-
 fn run_current_w7_deadlines(wasm: &[u8], replay_wasm: bool) {
   let mut ext = TestExternalities::new_with_code_and_state(
     wasm,
@@ -4555,7 +3884,6 @@ fn run_current_w7_deadlines(wasm: &[u8], replay_wasm: bool) {
       "funding refusal invokes no effect"
     );
     assert_eq!(authored.metrics.completed_cycles, 0);
-    assert_eq!(authored.metrics.actor_faults, 0);
     assert!(authored.metrics.closed_actors.is_empty());
     setup_suspensions += authored.metrics.suspended_steps.len();
     setup_control_ref_time.push(authored.metrics.actor_control.ref_time());
@@ -4640,7 +3968,6 @@ fn run_current_w7_deadlines(wasm: &[u8], replay_wasm: bool) {
       "unfunded Attempts cannot fabricate useful effects"
     );
     assert_eq!(authored.metrics.completed_cycles, 0);
-    assert_eq!(authored.metrics.actor_faults, 0);
     assert!(
       authored.metrics.suspended_steps.is_empty(),
       "retry exhaustion cannot re-sleep"
@@ -4866,8 +4193,6 @@ fn actor_lifecycle_observation(
         "temporalAnchorTick": state.hot.trigger_runtime_state.temporal_anchor_tick(),
         "atTimeConsumed": matches!(&state.contract.trigger, Trigger::AtTime { .. })
           .then(|| state.hot.trigger_runtime_state.temporal_occurrence_consumed()),
-        "crossingGeneration": matches!(&state.contract.trigger, Trigger::ObservationCrossing { .. })
-          .then(|| Actors::crossing_membership(*actor_id).map(|membership| membership.generation)).flatten(),
         "window": state.contract.window.map(|w| serde_json::json!({"start": w.start, "end": w.end})),
         "lifecycle": format!("{:?}", state.hot.lifecycle),
         "cycleState": format!("{:?}", state.hot.cycle_state),
@@ -5592,8 +4917,7 @@ fn run_w6_mixed_arrival_lifecycle_campaign(wasm: &[u8], replay_wasm: bool) {
   let mut paused_events = Vec::new();
   let mut resumed_events = Vec::new();
   let mut closed_events = Vec::new();
-  let mut trigger_counts = [0u32; 6];
-  let mut crossing_occurrence_blocks = Vec::new();
+  let mut trigger_counts = [0u32; 4];
   let mut steps_per_block = Vec::new();
   let mut control_ref_time = Vec::new();
   let mut control_proof_size = Vec::new();
@@ -5608,20 +4932,6 @@ fn run_w6_mixed_arrival_lifecycle_campaign(wasm: &[u8], replay_wasm: bool) {
     let calls = match block_number {
       2 => vec![RuntimeCall::Actors(pallet_deos_actors::Call::pause_actor {
         actor_id: fixture.paused_actor,
-      })],
-      3 => vec![
-        RuntimeCall::Oracle(pallet_oracle::Call::publish {
-          feed: fixture.feed,
-          sample: 100_000_000_000_000,
-        }),
-        RuntimeCall::Actors(pallet_deos_actors::Call::update_contract {
-          actor_id: fixture.crossing_actor,
-          contract: fixture.crossing_replacement.clone(),
-        }),
-      ],
-      4 => vec![RuntimeCall::Oracle(pallet_oracle::Call::publish {
-        feed: fixture.feed,
-        sample: 200_000_000_000_000,
       })],
       5 => vec![RuntimeCall::Actors(pallet_deos_actors::Call::close_actor {
         actor_id: fixture.closed_actor,
@@ -5663,17 +4973,12 @@ fn run_w6_mixed_arrival_lifecycle_campaign(wasm: &[u8], replay_wasm: bool) {
     paused_events.extend(authored.metrics.paused_actors.iter().copied());
     resumed_events.extend(authored.metrics.resumed_actors.iter().copied());
     closed_events.extend(authored.metrics.closed_actors.iter().copied());
-    for (actor_id, family) in &authored.metrics.trigger_occurrences {
-      if *actor_id == fixture.crossing_actor && *family == TriggerFamily::ObservationCrossing {
-        crossing_occurrence_blocks.push(block_number);
-      }
+    for (_actor_id, family) in &authored.metrics.trigger_occurrences {
       let index = match family {
         TriggerFamily::Manual => 0,
         TriggerFamily::AddressEvent => 1,
-        TriggerFamily::ObservationChange => 2,
-        TriggerFamily::ObservationCrossing => 3,
-        TriggerFamily::AtTime => 4,
-        TriggerFamily::Cadenced => 5,
+        TriggerFamily::AtTime => 2,
+        TriggerFamily::Cadenced => 3,
       };
       trigger_counts[index] = trigger_counts[index].saturating_add(1);
     }
@@ -5746,24 +5051,8 @@ fn run_w6_mixed_arrival_lifecycle_campaign(wasm: &[u8], replay_wasm: bool) {
       .is_some_and(|block| *block >= 6),
     "paused Manual Actor resumes without losing its retained arrival"
   );
-  assert_eq!(
-    crossing_occurrence_blocks,
-    vec![5],
-    "only generation 2 may own the W6 Crossing detector/latch transition"
-  );
-  assert_eq!(
-    first_progress.get(&fixture.crossing_actor),
-    Some(&6),
-    "generation-2 Crossing service must obey the N -> N+1 causal floor"
-  );
-  assert_eq!(
-    progress_counts.get(&fixture.crossing_actor),
-    Some(&1),
-    "only the post-replacement Crossing transition executes"
-  );
-  assert_eq!(trigger_counts[3], 1);
-  assert!(trigger_counts[4] >= fixture.sparse_tick.len() as u32);
-  assert!(trigger_counts[5] >= fixture.randomized_cadenced.len() as u32);
+  assert!(trigger_counts[2] >= fixture.sparse_tick.len() as u32);
+  assert!(trigger_counts[3] >= fixture.randomized_cadenced.len() as u32);
 
   let mut final_ext =
     TestExternalities::new_with_code_and_state(wasm, pre_state, crate::VERSION.state_version());
@@ -5771,13 +5060,6 @@ fn run_w6_mixed_arrival_lifecycle_campaign(wasm: &[u8], replay_wasm: bool) {
     assert!(Actors::active_actor_state(fixture.closed_actor).is_none());
     assert!(Actors::trigger_deadline_handles(fixture.closed_actor).is_none());
     assert!(Actors::deadline_handles(fixture.closed_actor).is_none());
-    assert!(Actors::crossing_worker_fault().is_none());
-    assert!(Actors::observation_fanout_worker_fault().is_none());
-    assert!(
-      Actors::crossing_membership(fixture.crossing_actor)
-        .is_some_and(|locator| locator.generation > fixture.crossing_generation),
-      "normal Contract replacement rotates Crossing generation authority"
-    );
   });
 
   println!(
@@ -5786,13 +5068,13 @@ fn run_w6_mixed_arrival_lifecycle_campaign(wasm: &[u8], replay_wasm: bool) {
       "productionWasmReplayed": replay_wasm,
       "roles": {"denseManual": fixture.dense_manual, "windowedManual": fixture.sparse_block,
         "atTime": fixture.sparse_tick, "cadenced": fixture.randomized_cadenced,
-        "cadencedPeriodsTicks": fixture.randomized_periods, "crossing": fixture.crossing_actor,
+        "cadencedPeriodsTicks": fixture.randomized_periods,
         "paused": fixture.paused_actor, "closed": fixture.closed_actor},
       "fixtureSetup": setup, "finalizedBlocks": timeline,
     })
   );
   println!(
-    "EXP_0066_W6_V2 {{\"seed\":{W6_RANDOM_SEED},\"measuredBlocks\":{},\"workloadActors\":{},\"denseManualActors\":{},\"sparseBlockClockActors\":{},\"atTimeDeadlineActors\":{},\"randomizedCadencedActors\":{},\"randomizedCadencePeriodsTicks\":{:?},\"distinctProgressedActors\":{},\"totalSteps\":{},\"pausedEvents\":{},\"resumedEvents\":{},\"ownerCloseEvents\":{},\"crossingOccurrences\":{},\"atTimeOccurrences\":{},\"cadencedOccurrences\":{},\"controlRefTimeMin\":{},\"controlRefTimeP50\":{},\"controlRefTimeMax\":{},\"controlProofSizeMin\":{},\"controlProofSizeP50\":{},\"controlProofSizeMax\":{},\"effectRefTimeMin\":{},\"effectRefTimeP50\":{},\"effectRefTimeMax\":{},\"effectProofSizeMin\":{},\"effectProofSizeP50\":{},\"effectProofSizeMax\":{},\"executionStorageProofMin\":{},\"executionStorageProofMax\":{},\"executionCompactProofMin\":{},\"executionCompactProofMax\":{},\"verificationStorageProofMin\":{},\"verificationStorageProofMax\":{},\"verificationCompactProofMin\":{},\"verificationCompactProofMax\":{}}}",
+    "EXP_0066_W6_V2 {{\"seed\":{W6_RANDOM_SEED},\"measuredBlocks\":{},\"workloadActors\":{},\"denseManualActors\":{},\"sparseBlockClockActors\":{},\"atTimeDeadlineActors\":{},\"randomizedCadencedActors\":{},\"randomizedCadencePeriodsTicks\":{:?},\"distinctProgressedActors\":{},\"totalSteps\":{},\"pausedEvents\":{},\"resumedEvents\":{},\"ownerCloseEvents\":{},\"atTimeOccurrences\":{},\"cadencedOccurrences\":{},\"controlRefTimeMin\":{},\"controlRefTimeP50\":{},\"controlRefTimeMax\":{},\"controlProofSizeMin\":{},\"controlProofSizeP50\":{},\"controlProofSizeMax\":{},\"effectRefTimeMin\":{},\"effectRefTimeP50\":{},\"effectRefTimeMax\":{},\"effectProofSizeMin\":{},\"effectProofSizeP50\":{},\"effectProofSizeMax\":{},\"executionStorageProofMin\":{},\"executionStorageProofMax\":{},\"executionCompactProofMin\":{},\"executionCompactProofMax\":{},\"verificationStorageProofMin\":{},\"verificationStorageProofMax\":{},\"verificationCompactProofMin\":{},\"verificationCompactProofMax\":{}}}",
     steps_per_block.len(),
     fixture.actors.actor_ids.len(),
     fixture.dense_manual.len(),
@@ -5808,9 +5090,8 @@ fn run_w6_mixed_arrival_lifecycle_campaign(wasm: &[u8], replay_wasm: bool) {
       .iter()
       .filter(|(_, reason)| *reason == CloseReason::OwnerInitiated)
       .count(),
+    trigger_counts[2],
     trigger_counts[3],
-    trigger_counts[4],
-    trigger_counts[5],
     control_ref_time.iter().copied().min().unwrap_or(0),
     nearest_rank_percentile(&control_ref_time, 50),
     control_ref_time.iter().copied().max().unwrap_or(0),
@@ -6543,35 +5824,11 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
       1,
     ),
     (
-      "coordinator",
-      W::materialization_coordinator_base(),
-      10_755_000,
-      1_629,
-      DatabaseIo::new(5, 1),
-      1,
-    ),
-    (
       "dependency-scan-probe",
       W::dependency_scan_source_probe(),
       6_635_000,
       1_498,
       DatabaseIo::new(1, 0),
-      1,
-    ),
-    (
-      "crossing-base",
-      W::crossing_worker_base(),
-      7_124_000,
-      1_543,
-      DatabaseIo::new(2, 0),
-      1,
-    ),
-    (
-      "fanout-base",
-      W::observation_fanout_base(),
-      5_867_000,
-      1_629,
-      DatabaseIo::new(2, 0),
       1,
     ),
     (
@@ -6631,7 +5888,7 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     fixed = fixed.saturating_add(weight.saturating_mul(*frequency));
     fixed_io = fixed_io.saturating_add(io.saturating_mul(*frequency));
   }
-  assert_eq!(fixed_io, DatabaseIo::new(36, 8));
+  assert_eq!(fixed_io, DatabaseIo::new(27, 7));
   // The first block adds one complete Fee Sink cadence occurrence above the stable baseline.
   let first_block_extra = W::cadenced_trigger_occurrence();
   let first_extra_io = DatabaseIo::new(41, 18);
@@ -6725,16 +5982,9 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
 fn control_temporal_weight_io_ledger_matches_production_selectors() {
   type ProductionWeight = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
 
-  let coordinator_io = DatabaseIo::new(5, 1);
   let at_time_occurrence_io = DatabaseIo::new(35, 15);
   let cadenced_occurrence_io = DatabaseIo::new(41, 18);
 
-  assert_production_weight_component(
-    ProductionWeight::materialization_coordinator_base(),
-    10_755_000,
-    1_629,
-    coordinator_io,
-  );
   assert_production_weight_component(
     ProductionWeight::at_time_trigger_occurrence(),
     1_116_081_000,
@@ -6792,7 +6042,7 @@ fn assert_control_phase_attribution_campaign(wasm: &[u8], replay_wasm: bool) {
       );
     }
   }
-  assert_eq!(manual.steps, vec![14, 16, 16, 16, 16, 16, 6, 0, 0]);
+  assert_eq!(manual.steps, vec![15, 16, 16, 16, 16, 16, 5, 0, 0]);
   assert_eq!(manual.prepass_steps, manual.steps);
   assert_eq!(manual.trigger_occurrences, vec![0; 9]);
   assert_eq!(cadenced.steps, vec![0, 0, 1, 1, 1, 1, 1, 1, 1]);
@@ -6870,7 +6120,6 @@ fn reference_full_block_fixture_replays_through_executive() {
       paused_actors: Vec::new(),
       resumed_actors: Vec::new(),
       trigger_occurrences: Vec::new(),
-      actor_faults: 0,
       user_calls: 0,
       next_user_weight: None,
       prepass_steps: 0,
@@ -7184,478 +6433,6 @@ fn full_executive_control_frontier_separates_capacity_from_service_eligibility()
   }
 }
 
-/// P5.3 retained end-to-end witness (BACKLOG P5.3): one bounded funded User ObservationCrossing
-/// cohort through the complete Executive block path — source publication, materialization, Service
-/// eligibility, one committed Transfer Step and a completed Cycle — with per-Actor lifecycle blocks
-/// and per-block resource accounting. The geometry reuses the 48-member equal-threshold feed of the
-/// retained Crossing regression witnesses; neither the member count nor the observation window is a
-/// new target. Each side of the comparison binds its own production Wasm/Weight identity.
-struct PreparedP53Cohort {
-  actors: PreparedActorFixture,
-  feed: primitives::OracleFeedId,
-}
-
-#[derive(Clone, Copy)]
-struct P53CohortRow {
-  actor_id: ActorId,
-  fifo_ordinal: u64,
-  materialized: u32,
-  eligible: u32,
-  step: u32,
-  completed: u32,
-}
-
-fn prepare_p53_cohort_fixture(wasm: &[u8]) -> PreparedP53Cohort {
-  let steps = actors_integration_tests::transfer_contract_steps(
-    super::common::BOB,
-    primitives::AssetKind::Native,
-    crate::EXISTENTIAL_DEPOSIT,
-  );
-  let (next_control_maximum, next_effect_maximum) =
-    actors_integration_tests::one_step_fifo_attempt_maxima(&steps);
-  let mut ext = TestExternalities::new_with_code_and_state(
-    wasm,
-    reference_genesis_storage(wasm),
-    crate::VERSION.state_version(),
-  );
-  let signer = sr25519::Pair::from_seed(&[67u8; 32]);
-  let (actor_ids, actor_profiles, feed) = ext.execute_with(|| {
-    System::set_block_number(1);
-    let initial_active = pallet_deos_actors::ActiveActorCount::<Runtime>::get();
-    let maximum = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get();
-    assert!(
-      initial_active.saturating_add(P53_COHORT_MEMBERS) <= maximum,
-      "the P5.3 cohort must fit the reference active bound"
-    );
-    let signer_account = crate::AccountId::from(signer.public());
-    assert_ok!(Balances::force_set_balance(
-      RuntimeOrigin::root(),
-      MultiAddress::Id(signer_account.clone()),
-      u128::MAX / 4,
-    ));
-    let feed = crate::configs::oracle_config::deos_router_pool_feed(
-      primitives::AssetKind::Native,
-      primitives::AssetKind::Local(P53_FEED_REGISTRY),
-    );
-    assert_ok!(Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      signer_account.clone(),
-      feed.meaning(),
-      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
-      feed.scale,
-      pallet_oracle::Aggregation::Ema {
-        half_life_blocks: 100,
-      },
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    ));
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(signer_account),
-      feed,
-      P53_RELEASE_SAMPLE,
-    ));
-    let mut actor_ids = Vec::with_capacity(P53_COHORT_MEMBERS as usize);
-    let mut actor_profiles = BTreeMap::new();
-    for index in 0..P53_COHORT_MEMBERS {
-      let owner = crate::AccountId::new([40u8 + index as u8; 32]);
-      assert_ok!(Balances::force_set_balance(
-        RuntimeOrigin::root(),
-        MultiAddress::Id(owner.clone()),
-        u128::MAX / 4,
-      ));
-      let actor_id = actors_integration_tests::create_user(
-        owner,
-        actors_integration_tests::observation_crossing_schedule(
-          feed,
-          CrossingDirection::Rising,
-          P53_CROSSING_THRESHOLD,
-          P53_CROSSING_REARM,
-        ),
-        None,
-        steps.clone(),
-      );
-      actors_integration_tests::fund_native(
-        actor_id,
-        1_000u128.saturating_mul(crate::EXISTENTIAL_DEPOSIT),
-      );
-      actor_ids.push(actor_id);
-      actor_profiles.insert(
-        actor_id,
-        WorkloadActorProfile {
-          step_count: 1,
-          opening_predicates_per_step: 0,
-          task: Some(WorkloadTask::Transfer),
-        },
-      );
-    }
-    assert_eq!(
-      Actors::crossing_feed_membership_count(feed),
-      P53_COHORT_MEMBERS,
-      "the P5.3 cohort is one equal-threshold feed membership"
-    );
-    assert_eq!(
-      pallet_deos_actors::ActiveActorCount::<Runtime>::get(),
-      initial_active.saturating_add(P53_COHORT_MEMBERS)
-    );
-    (actor_ids, actor_profiles, feed)
-  });
-  ext
-    .commit_all()
-    .expect("prepared P5.3 cohort commits before block authoring");
-  let storage = ext.execute_with(current_top_storage);
-  PreparedP53Cohort {
-    actors: PreparedActorFixture {
-      storage,
-      actor_ids,
-      actor_profiles,
-      signer,
-      next_control_maximum,
-      next_effect_maximum,
-    },
-    feed,
-  }
-}
-
-/// Reads canonical Service eligibility for every resident cohort member after one authored block;
-/// the first observed value per member is retained as lifecycle evidence.
-fn p53_cohort_service_observation(
-  wasm: &[u8],
-  storage: &Storage,
-  actor_ids: &[ActorId],
-) -> Vec<(ActorId, u32)> {
-  let mut ext = TestExternalities::new_with_code_and_state(
-    wasm,
-    storage.clone(),
-    crate::VERSION.state_version(),
-  );
-  ext.execute_with(|| {
-    actor_ids
-      .iter()
-      .filter_map(|actor_id| {
-        Actors::service_nodes(*actor_id).map(|node| (*actor_id, node.eligible_from))
-      })
-      .collect()
-  })
-}
-
-fn p53_latency_summary(label: &str, values: &[u32]) -> serde_json::Value {
-  let mut sorted = values.to_vec();
-  sorted.sort_unstable();
-  let count = sorted.len();
-  assert!(
-    count > 0,
-    "a P5.3 latency summary needs at least one sample"
-  );
-  let mean = sorted.iter().map(|value| u64::from(*value)).sum::<u64>() as f64 / count as f64;
-  let median = sorted[count / 2];
-  let p95_rank = (count as f64 * 0.95).ceil() as usize;
-  let p95 = sorted[p95_rank.saturating_sub(1).min(count - 1)];
-  serde_json::json!({
-    "metric": label, "samples": count, "meanBlocks": format!("{mean:.2}"),
-    "medianBlocks": median, "p95Blocks": p95,
-    "minBlocks": sorted[0], "maxBlocks": sorted[count - 1],
-  })
-}
-
-fn run_p53_funded_crossing_cohort_campaign(wasm: &[u8], replay_wasm: bool) {
-  let fixture = prepare_p53_cohort_fixture(wasm);
-  let actor_ids = fixture.actors.actor_ids.clone();
-  let mut pre_state = fixture.actors.storage.clone();
-  let mut parent = parent_header_for(pre_state.clone(), wasm, 1);
-  let mut signer_nonce = 0;
-  let mut materialized_at = BTreeMap::<ActorId, u32>::new();
-  let mut fifo_ordinal = BTreeMap::<ActorId, u64>::new();
-  let mut next_fifo_ordinal = 0u64;
-  let mut eligible_at = BTreeMap::<ActorId, u32>::new();
-  let mut step_at = BTreeMap::<ActorId, u32>::new();
-  let mut completed_at = BTreeMap::<ActorId, u32>::new();
-  let mut faults = 0u64;
-  let mut materialized_blocks = Vec::new();
-  let mut step_blocks = Vec::new();
-  let mut effect_blocks = Vec::new();
-  let mut completed_blocks = Vec::new();
-  let control_limit = BlockResourceBudgetValue::get().limits().actor_control();
-  let effect_limit = BlockResourceBudgetValue::get()
-    .limits()
-    .actor_base_turn()
-    .saturating_add(BlockResourceBudgetValue::get().limits().shared_economic());
-  let mut control_used = Vec::new();
-  let mut effect_used = Vec::new();
-  let mut user_dispatch = Vec::new();
-  let mut queue_span = Vec::new();
-  let mut control_unused = Vec::new();
-
-  for block_number in 2..=(P53_COHORT_BLOCK_LIMIT + 1) {
-    let calls = if block_number == P53_PUBLICATION_BLOCK {
-      vec![RuntimeCall::Oracle(pallet_oracle::Call::publish {
-        feed: fixture.feed,
-        sample: P53_CROSSING_SAMPLE,
-      })]
-    } else {
-      Vec::new()
-    };
-    let authored = author_complete_block_after_with_calls(
-      pre_state,
-      wasm,
-      &parent,
-      block_number,
-      UserDemand::ActorOnly,
-      &fixture.actors.signer,
-      signer_nonce,
-      &fixture.actors.actor_profiles,
-      &calls,
-    );
-    signer_nonce = signer_nonce.saturating_add(authored.metrics.user_calls);
-    faults = faults.saturating_add(u64::from(authored.metrics.actor_faults));
-    assert_eq!(
-      authored.metrics.non_successful_steps, 0,
-      "the P5.3 cohort commits every attempted Step: block {block_number}"
-    );
-    assert!(
-      authored.metrics.failed_cycle_actors.is_empty(),
-      "the P5.3 cohort has no failed Cycle: block {block_number}"
-    );
-    let mut block_materialized = 0u32;
-    for (actor_id, family) in &authored.metrics.trigger_occurrences {
-      if *family != TriggerFamily::ObservationCrossing || !actor_ids.contains(actor_id) {
-        continue;
-      }
-      block_materialized = block_materialized.saturating_add(1);
-      assert!(
-        materialized_at.insert(*actor_id, block_number).is_none(),
-        "the P5.3 cohort materializes exactly once: actor {actor_id} at block {block_number}"
-      );
-      assert!(
-        fifo_ordinal.insert(*actor_id, next_fifo_ordinal).is_none(),
-        "the P5.3 cohort assigns one canonical FIFO ordinal: actor {actor_id}"
-      );
-      next_fifo_ordinal = next_fifo_ordinal.saturating_add(1);
-    }
-    for (actor_id, _) in &authored.metrics.progressed_steps {
-      assert!(
-        step_at.insert(*actor_id, block_number).is_none(),
-        "the one-Step Contract commits exactly once: actor {actor_id}"
-      );
-    }
-    for actor_id in &authored.metrics.completed_cycle_actors {
-      assert!(
-        completed_at.insert(*actor_id, block_number).is_none(),
-        "the one-Step Contract completes exactly once: actor {actor_id}"
-      );
-    }
-    for (actor_id, eligible) in
-      p53_cohort_service_observation(wasm, &authored.post_state, &actor_ids)
-    {
-      eligible_at.entry(actor_id).or_insert(eligible);
-    }
-    materialized_blocks.push(block_materialized);
-    step_blocks.push(authored.metrics.actor_steps);
-    effect_blocks.push(authored.metrics.transfer_steps);
-    completed_blocks.push(authored.metrics.completed_cycles);
-    control_used.push(authored.metrics.actor_control);
-    effect_used.push(authored.metrics.actor_effect);
-    user_dispatch.push(authored.metrics.user_dispatch);
-    queue_span.push(
-      authored
-        .metrics
-        .queue_tail
-        .saturating_sub(authored.metrics.queue_head),
-    );
-    control_unused.push(control_limit.saturating_sub(authored.metrics.actor_control));
-    println!(
-      "P53_COHORT_BLOCK_V1 {}",
-      serde_json::json!({
-        "block": block_number,
-        "materialized": block_materialized,
-        "steps": authored.metrics.actor_steps,
-        "effects": authored.metrics.transfer_steps,
-        "completed": authored.metrics.completed_cycles,
-        "controlRefTime": authored.metrics.actor_control.ref_time(),
-        "controlProofSize": authored.metrics.actor_control.proof_size(),
-        "effectRefTime": authored.metrics.actor_effect.ref_time(),
-        "effectProofSize": authored.metrics.actor_effect.proof_size(),
-        "prepassControlProofSize": authored.metrics.prepass_actor_control.proof_size(),
-        "prepassEffectProofSize": authored.metrics.prepass_actor_effect.proof_size(),
-        "userDispatchProofSize": authored.metrics.user_dispatch.proof_size(),
-        "controlUnusedRefTime": control_limit
-          .saturating_sub(authored.metrics.actor_control)
-          .ref_time(),
-        "controlUnusedProofSize": control_limit
-          .saturating_sub(authored.metrics.actor_control)
-          .proof_size(),
-        "effectUnusedProofSize": effect_limit
-          .saturating_sub(authored.metrics.actor_effect)
-          .proof_size(),
-        "queueHead": authored.metrics.queue_head,
-        "queueTail": authored.metrics.queue_tail,
-        "faults": authored.metrics.actor_faults,
-      })
-    );
-    if replay_wasm {
-      replay_complete_block_in_wasm(
-        &authored,
-        wasm,
-        &format!("P5.3-funded-crossing-cohort-{block_number}"),
-      );
-    }
-    parent = authored.block.header.clone();
-    pre_state = authored.post_state;
-  }
-
-  assert_eq!(
-    faults, 0,
-    "the P5.3 cohort executes without Actor worker faults"
-  );
-  assert_eq!(
-    materialized_at.len(),
-    P53_COHORT_MEMBERS as usize,
-    "every cohort member materializes inside the observation window"
-  );
-  assert_eq!(step_at.len(), P53_COHORT_MEMBERS as usize);
-  assert_eq!(completed_at.len(), P53_COHORT_MEMBERS as usize);
-  assert_eq!(materialized_blocks.iter().sum::<u32>(), P53_COHORT_MEMBERS);
-  assert_eq!(step_blocks.iter().sum::<u32>(), P53_COHORT_MEMBERS);
-  assert_eq!(effect_blocks.iter().sum::<u32>(), P53_COHORT_MEMBERS);
-  assert_eq!(completed_blocks.iter().sum::<u32>(), P53_COHORT_MEMBERS);
-
-  let mut rows = Vec::with_capacity(actor_ids.len());
-  for actor_id in &actor_ids {
-    rows.push(P53CohortRow {
-      actor_id: *actor_id,
-      fifo_ordinal: *fifo_ordinal
-        .get(actor_id)
-        .expect("a materialized cohort member has one FIFO ordinal"),
-      materialized: *materialized_at
-        .get(actor_id)
-        .expect("a cohort member records its materialization block"),
-      eligible: *eligible_at
-        .get(actor_id)
-        .expect("a Service cohort member records its eligibility block"),
-      step: *step_at
-        .get(actor_id)
-        .expect("a cohort member commits its Step inside the window"),
-      completed: *completed_at
-        .get(actor_id)
-        .expect("a cohort member completes its Cycle inside the window"),
-    });
-  }
-  for row in &rows {
-    assert!(row.materialized >= P53_PUBLICATION_BLOCK);
-    assert!(
-      row.materialized <= row.eligible,
-      "Service eligibility cannot precede materialization: actor {} at {} vs {}",
-      row.actor_id,
-      row.materialized,
-      row.eligible
-    );
-    assert!(
-      row.eligible <= row.step,
-      "a committed Step must follow Service eligibility: actor {} at {} vs {}",
-      row.actor_id,
-      row.eligible,
-      row.step
-    );
-    assert!(
-      row.step <= row.completed,
-      "Cycle completion must follow its committed Step: actor {} at {} vs {}",
-      row.actor_id,
-      row.step,
-      row.completed
-    );
-  }
-  rows.sort_by_key(|row| row.fifo_ordinal);
-  let mut previous: Option<P53CohortRow> = None;
-  for row in &rows {
-    if let Some(previous) = previous {
-      assert!(
-        row.materialized >= previous.materialized,
-        "FIFO materialization order must follow canonical ordinal order"
-      );
-      assert!(
-        row.eligible >= previous.eligible,
-        "FIFO eligibility order must follow canonical ordinal order"
-      );
-      assert!(
-        row.step >= previous.step,
-        "FIFO service order must follow canonical ordinal order"
-      );
-      assert!(
-        row.completed >= previous.completed,
-        "FIFO completion order must follow canonical ordinal order"
-      );
-    }
-    previous = Some(*row);
-  }
-
-  let latency = |pick: fn(&P53CohortRow) -> u32| -> Vec<u32> {
-    rows
-      .iter()
-      .map(|row| pick(row).saturating_sub(P53_PUBLICATION_BLOCK))
-      .collect()
-  };
-  let materialization_latency = latency(|row| row.materialized);
-  let first_step_latency = latency(|row| row.step);
-  let completion_latency = latency(|row| row.completed);
-  let materialization_horizon = *materialization_latency
-    .iter()
-    .max()
-    .expect("the cohort records a materialization horizon");
-  let completion_horizon = *completion_latency
-    .iter()
-    .max()
-    .expect("the cohort records a completion horizon");
-
-  for row in &rows {
-    println!(
-      "P53_COHORT_ACTOR_V1 {}",
-      serde_json::json!({
-        "actorId": row.actor_id, "fifoOrdinal": row.fifo_ordinal,
-        "materializedAt": row.materialized, "eligibleAt": row.eligible,
-        "stepAt": row.step, "completedAt": row.completed,
-        "triggerToMaterialization": row.materialized.saturating_sub(P53_PUBLICATION_BLOCK),
-        "triggerToFirstStep": row.step.saturating_sub(P53_PUBLICATION_BLOCK),
-        "triggerToCompletion": row.completed.saturating_sub(P53_PUBLICATION_BLOCK),
-      })
-    );
-  }
-  println!(
-    "P53_COHORT_SUMMARY_V1 {}",
-    serde_json::json!({
-      "members": P53_COHORT_MEMBERS,
-      "publicationBlock": P53_PUBLICATION_BLOCK,
-      "blockLimit": P53_COHORT_BLOCK_LIMIT,
-      "S": step_blocks.iter().sum::<u32>(),
-      "A": effect_blocks.iter().sum::<u32>(),
-      "completedCycles": completed_blocks.iter().sum::<u32>(),
-      "censored": P53_COHORT_MEMBERS as usize - completed_at.len(),
-      "materializedPerBlock": materialized_blocks,
-      "stepsPerBlock": step_blocks,
-      "completedPerBlock": completed_blocks,
-      "materializationHorizon": materialization_horizon,
-      "completionHorizon": completion_horizon,
-      "latency": [
-        p53_latency_summary("triggerToMaterialization", &materialization_latency),
-        p53_latency_summary("triggerToFirstStep", &first_step_latency),
-        p53_latency_summary("triggerToCompletion", &completion_latency),
-      ],
-      "controlRefTimeTotal": control_used.iter().map(|weight| weight.ref_time()).sum::<u64>(),
-      "controlProofSizeTotal": control_used.iter().map(|weight| weight.proof_size()).sum::<u64>(),
-      "effectRefTimeTotal": effect_used.iter().map(|weight| weight.ref_time()).sum::<u64>(),
-      "effectProofSizeTotal": effect_used.iter().map(|weight| weight.proof_size()).sum::<u64>(),
-      "userDispatchProofSizeTotal": user_dispatch.iter().map(|weight| weight.proof_size()).sum::<u64>(),
-      "maxQueueSpan": queue_span.iter().copied().max().unwrap_or(0),
-      "maxControlUnusedProofSize": control_unused
-        .iter()
-        .map(|weight| weight.proof_size())
-        .max()
-        .unwrap_or(0),
-      "faults": faults,
-      "replayWasm": replay_wasm,
-    })
-  );
-}
-
 #[test]
 fn full_executive_w0_w1_fixture_covers_actor_only_and_valid_user_demand() {
   assert_prepared_w0_w1(&[], false);
@@ -7780,20 +6557,6 @@ fn full_executive_current_w7_deadlines_replay_exact_production_wasm() {
 }
 
 #[test]
-#[ignore = "requires exact current production Wasm via DEOS_PRODUCTION_WASM"]
-fn full_executive_current_w6_wake_storm_replays_exact_production_wasm() {
-  let path = std::env::var_os("DEOS_PRODUCTION_WASM")
-    .expect("DEOS_PRODUCTION_WASM must explicitly select the accepted production artifact");
-  let wasm = std::fs::read(path).expect("selected production Wasm is readable");
-  assert_eq!(
-    polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    ACCEPTED_PRODUCTION_WASM_SHA256,
-    "current W6 must remain bound to the accepted production Wasm"
-  );
-  run_current_w6_wake_storm(&wasm);
-}
-
-#[test]
 fn full_executive_w5_lifecycle_retry_cleanup_fixture_preserves_prefixes() {
   let wasm = std::env::var_os("DEOS_PRODUCTION_WASM")
     .map(|path| {
@@ -7882,25 +6645,6 @@ fn full_executive_w8_tombstone_prefix_chunk_pressure_campaign_replays_exact_prod
 #[test]
 fn full_executive_w9_resource_independence_fixture_preserves_actor_service() {
   run_w9_resource_independence_campaign(&[], false);
-}
-
-#[test]
-fn p53_funded_crossing_cohort_fixture_completes_with_per_actor_lifecycle() {
-  run_p53_funded_crossing_cohort_campaign(&[], false);
-}
-
-#[test]
-#[ignore = "requires exact current production Wasm via DEOS_PRODUCTION_WASM"]
-fn p53_funded_crossing_cohort_replays_exact_production_wasm() {
-  let path = std::env::var_os("DEOS_PRODUCTION_WASM")
-    .expect("DEOS_PRODUCTION_WASM must explicitly select the accepted production artifact");
-  let wasm = std::fs::read(path).expect("selected production Wasm is readable");
-  assert_eq!(
-    polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    ACCEPTED_PRODUCTION_WASM_SHA256,
-    "the P5.3 cohort witness must replay the retained production binding"
-  );
-  run_p53_funded_crossing_cohort_campaign(&wasm, true);
 }
 
 #[test]

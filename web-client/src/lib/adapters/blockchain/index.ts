@@ -5,7 +5,6 @@ Excludes: Wallet store ownership, system composition wiring, UI Kit presentation
 Zone: Transport adapter boundary; consumes adapter contracts and runtime helpers without importing widgets.
 */
 import type { Adapter, AdapterRuntimeContext } from '$lib/adapters/contract';
-import type { ActorMaterializationProjection } from '$lib/automation/materialization';
 import type { ActorResourceProjection } from '$lib/automation/resource';
 import type {
   AutomationActorSnapshot,
@@ -16,11 +15,7 @@ import type {
 import { PRECISION } from '$lib/economics';
 import type { LogEntry, TransactionProgress } from '$lib/log/types';
 import type { PricePoint, Quote, SwapResult } from '$lib/market/types';
-import { compareObservationRuntimeEvidence } from '$lib/observation/runtime-evidence';
-import type {
-  ObservationFanoutEvidence,
-  ObservationFeedIdentity,
-} from '$lib/observation/types';
+import type { ObservationFeedIdentity } from '$lib/observation/types';
 import type {
   AssetBalanceProjection,
   TransferAssetKey,
@@ -34,7 +29,6 @@ import { DEFAULT_DEOS_DAPP_NAME } from '$lib/wallet/signer';
 
 import { readActorControlProjection } from './actor-control';
 import { readActorEligibility } from './actor-eligibility';
-import { readActorMaterializationProjection } from './actor-materialization';
 import { readActorResourceProjection } from './actor-resource';
 import { getDeosActorFinalizedAuthoringContext } from './actor-simulation';
 import { BlockchainConnectionSession } from './connection';
@@ -49,7 +43,7 @@ import {
   formatChainEventMessage,
   unwrapEventRecord,
 } from './events';
-import { BlockchainObservationReader, runtimeFeed } from './observations';
+import { BlockchainObservationReader } from './observations';
 import {
   quoteBuyAtSnapshot,
   quoteSellAtSnapshot,
@@ -140,8 +134,6 @@ function automationTriggerLabel(trigger?: {
 }): string {
   if (!trigger) return 'Unavailable';
   if (trigger.type === 'AddressEvent') return 'Address event';
-  if (trigger.type === 'ObservationChange') return 'Observation change';
-  if (trigger.type === 'ObservationCrossing') return 'Observation crossing';
   if (trigger.type === 'AtTime') {
     const afterTicks = triggerRecord(trigger.value)?.after_ticks;
     const delay =
@@ -395,49 +387,18 @@ export class BlockchainAdapter implements Adapter {
   async getObservationInspection(
     feed: ObservationFeedIdentity,
     maxAgeBlocks: number,
-    actorId?: number,
   ) {
-    const connection = await this.ensurePapi();
-    const snapshot = await connection.snapshot();
-    let evidence: ObservationFanoutEvidence;
-    try {
-      evidence = compareObservationRuntimeEvidence(
-        await connection.finalizedRuntimeEvidence(snapshot),
-      );
-    } catch (error) {
-      evidence = {
-        status: 'EvidenceMismatch',
-        observedIdentity: `Unavailable at ${snapshot.at}`,
-        reasons: [
-          error instanceof Error
-            ? error.message
-            : 'Finalized runtime evidence is unavailable',
-        ],
-      };
-    }
+    const snapshot = await (await this.ensurePapi()).snapshot();
     return await this.observationReader.inspection(
       snapshot,
-      evidence,
       feed,
       maxAgeBlocks,
-      actorId,
     );
   }
 
   async getActorResourceProjection(): Promise<ActorResourceProjection> {
     const snapshot = await (await this.ensurePapi()).snapshot();
     return readActorResourceProjection(snapshot.typedApi, snapshot.at);
-  }
-
-  async getActorMaterializationProjection(
-    feed: ObservationFeedIdentity,
-  ): Promise<ActorMaterializationProjection> {
-    const snapshot = await (await this.ensurePapi()).snapshot();
-    return readActorMaterializationProjection(
-      snapshot.typedApi,
-      snapshot.at,
-      runtimeFeed(feed),
-    );
   }
 
   async getAutomationActors(): Promise<AutomationActorSnapshot[]> {

@@ -198,39 +198,6 @@ test('trigger admission diff stays inside the trigger tree and never invents con
     return inspection;
   };
   const manual = inspectTrigger({ type: 'Manual', value: undefined });
-  const observation = inspectTrigger({
-    type: 'ObservationChange',
-    value: {
-      feed: {
-        asset_in: { type: 'Native', value: undefined },
-        asset_out: { type: 'Local', value: 7 },
-        method: { type: 'PreExecutionSpot', value: undefined },
-        aggregation: {
-          type: 'Ema',
-          value: { half_life_blocks: 100 },
-        },
-        scale: 12,
-      },
-    },
-  });
-  const observationTrigger = observation.projection.trigger;
-  assert.equal(observationTrigger.type, 'ObservationChange');
-  assert.deepEqual(Object.keys(observationTrigger.value), ['feed']);
-  assert.equal(observationTrigger.value.feed.aggregation.type, 'Ema');
-  assert.equal(
-    observationTrigger.value.feed.aggregation.value.half_life_blocks.$integer,
-    '100',
-  );
-  assert.equal(observationTrigger.value.feed.scale.$integer, '12');
-  const observationDiff = diffActorContractArtifacts(manual, observation);
-  assert.equal(observationDiff.compatible, true);
-  if (observationDiff.compatible) {
-    assert(
-      observationDiff.changes.every((change) =>
-        ('path' in change ? change.path : change.from).startsWith('/trigger'),
-      ),
-    );
-  }
   const cadenced = inspectTrigger({
     type: 'Cadenced',
     value: { every_ticks: 10n },

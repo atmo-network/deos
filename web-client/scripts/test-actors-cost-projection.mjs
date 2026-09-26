@@ -250,7 +250,7 @@ test('runtime-generated cost vectors bind metadata, Weight, geometry, and Trigge
     createHash('sha256').update(weights).digest('hex'),
   );
   assert.equal(ACTORS_COST_VECTORS.runtimeApiVersion, 1);
-  assert.equal(ACTORS_COST_VECTORS.vectors.length, 12);
+  assert.equal(ACTORS_COST_VECTORS.vectors.length, 10);
 
   const manual = ACTORS_COST_VECTORS.vectors
     .filter(
@@ -288,14 +288,7 @@ test('runtime-generated cost vectors bind metadata, Weight, geometry, and Trigge
   );
   assert.deepEqual(
     families,
-    new Set([
-      'Manual',
-      'AddressEvent',
-      'ObservationChange',
-      'ObservationCrossing',
-      'AtTime',
-      'Cadenced',
-    ]),
+    new Set(['Manual', 'AddressEvent', 'AtTime', 'Cadenced']),
   );
 });
 

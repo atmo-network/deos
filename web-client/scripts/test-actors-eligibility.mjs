@@ -183,64 +183,6 @@ test('projectActorEligibility preserves absence, dormancy, terminal reason, and 
   });
 });
 
-test('projectActorEligibility preserves semantic Crossing activation state', () => {
-  const feed = {
-    asset_in: { type: 'Native', value: undefined },
-    asset_out: { type: 'Local', value: 7 },
-    method: { type: 'PreExecutionSpot', value: undefined },
-    aggregation: { type: 'LastValue', value: undefined },
-    scale: 12,
-  };
-  const decoded = encodeProjection({
-    success: true,
-    value: {
-      type: 'Active',
-      value: {
-        trigger: {
-          type: 'ObservationCrossing',
-          value: {
-            feed,
-            direction: { type: 'Rising', value: undefined },
-            threshold: 100n,
-            rearm_threshold: 80n,
-            phase: { type: 'WaitingForRearm', value: undefined },
-            installed_at_revision: 3n,
-            pending_revisions: 2,
-            processing_revision: 7n,
-          },
-        },
-        pending_signal: true,
-        placement: {
-          type: 'Wakeup',
-          value: { type: 'Block', value: 44 },
-        },
-        eligibility: {
-          terminal_reason: undefined,
-          execution_phase: { type: 'WaitingBlock', value: 44 },
-        },
-      },
-    },
-  });
-  assert.deepEqual(projectActorEligibility(decoded), {
-    type: 'Active',
-    trigger: {
-      type: 'ObservationCrossing',
-      feed,
-      direction: 'Rising',
-      threshold: 100n,
-      rearmThreshold: 80n,
-      phase: 'WaitingForRearm',
-      installedAtRevision: 3n,
-      pendingRevisions: 2,
-      processingRevision: 7n,
-    },
-    pendingSignal: true,
-    placement: { type: 'WakeupBlock', block: 44 },
-    terminalReason: null,
-    executionPhase: { type: 'WaitingBlock', block: 44 },
-  });
-});
-
 test('projectActorEligibility rejects a typed runtime failure honestly', () => {
   const decoded = encodeProjection({
     success: false,
@@ -303,10 +245,7 @@ test('projectActorEligibility rejects unknown runtime variants and malformed res
         value: {
           type: 'Active',
           value: {
-            trigger: {
-              type: 'ObservationCrossing',
-              value: { direction: { type: 'Sideways' } },
-            },
+            trigger: { type: 'ObservationCrossing', value: {} },
             pending_signal: false,
             placement: { type: 'Unplaced' },
             eligibility: {
@@ -316,7 +255,7 @@ test('projectActorEligibility rejects unknown runtime variants and malformed res
           },
         },
       }),
-    /Unsupported runtime Crossing direction Sideways/,
+    /Unsupported runtime trigger activation ObservationCrossing/,
   );
   assert.throws(
     () => projectActorEligibility({ success: 'maybe' }),

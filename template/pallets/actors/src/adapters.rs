@@ -30,30 +30,6 @@ pub trait SovereignAccountDeriver<AccountId> {
   fn system(pallet_id: PalletId, actor_id: crate::ActorId) -> AccountId;
 }
 
-/// Exact certified transition produced by one committed canonical observation update.
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
-)]
-pub struct ObservationTransition {
-  pub revision: u64,
-  pub previous: Option<u128>,
-  pub current: u128,
-}
-
-/// Certified bounded ingress for one externally owned observation transition.
-pub trait ObservationTransitionIngress<FeedId> {
-  fn note_observation_transition(
-    feed: FeedId,
-    transition: ObservationTransition,
-    cause_provenance: crate::TriggerCauseProvenance,
-  ) -> DispatchResult;
-}
-
-/// Bounded event-complete ingress for one externally owned dependency source.
-pub trait DependencyEventIngress<SourceId> {
-  fn note_dependency_event(source: SourceId) -> DispatchResult;
-}
-
 /// Bounded causal accelerator for a committed total-owned asset mutation. Correctness retains the
 /// mandatory timed review unless the host separately certifies complete mutation coverage.
 pub trait BalanceTransitionIngress<AssetId> {

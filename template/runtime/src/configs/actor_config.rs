@@ -71,26 +71,8 @@ parameter_types! {
   pub const ActorQueuePageSize: u32 = 64;
   /// Production temporal page granularity selected from 32/64/128 Wasm operation evidence.
   pub const ActorWakeupPageSize: u32 = 32;
-  /// Broad ObservationChange subscriber/fanout page granularity.
-  pub const ActorObservationPageSize: u32 = 64;
-  /// ObservationCrossing membership page granularity selected by bounded observation fanout requirements.
-  pub const ActorCrossingPageSize: u32 = 128;
-  pub const ActorMaxCrossingTransitionsPerFeed: u32 = 64;
-  pub const ActorMaxCrossingMembersPerFeed: u32 = 10_000;
-pub const ActorMaxUserCrossingMembersPerFeed: u32 = 9_000;
-pub const ActorMaxCrossingTransitionsPerBlock: u32 = 8;
-  pub const ActorMaxCrossingLeavesPerBlock: u32 = 64;
-  pub const ActorMaxCrossingPagesPerBlock: u32 = 64;
-  /// Accepted tail/preflight ceiling under Actor Control. Exact non-tail compaction is
-  /// independently clamped to 64 candidates by the pallet.
-  pub const ActorMaxCrossingActorsPerBlock: u32 = 128;
   pub const ActorMaxQueueEntriesScannedPerBlock: u32 = 10_000;
-  pub const ActorMaxObservationFanoutPagesPerBlock: u32 = 64;
   pub const ActorMaxWakeupsPerBlock: u32 = 512;
-  pub ActorObservationFanoutWeightLimit: Weight =
-    Perbill::from_percent(20) * MAXIMUM_BLOCK_WEIGHT;
-  pub ActorCrossingWorkerWeightLimit: Weight =
-    Perbill::from_percent(20) * MAXIMUM_BLOCK_WEIGHT;
   /// Dedicated overdue-wakeup worker envelope: one worst-case complete wakeup unit plus cursor
   /// probe remains inside it (spec 15.2.9), and it stays below the guaranteed on_idle headroom.
   pub ActorWakeupWeightLimit: Weight = Perbill::from_percent(14) * MAXIMUM_BLOCK_WEIGHT;
@@ -869,7 +851,6 @@ impl AdmissionCertificateAuthorityProvider for RuntimeAdmissionCertificateAuthor
         ActorMaxQueueEntriesScannedPerBlock::get(),
         ActorQueuePageSize::get(),
         ActorWakeupPageSize::get(),
-        ActorObservationPageSize::get(),
         ActorOnIdleReserve::get(),
       ),
     )
@@ -877,7 +858,6 @@ impl AdmissionCertificateAuthorityProvider for RuntimeAdmissionCertificateAuthor
     type LifecycleWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
     let maximum_lifecycle_weight = [
       LifecycleWeights::create_user_actor(),
-      LifecycleWeights::create_user_actor_crossing_new_page(),
       LifecycleWeights::create_user_actor_at_slot(),
       LifecycleWeights::create_system_actor(),
       LifecycleWeights::create_system_actor_at_sovereign_id(),
@@ -3109,19 +3089,7 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxQueueLength = ActorMaxQueueLength;
   type QueuePageSize = ActorQueuePageSize;
   type WakeupPageSize = ActorWakeupPageSize;
-  type ObservationPageSize = ActorObservationPageSize;
-  type CrossingPageSize = ActorCrossingPageSize;
-  type MaxCrossingTransitionsPerFeed = ActorMaxCrossingTransitionsPerFeed;
-  type MaxCrossingMembersPerFeed = ActorMaxCrossingMembersPerFeed;
-  type MaxUserCrossingMembersPerFeed = ActorMaxUserCrossingMembersPerFeed;
-  type MaxCrossingTransitionsPerBlock = ActorMaxCrossingTransitionsPerBlock;
-  type MaxCrossingLeavesPerBlock = ActorMaxCrossingLeavesPerBlock;
-  type MaxCrossingPagesPerBlock = ActorMaxCrossingPagesPerBlock;
-  type MaxCrossingActorsPerBlock = ActorMaxCrossingActorsPerBlock;
-  type CrossingWorkerWeightLimit = ActorCrossingWorkerWeightLimit;
   type MaxQueueEntriesScannedPerBlock = ActorMaxQueueEntriesScannedPerBlock;
-  type MaxObservationFanoutPagesPerBlock = ActorMaxObservationFanoutPagesPerBlock;
-  type ObservationFanoutWeightLimit = ActorObservationFanoutWeightLimit;
   type WakeupWeightLimit = ActorWakeupWeightLimit;
   type MaxWakeupsPerBlock = ActorMaxWakeupsPerBlock;
   type MaxFundingTrackedAssets = ActorMaxFundingTrackedAssets;

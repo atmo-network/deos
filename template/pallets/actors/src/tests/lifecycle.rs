@@ -9,29 +9,19 @@ use crate::{
 fn trigger_grammar_is_single_source_and_non_nested() {
   let manual = RuntimeTrigger::manual();
   let address = RuntimeTrigger::address_event(SourceFilter::OwnerOnly, AssetFilter::Any);
-  let observation = RuntimeTrigger::observation_change(7);
-  let crossing = RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80);
   let at_time = RuntimeTrigger::at_time(10);
   let cadence = RuntimeTrigger::cadenced(10);
 
-  assert_eq!(observation.encode(), vec![2, 7, 0, 0, 0]);
+  assert_eq!(manual.encode(), vec![0]);
   assert!(manual.manual_source_enabled());
   assert!(!cadence.manual_source_enabled());
 
-  assert_eq!(crossing.encode()[0], 3);
-  assert_eq!(at_time.encode()[0], 4);
-  assert_eq!(cadence.encode()[0], 5);
+  assert_eq!(address.encode()[0], 1);
+  assert_eq!(at_time.encode()[0], 2);
+  assert_eq!(cadence.encode()[0], 3);
 
   assert!(TriggerRuntimeState::Stateless.is_compatible_with(&manual));
   assert!(TriggerRuntimeState::Stateless.is_compatible_with(&address));
-  assert!(TriggerRuntimeState::Stateless.is_compatible_with(&observation));
-  assert!(
-    TriggerRuntimeState::ObservationCrossing {
-      phase: CrossingPhase::Armed,
-      installed_at_revision: 1,
-    }
-    .is_compatible_with(&crossing)
-  );
   assert!(
     TriggerRuntimeState::AtTime {
       anchor_tick: None,
@@ -40,10 +30,10 @@ fn trigger_grammar_is_single_source_and_non_nested() {
     .is_compatible_with(&at_time)
   );
   assert!(TriggerRuntimeState::Cadenced { anchor_tick: None }.is_compatible_with(&cadence));
-  assert!(!TriggerRuntimeState::Stateless.is_compatible_with(&crossing));
+  assert!(!TriggerRuntimeState::Stateless.is_compatible_with(&at_time));
   assert!(!TriggerRuntimeState::Cadenced { anchor_tick: None }.is_compatible_with(&manual));
 
-  for trigger in [manual, address, observation, crossing, at_time, cadence] {
+  for trigger in [manual, address, at_time, cadence] {
     assert!(trigger.has_canonical_filters());
     let encoded = trigger.encode();
     assert!(encoded.len() <= RuntimeTrigger::max_encoded_len());
@@ -107,18 +97,9 @@ fn latched_contract_replacement_preserves_temporal_trigger_authority() {
 fn active_trigger_replacement_matrix_preserves_one_canonical_family() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    set_observation(
-      7,
-      crate::ScalarObservationState::Fresh {
-        value: 50,
-        observed_at: 1,
-      },
-    );
     let triggers = [
       RuntimeTrigger::manual(),
       RuntimeTrigger::address_event(SourceFilter::OwnerOnly, AssetFilter::Any),
-      RuntimeTrigger::observation_change(7),
-      RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
       RuntimeTrigger::at_time(10),
       RuntimeTrigger::cadenced(10),
     ];
@@ -159,12 +140,8 @@ fn active_trigger_replacement_matrix_preserves_one_canonical_family() {
             .is_compatible_with(&contract.trigger)
         );
         assert_eq!(
-          Actors::crossing_membership(current_id).is_some(),
-          matches!(new_trigger, Trigger::ObservationCrossing { .. })
-        );
-        assert_eq!(
-          Actors::actor_observation_feeds(current_id).is_some(),
-          matches!(new_trigger, Trigger::ObservationChange { .. })
+          crate::TriggerDeadlineHandles::<Test>::contains_key(current_id),
+          matches!(new_trigger, Trigger::AtTime { .. } | Trigger::Cadenced { .. })
         );
         actor_id += 1;
       }
@@ -176,17 +153,10 @@ fn active_trigger_replacement_matrix_preserves_one_canonical_family() {
 fn late_trigger_transition_failure_rolls_back_canonical_and_derived_state() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    set_observation(
-      7,
-      crate::ScalarObservationState::Fresh {
-        value: 50,
-        observed_at: 1,
-      },
-    );
     let actor_id = create_system_with(
       ALICE,
       Schedule {
-        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
+        trigger: RuntimeTrigger::at_time(10),
         cooldown_blocks: 0,
       },
       None,
@@ -200,7 +170,7 @@ fn late_trigger_transition_failure_rolls_back_canonical_and_derived_state() {
         RuntimeOrigin::root(),
         actor_id,
         Schedule {
-          trigger: RuntimeTrigger::observation_change(7),
+          trigger: RuntimeTrigger::address_event(SourceFilter::OwnerOnly, AssetFilter::Any),
           cooldown_blocks: 0,
         },
         None,
@@ -213,16 +183,14 @@ fn late_trigger_transition_failure_rolls_back_canonical_and_derived_state() {
     );
     let contract = Actors::load_actor_contract(actor_id).expect("active Actor Contract");
     let hot = Actors::actor_hot(actor_id).expect("active Actor hot state");
-    assert!(matches!(
-      contract.trigger,
-      Trigger::ObservationCrossing { .. }
-    ));
+    assert!(matches!(contract.trigger, Trigger::AtTime { .. }));
     assert!(matches!(
       hot.trigger_runtime_state,
-      TriggerRuntimeState::ObservationCrossing { .. }
+      TriggerRuntimeState::AtTime { .. }
     ));
-    assert!(Actors::crossing_membership(actor_id).is_some());
-    assert!(Actors::actor_observation_feeds(actor_id).is_none());
+    assert!(crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
   });
 }
 
@@ -230,14 +198,7 @@ fn late_trigger_transition_failure_rolls_back_canonical_and_derived_state() {
 fn trigger_transition_preflight_is_read_only() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    set_observation(
-      7,
-      crate::ScalarObservationState::Fresh {
-        value: 50,
-        observed_at: 1,
-      },
-    );
-    let actor_id = create_system_with(
+    create_system_with(
       ALICE,
       Schedule {
         trigger: RuntimeTrigger::Manual,
@@ -246,19 +207,13 @@ fn trigger_transition_preflight_is_read_only() {
       None,
       contract_steps_with_step(make_step(Task::StopCycle)),
     );
-    let trigger = RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80);
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    let _plan = Actors::preflight_trigger_transition(
-      actor_id,
-      &trigger,
-      crate::TriggerTransitionIntent::ReplaceActive,
-    )
-    .expect("valid Trigger transition preflights");
+    let _plan = Actors::preflight_trigger_transition(crate::TriggerTransitionIntent::ReplaceActive)
+      .expect("valid Trigger transition preflights");
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
       root_before
     );
-    assert!(Actors::crossing_membership(actor_id).is_none());
   });
 }
 
@@ -688,10 +643,7 @@ fn deactivate_activate_preserves_nonce_but_resets_active_epoch_state_for_both_cl
 fn guaranteed_actor_service_rejects_housekeeping_underflow_in_each_dimension() {
   new_test_ext().execute_with(|| {
     let fixed = <TestWeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::materialization_coordinator_base())
-      .saturating_add(Actors::scheduler_complete_outer_weight_upper())
-      .saturating_add(TestCrossingWorkerWeightLimit::get())
-      .saturating_add(TestObservationFanoutWeightLimit::get());
+      .saturating_add(Actors::scheduler_complete_outer_weight_upper());
 
     set_guaranteed_on_idle_weight(Weight::from_parts(
       fixed.ref_time().saturating_sub(1),
@@ -1326,137 +1278,6 @@ fn user_contract_replacement_reconciles_state_hold_from_frame_authority() {
     let hold_after = crate::ActorStateHolds::<Test>::get(actor_id).expect("User hold survives");
     assert_eq!(hold_after.owner, hold_before.owner);
     assert_eq!(hold_after.breakdown, hold_before.breakdown);
-    assert!(ActorIdentities::<Test>::get(actor_id).is_none());
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(ActorProcesses::<Test>::contains_key(actor_id));
-    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[cfg(not(feature = "runtime-benchmarks"))]
-#[test]
-fn user_crossing_install_uses_frozen_class_with_canonical_control() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    set_observation(
-      7,
-      crate::ScalarObservationState::Fresh {
-        value: 50,
-        observed_at: 1,
-      },
-    );
-    let actor_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_contract_steps(),
-    );
-    let crate::LoadedActorStateOf::Active(state) = Actors::load_frame_actor_state(actor_id) else {
-      panic!("active User frame state");
-    };
-    let mut replacement = state.contract;
-    replacement.trigger =
-      RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80);
-    frame_system::Pallet::<Test>::set_block_number(2);
-
-    assert_ok!(Actors::update_contract(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      replacement,
-    ));
-    let locator =
-      crate::CrossingMemberships::<Test>::get(actor_id).expect("User membership exists");
-    assert_eq!(crate::CrossingUserFeedMembershipCount::<Test>::get(7), 1);
-    let crate::LoadedActorStateOf::Active(state) = Actors::load_frame_actor_state(actor_id) else {
-      panic!("User Crossing frame authority exists");
-    };
-    let (_, _, crossing_admission) = Actors::load_control_authority_with_authority(actor_id)
-      .expect("User Crossing admission exists");
-    let page = crate::CrossingMemberPages::<Test>::get(locator.key, locator.page)
-      .expect("User Crossing member page exists");
-    let member = page
-      .entries
-      .get(locator.offset as usize)
-      .expect("User Crossing member exists");
-    assert_eq!(
-      member.admission_identity,
-      crossing_admission.admission_identity
-    );
-    assert_ne!(member.admission_identity, [0; 32]);
-    assert!(matches!(
-      state.hot.trigger_runtime_state,
-      TriggerRuntimeState::ObservationCrossing {
-        phase: CrossingPhase::Armed,
-        ..
-      }
-    ));
-    assert!(ActorIdentities::<Test>::get(actor_id).is_none());
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(ActorProcesses::<Test>::contains_key(actor_id));
-    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[cfg(not(feature = "runtime-benchmarks"))]
-#[test]
-fn crossing_schedule_replacement_preserves_frame_phase_with_canonical_control() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    set_observation(
-      7,
-      crate::ScalarObservationState::Fresh {
-        value: 50,
-        observed_at: 1,
-      },
-    );
-    let actor_id = create_system_with(
-      ALICE,
-      Schedule {
-        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
-        cooldown_blocks: 0,
-      },
-      None,
-      inert_contract_steps(),
-    );
-    let membership_before =
-      crate::CrossingMemberships::<Test>::get(actor_id).expect("Crossing membership exists");
-    let crate::LoadedActorStateOf::Active(state) = Actors::load_frame_actor_state(actor_id) else {
-      panic!("active Crossing frame state");
-    };
-    let mut replacement = state.contract;
-    replacement.cooldown_blocks = 1;
-    frame_system::Pallet::<Test>::set_block_number(2);
-
-    assert_ok!(Actors::update_contract(
-      RuntimeOrigin::root(),
-      actor_id,
-      replacement,
-    ));
-    // A canonical Contract replacement rotates the generation-bound process identity, and
-    // `sync_crossing_compiled_authority` re-binds the compiled Crossing membership to the new
-    // generation so later homogeneous cohort commits cannot mutate a stale actor reference. The
-    // phase key and physical geometry are preserved; only the generation advances.
-    let membership_after =
-      crate::CrossingMemberships::<Test>::get(actor_id).expect("Crossing membership survives");
-    assert_eq!(membership_after.key, membership_before.key);
-    assert_eq!(membership_after.page, membership_before.page);
-    assert_eq!(membership_after.offset, membership_before.offset);
-    assert!(membership_after.generation >= membership_before.generation);
-    let crate::LoadedActorStateOf::Active(state) = Actors::load_frame_actor_state(actor_id) else {
-      panic!("Crossing frame authority survives");
-    };
-    assert!(matches!(
-      state.hot.trigger_runtime_state,
-      TriggerRuntimeState::ObservationCrossing {
-        phase: CrossingPhase::Armed,
-        ..
-      }
-    ));
     assert!(ActorIdentities::<Test>::get(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_some());
     assert!(ActorProcesses::<Test>::contains_key(actor_id));
@@ -2185,45 +2006,6 @@ fn ready_deactivation_consumes_frame_ticket_with_canonical_control() {
   });
 }
 
-#[cfg(not(feature = "runtime-benchmarks"))]
-#[test]
-fn crossing_deactivation_removes_membership_with_canonical_control() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    set_observation(
-      7,
-      crate::ScalarObservationState::Fresh {
-        value: 50,
-        observed_at: 1,
-      },
-    );
-    let actor_id = create_system_with(
-      ALICE,
-      Schedule {
-        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
-        cooldown_blocks: 0,
-      },
-      None,
-      inert_contract_steps(),
-    );
-    assert!(crate::CrossingMemberships::<Test>::contains_key(actor_id));
-
-    assert_ok!(Actors::deactivate_actor(RuntimeOrigin::root(), actor_id));
-    assert!(!crate::CrossingMemberships::<Test>::contains_key(actor_id));
-    assert!(ActorControlLocators::<Test>::get(actor_id).is_none());
-    assert!(Actors::actor_hot(actor_id).is_none());
-    assert!(
-      Actors::actor_control_cell(actor_id)
-        .map(|(_, cell)| cell.admission)
-        .is_none()
-    );
-    assert!(matches!(
-      Actors::load_actor_state(actor_id),
-      crate::LoadedActorStateOf::Dormant(_)
-    ));
-  });
-}
-
 #[test]
 fn contract_policy_schedule_deactivation_and_close_cancel_with_typed_reasons() {
   new_test_ext().execute_with(|| {
@@ -2801,157 +2583,6 @@ fn eligibility_rejects_foreign_run_state_in_nonrunning_states() {
       assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
     });
   }
-}
-
-#[test]
-fn waiting_observation_replacement_late_failure_restores_source_and_old_feed_service() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      observation_schedule(vec![7]),
-      Some(ScheduleWindow {
-        start: 10,
-        end: 110,
-      }),
-      contract_steps_with_step(make_step(Task::StopCycle)),
-    );
-    let semantic_before = ActorSemanticStates::<Test>::get(actor_id);
-    let process_before = ActorProcesses::<Test>::get(actor_id);
-    let authority_before = crate::ActorActivationAuthorities::<Test>::get(actor_id)
-      .expect("source activation authority");
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    set_fail_create_checkpoint(true);
-    assert_noop!(
-      update_contract_partial!(
-        RuntimeOrigin::root(),
-        actor_id,
-        observation_schedule(vec![8]),
-        Some(ScheduleWindow {
-          start: 10,
-          end: 110,
-        }),
-      ),
-      DispatchError::Other("AtomicityCreateCheckpointFailed")
-    );
-    set_fail_create_checkpoint(false);
-
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
-    );
-    assert_eq!(ActorSemanticStates::<Test>::get(actor_id), semantic_before);
-    assert_eq!(ActorProcesses::<Test>::get(actor_id), process_before);
-    assert_eq!(
-      crate::ActorActivationAuthorities::<Test>::get(actor_id),
-      Some(authority_before)
-    );
-    assert_eq!(
-      Actors::actor_observation_feeds(actor_id),
-      Some(BoundedVec::truncate_from(vec![7]))
-    );
-    assert_eq!(Actors::observation_subscriber_count(7), 1);
-    assert_eq!(Actors::observation_subscriber_count(8), 0);
-
-    assert_ok!(Actors::note_observation_changed(8, 1));
-    Actors::fanout_dirty_observations(Weight::MAX);
-    assert!(!Actors::actor_hot(actor_id).unwrap().pending_signal);
-    assert_ok!(Actors::note_observation_changed(7, 1));
-    Actors::fanout_dirty_observations(Weight::MAX);
-    assert!(Actors::actor_hot(actor_id).unwrap().pending_signal);
-
-    for block in 10..=12 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      Actors::on_initialize(block);
-      run_prepass();
-      run_idle(Weight::MAX);
-      if Actors::actor_identity(actor_id).unwrap().cycle_nonce == 1 {
-        break;
-      }
-    }
-    assert_eq!(Actors::actor_identity(actor_id).unwrap().cycle_nonce, 1);
-    assert!(!Actors::actor_hot(actor_id).unwrap().pending_signal);
-    #[cfg(feature = "try-runtime")]
-    Actors::do_try_state().expect("rolled-back subscription and Waiting authority stay coherent");
-  });
-}
-
-#[test]
-fn waiting_observation_replacement_moves_subscription_and_executes_only_new_feed() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      observation_schedule(vec![7]),
-      Some(ScheduleWindow {
-        start: 10,
-        end: 110,
-      }),
-      contract_steps_with_step(make_step(Task::StopCycle)),
-    );
-    let (_, before_hot, before_admission) =
-      Actors::load_control_authority_with_authority(actor_id).expect("future-window Actor waits");
-    assert_eq!(
-      Actors::actor_observation_feeds(actor_id),
-      Some(BoundedVec::truncate_from(vec![7]))
-    );
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(update_contract_partial!(
-      RuntimeOrigin::root(),
-      actor_id,
-      observation_schedule(vec![8]),
-      Some(ScheduleWindow {
-        start: 10,
-        end: 110,
-      }),
-    ));
-    let (_, after_hot, after_admission) = Actors::load_control_authority_with_authority(actor_id)
-      .expect("replacement retains Waiting authority");
-    assert_eq!(after_hot.wakeup_pointer, before_hot.wakeup_pointer);
-    assert_ne!(
-      after_admission.admission_identity,
-      before_admission.admission_identity
-    );
-    assert_eq!(
-      Actors::actor_observation_feeds(actor_id),
-      Some(BoundedVec::truncate_from(vec![8]))
-    );
-    assert_eq!(Actors::observation_subscriber_count(7), 0);
-    assert_eq!(Actors::observation_subscriber_count(8), 1);
-    let authority = crate::ActorActivationAuthorities::<Test>::get(actor_id)
-      .expect("replacement activation authority");
-    assert_eq!(authority.feed, 8);
-    assert_eq!(
-      authority.admission_identity,
-      after_admission.admission_identity
-    );
-
-    assert_ok!(Actors::note_observation_changed(7, 1));
-    Actors::fanout_dirty_observations(Weight::MAX);
-    assert!(!Actors::actor_hot(actor_id).unwrap().pending_signal);
-
-    assert_ok!(Actors::note_observation_changed(8, 1));
-    Actors::fanout_dirty_observations(Weight::MAX);
-    assert!(Actors::actor_hot(actor_id).unwrap().pending_signal);
-    assert_eq!(Actors::actor_identity(actor_id).unwrap().cycle_nonce, 0);
-
-    for block in 10..=12 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      Actors::on_initialize(block);
-      run_prepass();
-      run_idle(Weight::MAX);
-      if Actors::actor_identity(actor_id).unwrap().cycle_nonce == 1 {
-        break;
-      }
-    }
-    assert_eq!(Actors::actor_identity(actor_id).unwrap().cycle_nonce, 1);
-    assert!(!Actors::actor_hot(actor_id).unwrap().pending_signal);
-    #[cfg(feature = "try-runtime")]
-    Actors::do_try_state().expect("replacement subscription and Waiting authority stay coherent");
-  });
 }
 
 #[test]

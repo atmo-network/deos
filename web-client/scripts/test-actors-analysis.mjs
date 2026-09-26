@@ -849,78 +849,6 @@ test('trigger analysis projects one exact scalar trigger without runtime proof',
     contract.trigger = trigger;
     return contract;
   };
-  const observation = analyze(
-    artifactFor({
-      contract: contractWithTrigger({
-        type: 'ObservationChange',
-        value: { feed: observationFeed },
-      }),
-    }),
-  );
-  assert.equal(observation.completionPolicy, 'Persistent');
-  assert.deepEqual(observation.trigger, {
-    kind: 'ObservationChange',
-    afterTicks: null,
-    everyTicks: null,
-    sourceKinds: ['ObservationChange'],
-    observationFeeds: [
-      {
-        aggregation: {
-          type: 'Ema',
-          value: {
-            half_life_blocks: { $runtimeType: 'number', $integer: '100' },
-          },
-        },
-        asset_in: { type: 'Native', value: { $none: true } },
-        asset_out: {
-          type: 'Local',
-          value: { $runtimeType: 'number', $integer: '7' },
-        },
-        method: { type: 'PreExecutionSpot', value: { $none: true } },
-        scale: { $runtimeType: 'number', $integer: '12' },
-      },
-    ],
-  });
-  assert(
-    observation.findings.some(
-      (finding) =>
-        finding.kind === 'ExternallySignalledAdmission' &&
-        finding.trigger === 'ObservationChange',
-    ),
-  );
-  const crossing = analyze(
-    artifactFor({
-      contract: contractWithTrigger({
-        type: 'ObservationCrossing',
-        value: {
-          feed: observationFeed,
-          direction: { type: 'Rising', value: undefined },
-          threshold: 100n,
-          rearm_threshold: 80n,
-        },
-      }),
-    }),
-  );
-  assert.deepEqual(crossing.trigger, {
-    kind: 'ObservationCrossing',
-    afterTicks: null,
-    everyTicks: null,
-    sourceKinds: ['ObservationCrossing'],
-    observationFeeds: observation.trigger.observationFeeds,
-  });
-  const malformedCrossing = contractWithTrigger({
-    type: 'ObservationCrossing',
-    value: {
-      feed: observationFeed,
-      direction: { type: 'Rising', value: undefined },
-      threshold: 100n,
-      rearm_threshold: 100n,
-    },
-  });
-  assert.throws(
-    () => analyze(artifactFor({ contract: malformedCrossing })),
-    /invalid hysteresis/,
-  );
   const oneShot = analyze(
     artifactFor({
       contract: contractWithTrigger({
@@ -934,7 +862,6 @@ test('trigger analysis projects one exact scalar trigger without runtime proof',
     afterTicks: 10,
     everyTicks: null,
     sourceKinds: [],
-    observationFeeds: [],
   });
   assert(
     oneShot.findings.some(
@@ -957,7 +884,6 @@ test('trigger analysis projects one exact scalar trigger without runtime proof',
     afterTicks: null,
     everyTicks: 10,
     sourceKinds: [],
-    observationFeeds: [],
   });
   assert(
     periodic.findings.some(

@@ -107,7 +107,7 @@ function priceBucket({ direction, threshold }) {
     failure:
       'Non-fresh observation skips; Temporary swap failure retries at one cursor; retry exhaustion closes.',
     contract: activeContract({
-      trigger: { type: 'ObservationChange', feed },
+      trigger: { type: 'Cadenced', everyTicks: 12 },
       predicates: [
         {
           type: buying ? 'ObservationBelow' : 'ObservationAbove',
@@ -275,11 +275,7 @@ test('descending buys and ascending sells lower as independent bounded one-shot 
       'CloseAfterProductiveCycle',
       scenario.name,
     );
-    assert.equal(
-      inspection.projection.trigger.type,
-      'ObservationChange',
-      scenario.name,
-    );
+    assert.equal(inspection.projection.trigger.type, 'Cadenced', scenario.name);
   }
 });
 

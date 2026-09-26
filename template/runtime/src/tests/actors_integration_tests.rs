@@ -46,15 +46,15 @@ use pallet_deos_actors::adapters::SovereignAccountPolicy;
 use pallet_deos_actors::{
   ActorContract, ActorId, ActorType, AdmissionCertificateAuthorityProvider, AmountResolution,
   AssetFilter, AssetFilterOf, AssetOps, AttemptDisposition, CloseReason, CompletionPolicy,
-  ContextMessageGeometry, ContextMessageLimits, ContractSteps, CrossingDirection, CycleResult,
-  DexOps, Error, Event, ExecutionContext, FeeCollector, FundingSourcePolicy, IdleStarvationState,
-  InputLimit, LiquidityOps, Mutability, OutcomeTotals, ParkNegativeReason,
-  ParkedBalanceQualification, Precondition, Predicate, ProcessResidence, RetryClass,
-  ScheduleWindow, SimulationMode, SourceFilter, SourceFilterOf, SplitLeg, SplitTransferLegsOf,
-  StakingOps, StepControlExecution, StepControlOutcome, StepControlPhase, StepControlPlacement,
-  StepControlWeightContext, StepControlWeightProvider, StepErrorPolicy, StepOf, StepOutcome,
-  StepSkippedReason, Task, TaskEffectExecution, TaskEffectWeightProvider, TaskOf, Trigger,
-  TriggerFamily, WakeupKey, WeightInfo, certify_parked_balance_watch, classify_parked_balance_plan,
+  ContextMessageGeometry, ContextMessageLimits, ContractSteps, CycleResult, DexOps, Error, Event,
+  ExecutionContext, FeeCollector, FundingSourcePolicy, IdleStarvationState, InputLimit,
+  LiquidityOps, Mutability, OutcomeTotals, ParkedBalanceQualification, ProcessResidence,
+  RetryClass, ScheduleWindow, SimulationMode, SourceFilter, SourceFilterOf, SplitLeg,
+  SplitTransferLegsOf, StakingOps, StepControlExecution, StepControlOutcome, StepControlPhase,
+  StepControlPlacement, StepControlWeightContext, StepControlWeightProvider, StepErrorPolicy,
+  StepOf, StepOutcome, StepSkippedReason, Task, TaskEffectExecution, TaskEffectWeightProvider,
+  TaskOf, Trigger, WakeupKey, WeightInfo, certify_parked_balance_watch,
+  classify_parked_balance_plan,
 };
 use pallet_deos_router::{AssetConversionApi, FeeRoutingAdapter};
 use polkadot_sdk::frame_support::{
@@ -95,53 +95,6 @@ fn conservative_actor_resource_limits() -> (Weight, Weight) {
     .expect("control share fits conservative schedulable reserve");
   let actor_base_turn = Perbill::from_percent(50) * shared;
   (control, actor_base_turn)
-}
-
-#[test]
-fn crossing_search_minimum_and_non_tail_refill_ceiling_have_distinct_owners() {
-  type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-  let common = W::crossing_worker_base()
-    .saturating_add(W::crossing_work_probe())
-    .saturating_add(W::crossing_selection_probe())
-    .saturating_add(W::record_crossing_worker_fault());
-  let search = common
-    .saturating_add(W::crossing_search_probe())
-    .saturating_add(W::crossing_transition_unit());
-  let refill = common
-    .saturating_add(W::crossing_fire_pair_probe())
-    .saturating_add(W::crossing_tail_refill_probe())
-    .saturating_add(
-      W::crossing_placed_non_tail_emptied_unit().max(W::crossing_placed_non_tail_trimmed_unit()),
-    );
-  let minimum = Actors::materialization_family_minimum(0);
-  assert!(
-    search.all_lte(minimum),
-    "search probe must fit both dimensions: {search:?} > {minimum:?}"
-  );
-  let crossing_ceiling = crate::configs::actor_config::ActorCrossingWorkerWeightLimit::get();
-  assert!(
-    refill.all_lte(crossing_ceiling),
-    "non-tail refill requires family surplus, not the minimum quantum: {refill:?} > {crossing_ceiling:?}"
-  );
-}
-
-#[test]
-fn observation_fanout_minimum_reserves_probe_page_and_fault_capacity() {
-  type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-  let expected = W::observation_fanout_base()
-    .saturating_add(W::observation_fanout_branch_probe())
-    .saturating_add(
-      Actors::observation_fanout_ordinary_weight_upper().max(W::observation_fanout_terminal()),
-    )
-    .saturating_add(W::record_observation_fanout_worker_fault());
-  assert!(W::observation_fanout_branch_probe().ref_time() > 0);
-  assert!(W::observation_fanout_branch_probe().proof_size() > 0);
-  assert_eq!(
-    Actors::materialization_family_minimum(1),
-    expected,
-    "reserved observation minimum must fund the complete first page in both dimensions"
-  );
-  assert!(expected.all_lte(crate::configs::actor_config::ActorObservationFanoutWeightLimit::get()));
 }
 
 #[test]
@@ -1355,171 +1308,6 @@ fn host_system_activation_manifest_is_ranked_and_rejects_undeclared_cycle_edges_
 }
 
 #[test]
-#[ignore = "fixed T+1 runtime length-12 stress profile; run by exact test name"]
-fn next_block_runtime_mixed_length_herd_includes_maximum_tail() {
-  seeded_test_ext().execute_with(|| {
-    let feed = crate::configs::oracle_config::deos_router_pool_feed(
-      AssetKind::Native,
-      AssetKind::Local(8_043),
-    );
-    let lengths = [0_u32, 1, 4, 8, 12];
-    let actors = (0..10)
-      .map(|index| {
-        let steps = BoundedVec::try_from(
-          (0..lengths[index % lengths.len()])
-            .map(|_| {
-              make_step(Task::Mint {
-                asset: AssetKind::Native,
-                amount: AmountResolution::Fixed(1),
-              })
-            })
-            .collect::<Vec<_>>(),
-        )
-        .expect("runtime W3 contract fits MaxContractSteps");
-        create_system(ALICE, observation_schedule(feed), None, steps)
-      })
-      .collect::<Vec<_>>();
-
-    System::set_block_number(1);
-    Actors::on_initialize(1);
-    assert_ok!(Actors::note_observation_transition_with_provenance(
-      feed,
-      pallet_deos_actors::ObservationTransition {
-        revision: 1,
-        previous: None,
-        current: 10,
-      },
-      pallet_deos_actors::TriggerCauseProvenance::ExternalPhase,
-    ));
-    run_idle(Weight::MAX);
-
-    let started_actors = || {
-      System::events()
-        .into_iter()
-        .filter_map(|record| match record.event {
-          RuntimeEvent::Actors(Event::CycleStarted { actor_id, .. }) => Some(actor_id),
-          _ => None,
-        })
-        .collect::<Vec<_>>()
-    };
-    let source_started = started_actors();
-    assert!(source_started.is_empty());
-
-    let mut started = source_started;
-    let mut block = 1_u32;
-    while started.len() < actors.len() {
-      block += 1;
-      assert!(block <= 12, "runtime W3 herd failed to drain");
-      System::set_block_number(block);
-      Actors::on_initialize(block);
-      run_idle(Weight::MAX);
-      started = started_actors();
-      assert_eq!(started, actors[..started.len()]);
-    }
-    assert_eq!(started, actors);
-  });
-}
-
-fn run_next_block_runtime_herd(requested_population: Option<usize>) {
-  seeded_test_ext().execute_with(|| {
-    let feed = crate::configs::oracle_config::deos_router_pool_feed(
-      AssetKind::Native,
-      AssetKind::Local(8_044),
-    );
-    let active_remaining = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get()
-      .saturating_sub(Actors::active_actor_count());
-    let identity_remaining = <Runtime as pallet_deos_actors::Config>::MaxActorIdentities::get()
-      .saturating_sub(Actors::actor_identity_count());
-    let sovereign_remaining = <Runtime as pallet_deos_actors::Config>::MaxSystemSovereigns::get()
-      .saturating_sub(Actors::system_sovereign_count());
-    let maximum_population = active_remaining
-      .min(identity_remaining)
-      .min(sovereign_remaining) as usize;
-    if requested_population.is_none() {
-      assert_eq!(maximum_population, 9_985);
-    }
-    let population = requested_population.unwrap_or(maximum_population);
-    assert!(population <= maximum_population);
-    let lengths = [0_u32, 1, 4, 8, 12];
-    let actors = (0..population)
-      .map(|index| {
-        let steps = BoundedVec::try_from(
-          (0..lengths[index % lengths.len()])
-            .map(|_| {
-              make_step(Task::Mint {
-                asset: AssetKind::Native,
-                amount: AmountResolution::Fixed(1),
-              })
-            })
-            .collect::<Vec<_>>(),
-        )
-        .expect("runtime W3 contract fits MaxContractSteps");
-        create_system(ALICE, observation_schedule(feed), None, steps)
-      })
-      .collect::<Vec<_>>();
-    let actor_set = actors
-      .iter()
-      .copied()
-      .collect::<alloc::collections::BTreeSet<_>>();
-
-    System::set_block_number(1);
-    Actors::on_initialize(1);
-    assert_ok!(Actors::note_observation_transition_with_provenance(
-      feed,
-      pallet_deos_actors::ObservationTransition {
-        revision: 1,
-        previous: None,
-        current: 10,
-      },
-      pallet_deos_actors::TriggerCauseProvenance::ExternalPhase,
-    ));
-
-    let mut started = Vec::new();
-    let mut block = 1_u32;
-    while started.len() < actors.len() {
-      System::reset_events();
-      run_idle(Weight::MAX);
-      started.extend(
-        System::events()
-          .into_iter()
-          .filter_map(|record| match record.event {
-            RuntimeEvent::Actors(Event::CycleStarted { actor_id, .. })
-              if actor_set.contains(&actor_id) =>
-            {
-              Some(actor_id)
-            }
-            _ => None,
-          }),
-      );
-      assert_eq!(started, actors[..started.len()]);
-      if started.len() == actors.len() {
-        break;
-      }
-      block += 1;
-      assert!(
-        block <= population as u32 + 2,
-        "runtime W3 herd failed to drain"
-      );
-      System::set_block_number(block);
-      Actors::on_initialize(block);
-    }
-    assert_eq!(started, actors);
-  });
-}
-
-#[test]
-#[ignore = "fixed T+1 1,000-Actor runtime stress profile; run by exact test name"]
-fn next_block_thousand_actor_runtime_herd_preserves_fifo_order() {
-  run_next_block_runtime_herd(Some(1_000));
-}
-
-#[test]
-#[ignore = "fixed T+1 maximum-admissible runtime stress profile; run by exact test name"]
-fn next_block_maximum_admissible_runtime_herd_preserves_fifo_order() {
-  run_next_block_runtime_herd(None);
-}
-
-#[test]
 fn actor_produced_address_event_waits_one_additional_block() {
   seeded_test_ext().execute_with(|| {
     let first_account = Actors::sovereign_account_id(&ALICE, 0);
@@ -1940,288 +1728,6 @@ type RuntimeStep = StepOf<Runtime>;
 type RuntimeContractSteps = pallet_deos_actors::ContractSteps<Runtime>;
 
 #[test]
-fn runtime_oracle_change_hook_coalesces_into_actor_dirty_feed_state() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let producer = deos_router_account();
-    let feed =
-      crate::configs::oracle_config::deos_router_pool_feed(AssetKind::Native, AssetKind::Local(7));
-    assert_ok!(Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      producer.clone(),
-      feed.meaning(),
-      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
-      feed.scale,
-      pallet_oracle::Aggregation::Ema {
-        half_life_blocks: 100,
-      },
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    ));
-    create_system(
-      ALICE,
-      observation_schedule(feed),
-      None,
-      BoundedVec::try_from(vec![make_step(inert_task())]).expect("one step fits"),
-    );
-
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer.clone()),
-      feed,
-      1_000_000_000_000,
-    ));
-    let first = Actors::dirty_observation_feeds(feed).expect("Actors hook marks the feed dirty");
-    assert_eq!(first.latest_revision, 1);
-    assert_eq!(first.fanout_revision, 0);
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer.clone()),
-      feed,
-      1_000_000_000_000,
-    ));
-    assert_eq!(Actors::dirty_observation_feeds(feed), Some(first));
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer),
-      feed,
-      2_000_000_000_000,
-    ));
-    let latest = Actors::dirty_observation_feeds(feed).expect("dirty feed remains coalesced");
-    assert_eq!(latest.previous_dirty_feed, first.previous_dirty_feed);
-    assert_eq!(latest.next_dirty_feed, first.next_dirty_feed);
-    assert_eq!(latest.latest_revision, 2);
-    assert_eq!(Actors::dirty_observation_feed_count(), 1);
-  });
-}
-
-#[test]
-fn oracle_publication_rolls_back_when_actor_change_hook_rejects() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let producer = deos_router_account();
-    let feed =
-      crate::configs::oracle_config::deos_router_pool_feed(AssetKind::Native, AssetKind::Local(8));
-    assert_ok!(Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      producer.clone(),
-      feed.meaning(),
-      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
-      feed.scale,
-      pallet_oracle::Aggregation::Ema {
-        half_life_blocks: 100,
-      },
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    ));
-    create_system(
-      ALICE,
-      observation_schedule(feed),
-      None,
-      BoundedVec::try_from(vec![make_step(inert_task())]).expect("one step fits"),
-    );
-    pallet_deos_actors::DirtyObservationListState::<Runtime>::mutate(|list| {
-      list.count = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get();
-    });
-    let actor_before = Actors::dirty_observation_list();
-    let events_before = System::events();
-
-    assert_noop!(
-      Oracle::publish(
-        RuntimeOrigin::signed(producer.clone()),
-        feed,
-        1_000_000_000_000
-      ),
-      Error::<Runtime>::DirtyObservationCapacityExceeded
-    );
-    assert!(Oracle::observations(feed).is_none());
-    assert!(Actors::dirty_observation_feeds(feed).is_none());
-    assert_eq!(Actors::dirty_observation_list(), actor_before);
-    assert_eq!(System::events(), events_before);
-
-    pallet_deos_actors::DirtyObservationListState::<Runtime>::kill();
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer),
-      feed,
-      1_000_000_000_000,
-    ));
-    assert_eq!(
-      Oracle::observations(feed).expect("retry commits").revision,
-      1
-    );
-    assert_eq!(
-      Actors::dirty_observation_feeds(feed)
-        .expect("retry reaches Actors")
-        .latest_revision,
-      1
-    );
-  });
-}
-
-#[test]
-fn underfunded_crossing_fire_advances_without_readiness_or_peer_cursor_loss() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let producer = deos_router_account();
-    let feed =
-      crate::configs::oracle_config::deos_router_pool_feed(AssetKind::Native, AssetKind::Local(19));
-    assert_ok!(Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      producer.clone(),
-      feed.meaning(),
-      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
-      feed.scale,
-      pallet_oracle::Aggregation::Ema {
-        half_life_blocks: 100,
-      },
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    ));
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer.clone()),
-      feed,
-      1_000_000_000_000,
-    ));
-    let hold_before = actors_owner_hold(&ALICE);
-    let crossing = RuntimeSchedule {
-      trigger: Trigger::observation_crossing(
-        feed,
-        CrossingDirection::Rising,
-        1_500_000_000_000,
-        800_000_000_000,
-      ),
-      cooldown_blocks: 0,
-    };
-    let insolvent = create_user(
-      ALICE,
-      crossing.clone(),
-      None,
-      transfer_contract_steps(BOB, AssetKind::Native, 1),
-    );
-    let peer = create_user(
-      ALICE,
-      crossing,
-      None,
-      transfer_contract_steps(BOB, AssetKind::Native, 1),
-    );
-    let state_hold_after_creation = hold_before
-      .saturating_add(actor_state_hold_total(insolvent))
-      .saturating_add(actor_state_hold_total(peer));
-    assert_eq!(actors_owner_hold(&ALICE), state_hold_after_creation);
-    let balance = Balances::free_balance(actor_account(insolvent));
-    let protected_floor = crate::configs::actor_config::ActorMinUserBalance::get();
-    deplete_user_sovereign(insolvent, balance.saturating_sub(protected_floor));
-    fund_native(peer, observation_crossing_trigger_fee());
-
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer),
-      feed,
-      100_000_000_000_000,
-    ));
-    for block in System::block_number()..=System::block_number().saturating_add(2) {
-      System::set_block_number(block);
-      run_idle(Weight::MAX);
-    }
-
-    let underfunded = Actors::active_actor_state(insolvent).expect("underfunded process remains");
-    assert!(!underfunded.hot.pending_signal);
-    assert!(underfunded.hot.queue_ticket.is_none());
-    assert!(Actors::active_actor_state(peer).is_some());
-    assert_eq!(actors_owner_hold(&ALICE), state_hold_after_creation);
-    assert_eq!(Actors::crossing_feed_membership_count(feed), 2);
-    assert!(Actors::crossing_membership(peer).is_some());
-    assert!(Actors::crossing_membership(insolvent).is_some());
-    assert!(Actors::crossing_worker_fault().is_none());
-    assert!(!System::events().iter().any(|record| matches!(
-      &record.event,
-      RuntimeEvent::Actors(Event::ActorClosed { actor_id, .. }) if *actor_id == insolvent
-    )));
-    assert!(!System::events().iter().any(|record| matches!(
-      &record.event,
-      RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
-        actor_id,
-        trigger_family: TriggerFamily::ObservationCrossing,
-        ..
-      }) if *actor_id == insolvent
-    )));
-  });
-}
-
-#[test]
-fn oracle_publication_rolls_back_when_crossing_transition_queue_is_full() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let producer = deos_router_account();
-    let feed =
-      crate::configs::oracle_config::deos_router_pool_feed(AssetKind::Native, AssetKind::Local(9));
-    assert_ok!(Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      producer.clone(),
-      feed.meaning(),
-      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
-      feed.scale,
-      pallet_oracle::Aggregation::Ema {
-        half_life_blocks: 100,
-      },
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    ));
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer.clone()),
-      feed,
-      1_000_000_000_000,
-    ));
-    create_system(
-      ALICE,
-      RuntimeSchedule {
-        trigger: Trigger::observation_crossing(
-          feed,
-          CrossingDirection::Rising,
-          1_500_000_000_000,
-          800_000_000_000,
-        ),
-        cooldown_blocks: 0,
-      },
-      None,
-      BoundedVec::try_from(vec![make_step(inert_task())]).expect("one step fits"),
-    );
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer.clone()),
-      feed,
-      2_000_000_000_000,
-    ));
-    let observation = Oracle::observations(feed).expect("second publication commits");
-    let maximum =
-      <Runtime as pallet_deos_actors::Config>::MaxCrossingTransitionsPerFeed::get() as usize;
-    let saturated = pallet_deos_actors::CrossingTransitionQueueOf::<Runtime>::try_from(vec![
-      pallet_deos_actors::CrossingTransitionObligation {
-        revision: observation.revision,
-        previous: observation.value.saturating_sub(1),
-        current: observation.value,
-        cause_provenance: pallet_deos_actors::TriggerCauseProvenance::Deferred,
-        cause_block: 0,
-      };
-      maximum
-    ])
-    .expect("runtime Crossing queue bound fits");
-    pallet_deos_actors::CrossingTransitionQueues::<Runtime>::insert(feed, saturated);
-    let root_before =
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-
-    assert_noop!(
-      Oracle::publish(RuntimeOrigin::signed(producer), feed, 3_000_000_000_000),
-      Error::<Runtime>::CrossingTransitionCapacityExceeded
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      root_before
-    );
-    assert_eq!(Oracle::observations(feed), Some(observation));
-  });
-}
-
-#[test]
 fn native_flow_anchor_topology_is_unique_and_funded_with_one_ed() {
   super::common::new_test_ext().execute_with(|| {
     let anchors = TmctolGenesisSystemActors::native_flow_anchor_accounts();
@@ -2364,25 +1870,6 @@ pub(super) fn cadenced_schedule(every_ticks: u64) -> RuntimeSchedule {
 pub(super) fn at_time_schedule(after_ticks: u64) -> RuntimeSchedule {
   RuntimeSchedule {
     trigger: Trigger::at_time(after_ticks),
-    cooldown_blocks: 0,
-  }
-}
-
-pub(super) fn observation_crossing_schedule(
-  feed: primitives::OracleFeedId,
-  direction: CrossingDirection,
-  threshold: u128,
-  rearm_threshold: u128,
-) -> RuntimeSchedule {
-  RuntimeSchedule {
-    trigger: Trigger::observation_crossing(feed, direction, threshold, rearm_threshold),
-    cooldown_blocks: 0,
-  }
-}
-
-fn observation_schedule(feed: primitives::OracleFeedId) -> RuntimeSchedule {
-  RuntimeSchedule {
-    trigger: Trigger::observation_change(feed),
     cooldown_blocks: 0,
   }
 }
@@ -2577,12 +2064,6 @@ pub(super) fn fund_native(actor_id: ActorId, amount: u128) {
 fn address_event_trigger_fee() -> Balance {
   let weight =
     <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::address_event_trigger_occurrence();
-  <Runtime as pallet_deos_actors::Config>::WeightToFee::weight_to_fee(&weight)
-}
-
-fn observation_crossing_trigger_fee() -> Balance {
-  let weight =
-    <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::observation_crossing_trigger_occurrence();
   <Runtime as pallet_deos_actors::Config>::WeightToFee::weight_to_fee(&weight)
 }
 
@@ -3724,7 +3205,7 @@ fn system_actor_executes_native_staking_lp_donation_task() {
         usage.user_dispatch_used()
       ),
       (
-        Weight::from_parts(5_579_303_666, 76_022),
+        Weight::from_parts(4_279_639_666, 66_651),
         Weight::from_parts(1_204_565_000, 14_035),
         Weight::zero()
       ),
@@ -4091,23 +3572,6 @@ fn paged_queue_limits_are_independent_runtime_controls() {
       10_000
     );
     assert_eq!(
-      <Runtime as pallet_deos_actors::Config>::MaxObservationFanoutPagesPerBlock::get(),
-      64
-    );
-    let fanout_limit = <Runtime as pallet_deos_actors::Config>::ObservationFanoutWeightLimit::get();
-    assert!(fanout_limit.ref_time() > 0 && fanout_limit.proof_size() > 0);
-    assert!(fanout_limit.all_lte(
-      <Runtime as pallet_deos_actors::Config>::ActorOnIdleReserve::get()
-    ));
-    assert!(
-      crate::Actors::observation_change_ingress_weight().all_lte(fanout_limit)
-    );
-    assert!(
-      <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_page()
-        .all_lte(fanout_limit),
-      "one maximum-density fanout page must fit the dedicated two-dimensional runtime budget"
-    );
-    assert_eq!(
       <Runtime as pallet_deos_actors::Config>::MaxExecutionsPerBlock::get(),
       1_000,
       "the execution count is a safety ceiling; WeightMeter remains primary"
@@ -4163,886 +3627,38 @@ fn active_trigger_lifecycle_reconciles_only_the_dedicated_state_hold() {
 }
 
 #[test]
-fn observation_change_single_user_binds_fanout_and_scheduled_service() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let producer = deos_router_account();
-    let feed = crate::configs::oracle_config::deos_router_pool_feed(
-      AssetKind::Native,
-      AssetKind::Local(8_089),
-    );
-    assert_ok!(Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      producer.clone(),
-      feed.meaning(),
-      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
-      feed.scale,
-      pallet_oracle::Aggregation::Ema {
-        half_life_blocks: 100,
-      },
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    ));
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer.clone()),
-      feed,
-      1_000_000_000_000,
-    ));
-    let actor_id = create_user(
-      ALICE,
-      RuntimeSchedule {
-        trigger: Trigger::observation_change(feed),
-        cooldown_blocks: 0,
-      },
-      None,
-      transfer_contract_steps(BOB, AssetKind::Native, 1),
-    );
-    fund_native(actor_id, 1_000_000_000_000_000);
-    type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-    use pallet_deos_actors::WeightInfo as _;
-    assert_eq!(
-      Actors::observation_change_ingress_weight(),
-      W::observation_change_ingress(),
-      "Oracle ingress and Actors dirty-state ownership share one generated boundary"
-    );
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer),
-      feed,
-      2_000_000_000_000,
-    ));
-
-    let fanout = Actors::fanout_dirty_observations(Weight::MAX);
-    assert_eq!(
-      fanout,
-      W::observation_fanout_base()
-        .saturating_add(W::observation_fanout_branch_probe())
-        .saturating_add(Actors::observation_fanout_ordinary_weight_upper()),
-      "one ordinary page owns base, branch selection and exactly one admitted branch unit"
-    );
-    assert_eq!(fanout, Weight::from_parts(74_754_351_000, 330_558));
-    let state = Actors::active_actor_state(actor_id).expect("ObservationChange Actor remains");
-    assert!(state.hot.pending_signal);
-    assert!(state.hot.queue_ticket.is_none());
-    assert_eq!(
-      Actors::service_nodes(actor_id)
-        .expect("ObservationChange latch publishes canonical Service work")
-        .eligible_from,
-      2
-    );
-
-    let recipient_before = Balances::free_balance(BOB);
-    System::set_block_number(2);
-    ensure_actor_prepass_context();
-    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
-    let usage = Actors::block_resource_state()
-      .expect("ObservationChange service usage exists")
-      .usage();
-    assert_eq!(
-      (
-        usage.actor_control_used(),
-        usage.actor_effect_used(),
-        usage.user_dispatch_used()
-      ),
-      (
-        Weight::from_parts(9_004_745_000, 115_008),
-        Weight::from_parts(1_463_533_000, 6_196),
-        Weight::zero()
-      )
-    );
-    assert_eq!(
-      System::events()
-        .iter()
-        .filter(|record| matches!(
-          &record.event,
-          RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
-            actor_id: observed,
-            trigger_family: TriggerFamily::ObservationChange,
-            ..
-          }) if *observed == actor_id
-        ))
-        .count(),
-      1
-    );
-    assert_eq!(Balances::free_balance(BOB), recipient_before + 1);
-    assert!(
-      Actors::active_actor_state(actor_id)
-        .is_some_and(|state| { !state.hot.pending_signal && state.hot.queue_ticket.is_none() })
-    );
-  });
-}
-
-#[test]
-fn crossing_single_user_fire_binds_executed_detector_latch_control() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let producer = deos_router_account();
-    let feed = crate::configs::oracle_config::deos_router_pool_feed(
-      AssetKind::Native,
-      AssetKind::Local(8_098),
-    );
-    assert_ok!(Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      producer.clone(),
-      feed.meaning(),
-      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
-      feed.scale,
-      pallet_oracle::Aggregation::Ema {
-        half_life_blocks: 100,
-      },
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    ));
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer.clone()),
-      feed,
-      1_000_000_000_000,
-    ));
-    let actor_id = create_user(
-      ALICE,
-      RuntimeSchedule {
-        trigger: Trigger::observation_crossing(
-          feed,
-          CrossingDirection::Rising,
-          1_500_000_000_000,
-          800_000_000_000,
-        ),
-        cooldown_blocks: 0,
-      },
-      None,
-      transfer_contract_steps(BOB, AssetKind::Native, 1),
-    );
-    fund_native(actor_id, 1_000_000_000_000_000);
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer),
-      feed,
-      100_000_000_000_000,
-    ));
-
-    let consumed = Actors::service_crossing_transitions(Weight::MAX);
-    type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-    use pallet_deos_actors::WeightInfo as _;
-    assert_eq!(
-      consumed,
-      Weight::from_parts(15_474_645_000, 376_556)
-        .saturating_add(W::crossing_selection_probe().saturating_mul(3)),
-      "the generated Crossing worker owners must settle the complete one-Actor detector/latch path"
-    );
-    assert_eq!(
-      System::events()
-        .iter()
-        .filter(|record| matches!(
-          &record.event,
-          RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
-            actor_id: observed,
-            trigger_family: TriggerFamily::ObservationCrossing,
-            ..
-          }) if *observed == actor_id
-        ))
-        .count(),
-      1,
-      "one Crossing occurrence owns one latch transition"
-    );
-    let state = Actors::active_actor_state(actor_id).expect("Crossing Actor remains active");
-    assert!(state.hot.pending_signal);
-    assert!(state.hot.queue_ticket.is_none());
-    assert_eq!(
-      Actors::service_nodes(actor_id)
-        .expect("Crossing latch publishes canonical Service work")
-        .eligible_from,
-      2
-    );
-
-    let recipient_before = Balances::free_balance(BOB);
-    System::set_block_number(2);
-    ensure_actor_prepass_context();
-    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
-    let usage = Actors::block_resource_state()
-      .expect("scheduled service records resource usage")
-      .usage();
-    assert_eq!(
-      usage.actor_control_used(),
-      Weight::from_parts(9_004_745_000, 115_008),
-      "the next-block prepass includes mandatory Deadline and final Service discovery, genesis cadence initialization and full funded User Control"
-    );
-    assert_eq!(
-      usage.actor_effect_used(),
-      Weight::from_parts(1_463_533_000, 6_196),
-      "the Transfer effect remains separate from detector and service Control"
-    );
-    assert_eq!(Balances::free_balance(BOB), recipient_before + 1);
-    assert!(
-      Actors::active_actor_state(actor_id)
-        .is_some_and(|state| { !state.hot.pending_signal && state.hot.queue_ticket.is_none() })
-    );
-  });
-}
-
-/// Retained regression witness: measures how many ObservationCrossing candidates the real mandatory
-/// prepass materialization budget admits per block for one dense same-threshold cohort under the
-/// retained placed pair fallback. The pinned released cohort executed a deterministic `1/3/8`
-/// rotation cycle (mean four, ceiling `MaxCrossingTransitionsPerBlock`); the pair fallback settles
-/// the generated two-candidate placed owner whenever a classified multi-candidate batch does not
-/// fit its grant, so the lean phases execute `2` and `6` and the steady cycle is `2/6/8`. The
-/// first-block opening leaf still admits one scalar candidate. Exactly-once materialization, the
-/// per-block counter ceiling and the Actor Control root envelope bind both cohorts.
-#[test]
-fn crossing_prepass_materialization_rate_follows_the_materialization_family_rotation() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let producer = deos_router_account();
-    let feed = crate::configs::oracle_config::deos_router_pool_feed(
-      AssetKind::Native,
-      AssetKind::Local(8_097),
-    );
-    assert_ok!(Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      producer.clone(),
-      feed.meaning(),
-      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
-      feed.scale,
-      pallet_oracle::Aggregation::Ema {
-        half_life_blocks: 100,
-      },
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    ));
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer.clone()),
-      feed,
-      1_000_000_000_000,
-    ));
-    const MEMBERS: u32 = 48;
-    for index in 0..MEMBERS {
-      let owner = crate::AccountId::new([40u8 + index as u8; 32]);
-      let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
-        &owner,
-        1_000_000_000_000_000_000,
-      );
-      let actor_id = create_user(
-        owner,
-        RuntimeSchedule {
-          trigger: Trigger::observation_crossing(
-            feed,
-            CrossingDirection::Rising,
-            1_500_000_000_000,
-            800_000_000_000,
-          ),
-          cooldown_blocks: 0,
-        },
-        None,
-        transfer_contract_steps(BOB, AssetKind::Native, 1),
-      );
-      fund_native(actor_id, 1_000_000_000_000_000);
-    }
-    assert_eq!(Actors::crossing_feed_membership_count(feed), MEMBERS);
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer),
-      feed,
-      100_000_000_000_000,
-    ));
-
-    let cap = <Runtime as pallet_deos_actors::Config>::MaxCrossingTransitionsPerBlock::get();
-    let control_limit = BlockResourceBudgetValue::get().limits().actor_control();
-    let cutoff = <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as WeightInfo>::scheduler_on_initialize_cutoff();
-    let coordinator_base = <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as WeightInfo>::materialization_coordinator_base();
-    let materialization_limit = Actors::materialization_weight_limit();
-    let minima: Vec<Weight> = (0u8..2)
-      .map(Actors::materialization_family_minimum)
-      .collect();
-    let minima_sum = minima
-      .iter()
-      .fold(Weight::zero(), |sum, weight| sum.saturating_add(*weight));
-    let materialization_budget = control_limit
-      .saturating_sub(cutoff)
-      .saturating_sub(coordinator_base);
-    println!(
-      "CROSSING_PREPASS_BUDGET_V1 control={control_limit:?} materialization_limit={materialization_limit:?} coordinator={coordinator_base:?} minima={minima:?} minima_sum={minima_sum:?} materialization_budget={materialization_budget:?} cap={cap}"
-    );
-    let mut per_block = Vec::new();
-    for block in 2..=14 {
-      System::set_block_number(block);
-      ensure_actor_prepass_context();
-      let cursor = pallet_deos_actors::MaterializationFamilyCursor::<Runtime>::get();
-      System::reset_events();
-      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
-      let materialized = System::events()
-        .iter()
-        .filter(|record| {
-          matches!(
-            &record.event,
-            RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
-              trigger_family: TriggerFamily::ObservationCrossing,
-              ..
-            })
-          )
-        })
-        .count() as u32;
-      let usage = Actors::block_resource_state()
-        .expect("prepass records block resource usage")
-        .usage();
-      println!(
-        "CROSSING_PREPASS_MATERIALIZATION_V1 block={block} materialized={materialized} cap={cap} pending={} cursor={cursor} head={} tail={} control={:?} effect={:?}",
-        pallet_deos_actors::CrossingPendingFeedListState::<Runtime>::get().count,
-        pallet_deos_actors::ActorReadyHead::<Runtime>::get(),
-        pallet_deos_actors::ActorReadyTail::<Runtime>::get(),
-        usage.actor_control_used(),
-        usage.actor_effect_used(),
-      );
-      per_block.push(materialized);
-    }
-    assert_eq!(
-      per_block.iter().sum::<u32>(),
-      MEMBERS,
-      "the whole same-threshold cohort must materialize exactly once: {per_block:?}"
-    );
-    assert!(
-      per_block.iter().all(|materialized| *materialized <= cap),
-      "executed per-block materialization must stay within the transition candidate cap {cap}: {per_block:?}"
-    );
-    assert_eq!(
-      per_block[..9],
-      [5u32, 6, 6, 6, 6, 6, 6, 6, 1],
-      "both families share only the remainder after mandatory Deadline work and finalization headroom: {per_block:?}"
-    );
-    assert!(
-      per_block[9..].iter().all(|materialized| *materialized == 0),
-      "materialization stops exactly once the cohort is served: {per_block:?}"
-    );
-    assert!(
-      control_limit.proof_size() < materialization_limit.proof_size(),
-      "the Actor Control envelope, not the shared materialization limit, must remain the binding root envelope: {control_limit:?} vs {materialization_limit:?}"
-    );
-    assert!(
-      minima.iter().all(|minimum| minimum.all_lte(materialization_budget))
-        && !minima_sum.all_lte(materialization_budget),
-      "each live family minimum must fit independently while the generated pair selects rotating work-conserving admission: {minima_sum:?} vs {materialization_budget:?}"
-    );
-  });
-}
-
-/// Campaign candidate witness: reconciles the executed Crossing materialization yield under the
-/// retained placed pair fallback with the generated reservation boundaries (single, pair and
-/// aggregate batch owners), the rotated family grant, and the remaining Actor Control phase
-/// budget. The executed rotation yield itself is owned by
-/// `crossing_prepass_materialization_rate_follows_the_materialization_family_rotation`.
-///
-/// Establishes: one scalar candidate needs a generated reservation of
-/// `base + probe + selection + placed + fault` and settles `base + probe + selection + placed`;
-/// the first-served five-candidate block settles three generated pair envelopes plus nine probes.
-/// Later whole-prepass usage also contains Deadline discovery and B+1 Service, so it cannot
-/// identify a Crossing-only grant or settlement by subtracting an idle baseline.
-#[test]
-fn crossing_materialization_reservation_boundaries_reconcile_executed_yield() {
-  use pallet_deos_actors::WeightInfo as _;
-
-  type ActorsWeight = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-
-  let base = ActorsWeight::crossing_worker_base();
-  let probe = ActorsWeight::crossing_work_probe();
-  let placed = ActorsWeight::crossing_placed_unit();
-  let placed_pair = ActorsWeight::crossing_placed_pair_unit();
-  let placed_maximum = ActorsWeight::crossing_placed_maximum_unit();
-  let leaf_owner = ActorsWeight::crossing_leaf_unit().max(ActorsWeight::crossing_page_unit());
-  let fault = ActorsWeight::record_crossing_worker_fault();
-  let pair_premium = placed_pair.saturating_sub(placed);
-  let single_check = base
-    .saturating_add(probe)
-    .saturating_add(placed)
-    .saturating_add(fault);
-  let single_settled = base.saturating_add(probe).saturating_add(placed);
-  assert_eq!(
-    placed_pair.proof_size(),
-    placed.proof_size(),
-    "the pair owner carries the same generated ProofSize as the scalar single"
-  );
-  assert!(
-    pair_premium.ref_time() > 0 && pair_premium.proof_size() == 0,
-    "the pair fallback must trade exactly a bounded RefTime premium for the extra candidate: {pair_premium:?}"
-  );
-  println!(
-    "CROSSING_RECONCILIATION_V1 weights base={} probe={} placed={} placed_pair={} placed_maximum={} leaf={} fault={} pair_premium={} single_check={} single_settled={}",
-    base.proof_size(),
-    probe.proof_size(),
-    placed.proof_size(),
-    placed_pair.proof_size(),
-    placed_maximum.proof_size(),
-    leaf_owner.proof_size(),
-    fault.proof_size(),
-    pair_premium.ref_time(),
-    single_check.proof_size(),
-    single_settled.proof_size(),
-  );
-
-  let install_fixture = |feed_registry: u32, members: u32, crossing: bool| {
-    System::set_block_number(1);
-    let producer = deos_router_account();
-    let feed = crate::configs::oracle_config::deos_router_pool_feed(
-      AssetKind::Native,
-      AssetKind::Local(feed_registry),
-    );
-    assert_ok!(Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      producer.clone(),
-      feed.meaning(),
-      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
-      feed.scale,
-      pallet_oracle::Aggregation::Ema {
-        half_life_blocks: 100,
-      },
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    ));
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer.clone()),
-      feed,
-      1_000_000_000_000,
-    ));
-    for index in 0..members {
-      let owner = crate::AccountId::new([40u8 + index as u8; 32]);
-      let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
-        &owner,
-        1_000_000_000_000_000_000,
-      );
-      let actor_id = create_user(
-        owner,
-        observation_crossing_schedule(
-          feed,
-          CrossingDirection::Rising,
-          1_500_000_000_000,
-          800_000_000_000,
-        ),
-        None,
-        transfer_contract_steps(BOB, AssetKind::Native, 1),
-      );
-      fund_native(actor_id, 1_000_000_000_000_000);
-    }
-    assert_eq!(Actors::crossing_feed_membership_count(feed), members);
-    if crossing {
-      assert_ok!(Oracle::publish(
-        RuntimeOrigin::signed(producer),
-        feed,
-        100_000_000_000_000,
-      ));
-    }
-    feed
-  };
-
-  let sweep = |label: &str, proof_limit: u64| -> (u32, Weight) {
-    let grant = Weight::from_parts(1_000_000_000_000_000u64, proof_limit);
-    System::reset_events();
-    let consumed = Actors::service_crossing_transitions(grant);
-    let materialized = System::events()
-      .iter()
-      .filter(|record| {
-        matches!(
-          &record.event,
-          RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
-            trigger_family: TriggerFamily::ObservationCrossing,
-            ..
-          })
-        )
-      })
-      .count() as u32;
-    println!(
-      "CROSSING_RECONCILIATION_V1 grant label={label} limit={proof_limit} consumed={} materialized={materialized}",
-      consumed.proof_size(),
-    );
-    (materialized, consumed)
-  };
-
-  // One proof below the generated reservation spends the common probe and settles nothing.
-  seeded_test_ext().execute_with(|| {
-    let _feed = install_fixture(8_103, 48, true);
-    let (materialized, consumed) = sweep("below_single_check", single_check.proof_size() - 1);
-    assert_eq!(
-      materialized, 0,
-      "below the reservation no candidate is admitted"
-    );
-    assert_eq!(
-      consumed.proof_size(),
-      base.saturating_add(probe).proof_size(),
-      "a refused frontier charges only the bounded common probe"
-    );
-  });
-
-  // At the generated reservation the branch owner settles without its fault reserve.
-  seeded_test_ext().execute_with(|| {
-    let _feed = install_fixture(8_104, 48, true);
-    let (materialized, consumed) = sweep("at_single_check", single_check.proof_size());
-    assert_eq!(
-      materialized, 1,
-      "the reservation admits exactly one candidate"
-    );
-    assert_eq!(
-      consumed.proof_size(),
-      single_settled.proof_size(),
-      "the branch owner settles while its fault reserve stays unspent"
-    );
-  });
-
-  let collect_blocks = |first: u32, last: u32| -> Vec<(u32, Weight, Weight)> {
-    let mut rows = Vec::new();
-    for block in first..=last {
-      System::set_block_number(block);
-      ensure_actor_prepass_context();
-      System::reset_events();
-      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
-      let materialized = System::events()
-        .iter()
-        .filter(|record| {
-          matches!(
-            &record.event,
-            RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
-              trigger_family: TriggerFamily::ObservationCrossing,
-              ..
-            })
-          )
-        })
-        .count() as u32;
-      let usage = Actors::block_resource_state()
-        .expect("prepass records block resource usage")
-        .usage();
-      println!(
-        "CROSSING_RECONCILIATION_V1 block={block} materialized={materialized} control={} effect={}",
-        usage.actor_control_used().proof_size(),
-        usage.actor_effect_used().proof_size(),
-      );
-      rows.push((
-        materialized,
-        usage.actor_control_used(),
-        usage.actor_effect_used(),
-      ));
-    }
-    rows
-  };
-
-  // Empty-family baselines keep the identical topology but never cross the feed.
-  let empty_rows = seeded_test_ext().execute_with(|| {
-    let _feed = install_fixture(8_105, 48, false);
-    collect_blocks(2, 4)
-  });
-
-  // The executed rotation on the same topology.
-  let work_rows = seeded_test_ext().execute_with(|| {
-    let _feed = install_fixture(8_106, 48, true);
-    collect_blocks(2, 5)
-  });
-
-  let yields: Vec<u32> = work_rows.iter().map(|row| row.0).collect();
-  assert_eq!(
-    yields,
-    vec![5, 6, 6, 6],
-    "mandatory Deadline service and finalization leave a bounded shared materialization remainder"
-  );
-
-  let control_limit = BlockResourceBudgetValue::get().limits().actor_control();
-  let cutoff = ActorsWeight::scheduler_on_initialize_cutoff();
-  let coordinator = ActorsWeight::materialization_coordinator_base();
-  let mandatory_overhead = cutoff
-    .saturating_add(coordinator)
-    .saturating_add(ActorsWeight::dependency_scan_source_probe())
-    .saturating_add(ActorsWeight::classify_due_block_deadline())
-    .saturating_add(ActorsWeight::classify_due_tick_deadline())
-    .saturating_add(ActorsWeight::scheduler_on_idle_base())
-    .saturating_add(ActorsWeight::block_resource_finalize());
-  let materialization_budget = control_limit
-    .saturating_sub(mandatory_overhead)
-    .proof_size();
-  let finalization =
-    ActorsWeight::scheduler_on_idle_base().saturating_add(ActorsWeight::block_resource_finalize());
-  assert!(
-    work_rows
-      .iter()
-      .all(|row| row.1.saturating_add(finalization).all_lte(control_limit)),
-    "whole-prepass settlement preserves both finalization dimensions"
-  );
-
-  // Independently test the smaller first-family grant. Whole-prepass usage is not a
-  // Crossing-only measurement once B+1 Service competes for the remaining Control.
-  let phase_b_grant =
-    materialization_budget.saturating_sub(Actors::materialization_family_minimum(0).proof_size());
-  println!("CROSSING_RECONCILIATION_V1 phase_b first_family_grant={phase_b_grant}");
-  assert!(
-    phase_b_grant
-      < placed_maximum
-        .proof_size()
-        .saturating_add(fault.proof_size()),
-    "the rotated-first grant cannot reach the aggregate owner's reservation"
-  );
-  seeded_test_ext().execute_with(|| {
-    let _feed = install_fixture(8_107, 48, true);
-    let (materialized, consumed) = sweep("phase_b_grant", phase_b_grant);
-    assert_eq!(
-      materialized, 0,
-      "the first-family reservation alone cannot open the aggregate Crossing branch"
-    );
-    assert_eq!(
-      consumed,
-      base
-        .saturating_add(probe)
-        .saturating_add(ActorsWeight::crossing_selection_probe()),
-      "the refused fresh grant settles common discovery plus bounded work and selection probes"
-    );
-  });
-
-  // First-served Crossing receives the released two-family grant, opens the leaf, and admits five
-  // candidates through three bounded pair envelopes plus their classification probes. The block
-  // residue may fund ordinary User service alongside later materialization phases.
-  let phase_a_increment = work_rows[0]
-    .1
-    .proof_size()
-    .saturating_sub(empty_rows[0].1.proof_size());
-  println!(
-    "CROSSING_RECONCILIATION_V1 phase_a increment={phase_a_increment} effect={}",
-    work_rows[0].2.proof_size()
-  );
-  assert_eq!(
-    phase_a_increment,
-    base
-      .proof_size()
-      .saturating_add(placed_pair.proof_size().saturating_mul(3))
-      .saturating_add(probe.proof_size().saturating_mul(9)),
-    "the first cursor-zero prepass settles three pair envelopes and nine bounded probes"
-  );
-  assert!(
-    work_rows[0].2 == Weight::zero(),
-    "the first cursor-zero block has no earlier ticket to execute"
-  );
-  assert!(
-    work_rows[1..].iter().all(|row| row.2 == Weight::zero()),
-    "this materialization-saturated horizon leaves no complete Service Control envelope; unused effect capacity cannot pay for Control"
-  );
-}
-
-#[test]
-fn crossing_capacity_policy_is_bound_to_measured_minimum_progress_and_explicit_horizons() {
-  use pallet_deos_actors::WeightInfo as _;
-
-  type ActorsWeight = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-  let tail_refill = ActorsWeight::crossing_tail_refill_probe();
-  assert!(tail_refill.ref_time() > 0);
-  assert!(tail_refill.proof_size() > 0);
-  for (one, four) in [
-    (
-      ActorsWeight::crossing_fire_cohort_preflight(1),
-      ActorsWeight::crossing_fire_cohort_preflight(4),
-    ),
-    (
-      ActorsWeight::crossing_coalesced_cohort_preflight(1),
-      ActorsWeight::crossing_coalesced_cohort_preflight(4),
-    ),
-    (
-      ActorsWeight::crossing_terminal_cohort_preflight(1),
-      ActorsWeight::crossing_terminal_cohort_preflight(4),
-    ),
-    (
-      ActorsWeight::crossing_skip_cohort_preflight(1),
-      ActorsWeight::crossing_skip_cohort_preflight(4),
-    ),
-    (
-      ActorsWeight::crossing_rearm_cohort_preflight(1),
-      ActorsWeight::crossing_rearm_cohort_preflight(4),
-    ),
-  ] {
-    assert!(four.ref_time() > one.ref_time());
-    assert!(four.proof_size() > one.proof_size());
-  }
-
-  let limit = <Runtime as pallet_deos_actors::Config>::CrossingWorkerWeightLimit::get();
-  let base = crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::crossing_worker_base();
-  let pair_unit =
-    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::crossing_work_probe()
-      .saturating_add(
-        crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::crossing_fire_pair_probe(),
-      )
-      .saturating_add(
-        crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::crossing_placed_pair_unit(),
-      );
-  let available = limit.saturating_sub(base);
-  let admitted_pairs = (available.ref_time() / pair_unit.ref_time())
-    .min(available.proof_size() / pair_unit.proof_size());
-  let candidates_per_block = admitted_pairs.saturating_mul(2).min(u64::from(
-    <Runtime as pallet_deos_actors::Config>::MaxCrossingActorsPerBlock::get(),
-  ));
-  assert_eq!(candidates_per_block, 10);
-
-  let user_cap = crate::configs::actor_config::ActorMaxUserCrossingMembersPerFeed::get();
-  let total_cap = crate::configs::actor_config::ActorMaxCrossingMembersPerFeed::get();
-  let user_blocks = u64::from(user_cap).div_ceil(candidates_per_block);
-  let total_blocks = u64::from(total_cap).div_ceil(candidates_per_block);
-  assert_eq!((user_cap, total_cap), (9_000, 10_000));
-  const REQUIRED_REACTIVE_USER_TARGET: u64 = 10_000;
-  const REQUIRED_ELIGIBLE_BLOCKS: u64 = 100;
-  assert!(u64::from(user_cap) < REQUIRED_REACTIVE_USER_TARGET);
-  assert_eq!(candidates_per_block * REQUIRED_ELIGIBLE_BLOCKS, 1_000);
-  assert!(
-    candidates_per_block * REQUIRED_ELIGIBLE_BLOCKS < REQUIRED_REACTIVE_USER_TARGET,
-    "current production Crossing admission cannot satisfy the governing User target"
-  );
-  assert_eq!((user_blocks, total_blocks), (900, 1_000));
-  assert_eq!(
-    total_blocks * 6,
-    6_000,
-    "maximum herd is 1h40m at six-second blocks"
-  );
-  assert_eq!(
-    <Runtime as pallet_deos_actors::Config>::MaxQueueLength::get(),
-    total_cap
-  );
-  assert_eq!(
-    <Runtime as pallet_deos_actors::Config>::MaxCrossingTransitionsPerFeed::get(),
-    64
-  );
-}
-
-#[test]
-fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
-  let base =
-    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_base();
-  let branch_probe =
-    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_branch_probe();
-  let queue =
-    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_page();
-  let wakeup =
-    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_wakeup_page();
-  let coalesced =
-    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_coalesced_page();
-  let blocked =
-    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_blocked_page();
-  let unit = Weight::from_parts(
-    queue
-      .ref_time()
-      .max(wakeup.ref_time())
-      .max(coalesced.ref_time())
-      .max(blocked.ref_time()),
-    queue
-      .proof_size()
-      .max(wakeup.proof_size())
-      .max(coalesced.proof_size())
-      .max(blocked.proof_size()),
-  );
-  let fault =
-    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::record_observation_fanout_worker_fault();
-  let limit = <Runtime as pallet_deos_actors::Config>::ObservationFanoutWeightLimit::get();
-  let configured_units =
-    u64::from(<Runtime as pallet_deos_actors::Config>::MaxObservationFanoutPagesPerBlock::get());
-  let available = limit.saturating_sub(base);
-  let admitted_unit = branch_probe.saturating_add(unit).saturating_add(fault);
-  let units_per_block = configured_units
-    .min(available.ref_time() / admitted_unit.ref_time())
-    .min(available.proof_size() / admitted_unit.proof_size());
-
-  println!(
-    "ACTOR_REACTIVE_ENVELOPES_V1 base={base:?} branch_probe={branch_probe:?} unit={unit:?} fault={fault:?} units_per_block={units_per_block}"
-  );
-  assert_eq!(base, Weight::from_parts(55_867_000, 1_629));
-  assert_eq!(branch_probe, Weight::from_parts(63_829_000, 3_587));
-  assert_eq!(unit, Weight::from_parts(74_634_655_000, 325_342));
-  assert_eq!(fault, Weight::from_parts(199_794_000, 4_106));
-  assert_eq!(limit, Weight::from_parts(400_000_000_000, 1_000_000));
-  assert_eq!(
-    units_per_block, 2,
-    "the generated ordinary fanout unit reaches the active ProofSize service limit"
-  );
-
-  let max_actors = u64::from(<Runtime as pallet_deos_actors::Config>::MaxActiveActors::get());
-  let page_size = u64::from(<Runtime as pallet_deos_actors::Config>::QueuePageSize::get());
-  let max_sources = 1u64;
-  let subscription_pages = max_actors.div_ceil(page_size);
-  let dense_single_feed_units = subscription_pages;
-  let sparse_high_slot_units = 1u64;
-  let compact_four_feed_units = subscription_pages.saturating_mul(max_sources);
-  let quiescent_revision_race_units = subscription_pages.saturating_mul(2);
-
-  assert_eq!((max_actors, page_size, max_sources), (10_000, 64, 1));
-  assert_eq!(subscription_pages, 157);
-  assert_eq!(dense_single_feed_units.div_ceil(units_per_block), 79);
-  assert_eq!(sparse_high_slot_units.div_ceil(units_per_block), 1);
-  assert_eq!(compact_four_feed_units.div_ceil(units_per_block), 79);
-  assert_eq!(quiescent_revision_race_units.div_ceil(units_per_block), 157);
-}
-
-#[test]
 fn sched_workers_static_envelope_retains_admission_and_close_cleanup() {
   use crate::weights::pallet_deos_actors::SubstrateWeight;
   type W = SubstrateWeight<Runtime>;
   let base = W::scheduler_on_idle_base();
-  let coordinator = W::materialization_coordinator_base();
   let complete_outer = crate::Actors::scheduler_complete_outer_weight_upper();
-  // The complete first-page probe/unit/fault reserve is checked independently by
-  // observation_fanout_minimum_reserves_probe_page_and_fault_capacity.
-  let fanout_ceiling = <Runtime as pallet_deos_actors::Config>::ObservationFanoutWeightLimit::get();
-  // Reserve the entire configured family ceiling, not a capped synthetic page multiplication.
-  let fanout_envelope = fanout_ceiling;
-
-  let crossing_ceiling = <Runtime as pallet_deos_actors::Config>::CrossingWorkerWeightLimit::get();
-  let crossing_minimum = Actors::materialization_family_minimum(0);
-  assert!(
-    crossing_minimum.all_lte(crossing_ceiling),
-    "Crossing minimum quantum must fit its two-dimensional family ceiling: minimum={crossing_minimum:?}, ceiling={crossing_ceiling:?}"
-  );
-  // The complete family ceiling, not an arbitrary sum of alternative branch weights,
-  // participates in the on_idle reserve composition.
-  let crossing_envelope = crossing_ceiling;
-
   // Admission/probe overhead plus pure close cleanup; a full Step and its effect are not included.
   let actor_unit = crate::Actors::scheduler_admission_overhead()
     .saturating_add(crate::Actors::close_dispatch_weight_upper())
     .max(complete_outer);
   let reserve = <Runtime as pallet_deos_actors::Config>::ActorOnIdleReserve::get();
-  let shared_materialization = crate::Actors::materialization_weight_limit();
-  assert_eq!(
-    shared_materialization,
-    crossing_ceiling.saturating_add(fanout_ceiling),
-    "one shared materialization envelope must own both live bounded family ceilings"
-  );
-  let minimum_quanta = crate::Actors::materialization_family_minimum(0)
-    .saturating_add(crate::Actors::materialization_family_minimum(1));
-  assert!(
-    minimum_quanta.all_lte(shared_materialization),
-    "the shared envelope must admit one minimum quantum from every family"
-  );
-  assert!(
-    minimum_quanta.ref_time() < shared_materialization.ref_time()
-      && minimum_quanta.proof_size() < shared_materialization.proof_size(),
-    "the production envelope must retain lendable capacity after all minimum quanta"
-  );
   let actor_service = crate::Actors::guaranteed_actor_service_weight()
     .expect("configured housekeeping must fit the runtime reserve");
   assert_eq!(
     actor_service,
-    reserve
-      .saturating_sub(base)
-      .saturating_sub(coordinator)
-      .saturating_sub(complete_outer)
-      .saturating_sub(shared_materialization),
-    "the Actor floor must be the exact reserve remainder after shared materialization ownership"
+    reserve.saturating_sub(base).saturating_sub(complete_outer),
+    "the Actor floor must be the exact reserve remainder after fixed housekeeping"
   );
   let close_cleanup = crate::Actors::close_cleanup_weight_upper();
   assert!(
     close_cleanup.all_lte(actor_service),
-    "bond-aware terminal cleanup across Crossing and pending queues must fit the Actor floor: cleanup={close_cleanup:?}, floor={actor_service:?}"
+    "terminal cleanup must fit the Actor floor: cleanup={close_cleanup:?}, floor={actor_service:?}"
   );
   assert!(
     actor_unit.all_lte(actor_service),
-    "dense materialization must retain admission overhead plus pure close cleanup: actor={actor_unit:?}, floor={actor_service:?}"
+    "the Actor floor must retain admission overhead plus pure close cleanup: actor={actor_unit:?}, floor={actor_service:?}"
   );
   let combined = base
-    .saturating_add(coordinator)
     .saturating_add(complete_outer)
-    .saturating_add(crossing_envelope)
-    .saturating_add(fanout_envelope)
     .saturating_add(actor_unit);
   assert!(
     combined.all_lte(reserve),
-    "fixed base + coordinator + complete outer owner + full Crossing and fanout family ceilings + admission/close unit must fit ActorOnIdleReserve: base={base:?}, coordinator={coordinator:?}, outer={complete_outer:?}, crossing={crossing_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, combined={combined:?}, reserve={reserve:?}"
-  );
-  println!(
-    "SCHED-WORKERS: base={base:?}, coordinator={coordinator:?}, outer={complete_outer:?}, crossing={crossing_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, floor={actor_service:?}, combined={combined:?}, reserve={reserve:?}"
+    "fixed base + complete outer owner + admission/close unit must fit ActorOnIdleReserve: base={base:?}, outer={complete_outer:?}, actor={actor_unit:?}, combined={combined:?}, reserve={reserve:?}"
   );
 }
 
@@ -6208,7 +4824,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         first_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(9_537_426_000, 116_111),
+        Weight::from_parts(8_237_762_000, 106_740),
         Weight::from_parts(3_973_924_000, 19_253)
       )
     );
@@ -6238,7 +4854,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         second_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(9_927_802_000, 129_111),
+        Weight::from_parts(8_628_138_000, 119_740),
         Weight::from_parts(3_973_924_000, 19_253)
       ),
       "the second failure owns long-Deadline placement rather than another Service turn"
@@ -6276,7 +4892,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         return_usage.actor_control_used(),
         return_usage.actor_effect_used()
       ),
-      (Weight::from_parts(8_382_598_000, 85_343), Weight::zero()),
+      (Weight::from_parts(7_082_934_000, 75_972), Weight::zero()),
       "Deadline return is Control-only and cannot execute the retry in the same block"
     );
     System::set_block_number(6);
@@ -6291,7 +4907,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         resumed_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(17_971_025_000, 212_623),
+        Weight::from_parts(17_622_279_000, 207_822),
         Weight::from_parts(3_973_924_000, 19_253)
       ),
       "returned Service owns the third failed effect separately from Deadline return"
@@ -6340,180 +4956,6 @@ fn temporary_market_failure_opens_the_single_retry_continuation() {
       } if *id == actor_id
     )));
   });
-}
-
-#[test]
-fn temporary_oracle_capacity_failure_rolls_back_economics_and_has_one_retry_owner() {
-  use primitives::ecosystem::params::PRECISION;
-
-  for exact_output in [false, true] {
-    seeded_test_ext().execute_with(|| {
-      System::set_block_number(1);
-      assert_ok!(super::common::setup_deos_router_infrastructure());
-      for block in 2..=19 {
-        System::set_block_number(block);
-        Actors::on_initialize(block);
-        run_idle(Weight::MAX);
-      }
-      let asset_in = AssetKind::Native;
-      let asset_out = AssetKind::Local(ASSET_A);
-      let feed = crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out);
-      crate::configs::oracle_config::ensure_deos_router_pool_feeds(asset_in, asset_out)
-        .expect("directional pool feeds fit");
-      create_system(
-        ALICE,
-        observation_schedule(feed),
-        None,
-        BoundedVec::try_from(vec![make_step(inert_task())]).expect("one inert step fits"),
-      );
-      let task = if exact_output {
-        Task::SwapOut {
-          asset_out,
-          amount_out: AmountResolution::Fixed(PRECISION),
-          asset_in,
-          input_limit: InputLimit::Absolute(100 * PRECISION),
-          slippage_tolerance: Perbill::zero(),
-        }
-      } else {
-        Task::SwapIn {
-          asset_in,
-          asset_out,
-          amount_in: AmountResolution::Fixed(10 * PRECISION),
-          slippage_tolerance: Perbill::zero(),
-        }
-      };
-      let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
-        precondition: None,
-        task,
-        on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
-      }])
-      .expect("single-step publication retry plan fits");
-      let actor_id = create_user(ALICE, manual_schedule(), None, plan);
-      fund_native(actor_id, 1_000 * PRECISION);
-      let actor = actor_account(actor_id);
-      let input_before = native_balance(&actor);
-      let burn_actor_id = primitives::ecosystem::actor_ids::BURN_ACTOR_ID;
-      let burn_actor = super::common::burn_actor_account();
-      let router_fee_before = native_balance(&burn_actor);
-      let burn_cycle_before = Actors::active_actor_state(burn_actor_id)
-        .expect("Burn Actor exists")
-        .identity
-        .cycle_nonce;
-      let output_before = Assets::balance(ASSET_A, &actor);
-      let pool_before =
-        crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool exists");
-      let reward_liability_before = Staking::native_security_reward_liability();
-      let reward_account = Staking::native_security_reward_account();
-      let reward_custody_before = native_balance(&reward_account);
-      let dirty_capacity = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get();
-      pallet_deos_actors::DirtyObservationListState::<Runtime>::mutate(|list| {
-        list.count = dirty_capacity;
-      });
-
-      assert_ok!(Actors::manual_trigger(
-        RuntimeOrigin::signed(ALICE),
-        actor_id
-      ));
-      run_next_idle(Weight::MAX);
-
-      let input_after_failure = native_balance(&actor);
-      assert!(input_after_failure < input_before);
-      assert_eq!(native_balance(&burn_actor), router_fee_before);
-      assert_eq!(
-        Actors::active_actor_state(burn_actor_id)
-          .expect("Burn Actor remains active")
-          .identity
-          .cycle_nonce,
-        burn_cycle_before,
-      );
-      assert_eq!(Assets::balance(ASSET_A, &actor), output_before);
-      assert_eq!(
-        crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool remains"),
-        pool_before
-      );
-      assert!(Oracle::observations(feed).is_none());
-      assert!(Actors::dirty_observation_feeds(feed).is_none());
-      assert_eq!(Actors::dirty_observation_feed_count(), dirty_capacity);
-      assert_eq!(
-        Staking::native_security_reward_liability(),
-        reward_liability_before
-      );
-      assert_eq!(native_balance(&reward_account), reward_custody_before);
-      assert_eq!(
-        actor_events()
-          .iter()
-          .filter(
-            |event| matches!(event, Event::SwapExecuted { actor_id: id, .. } if *id == actor_id)
-          )
-          .count(),
-        0
-      );
-      assert_eq!(
-        actor_events()
-          .iter()
-          .filter(|event| matches!(
-            event,
-            Event::CycleSuspended {
-              actor_id: id,
-              reason: pallet_deos_actors::SuspensionReason::Temporary,
-              ..
-            } if *id == actor_id
-          ))
-          .count(),
-        1,
-      );
-      let continuation = Actors::actor_run_state(actor_id).expect("publication retry suspends");
-      assert_eq!(continuation.cursor, 0);
-      let hot = Actors::actor_hot(actor_id).expect("suspended Actor stays hot");
-      assert!(hot.queue_ticket.is_none());
-      assert!(hot.wakeup_pointer.is_none());
-      assert_eq!(
-        Actors::service_nodes(actor_id)
-          .expect("temporary publication retry remains in canonical Service")
-          .eligible_from,
-        20
-      );
-
-      pallet_deos_actors::DirtyObservationListState::<Runtime>::kill();
-      System::set_block_number(21);
-      run_idle(Weight::MAX);
-
-      assert!(Actors::actor_run_state(actor_id).is_none());
-      assert!(native_balance(&actor) < input_after_failure);
-      assert!(Assets::balance(ASSET_A, &actor) > output_before);
-      assert_ne!(
-        crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool remains"),
-        pool_before
-      );
-      assert_eq!(
-        Oracle::observations(feed)
-          .expect("retry publishes")
-          .revision,
-        1
-      );
-      assert_eq!(
-        actor_events()
-          .iter()
-          .filter(
-            |event| matches!(event, Event::SwapExecuted { actor_id: id, .. } if *id == actor_id)
-          )
-          .count(),
-        1
-      );
-
-      System::set_block_number(22);
-      run_idle(Weight::MAX);
-      assert_eq!(
-        actor_events()
-          .iter()
-          .filter(
-            |event| matches!(event, Event::SwapExecuted { actor_id: id, .. } if *id == actor_id)
-          )
-          .count(),
-        1
-      );
-    });
-  }
 }
 
 #[test]
@@ -6610,7 +5052,6 @@ fn permanent_publication_invariant_terminates_without_cross_system_mutation_or_r
         burn_cycle_before,
       );
       assert!(Oracle::observations(feed).is_none());
-      assert!(Actors::dirty_observation_feeds(feed).is_none());
       assert_eq!(
         Staking::native_security_reward_liability(),
         reward_liability_before
@@ -9103,17 +7544,12 @@ fn mandatory_deadline_reservation_composes_both_clock_branch_maxima() {
       .copied()
       .fold(Weight::zero(), |acc, branch| acc.max(branch))
   };
-  // The shared review ceiling conservatively includes separately serviced pending-event owners.
+  // Park reviews are parked-balance owned and Block-clock only; the review ceiling includes the
+  // separately serviced pending-event owner.
   let review = maximum(&[
-    W::process_due_observation_availability_review(),
-    W::process_due_observation_availability_review_deep_index(),
-    W::process_due_observation_predicate_review(),
-    W::process_due_observation_predicate_review_deep_index(),
     W::process_due_parked_balance_review(),
     W::process_due_parked_balance_review_deep_index(),
     W::process_pending_parked_balance_event(),
-    W::process_pending_observation_availability_event(),
-    W::process_pending_observation_predicate_event(),
   ]);
   let block = maximum(&[
     W::return_due_block_deadline_to_service(),
@@ -9126,7 +7562,6 @@ fn mandatory_deadline_reservation_composes_both_clock_branch_maxima() {
     W::cadenced_running_rearm(),
     W::cadenced_suspended_service_rearm(),
     W::cadenced_suspended_deadline_rearm(),
-    review,
   ]);
   let required = W::classify_due_block_deadline()
     .saturating_add(block)
@@ -9215,303 +7650,6 @@ fn transaction_extension_ingress_uses_generated_runtime_weights() {
     assert_eq!(
       AddressEventIngressExtension::post_dispatch_refund(true, false),
       notify
-    );
-  });
-}
-
-#[test]
-fn event_complete_dependency_owner_inventory_covers_every_oracle_state_writer() {
-  use crate::configs::oracle_config::{
-    EVENT_COMPLETE_TRANSITION_OWNERS, EventCompleteDependencySource,
-    EventCompleteTransitionBoundary, deos_router_pool_feed,
-  };
-  use alloc::{collections::BTreeSet, string::String};
-
-  fn state_writers(source: &str) -> BTreeSet<String> {
-    let mut owner = None;
-    let mut owners = BTreeSet::new();
-    for line in source.lines() {
-      let trimmed = line.trim_start();
-      if let Some(rest) = trimmed
-        .strip_prefix("fn ")
-        .or_else(|| trimmed.strip_prefix("pub fn "))
-      {
-        owner = rest.split('(').next();
-      }
-      if [
-        "Feeds::<T>::insert",
-        "Feeds::<T>::try_mutate",
-        "Observations::<T>::insert",
-      ]
-      .iter()
-      .any(|needle| line.contains(needle))
-      {
-        owners.insert(
-          owner
-            .expect("Oracle state mutation must have a named owner")
-            .into(),
-        );
-      }
-    }
-    owners
-  }
-
-  let source = include_str!("../../../pallets/oracle/src/lib.rs");
-  let actual = state_writers(source);
-  let expected = EVENT_COMPLETE_TRANSITION_OWNERS
-    .iter()
-    .map(|row| String::from(row.owner))
-    .collect::<BTreeSet<_>>();
-  assert_eq!(
-    actual, expected,
-    "classify every Oracle writer that can invalidate current dependency state"
-  );
-
-  assert_eq!(
-    EVENT_COMPLETE_TRANSITION_OWNERS
-      .iter()
-      .map(|row| row.boundary)
-      .collect::<BTreeSet<_>>(),
-    BTreeSet::from([EventCompleteTransitionBoundary::FunctionTransactional])
-  );
-  for row in EVENT_COMPLETE_TRANSITION_OWNERS {
-    assert!(!row.mutation.is_empty());
-    assert_eq!(
-      row.source_schema,
-      "EventCompleteDependencySource::OracleFeed(feed)"
-    );
-    assert!(row.publication_point.starts_with("after "));
-    assert!(row.publication_point.contains("before "));
-  }
-  let feed = deos_router_pool_feed(AssetKind::Native, AssetKind::Local(1));
-  assert_eq!(
-    EventCompleteDependencySource::OracleFeed(feed),
-    EventCompleteDependencySource::OracleFeed(feed)
-  );
-}
-
-#[test]
-fn oracle_dependency_adapter_covers_every_state_cause_without_subscriber_traversal() {
-  use crate::configs::oracle_config::{ActorFeedStateChangeIngress, deos_router_pool_feed};
-  use pallet_oracle::{FeedStateChange, OnFeedStateChanged};
-
-  seeded_test_ext().execute_with(|| {
-    let feed = deos_router_pool_feed(AssetKind::Native, AssetKind::Local(1));
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      for cause in [
-        FeedStateChange::Registered,
-        FeedStateChange::Paused,
-        FeedStateChange::Resumed,
-        FeedStateChange::Deactivated,
-        FeedStateChange::ObservationChanged,
-        FeedStateChange::ObservationRefreshed,
-      ] {
-        assert_ok!(ActorFeedStateChangeIngress::on_feed_state_changed(
-          feed, cause
-        ));
-      }
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-
-    let source = pallet_deos_actors::ObservationDependencySources::<Runtime>::get(feed)
-      .expect("adapter allocates one exact source identity");
-    assert_eq!(
-      pallet_deos_actors::DependencySourceObservations::<Runtime>::get(source),
-      Some(feed)
-    );
-    assert_eq!(
-      pallet_deos_actors::DependencyRevisions::<Runtime>::get(source).revision,
-      6
-    );
-    assert_eq!(
-      pallet_deos_actors::DependencyRegistrationHeaders::<Runtime>::get(source).next_index,
-      0,
-      "publication is O(1) and does not traverse absent subscribers"
-    );
-    assert_eq!(
-      pallet_deos_actors::DependencyScanSourceListState::<Runtime>::get().count,
-      1,
-      "all six causes retain one coalesced fair source membership"
-    );
-    assert!(pallet_deos_actors::DependencyScanSourceNodes::<Runtime>::contains_key(source));
-  });
-}
-
-#[test]
-fn manual_observation_profile_uses_production_oracle_revisions_and_current_due_comparison() {
-  use crate::configs::oracle_config::{deos_router_pool_feed, ensure_deos_router_pool_feeds};
-
-  synthetic_actor_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let asset_in = AssetKind::Native;
-    let asset_out = AssetKind::Local(1);
-    ensure_deos_router_pool_feeds(asset_in, asset_out).expect("reference feed is registered");
-    let feed = deos_router_pool_feed(asset_in, asset_out);
-    let producer = deos_router_account();
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer.clone()),
-      feed,
-      5,
-    ));
-    let precondition = Precondition {
-      clauses: BoundedVec::try_from(vec![
-        BoundedVec::try_from(vec![Predicate::ObservationAbove {
-          feed,
-          threshold: 10,
-          max_age_blocks: 100,
-        }])
-        .expect("one observation predicate fits"),
-      ])
-      .expect("one observation clause fits"),
-    };
-    let steps = BoundedVec::try_from(vec![StepOf::<Runtime> {
-      precondition: Some(precondition),
-      task: Task::StopCycle,
-      on_error: StepErrorPolicy::AbortCycle,
-    }])
-    .expect("one observation-gated Step fits");
-    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
-
-    let post = Actors::manual_trigger(RuntimeOrigin::root(), actor_id)
-      .expect("false current comparison enters observation Park");
-    assert_eq!(
-      post.actual_weight,
-      Some(<Runtime as pallet_deos_actors::Config>::WeightInfo::manual_observation_park())
-    );
-    assert!(matches!(
-      pallet_deos_actors::ActorProcesses::<Runtime>::get(actor_id)
-        .and_then(|process| process.residence),
-      Some(ProcessResidence::Parked(pallet_deos_actors::ParkEvidence {
-        reason: ParkNegativeReason::PredicateFalse,
-        review_at: Some(2),
-        ..
-      }))
-    ));
-    let source = pallet_deos_actors::ObservationDependencySources::<Runtime>::get(feed)
-      .expect("Manual Park binds the exact Oracle source");
-    let parked_revision = pallet_deos_actors::DependencyRevisions::<Runtime>::get(source).revision;
-    let scan_count_before_refresh =
-      pallet_deos_actors::DependencyScanSourceListState::<Runtime>::get().count;
-
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer.clone()),
-      feed,
-      5,
-    ));
-    assert_eq!(
-      pallet_deos_actors::DependencyRevisions::<Runtime>::get(source).revision,
-      parked_revision + 1,
-      "equal-value freshness is a causal revision"
-    );
-    System::set_block_number(2);
-    set_consensus_timestamp(
-      2 * primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS,
-    );
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer),
-      feed,
-      1_000_000,
-    ));
-    assert_eq!(
-      pallet_deos_actors::DependencyRevisions::<Runtime>::get(source).revision,
-      parked_revision + 2,
-      "changed value coalesces without losing the newer revision"
-    );
-    assert!(matches!(
-      <crate::configs::actor_config::TmctolObservationProvider as pallet_deos_actors::ObservationProvider<
-        primitives::OracleFeedId,
-        crate::BlockNumber,
-      >>::observe(&feed, 2, 100),
-      pallet_deos_actors::ScalarObservationState::Fresh {
-        value,
-        observed_at: 2,
-      } if value > 10
-    ));
-    assert_eq!(
-      pallet_deos_actors::DependencyScanSourceListState::<Runtime>::get().count,
-      scan_count_before_refresh,
-      "equal and changed publication retain one existing membership for this source"
-    );
-    assert!(pallet_deos_actors::DependencyScanSourceNodes::<Runtime>::contains_key(source));
-
-    run_current_idle(Weight::MAX);
-    for _ in 0..7 {
-      if matches!(
-        pallet_deos_actors::ActorProcesses::<Runtime>::get(actor_id)
-          .and_then(|process| process.residence),
-        Some(ProcessResidence::Service(
-          pallet_deos_actors::ServiceResidenceKind::Pending
-        ))
-      ) {
-        break;
-      }
-      run_next_current_idle(Weight::MAX);
-    }
-    assert_eq!(
-      pallet_deos_actors::ActorProcesses::<Runtime>::get(actor_id)
-        .and_then(|process| process.residence),
-      Some(ProcessResidence::Service(
-        pallet_deos_actors::ServiceResidenceKind::Pending
-      )),
-      "state={:?} scans={:?} deadline={:?}",
-      Actors::block_resource_state(),
-      pallet_deos_actors::DependencyScanSourceListState::<Runtime>::get(),
-      pallet_deos_actors::DeadlineHandles::<Runtime>::get(actor_id),
-    );
-    assert!(!pallet_deos_actors::DependencyTimedReviews::<Runtime>::contains_key(actor_id));
-    assert!(!pallet_deos_actors::DependencyPlans::<Runtime>::contains_key(actor_id));
-
-    run_next_current_idle(Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_state(actor_id)
-        .expect("Actor remains active")
-        .identity
-        .cycle_nonce,
-      1
-    );
-  });
-}
-
-#[test]
-fn oracle_dependency_carrier_capacity_refusal_rolls_back_registration_and_source_allocation() {
-  seeded_test_ext().execute_with(|| {
-    let feed = crate::configs::oracle_config::deos_router_pool_feed(
-      AssetKind::Native,
-      AssetKind::Local(60_001),
-    );
-    let capacity = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get()
-      .saturating_mul(<Runtime as pallet_deos_actors::Config>::MaxContractSteps::get());
-    pallet_deos_actors::DependencyScanSourceListState::<Runtime>::put(
-      pallet_deos_actors::DependencyScanSourceList {
-        cursor: None,
-        count: capacity,
-      },
-    );
-    let allocator_before = pallet_deos_actors::DependencySourceAllocatorState::<Runtime>::get();
-
-    assert_noop!(
-      Oracle::register_feed(
-        RuntimeOrigin::root(),
-        feed,
-        deos_router_account(),
-        feed.meaning(),
-        primitives::OracleProvenance::DeosRouterPreExecutionReserves,
-        feed.scale,
-        pallet_oracle::Aggregation::LastValue,
-        pallet_oracle::ZeroPolicy::Reject,
-        false,
-      ),
-      polkadot_sdk::sp_runtime::DispatchError::Other("dependency scan source capacity reached")
-    );
-    assert!(!pallet_oracle::Feeds::<Runtime>::contains_key(feed));
-    assert!(!pallet_deos_actors::ObservationDependencySources::<Runtime>::contains_key(feed));
-    assert_eq!(
-      pallet_deos_actors::DependencySourceAllocatorState::<Runtime>::get(),
-      allocator_before
-    );
-    assert_eq!(
-      pallet_deos_actors::DependencyScanSourceListState::<Runtime>::get().count,
-      capacity
     );
   });
 }
@@ -10173,10 +8311,7 @@ fn maximum_user_creation_and_replacement_pass_real_transaction_extensions() {
       contract: user_active_contract(manual_schedule(), None, steps.clone()),
     });
     let create_info = create.get_dispatch_info();
-    let expected_create = <Runtime as pallet_deos_actors::Config>::WeightInfo::create_user_actor()
-      .max(
-        <Runtime as pallet_deos_actors::Config>::WeightInfo::create_user_actor_crossing_new_page(),
-      );
+    let expected_create = <Runtime as pallet_deos_actors::Config>::WeightInfo::create_user_actor();
     assert_eq!(create_info.call_weight, expected_create);
     let create_extrinsic = signed_extrinsic(&signer_pair, 0, create);
     assert_ok!(Executive::validate_transaction(
@@ -10682,189 +8817,14 @@ fn actor_control_uses_exact_one_third_of_schedulable_weight() {
   );
   let mandatory = W::scheduler_on_initialize_cutoff()
     .saturating_add(Actors::deadline_service_weight_upper())
-    .saturating_add(W::materialization_coordinator_base())
     .saturating_add(scan)
     .saturating_add(W::scheduler_on_idle_base())
     .saturating_add(W::block_resource_finalize());
   assert!(mandatory.all_lte(limits.actor_control()));
-  let fanout_overhead = W::observation_fanout_base()
-    .saturating_add(W::observation_fanout_branch_probe())
-    .saturating_add(W::record_observation_fanout_worker_fault());
-  let ordinary_turn = W::observation_fanout_branch_probe()
-    .saturating_add(Actors::observation_fanout_ordinary_weight_upper());
-  let one_retained_turn = mandatory
-    .saturating_add(W::observation_fanout_base())
-    .saturating_add(ordinary_turn);
-  let two_retained_turns = one_retained_turn.saturating_add(ordinary_turn);
-  assert!(one_retained_turn.all_lte(limits.actor_control()));
-  assert!(
-    two_retained_turns.proof_size() > limits.actor_control().proof_size(),
-    "retained full-page unit pricing cannot co-admit two turns under one-third Control"
-  );
   println!(
-    "ACTOR_CONTROL_THIRD_V1 limit={:?} mandatory={mandatory:?} fanout_overhead={fanout_overhead:?} available={:?}",
+    "ACTOR_CONTROL_THIRD_V1 limit={:?} mandatory={mandatory:?} available={:?}",
     limits.actor_control(),
     limits.actor_control().saturating_sub(mandatory),
-  );
-}
-
-#[test]
-fn current_control_cap_cannot_admit_a_placed_batch_larger_than_a_pair() {
-  type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-  let control = BlockResourceBudgetValue::get().limits().actor_control();
-  let minimum_batch = W::crossing_worker_base()
-    .saturating_add(W::crossing_work_probe())
-    .saturating_add(W::crossing_fire_pair_probe())
-    .saturating_add(W::crossing_placed_maximum_unit())
-    .saturating_add(W::record_crossing_worker_fault());
-  assert_eq!(control.proof_size(), 676_150);
-  assert_eq!(minimum_batch.proof_size(), 676_224);
-  assert!(
-    minimum_batch.proof_size() > control.proof_size(),
-    "even with zero mandatory/selection work and no Service, every >2 placed batch must downgrade before admission",
-  );
-}
-
-#[cfg(feature = "runtime-benchmarks")]
-#[test]
-fn observation_quantum_resumes_in_runtime_prepass_under_one_third() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let producer = deos_router_account();
-    let feed = crate::configs::oracle_config::deos_router_pool_feed(
-      AssetKind::Native,
-      AssetKind::Local(8_123),
-    );
-    assert_ok!(Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      producer.clone(),
-      feed.meaning(),
-      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
-      feed.scale,
-      pallet_oracle::Aggregation::Ema {
-        half_life_blocks: 100,
-      },
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    ));
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer.clone()),
-      feed,
-      1_000_000_000_000,
-    ));
-    let actors = (0..40)
-      .map(|_| {
-        create_system(
-          ALICE,
-          RuntimeSchedule {
-            trigger: Trigger::observation_change(feed),
-            cooldown_blocks: 0,
-          },
-          None,
-          BoundedVec::try_from(vec![make_step(inert_task())]).expect("one Step fits"),
-        )
-      })
-      .collect::<Vec<_>>();
-    assert_ok!(Oracle::publish(
-      RuntimeOrigin::signed(producer),
-      feed,
-      2_000_000_000_000,
-    ));
-    pallet_deos_actors::MaterializationFamilyCursor::<Runtime>::put(1);
-    assert_eq!(Actors::on_initialize(1), Weight::zero());
-    ensure_actor_prepass_context();
-    let actual = Actors::benchmark_mandatory_prepass_with_quantum(
-      1,
-      12,
-      Weight::from_parts(20_000_000_000, 185_000),
-    )
-    .expect("candidate Prepass admits two bounded turns");
-    let budget = BlockResourceBudgetValue::get().limits();
-    let usage = Actors::block_resource_state()
-      .expect("real runtime Prepass settles the resource ledger")
-      .usage();
-    assert_eq!(budget.actor_control(), Weight::from_parts(303_433_283_909, 676_150));
-    assert!(usage.actor_control_used().all_lte(budget.actor_control()));
-    assert_eq!(usage.shared_used(), Ok(Weight::zero()));
-    assert!(actual.all_lte(budget.actor_control()));
-    assert!(actors.iter().take(36).all(|id| Actors::pending_signal(*id)));
-    assert!(actors.iter().skip(36).all(|id| !Actors::pending_signal(*id)));
-    let dirty = Actors::dirty_observation_feeds(feed).expect("four subscribers remain dirty");
-    assert_eq!(dirty.next_subscriber_position, 36);
-    for id in actors.iter().take(36) {
-      assert_eq!(Actors::service_nodes(*id).expect("causal Service").eligible_from, 2);
-    }
-    assert_eq!(
-      pallet_deos_actors::MaterializationFamilyCursor::<Runtime>::get(),
-      0
-    );
-    println!(
-      "OBSERVATION_PREPASS_QUANTUM_V1 block=1 control={:?} actual={actual:?} control_used={:?} shared_used={:?} cursor=36",
-      budget.actor_control(),
-      usage.actor_control_used(),
-      usage.shared_used(),
-    );
-
-    Actors::on_idle(1, Weight::MAX);
-    Actors::on_finalize(1);
-    System::set_block_number(2);
-    set_consensus_timestamp(1_000);
-    assert_eq!(Actors::on_initialize(2), Weight::zero());
-    ensure_actor_prepass_context();
-    System::reset_events();
-    let second = Actors::benchmark_mandatory_prepass_with_quantum(
-      2,
-      12,
-      Weight::from_parts(20_000_000_000, 185_000),
-    )
-    .expect("next block resumes the remaining four positions");
-    assert!(second.all_lte(budget.actor_control().saturating_add(budget.actor_base_turn())));
-    assert!(Actors::dirty_observation_feeds(feed).is_none());
-    assert!(actors.iter().skip(36).all(|id| Actors::pending_signal(*id)));
-    for id in actors.iter().skip(36) {
-      assert_eq!(Actors::service_nodes(*id).expect("deferred Service").eligible_from, 3);
-    }
-    assert_eq!(
-      System::events()
-        .iter()
-        .filter(|record| matches!(
-          &record.event,
-          RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
-            actor_id,
-            trigger_family: TriggerFamily::ObservationChange,
-            ..
-          }) if actors.iter().skip(36).any(|id| id == actor_id)
-        ))
-        .count(),
-      4
-    );
-    println!(
-      "OBSERVATION_PREPASS_QUANTUM_V1 block=2 actual={second:?} control_used={:?} shared_used={:?} cursor=complete",
-      Actors::block_resource_state().expect("second Prepass ledger").usage().actor_control_used(),
-      Actors::block_resource_state().expect("second Prepass ledger").usage().shared_used(),
-    );
-  });
-}
-
-#[test]
-fn actor_control_limit_admits_cutoff_and_one_rotating_materialization_family() {
-  let family_minimum = Actors::materialization_family_minimum(0)
-    .max(Actors::materialization_family_minimum(1))
-    .max(Actors::materialization_family_minimum(2));
-  let minimum_control = ActorControlInitializationWeight::get()
-    .saturating_add(<Runtime as pallet_deos_actors::Config>::WeightInfo::scheduler_on_idle_base())
-    .saturating_add(
-      <Runtime as pallet_deos_actors::Config>::WeightInfo::materialization_coordinator_base(),
-    )
-    .saturating_add(family_minimum);
-  assert!(
-    minimum_control.all_lte(BlockResourceBudgetValue::get().limits().actor_control()),
-    "minimum Actor Control {minimum_control:?} rotating families={:?}/{:?}/{:?} must fit {:?}",
-    Actors::materialization_family_minimum(0),
-    Actors::materialization_family_minimum(1),
-    Actors::materialization_family_minimum(2),
-    BlockResourceBudgetValue::get().limits().actor_control()
   );
 }
 
@@ -13759,23 +11719,23 @@ fn cadenced_complete_path_isolates_reactive_control_delta() {
     assert_eq!(
       block_usage,
       vec![
-        (2, false, Weight::from_parts(6_190_722_000, 75_794), Weight::zero()),
+        (2, false, Weight::from_parts(5_841_976_000, 70_993), Weight::zero()),
         (
           3,
           true,
-          Weight::from_parts(4_560_286_000, 65_922),
+          Weight::from_parts(4_211_540_000, 61_121),
           Weight::from_parts(1_463_533_000, 6_196),
         ),
-        (4, false, Weight::from_parts(6_190_722_000, 75_794), Weight::zero()),
+        (4, false, Weight::from_parts(5_841_976_000, 70_993), Weight::zero()),
         (
           5,
           true,
-          Weight::from_parts(4_560_286_000, 65_922),
+          Weight::from_parts(4_211_540_000, 61_121),
           Weight::from_parts(1_463_533_000, 6_196),
         ),
       ]
     );
-    assert_eq!(empty_control, Weight::from_parts(2_143_410_000, 29_293));
+    assert_eq!(empty_control, Weight::from_parts(1_794_664_000, 24_492));
     type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
     let at_time = <W as WeightInfo>::at_time_trigger_occurrence();
     let cadenced = <W as WeightInfo>::cadenced_trigger_occurrence();
@@ -13924,14 +11884,14 @@ fn zero_step_and_productive_cleanup_complete_path_matrix_is_exact() {
   let productive_cleanup = measure_manual_control_branch(true);
   assert_eq!(
     zero_step,
-    (Weight::from_parts(4_182_903_000, 55_666), Weight::zero())
+    (Weight::from_parts(3_834_157_000, 50_865), Weight::zero())
   );
   // Close retains the admitted Step maximum plus lifecycle cleanup. This is a conservative
   // resource charge, not evidence that a persistent-completion benchmark measured destruction.
   assert_eq!(
     productive_cleanup,
     (
-      Weight::from_parts(17_971_025_000, 212_623),
+      Weight::from_parts(17_622_279_000, 207_822),
       Weight::from_parts(1_463_533_000, 6_196),
     )
   );
@@ -14036,7 +11996,7 @@ fn transfer_complete_path_matrix_uses_canonical_service_envelope() {
     );
   }
   let canonical_control = cells[0].2;
-  assert_eq!(canonical_control, Weight::from_parts(4_560_286_000, 65_922));
+  assert_eq!(canonical_control, Weight::from_parts(4_211_540_000, 61_121));
   for phase_cells in cells.chunks_exact(3) {
     assert_eq!(
       phase_cells.iter().map(|cell| cell.1).collect::<Vec<_>>(),
@@ -14105,7 +12065,7 @@ fn running_middle_complete_path_is_exact() {
     assert_eq!(
       measured,
       (
-        Weight::from_parts(4_527_520_603, 58_025),
+        Weight::from_parts(4_178_774_603, 53_224),
         Weight::from_parts(1_463_533_000, 6_196),
       )
     );
@@ -14204,7 +12164,7 @@ fn swapout_success_complete_path_matrix_uses_canonical_service_envelope() {
     assert!(effect.all_lte(BlockResourceBudgetValue::get().limits().actor_base_turn()));
     cells.push((predicate_count, control, effect));
   }
-  assert_eq!(cells[0].1, Weight::from_parts(5_511_204_000, 70_492));
+  assert_eq!(cells[0].1, Weight::from_parts(4_211_540_000, 61_121));
   assert!(
     cells
       .windows(2)
@@ -14748,7 +12708,7 @@ fn funding_unavailable_and_retry_use_canonical_service_envelope() {
   let [first, retry] = measure_funding_unavailable_retry(None);
   assert_eq!(
     first,
-    (Weight::from_parts(4_534_866_000, 65_040), Weight::zero())
+    (Weight::from_parts(4_186_120_000, 60_239), Weight::zero())
   );
   assert_eq!(retry.1, Weight::zero());
   assert!(
@@ -14866,7 +12826,7 @@ fn minimal_pipeline_admission_apoptosis_complete_path_is_exact() {
     let measured = (usage.actor_control_used(), usage.actor_effect_used());
     assert_eq!(
       measured,
-      (Weight::from_parts(11_194_958_000, 118_650), Weight::zero()),
+      (Weight::from_parts(10_846_212_000, 113_849), Weight::zero()),
       "canonical Service owns the complete bounded minimal-apoptosis cleanup envelope"
     );
     println!(

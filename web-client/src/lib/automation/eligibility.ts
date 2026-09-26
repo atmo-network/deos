@@ -47,23 +47,6 @@ export type ActorActivationPlacement =
 export type ActorTriggerActivation =
   | { type: 'Manual' }
   | { type: 'AddressEvent' }
-  | {
-      type: 'ObservationChange';
-      feed: unknown;
-      subscriberCount: number;
-      pendingRevision: bigint | null;
-    }
-  | {
-      type: 'ObservationCrossing';
-      feed: unknown;
-      direction: 'Rising' | 'Falling';
-      threshold: bigint;
-      rearmThreshold: bigint;
-      phase: 'Armed' | 'WaitingForRearm';
-      installedAtRevision: bigint;
-      pendingRevisions: number;
-      processingRevision: bigint | null;
-    }
   | { type: 'AtTime'; afterTicks: bigint; consumed: boolean }
   | { type: 'Cadenced'; everyTicks: bigint };
 
@@ -135,20 +118,6 @@ function asU64(value: unknown, field: string): bigint {
   throw new Error(`${field} must be an unsigned runtime integer`);
 }
 
-function asU128(value: unknown, field: string): bigint {
-  const parsed = asU64(value, field);
-  if (parsed >= 1n << 128n) throw new Error(`${field} must fit u128`);
-  return parsed;
-}
-
-function asCount(value: unknown, field: string): number {
-  return asBlock(value, field);
-}
-
-function optionalU64(value: unknown, field: string): bigint | null {
-  return value === undefined ? null : asU64(value, field);
-}
-
 function projectPlacement(value: unknown): ActorActivationPlacement {
   const placement = asVariant(value, 'ActiveActorActivation.placement');
   if (placement.type === 'Unplaced') return { type: 'Unplaced' };
@@ -180,47 +149,6 @@ function projectTriggerActivation(value: unknown): ActorTriggerActivation {
     trigger.value,
     `ActorTriggerActivation.${trigger.type}`,
   );
-  if (trigger.type === 'ObservationChange') {
-    return {
-      type: trigger.type,
-      feed: fields.feed,
-      subscriberCount: asCount(fields.subscriber_count, 'subscriber count'),
-      pendingRevision: optionalU64(fields.pending_revision, 'pending revision'),
-    };
-  }
-  if (trigger.type === 'ObservationCrossing') {
-    const direction = asVariant(fields.direction, 'Crossing direction').type;
-    if (direction !== 'Rising' && direction !== 'Falling') {
-      throw new Error(`Unsupported runtime Crossing direction ${direction}`);
-    }
-    const phase = asVariant(fields.phase, 'Crossing phase').type;
-    if (phase !== 'Armed' && phase !== 'WaitingForRearm') {
-      throw new Error(`Unsupported runtime Crossing phase ${phase}`);
-    }
-    return {
-      type: trigger.type,
-      feed: fields.feed,
-      direction,
-      threshold: asU128(fields.threshold, 'Crossing fire threshold'),
-      rearmThreshold: asU128(
-        fields.rearm_threshold,
-        'Crossing rearm threshold',
-      ),
-      phase,
-      installedAtRevision: asU64(
-        fields.installed_at_revision,
-        'Crossing installation revision',
-      ),
-      pendingRevisions: asCount(
-        fields.pending_revisions,
-        'pending Crossing revisions',
-      ),
-      processingRevision: optionalU64(
-        fields.processing_revision,
-        'processing Crossing revision',
-      ),
-    };
-  }
   if (trigger.type === 'AtTime') {
     if (typeof fields.consumed !== 'boolean') {
       throw new Error('AtTime consumed state must be boolean');

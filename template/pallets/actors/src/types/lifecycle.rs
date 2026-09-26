@@ -1,5 +1,5 @@
 use super::{
-  contract::{CrossingDirection, CrossingPhase, ScheduleWindow, Trigger, TriggerFamily},
+  contract::{ScheduleWindow, Trigger, TriggerFamily},
   scheduler::{TriggerWakeupPointer, WakeupKey, WakeupPointer},
 };
 use frame::prelude::*;
@@ -810,38 +810,18 @@ pub enum ActorActivationPlacement<BlockNumber> {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub enum ActorTriggerActivation<FeedId> {
+pub enum ActorTriggerActivation {
   Manual,
   AddressEvent,
-  ObservationChange {
-    feed: FeedId,
-    subscriber_count: u32,
-    pending_revision: Option<u64>,
-  },
-  ObservationCrossing {
-    feed: FeedId,
-    direction: CrossingDirection,
-    threshold: u128,
-    rearm_threshold: u128,
-    phase: CrossingPhase,
-    installed_at_revision: u64,
-    pending_revisions: u32,
-    processing_revision: Option<u64>,
-  },
-  AtTime {
-    after_ticks: u64,
-    consumed: bool,
-  },
-  Cadenced {
-    every_ticks: u64,
-  },
+  AtTime { after_ticks: u64, consumed: bool },
+  Cadenced { every_ticks: u64 },
 }
 
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActiveActorActivation<FeedId, BlockNumber> {
-  pub trigger: ActorTriggerActivation<FeedId>,
+pub struct ActiveActorActivation<BlockNumber> {
+  pub trigger: ActorTriggerActivation,
   pub pending_signal: bool,
   pub placement: ActorActivationPlacement<BlockNumber>,
   pub eligibility: ActorClassification<BlockNumber>,
@@ -850,10 +830,10 @@ pub struct ActiveActorActivation<FeedId, BlockNumber> {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub enum ActorEligibility<FeedId, BlockNumber> {
+pub enum ActorEligibility<BlockNumber> {
   NotRegistered,
   Dormant,
-  Active(ActiveActorActivation<FeedId, BlockNumber>),
+  Active(ActiveActorActivation<BlockNumber>),
 }
 
 #[derive(
@@ -1085,10 +1065,6 @@ pub enum ActorCostQuoteError {
 )]
 pub enum TriggerRuntimeState {
   Stateless,
-  ObservationCrossing {
-    phase: CrossingPhase,
-    installed_at_revision: u64,
-  },
   AtTime {
     anchor_tick: Option<u64>,
     consumed: bool,
@@ -1102,7 +1078,7 @@ impl TriggerRuntimeState {
   pub fn temporal_anchor_tick(&self) -> Option<u64> {
     match self {
       Self::AtTime { anchor_tick, .. } | Self::Cadenced { anchor_tick } => *anchor_tick,
-      Self::Stateless | Self::ObservationCrossing { .. } => None,
+      Self::Stateless => None,
     }
   }
 
@@ -1110,9 +1086,9 @@ impl TriggerRuntimeState {
     matches!(self, Self::AtTime { consumed: true, .. })
   }
 
-  pub fn is_compatible_with<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>(
+  pub fn is_compatible_with<AccountId, AssetId, MaxWhitelistSize>(
     &self,
-    trigger: &Trigger<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>,
+    trigger: &Trigger<AccountId, AssetId, MaxWhitelistSize>,
   ) -> bool
   where
     MaxWhitelistSize: Get<u32>,
@@ -1121,10 +1097,7 @@ impl TriggerRuntimeState {
       (self, trigger),
       (
         Self::Stateless,
-        Trigger::Manual | Trigger::AddressEvent { .. } | Trigger::ObservationChange { .. }
-      ) | (
-        Self::ObservationCrossing { .. },
-        Trigger::ObservationCrossing { .. }
+        Trigger::Manual | Trigger::AddressEvent { .. }
       ) | (Self::AtTime { .. }, Trigger::AtTime { .. })
         | (Self::Cadenced { .. }, Trigger::Cadenced { .. })
     )

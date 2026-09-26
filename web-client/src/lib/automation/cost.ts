@@ -19,13 +19,7 @@ export type ActorCostWeight = {
 };
 
 export type ActorTriggerFeeView = {
-  family:
-    | 'Manual'
-    | 'AddressEvent'
-    | 'ObservationChange'
-    | 'ObservationCrossing'
-    | 'AtTime'
-    | 'Cadenced';
+  family: 'Manual' | 'AddressEvent' | 'AtTime' | 'Cadenced';
   maximumWeight: ActorCostWeight;
   fee: bigint;
   productionWeightIdentity: string;
@@ -87,8 +81,6 @@ const COST_FAILURES: ReadonlySet<string> = new Set([
 const TRIGGER_FAMILIES: ReadonlySet<string> = new Set([
   'Manual',
   'AddressEvent',
-  'ObservationChange',
-  'ObservationCrossing',
   'AtTime',
   'Cadenced',
 ]);

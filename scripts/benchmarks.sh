@@ -51,17 +51,9 @@ ACTORS_REQUIRED_RUNTIME_BENCHMARKS=(
     "transaction_extension_ingress_base"
     "transaction_extension_ingress_notify"
     "run_suspend"
-    "record_crossing_worker_fault"
-    "record_observation_fanout_worker_fault"
-    "crossing_worker_base"
-    "crossing_transition_unit"
-    "crossing_leaf_unit"
-    "crossing_page_unit"
-    "crossing_actor_unit"
     "predicate_set_evaluation"
     "predicate_asset_evaluation"
     "predicate_observation_heavy_evaluation"
-    "observation_fanout_blocked_page"
 )
 
 BENCHER_MODE=""

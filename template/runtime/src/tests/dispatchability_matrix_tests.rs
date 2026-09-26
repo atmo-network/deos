@@ -12,7 +12,7 @@ type RouterWeights = crate::weights::pallet_deos_router::SubstrateWeight<Runtime
 type StakingWeights = crate::weights::pallet_staking::SubstrateWeight<Runtime>;
 type TmcWeights = crate::weights::pallet_tmc::SubstrateWeight<Runtime>;
 
-const EXPECTED_CUSTOM_CALL_FAMILIES: usize = 64;
+const EXPECTED_CUSTOM_CALL_FAMILIES: usize = 62;
 
 #[derive(Clone, Copy)]
 struct DispatchabilityRow {
@@ -102,14 +102,6 @@ fn every_custom_runtime_call_family_fits_its_dispatch_envelope_at_maximum_input(
     normal(
       "Actors.set_global_circuit_breaker",
       ActorsWeights::set_global_circuit_breaker(),
-    ),
-    normal(
-      "Actors.clear_crossing_worker_fault",
-      ActorsWeights::clear_crossing_worker_fault(),
-    ),
-    normal(
-      "Actors.clear_observation_fanout_worker_fault",
-      ActorsWeights::clear_observation_fanout_worker_fault(),
     ),
     normal(
       "Actors.permissionless_sweep",

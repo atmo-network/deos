@@ -77,10 +77,6 @@ const addressTrigger = {
   sourceFilter: { type: 'Any' },
   assetFilter: { type: 'Any' },
 };
-const observationTrigger = {
-  type: 'ObservationChange',
-  feed: observationFeed,
-};
 
 const weightModel = {
   identity: 'authoring-test-weights',
@@ -280,10 +276,6 @@ test('trigger editor exposes one scalar trigger without graph vocabulary', () =>
     'Cadenced',
     'Manual',
     'AddressEvent',
-    'ObservationChange',
-    'ObservationCrossing',
-    'Rising',
-    'Falling',
     'OwnerOnly',
     'Whitelist',
     'everyTicks',
@@ -294,74 +286,38 @@ test('trigger editor exposes one scalar trigger without graph vocabulary', () =>
     );
   }
   assert(!triggerEditorSource.includes('maxTriggerSources'));
-  assert(triggerEditorSource.includes('Broad semantics'));
-  assert(triggerEditorSource.includes('creation never retrofires'));
+  assert(!triggerEditorSource.includes('ObservationChange'));
+  assert(!triggerEditorSource.includes('ObservationCrossing'));
+  assert(triggerEditorSource.includes('evaluated at execution time'));
   for (const rejected of ['successor', 'callback', 'branch target']) {
     assert(!triggerEditorSource.toLowerCase().includes(rejected));
   }
 });
 
-test('observation sources lower exactly and current percentages are trigger-independent', () => {
+test('current percentages remain trigger-independent and removed observation triggers fail closed', () => {
   const currentAmountStep = authoringStep(
     'current-amount',
     transferTask({ type: 'Percent', parts: 500_000_000 }),
   );
-  const observationOnly = contract([currentAmountStep], {
-    trigger: observationTrigger,
-  });
-  assert.equal(validateActorAuthoringContract(observationOnly).valid, true);
-  const lowered = lowerActorAuthoringContract(observationOnly);
-  assert.deepEqual(lowered.trigger, {
-    type: 'ObservationChange',
-    value: {
-      feed: {
-        asset_in: { type: 'Native', value: undefined },
-        asset_out: { type: 'Local', value: 7 },
-        method: { type: 'PreExecutionSpot', value: undefined },
-        aggregation: { type: 'Ema', value: { half_life_blocks: 100 } },
-        scale: 12,
-      },
-    },
-  });
-  assert.equal(
-    validateActorAuthoringContract(
-      contract([currentAmountStep], { trigger: addressTrigger }),
-    ).valid,
-    true,
-  );
-});
-
-test('ObservationCrossing validates hysteresis and lowers exact u128 semantics', () => {
-  const rising = contract(undefined, {
-    trigger: {
-      type: 'ObservationCrossing',
-      feed: observationTrigger.feed,
-      direction: 'Rising',
-      threshold: '100',
-      rearmThreshold: '80',
-    },
-  });
-  assert.equal(validateActorAuthoringContract(rising).valid, true);
-  assert.deepEqual(lowerActorAuthoringContract(rising).trigger, {
-    type: 'ObservationCrossing',
-    value: {
-      feed: lowerActorAuthoringContract(
-        contract(undefined, { trigger: observationTrigger }),
-      ).trigger.value.feed,
-      direction: { type: 'Rising', value: undefined },
-      threshold: 100n,
-      rearm_threshold: 80n,
-    },
-  });
   for (const trigger of [
-    { ...rising.trigger, rearmThreshold: '100' },
-    { ...rising.trigger, direction: 'Falling', rearmThreshold: '80' },
-    { ...rising.trigger, threshold: `${1n << 128n}` },
+    { type: 'Manual' },
+    addressTrigger,
+    { type: 'Cadenced', everyTicks: 10 },
   ]) {
     assert.equal(
-      validateActorAuthoringContract(contract(undefined, { trigger })).valid,
-      false,
+      validateActorAuthoringContract(contract([currentAmountStep], { trigger }))
+        .valid,
+      true,
     );
+  }
+  for (const type of ['ObservationChange', 'ObservationCrossing']) {
+    const validation = validateActorAuthoringContract(
+      contract([currentAmountStep], {
+        trigger: { type, feed: observationFeed },
+      }),
+    );
+    assert.equal(validation.valid, false);
+    assert(validation.issues.some((issue) => issue.path === 'trigger.type'));
   }
 });
 
@@ -1024,17 +980,7 @@ test('trigger, completion, and funding policy variants lower as typed ActorContr
       fundingPolicy: { type: 'SignedAllowlist', accounts: [accountA] },
     }),
     contract(undefined, {
-      trigger: observationTrigger,
-      fundingPolicy: { type: 'AnyVerifiedIngress' },
-    }),
-    contract(undefined, {
-      trigger: {
-        type: 'ObservationCrossing',
-        feed: observationTrigger.feed,
-        direction: 'Falling',
-        threshold: '80',
-        rearmThreshold: '100',
-      },
+      trigger: { type: 'Cadenced', everyTicks: 10 },
       fundingPolicy: { type: 'AnyVerifiedIngress' },
     }),
   ];

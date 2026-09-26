@@ -353,7 +353,6 @@ pub enum DueBlockDeadlineMutation {
 /// reviews and independent temporal Trigger occurrences; execution retries remain block-clock members.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DueTickDeadlineMutation {
-  ReviewProcessed(ActorRef, DependencyReviewMutation),
   TemporalTriggerProcessed(ActorRef),
 }
 

@@ -626,87 +626,6 @@ pub type ObservationValue = u128;
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
 )]
-pub enum CrossingDirection {
-  Rising,
-  Falling,
-}
-
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
-)]
-pub enum CrossingPhase {
-  Armed,
-  WaitingForRearm,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CrossingTransition {
-  None,
-  Fire,
-  Rearm,
-}
-
-#[derive(
-  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
-)]
-pub struct ObservationCrossing<ObservationFeedId> {
-  pub feed: ObservationFeedId,
-  pub direction: CrossingDirection,
-  pub threshold: ObservationValue,
-  pub rearm_threshold: ObservationValue,
-}
-
-impl<ObservationFeedId> ObservationCrossing<ObservationFeedId> {
-  pub fn has_valid_hysteresis(&self) -> bool {
-    match self.direction {
-      CrossingDirection::Rising => self.rearm_threshold < self.threshold,
-      CrossingDirection::Falling => self.rearm_threshold > self.threshold,
-    }
-  }
-
-  pub fn initial_phase(&self, current: ObservationValue) -> CrossingPhase {
-    match self.direction {
-      CrossingDirection::Rising if current >= self.threshold => CrossingPhase::WaitingForRearm,
-      CrossingDirection::Falling if current <= self.threshold => CrossingPhase::WaitingForRearm,
-      CrossingDirection::Rising | CrossingDirection::Falling => CrossingPhase::Armed,
-    }
-  }
-
-  pub fn transition(
-    &self,
-    phase: CrossingPhase,
-    previous: ObservationValue,
-    current: ObservationValue,
-  ) -> CrossingTransition {
-    match (self.direction, phase) {
-      (CrossingDirection::Rising, CrossingPhase::Armed)
-        if previous < self.threshold && current >= self.threshold =>
-      {
-        CrossingTransition::Fire
-      }
-      (CrossingDirection::Rising, CrossingPhase::WaitingForRearm)
-        if previous > self.rearm_threshold && current <= self.rearm_threshold =>
-      {
-        CrossingTransition::Rearm
-      }
-      (CrossingDirection::Falling, CrossingPhase::Armed)
-        if previous > self.threshold && current <= self.threshold =>
-      {
-        CrossingTransition::Fire
-      }
-      (CrossingDirection::Falling, CrossingPhase::WaitingForRearm)
-        if previous < self.rearm_threshold && current >= self.rearm_threshold =>
-      {
-        CrossingTransition::Rearm
-      }
-      _ => CrossingTransition::None,
-    }
-  }
-}
-
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
-)]
 pub struct ParkedBalanceRule<AssetId, Balance> {
   pub asset: AssetId,
   pub authored_min_delta: Balance,
@@ -809,28 +728,17 @@ where
 pub enum TriggerFamily {
   Manual,
   AddressEvent,
-  ObservationChange,
-  ObservationCrossing,
   AtTime,
   Cadenced,
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxWhitelistSize))]
-pub enum Trigger<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId = AssetId> {
+pub enum Trigger<AccountId, AssetId, MaxWhitelistSize: Get<u32>> {
   Manual,
   AddressEvent {
     source_filter: SourceFilter<AccountId, MaxWhitelistSize>,
     asset_filter: AssetFilter<AssetId, MaxWhitelistSize>,
-  },
-  ObservationChange {
-    feed: ObservationFeedId,
-  },
-  ObservationCrossing {
-    feed: ObservationFeedId,
-    direction: CrossingDirection,
-    threshold: ObservationValue,
-    rearm_threshold: ObservationValue,
   },
   AtTime {
     after_ticks: u64,
@@ -840,8 +748,8 @@ pub enum Trigger<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeed
   },
 }
 
-impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>, ObservationFeedId: Clone> Clone
-  for Trigger<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
+impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>> Clone
+  for Trigger<AccountId, AssetId, MaxWhitelistSize>
 {
   fn clone(&self) -> Self {
     match self {
@@ -853,18 +761,6 @@ impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>, ObservationFe
         source_filter: source_filter.clone(),
         asset_filter: asset_filter.clone(),
       },
-      Self::ObservationChange { feed } => Self::ObservationChange { feed: feed.clone() },
-      Self::ObservationCrossing {
-        feed,
-        direction,
-        threshold,
-        rearm_threshold,
-      } => Self::ObservationCrossing {
-        feed: feed.clone(),
-        direction: *direction,
-        threshold: *threshold,
-        rearm_threshold: *rearm_threshold,
-      },
       Self::AtTime { after_ticks } => Self::AtTime {
         after_ticks: *after_ticks,
       },
@@ -875,12 +771,8 @@ impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>, ObservationFe
   }
 }
 
-impl<
-  AccountId: core::fmt::Debug,
-  AssetId: core::fmt::Debug,
-  MaxWhitelistSize: Get<u32>,
-  ObservationFeedId: core::fmt::Debug,
-> core::fmt::Debug for Trigger<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
+impl<AccountId: core::fmt::Debug, AssetId: core::fmt::Debug, MaxWhitelistSize: Get<u32>>
+  core::fmt::Debug for Trigger<AccountId, AssetId, MaxWhitelistSize>
 {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
@@ -892,22 +784,6 @@ impl<
         .debug_struct("AddressEvent")
         .field("source_filter", source_filter)
         .field("asset_filter", asset_filter)
-        .finish(),
-      Self::ObservationChange { feed } => f
-        .debug_struct("ObservationChange")
-        .field("feed", feed)
-        .finish(),
-      Self::ObservationCrossing {
-        feed,
-        direction,
-        threshold,
-        rearm_threshold,
-      } => f
-        .debug_struct("ObservationCrossing")
-        .field("feed", feed)
-        .field("direction", direction)
-        .field("threshold", threshold)
-        .field("rearm_threshold", rearm_threshold)
         .finish(),
       Self::AtTime { after_ticks } => f
         .debug_struct("AtTime")
@@ -921,12 +797,8 @@ impl<
   }
 }
 
-impl<
-  AccountId: PartialEq,
-  AssetId: PartialEq,
-  MaxWhitelistSize: Get<u32>,
-  ObservationFeedId: PartialEq,
-> PartialEq for Trigger<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
+impl<AccountId: PartialEq, AssetId: PartialEq, MaxWhitelistSize: Get<u32>> PartialEq
+  for Trigger<AccountId, AssetId, MaxWhitelistSize>
 {
   fn eq(&self, other: &Self) -> bool {
     match (self, other) {
@@ -941,28 +813,6 @@ impl<
           asset_filter: right_asset,
         },
       ) => left_source == right_source && left_asset == right_asset,
-      (Self::ObservationChange { feed: left }, Self::ObservationChange { feed: right }) => {
-        left == right
-      }
-      (
-        Self::ObservationCrossing {
-          feed: left_feed,
-          direction: left_direction,
-          threshold: left_threshold,
-          rearm_threshold: left_rearm,
-        },
-        Self::ObservationCrossing {
-          feed: right_feed,
-          direction: right_direction,
-          threshold: right_threshold,
-          rearm_threshold: right_rearm,
-        },
-      ) => {
-        left_feed == right_feed
-          && left_direction == right_direction
-          && left_threshold == right_threshold
-          && left_rearm == right_rearm
-      }
       (Self::AtTime { after_ticks: left }, Self::AtTime { after_ticks: right }) => left == right,
       (Self::Cadenced { every_ticks: left }, Self::Cadenced { every_ticks: right }) => {
         left == right
@@ -972,14 +822,12 @@ impl<
   }
 }
 
-impl<AccountId: Eq, AssetId: Eq, MaxWhitelistSize: Get<u32>, ObservationFeedId: Eq> Eq
-  for Trigger<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
+impl<AccountId: Eq, AssetId: Eq, MaxWhitelistSize: Get<u32>> Eq
+  for Trigger<AccountId, AssetId, MaxWhitelistSize>
 {
 }
 
-impl<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId>
-  Trigger<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
-{
+impl<AccountId, AssetId, MaxWhitelistSize: Get<u32>> Trigger<AccountId, AssetId, MaxWhitelistSize> {
   pub fn manual() -> Self {
     Self::Manual
   }
@@ -991,41 +839,6 @@ impl<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId>
     Self::AddressEvent {
       source_filter,
       asset_filter,
-    }
-  }
-
-  pub fn observation_change(feed: ObservationFeedId) -> Self {
-    Self::ObservationChange { feed }
-  }
-
-  pub fn observation_crossing(
-    feed: ObservationFeedId,
-    direction: CrossingDirection,
-    threshold: ObservationValue,
-    rearm_threshold: ObservationValue,
-  ) -> Self {
-    Self::ObservationCrossing {
-      feed,
-      direction,
-      threshold,
-      rearm_threshold,
-    }
-  }
-
-  pub fn observation_crossing_contract(&self) -> Option<ObservationCrossing<&ObservationFeedId>> {
-    match self {
-      Self::ObservationCrossing {
-        feed,
-        direction,
-        threshold,
-        rearm_threshold,
-      } => Some(ObservationCrossing {
-        feed,
-        direction: *direction,
-        threshold: *threshold,
-        rearm_threshold: *rearm_threshold,
-      }),
-      _ => None,
     }
   }
 
@@ -1055,8 +868,6 @@ impl<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId>
     match self {
       Self::Manual => TriggerFamily::Manual,
       Self::AddressEvent { .. } => TriggerFamily::AddressEvent,
-      Self::ObservationChange { .. } => TriggerFamily::ObservationChange,
-      Self::ObservationCrossing { .. } => TriggerFamily::ObservationCrossing,
       Self::AtTime { .. } => TriggerFamily::AtTime,
       Self::Cadenced { .. } => TriggerFamily::Cadenced,
     }
@@ -1069,7 +880,6 @@ impl<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId>
   where
     AccountId: Encode,
     AssetId: Encode,
-    ObservationFeedId: Encode,
   {
     ActorWakeQualification {
       family: self.family(),
@@ -1488,19 +1298,6 @@ pub struct ActorContractHead<Header, Step> {
   pub header: Header,
   pub first_step: Option<Step>,
   pub first_step_resources: Option<ActorStepResourceEnvelope>,
-}
-
-#[derive(
-  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-pub struct ActorActivationAuthority<ObservationFeedId, BlockNumber, Hash> {
-  pub feed: ObservationFeedId,
-  pub cooldown_blocks: u32,
-  pub window: Option<ScheduleWindow<BlockNumber>>,
-  pub auto_close_at_cycle_nonce: Option<u64>,
-  pub semantic_contract_id: Hash,
-  pub body_commitment: Hash,
-  pub admission_identity: Hash,
 }
 
 #[derive(

@@ -1,8 +1,8 @@
-use deos_runtime::{AccountId, Actors, Balance, Balances, Oracle, Runtime, RuntimeOrigin, System};
+use deos_runtime::{AccountId, Actors, Balance, Balances, Runtime, RuntimeOrigin, System};
 use pallet_deos_actors::{
   ActorContract, ActorCostQuote, ActorType, AmountResolution, AssetFilter, CompletionPolicy,
-  ContractSteps, CrossingDirection, FundingSourcePolicy, Mutability, SourceFilter, Step,
-  StepErrorPolicy, Task, Trigger, TriggerFamily,
+  ContractSteps, FundingSourcePolicy, Mutability, SourceFilter, Step, StepErrorPolicy, Task,
+  Trigger, TriggerFamily,
 };
 use polkadot_sdk::{
   frame_support::{BoundedVec, traits::Currency},
@@ -10,9 +10,7 @@ use polkadot_sdk::{
   sp_io::TestExternalities,
   sp_io::hashing::sha2_256,
 };
-use primitives::{
-  AssetKind, LocalPoolObservationMethod, OracleAggregationId, OracleFeedId, OracleProvenance,
-};
+use primitives::AssetKind;
 use serde_json::{Value, json};
 use std::{env, fs, path::Path, process};
 
@@ -42,8 +40,6 @@ fn trigger_family_name(family: TriggerFamily) -> &'static str {
   match family {
     TriggerFamily::Manual => "Manual",
     TriggerFamily::AddressEvent => "AddressEvent",
-    TriggerFamily::ObservationChange => "ObservationChange",
-    TriggerFamily::ObservationCrossing => "ObservationCrossing",
     TriggerFamily::AtTime => "AtTime",
     TriggerFamily::Cadenced => "Cadenced",
   }
@@ -246,30 +242,6 @@ fn manifest() -> Value {
   let mut ext = TestExternalities::new(storage);
   let vectors = ext.execute_with(|| {
     System::set_block_number(1);
-    let feed = OracleFeedId::directional_local_pool_price(
-      AssetKind::Native,
-      AssetKind::Local(1),
-      LocalPoolObservationMethod::PreExecutionSpot,
-      OracleAggregationId::Ema {
-        half_life_blocks: 1,
-      },
-      12,
-    );
-    Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      destination.clone(),
-      feed.meaning(),
-      OracleProvenance::DeosRouterPreExecutionReserves,
-      12,
-      pallet_oracle::Aggregation::LastValue,
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    )
-    .expect("cost-vector observation feed registers");
-    Oracle::publish(RuntimeOrigin::signed(destination.clone()), feed, 100)
-      .expect("cost-vector observation publishes");
-
     let mut vectors = vec![
       create_user_vector(
         "user-manual-0",
@@ -313,23 +285,6 @@ fn manifest() -> Value {
         Trigger::AddressEvent {
           source_filter: SourceFilter::Any,
           asset_filter: AssetFilter::Any,
-        },
-        transfer_steps(1, &destination),
-      ),
-      create_user_vector(
-        "user-observation-change-1",
-        7,
-        Trigger::ObservationChange { feed },
-        transfer_steps(1, &destination),
-      ),
-      create_user_vector(
-        "user-observation-crossing-1",
-        8,
-        Trigger::ObservationCrossing {
-          feed,
-          direction: CrossingDirection::Rising,
-          threshold: 200,
-          rearm_threshold: 100,
         },
         transfer_steps(1, &destination),
       ),
