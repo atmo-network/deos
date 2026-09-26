@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-  ActorContractHeads, ActorContractTailChunks, ActorControlLocators, ActorProcesses, ActorRunHeads,
-  ActorRunPayloads, ActorSemanticState, ActorSemanticStates, ActorUnsignaledControlCells,
+  ActorContractHeads, ActorContractTailChunks, ActorControlLocators, ActorProcesses,
+  ActorRunStateStore, ActorSemanticState, ActorSemanticStates, ActorUnsignaledControlCells,
   DeadlineHandles,
 };
 
@@ -310,6 +310,215 @@ fn exact_slot_user_creation_accepts_absent_contract() {
 }
 
 #[test]
+fn user_lifecycle_reconciles_exact_state_hold_and_preserves_exact_slot_custody() {
+  use polkadot_sdk::frame_support::traits::fungible::InspectHold;
+
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let owner_slot = 7;
+    assert_ok!(Actors::create_user_actor_at_slot(
+      RuntimeOrigin::signed(ALICE),
+      owner_slot,
+      Mutability::Mutable,
+      None,
+    ));
+    let actor_id = NextActorId::<Test>::get().saturating_sub(1);
+    let sovereign = Actors::actor_identity(actor_id)
+      .expect("dormant User identity exists")
+      .sovereign_account;
+    let reason: RuntimeHoldReason = crate::HoldReason::ActorState.into();
+    let total = |record: &crate::ActorStateHoldRecordOf<Test>| {
+      let breakdown = record.breakdown;
+      breakdown
+        .identity
+        .saturating_add(breakdown.contract_head)
+        .saturating_add(breakdown.contract_body)
+        .saturating_add(breakdown.detector)
+        .saturating_add(breakdown.run)
+    };
+    let dormant_hold = crate::ActorStateHolds::<Test>::get(actor_id)
+      .expect("dormant User identity owns its retained-state hold");
+    assert_eq!(dormant_hold.owner, ALICE);
+    assert_ne!(dormant_hold.breakdown.identity, 0);
+    assert_eq!(dormant_hold.breakdown.contract_head, 0);
+    assert_eq!(dormant_hold.breakdown.contract_body, 0);
+    assert_eq!(dormant_hold.breakdown.detector, 0);
+    assert_eq!(dormant_hold.breakdown.run, 0);
+    assert_eq!(
+      Balances::balance_on_hold(&reason, &ALICE),
+      total(&dormant_hold)
+    );
+
+    let inert_step = inert_contract_steps()[0].clone();
+    let steps = BoundedVec::try_from(vec![inert_step; 8]).expect("eight Steps fit");
+    let contract =
+      user_active_contract(manual_schedule(), None, steps).expect("active User Contract is valid");
+    frame_system::Pallet::<Test>::set_block_number(2);
+    assert_ok!(Actors::activate_actor(
+      RuntimeOrigin::signed(ALICE),
+      actor_id,
+      contract.clone(),
+    ));
+    fund_native(actor_id, 1_000);
+    let custody = native_balance(&sovereign);
+    let active_hold = crate::ActorStateHolds::<Test>::get(actor_id)
+      .expect("active User geometry owns its complete hold");
+    assert_eq!(active_hold.owner, ALICE);
+    assert_ne!(active_hold.breakdown.contract_head, 0);
+    assert_ne!(active_hold.breakdown.contract_body, 0);
+    assert_eq!(active_hold.breakdown.detector, 0);
+    assert_ne!(active_hold.breakdown.run, 0);
+    assert!(total(&active_hold) > total(&dormant_hold));
+    assert_eq!(
+      Balances::balance_on_hold(&reason, &ALICE),
+      total(&active_hold)
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(3);
+    assert_ok!(Actors::deactivate_actor(
+      RuntimeOrigin::signed(ALICE),
+      actor_id,
+    ));
+    assert_eq!(
+      crate::ActorStateHolds::<Test>::get(actor_id),
+      Some(dormant_hold.clone())
+    );
+    assert_eq!(
+      Balances::balance_on_hold(&reason, &ALICE),
+      total(&dormant_hold)
+    );
+    assert_eq!(native_balance(&sovereign), custody);
+
+    frame_system::Pallet::<Test>::set_block_number(4);
+    assert_ok!(Actors::activate_actor(
+      RuntimeOrigin::signed(ALICE),
+      actor_id,
+      contract,
+    ));
+    assert_eq!(
+      crate::ActorStateHolds::<Test>::get(actor_id),
+      Some(active_hold.clone())
+    );
+    assert_eq!(
+      Balances::balance_on_hold(&reason, &ALICE),
+      total(&active_hold)
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(5);
+    assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id,));
+    assert!(!crate::ActorStateHolds::<Test>::contains_key(actor_id));
+    assert_eq!(Balances::balance_on_hold(&reason, &ALICE), 0);
+    assert_eq!(native_balance(&sovereign), custody);
+
+    frame_system::Pallet::<Test>::set_block_number(6);
+    let replacement = NextActorId::<Test>::get();
+    assert_ok!(Actors::create_user_actor_at_slot(
+      RuntimeOrigin::signed(ALICE),
+      owner_slot,
+      Mutability::Mutable,
+      user_active_contract(manual_schedule(), None, inert_contract_steps()),
+    ));
+    assert_ne!(replacement, actor_id);
+    assert_eq!(
+      Actors::actor_identity(replacement)
+        .expect("replacement User is active")
+        .sovereign_account,
+      sovereign,
+    );
+    assert!(crate::ActorStateHolds::<Test>::contains_key(replacement));
+    assert_eq!(native_balance(&sovereign), custody);
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
+  });
+}
+
+#[test]
+fn user_close_reclaims_park_and_pending_without_custody_or_hold_leak() {
+  use polkadot_sdk::frame_support::traits::fungible::InspectHold;
+
+  #[derive(Clone, Copy)]
+  enum Residence {
+    Parked,
+    Pending,
+  }
+
+  for residence in [Residence::Parked, Residence::Pending] {
+    new_test_ext().execute_with(|| {
+      frame_system::Pallet::<Test>::set_block_number(1);
+      let steps = match residence {
+        Residence::Parked => contract_steps_with_step(make_step(Task::StopCycle)),
+        Residence::Pending => inert_contract_steps(),
+      };
+      let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps);
+      if matches!(residence, Residence::Parked) {
+        let mut contract = Actors::load_actor_contract(actor_id).expect("User Contract exists");
+        contract.parked_balance_activation = Some(
+          crate::ParkedBalanceActivationOf::<Test>::try_from_rules(vec![
+            crate::ParkedBalanceRule {
+              asset: TestAsset::Native,
+              authored_min_delta: 100,
+            },
+          ])
+          .expect("Parked Balance activation is valid"),
+        );
+        assert_ok!(Actors::update_contract(
+          RuntimeOrigin::signed(ALICE),
+          actor_id,
+          contract,
+        ));
+      }
+      fund_native(actor_id, 1_000_000_000_000_000_000);
+      let sovereign = sovereign_account(actor_id);
+      assert_ok!(Actors::manual_trigger(
+        RuntimeOrigin::signed(ALICE),
+        actor_id,
+      ));
+      match residence {
+        Residence::Parked => {
+          run_next_idle(Weight::MAX);
+          assert!(matches!(
+            ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+            Some(crate::ProcessResidence::Parked(_)),
+          ));
+          assert!(crate::ParkedBalanceEpisodes::<Test>::contains_key(actor_id));
+          assert!(crate::PendingCheckOwners::<Test>::contains_key(actor_id));
+          assert!(DeadlineHandles::<Test>::contains_key(actor_id));
+        }
+        Residence::Pending => {
+          assert!(matches!(
+            ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+            Some(crate::ProcessResidence::Service(
+              crate::ServiceResidenceKind::Pending
+            )),
+          ));
+          assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+        }
+      }
+      assert!(crate::ActorStateHolds::<Test>::contains_key(actor_id));
+      let custody = native_balance(&sovereign);
+      frame_system::Pallet::<Test>::set_block_number(
+        frame_system::Pallet::<Test>::block_number().saturating_add(1),
+      );
+      assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id,));
+      assert!(!ActorSemanticStates::<Test>::contains_key(actor_id));
+      assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+      assert!(!crate::ServiceNodes::<Test>::contains_key(actor_id));
+      assert!(!crate::ParkedBalanceEpisodes::<Test>::contains_key(
+        actor_id
+      ));
+      assert!(!crate::PendingCheckOwners::<Test>::contains_key(actor_id));
+      assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
+      assert!(!crate::ActorStateHolds::<Test>::contains_key(actor_id));
+      let reason: RuntimeHoldReason = crate::HoldReason::ActorState.into();
+      assert_eq!(Balances::balance_on_hold(&reason, &ALICE), 0);
+      assert_eq!(native_balance(&sovereign), custody);
+      #[cfg(feature = "try-runtime")]
+      assert_ok!(Actors::do_try_state());
+    });
+  }
+}
+
+#[test]
 fn deactivation_removes_active_epoch_and_all_contract_fragments_without_orphans() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -350,8 +559,7 @@ fn deactivation_removes_active_epoch_and_all_contract_fragments_without_orphans(
       assert!(!Actors::actor_control_cell(actor_id).is_some());
       assert!(!ActorContractTailChunks::<Test>::contains_key(actor_id, 0));
       assert!(!ActorContractTailChunks::<Test>::contains_key(actor_id, 1));
-      assert!(!ActorRunHeads::<Test>::contains_key(actor_id));
-      assert!(!ActorRunPayloads::<Test>::contains_key(actor_id));
+      assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
     }
     #[cfg(feature = "try-runtime")]
     assert_ok!(Actors::do_try_state());
@@ -2459,7 +2667,7 @@ fn actor_id_collision_check_uses_frame_authority_with_canonical_control() {
 
 #[test]
 fn actor_id_collision_rejects_each_orphan_canonical_partition_without_writes() {
-  for partition in 0..4 {
+  for partition in 0..2 {
     for actor_type in [ActorType::User, ActorType::System] {
       new_test_ext().execute_with(|| {
         let source = create_suspended_system_retry(1);
@@ -2472,14 +2680,6 @@ fn actor_id_collision_rejects_each_orphan_canonical_partition_without_writes() {
           1 => ActorContractHeads::<Test>::insert(
             target,
             ActorContractHeads::<Test>::get(source).expect("source Contract head"),
-          ),
-          2 => ActorRunHeads::<Test>::insert(
-            target,
-            ActorRunHeads::<Test>::get(source).expect("source Run head"),
-          ),
-          3 => ActorRunPayloads::<Test>::insert(
-            target,
-            ActorRunPayloads::<Test>::get(source).expect("source Run payload"),
           ),
           _ => unreachable!(),
         }
@@ -2559,58 +2759,47 @@ fn duplicate_dormant_and_active_identity_rejects_eligibility_and_close() {
 }
 
 #[test]
-fn eligibility_rejects_partial_or_mismatched_run_tiers_in_nonrunning_states() {
+fn eligibility_rejects_foreign_run_state_in_nonrunning_states() {
   for identity_state in 0..3 {
-    for run_shape in 0..3 {
-      new_test_ext().execute_with(|| {
-        let source = create_suspended_system_retry(1);
-        let target = NextActorId::<Test>::get();
-        match identity_state {
-          0 => assert_eq!(eligibility(target), ActorEligibility::NotRegistered),
-          1 => {
-            assert_ok!(Actors::create_system_actor(
-              RuntimeOrigin::root(),
-              BOB,
-              Mutability::Mutable,
-              None
-            ));
-            assert_eq!(eligibility(target), ActorEligibility::Dormant);
-          }
-          2 => {
-            assert_eq!(
-              create_system_with(BOB, manual_schedule(), None, inert_contract_steps()),
-              target
-            );
-            assert!(matches!(eligibility(target), ActorEligibility::Active(_)));
-          }
-          _ => unreachable!(),
+    new_test_ext().execute_with(|| {
+      let source = create_suspended_system_retry(1);
+      let target = NextActorId::<Test>::get();
+      match identity_state {
+        0 => assert_eq!(eligibility(target), ActorEligibility::NotRegistered),
+        1 => {
+          assert_ok!(Actors::create_system_actor(
+            RuntimeOrigin::root(),
+            BOB,
+            Mutability::Mutable,
+            None
+          ));
+          assert_eq!(eligibility(target), ActorEligibility::Dormant);
         }
-        if run_shape != 0 {
-          let mut head = ActorRunHeads::<Test>::get(source).expect("source Run head");
-          if run_shape == 2 {
-            head.payload_commitment[0] ^= 1;
-          }
-          ActorRunHeads::<Test>::insert(target, head);
-        }
-        if run_shape != 1 {
-          ActorRunPayloads::<Test>::insert(
-            target,
-            ActorRunPayloads::<Test>::get(source).expect("source Run payload"),
+        2 => {
+          assert_eq!(
+            create_system_with(BOB, manual_schedule(), None, inert_contract_steps()),
+            target
           );
+          assert!(matches!(eligibility(target), ActorEligibility::Active(_)));
         }
-        assert!(ActorRunStateStore::<Test>::get(target).is_none());
-        let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-        assert_eq!(
-          Actors::actor_eligibility(target),
-          Err(ActorClassificationError::ActorInvariant)
-        );
-        assert_noop!(
-          Actors::resume_actor(RuntimeOrigin::root(), target),
-          Error::<Test>::ActorInvariant
-        );
-        assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-      });
-    }
+        _ => unreachable!(),
+      }
+      ActorRunStateStore::<Test>::insert(
+        target,
+        ActorRunStateStore::<Test>::get(source).expect("source Run state"),
+      );
+      assert!(ActorRunStateStore::<Test>::get(target).is_some());
+      let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+      assert_eq!(
+        Actors::actor_eligibility(target),
+        Err(ActorClassificationError::ActorInvariant)
+      );
+      assert_noop!(
+        Actors::resume_actor(RuntimeOrigin::root(), target),
+        Error::<Test>::ActorInvariant
+      );
+      assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
+    });
   }
 }
 

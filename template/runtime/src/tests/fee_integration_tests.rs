@@ -1,3 +1,4 @@
+use super::actors_integration_tests::ensure_actor_prepass_context;
 use super::common::{
   ALICE, INITIAL_BALANCE, actor_fee_sink_account, new_test_ext, set_consensus_timestamp,
 };
@@ -50,11 +51,16 @@ fn run_at_cadence_tick(key: WakeupKey<crate::BlockNumber>) {
   let block = crate::System::block_number().saturating_add(1);
   crate::System::set_block_number(block);
   let _ = Actors::on_initialize(block);
+  ensure_actor_prepass_context();
+  assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
   let _ = Actors::on_idle(block, Weight::MAX);
+  Actors::on_finalize(block);
   let eligible_block = block.saturating_add(1);
   crate::System::set_block_number(eligible_block);
   let _ = Actors::on_initialize(eligible_block);
+  assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
   let _ = Actors::on_idle(eligible_block, Weight::MAX);
+  Actors::on_finalize(eligible_block);
 }
 
 fn cadence_key(actor_id: pallet_deos_actors::ActorId) -> WakeupKey<crate::BlockNumber> {
@@ -72,7 +78,10 @@ fn initialize_genesis_fee_sink_cadence(timestamp_millis: u64) -> WakeupKey<crate
   let block = crate::System::block_number().saturating_add(1);
   crate::System::set_block_number(block);
   let _ = Actors::on_initialize(block);
+  ensure_actor_prepass_context();
+  assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
   let _ = Actors::on_idle(block, Weight::MAX);
+  Actors::on_finalize(block);
   cadence_key(fee_sink_id)
 }
 
@@ -273,6 +282,10 @@ fn fee_sink_threshold_admits_exactly_one_ed_per_permissioned_leg() {
 #[cfg(not(feature = "runtime-benchmarks"))]
 fn fee_sink_actor_splits_trusted_set_native_flow_to_staking_and_lp_ingress() {
   new_test_ext().execute_with(|| {
+    assert_eq!(
+      Staking::native_security_mode(),
+      pallet_staking::NativeSecurityMode::TrustedSet
+    );
     let native_asset_id = 0;
     assert_ok!(Assets::force_create(
       RuntimeOrigin::root(),
@@ -372,6 +385,34 @@ fn fee_sink_actor_splits_trusted_set_native_flow_to_staking_and_lp_ingress() {
         amount
           .saturating_sub(primitives::ecosystem::params::FEE_SINK_BUFFER_PCT.mul_floor(amount),),
       )
+    );
+
+    // The second leg transfers native to the Liquidity Actor before converting it to the
+    // registered staking asset. Freezing that asset is a reachable post-preflight failure:
+    // the first staking-pool leg must also roll back, despite having already executed.
+    assert_ok!(Assets::freeze_asset(
+      RuntimeOrigin::signed(ALICE),
+      native_asset_id,
+    ));
+    let sink_before_failure = Balances::free_balance(&fee_sink);
+    let pool_before_failure = Balances::free_balance(&staking_pool);
+    let liquidity_before_failure = Balances::free_balance(&staking_liquidity_actor);
+    let next_cadence = cadence_key(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID);
+    run_at_cadence_tick(next_cadence);
+    assert!(crate::System::events().iter().any(|record| matches!(
+      &record.event,
+      crate::RuntimeEvent::Actors(pallet_deos_actors::Event::StepFailed {
+        actor_id,
+        error,
+        ..
+      }) if *actor_id == primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID
+        && *error == polkadot_sdk::pallet_assets::Error::<Runtime>::AssetNotLive.into()
+    )));
+    assert_eq!(Balances::free_balance(&fee_sink), sink_before_failure);
+    assert_eq!(Balances::free_balance(&staking_pool), pool_before_failure);
+    assert_eq!(
+      Balances::free_balance(&staking_liquidity_actor),
+      liquidity_before_failure
     );
   });
 }

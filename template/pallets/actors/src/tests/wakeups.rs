@@ -112,7 +112,9 @@ fn canonical_temporal_occurrence_ignores_the_legacy_ticket_namespace() {
     let bob_before = native_balance(&BOB);
     System::reset_events();
 
-    run_idle(Weight::MAX);
+    run_canonical_block_at(2, Weight::MAX);
+    assert_eq!(native_balance(&BOB), bob_before);
+    run_canonical_block_at(3, Weight::MAX);
 
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert!(Actors::active_actor_exists(actor_id));
@@ -353,9 +355,8 @@ fn window_expiry_wakeup_closes_inactive_actor_without_identity_scan() {
     );
     assert_eq!(scheduled_wakeup_block(actor_id), Some(102));
     NextActorId::<Test>::put(10_000_000);
-    frame_system::Pallet::<Test>::set_block_number(102);
-    run_idle(Weight::MAX);
-    run_next_idle(Weight::MAX);
+    run_canonical_block_at(102, Weight::MAX);
+    run_canonical_block_at(103, Weight::MAX);
     assert!(Actors::active_actor_view(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,
@@ -381,9 +382,8 @@ fn paused_actor_retains_direct_window_expiry_wakeup() {
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
     assert_eq!(scheduled_wakeup_block(actor_id), Some(102));
-    frame_system::Pallet::<Test>::set_block_number(102);
-    run_idle(Weight::MAX);
-    run_next_idle(Weight::MAX);
+    run_canonical_block_at(102, Weight::MAX);
+    run_canonical_block_at(103, Weight::MAX);
     assert!(Actors::active_actor_view(actor_id).is_none());
   });
 }
@@ -469,8 +469,9 @@ fn timer_wakeup_uses_exact_cadence_without_actor_phase() {
     let actor_id = create_system_with(ALICE, timer_schedule(cadence), None, inert_contract_steps());
     assert_eq!(scheduled_wakeup_block(actor_id), Some(21));
 
-    frame_system::Pallet::<Test>::set_block_number(21);
-    run_idle(Weight::MAX);
+    run_canonical_block_at(21, Weight::MAX);
+    assert_eq!(scheduled_wakeup_block(actor_id), None);
+    run_canonical_block_at(22, Weight::MAX);
     assert_eq!(scheduled_wakeup_block(actor_id), Some(41));
   });
 }

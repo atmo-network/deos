@@ -14,6 +14,8 @@ INTEGRATED_W3_OPENING_MATRIX=0
 INTEGRATED_W4_HETEROGENEOUS_EFFECTS=0
 INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP=0
 INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE=0
+INTEGRATED_CURRENT_W6_WAKE_STORM=0
+INTEGRATED_CURRENT_W7_DEADLINES=0
 INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER=0
 INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE=0
 INTEGRATED_W9_RESOURCE_INDEPENDENCE=0
@@ -87,6 +89,10 @@ Options:
                                   Run native and exact-Wasm W5 lifecycle/retry/cleanup
   --integrated-w6-mixed-arrival-lifecycle
                                   Run native and exact-Wasm W6 clocks/Triggers/churn
+  --integrated-current-w6-wake-storm
+                                  Run exact-Wasm current W6 event-Park scan and bounded drain
+  --integrated-current-w7-deadlines
+                                  Run native/exact-Wasm current W7 Sleep/reentry and bounded drain
   --integrated-w7-due-only-active-frontier
                                   Run native and exact-Wasm W7 active-frontier scaling
   --integrated-w8-tombstone-prefix-chunk-pressure
@@ -122,7 +128,19 @@ The W6 campaign combines dense Manual readiness, sparse block windows, AtTime
 tick deadlines and seeded Cadenced periods with pause/resume, close-created
 tombstones and normal Crossing generation rotation without stale execution.
 Its timeline distinguishes deadline, materialization and service: distinct short
-tick periods can become due together in the same produced block.
+tick periods can become due together in the same produced block. The current W6
+wake-storm campaign binds 1,024 Manual observation-predicate event-Parked Actors in
+32 fixed pages, submits four updates per block for 32 blocks, then observes one
+bounded 32-block drain while retaining false targets and recording exact latches,
+progress, persistent Actors bytes/key mutations and proofs.
+The current W7 deadline campaign creates 1,024 real User retries through signed
+Manual readiness and ordinary funding-unavailable Attempts, with 16 Actors per
+owner across 64 owners. Its 32 C32 deadline pages become due 32 Actors/block for
+32 blocks, followed by a fixed 32-block drain. It checks due-key/slot extraction
+order, B+1 return service, retry exhaustion and custody neutrality, reporting
+unfinished Sleep/Service obligations, persistent bytes/key mutations and proofs.
+The 64 setup blocks remain separate from the 64-block measurement horizon; every
+block is replayed against the pinned Wasm. A false completion target is retained.
 The W7 campaign compares one 100-due-Actor control with the same due frontier at
 10,000 total identities: 4,943 future, 4,942 unsignaled, and 15 retained reference
 identities form the 9,900 non-due population. Both profiles must preserve exact
@@ -200,6 +218,12 @@ parse_args() {
             --integrated-w6-mixed-arrival-lifecycle)
                 INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE=1
                 ;;
+            --integrated-current-w6-wake-storm)
+                INTEGRATED_CURRENT_W6_WAKE_STORM=1
+                ;;
+            --integrated-current-w7-deadlines)
+                INTEGRATED_CURRENT_W7_DEADLINES=1
+                ;;
             --integrated-w7-due-only-active-frontier)
                 INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER=1
                 ;;
@@ -230,7 +254,7 @@ parse_args() {
         esac
         shift
     done
-    local integrated_count=$((INTEGRATED_W0_W1 + INTEGRATED_W1_ACTOR_ONLY + INTEGRATED_W1_CONTINUOUS_USER + INTEGRATED_W2_SCHEDULES + INTEGRATED_W3_OPENING_MATRIX + INTEGRATED_W4_HETEROGENEOUS_EFFECTS + INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP + INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE + INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER + INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE + INTEGRATED_W9_RESOURCE_INDEPENDENCE + INTEGRATED_CONTROL_ATTRIBUTION + INTEGRATED_FUNDED_USER_ACTION))
+    local integrated_count=$((INTEGRATED_W0_W1 + INTEGRATED_W1_ACTOR_ONLY + INTEGRATED_W1_CONTINUOUS_USER + INTEGRATED_W2_SCHEDULES + INTEGRATED_W3_OPENING_MATRIX + INTEGRATED_W4_HETEROGENEOUS_EFFECTS + INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP + INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE + INTEGRATED_CURRENT_W6_WAKE_STORM + INTEGRATED_CURRENT_W7_DEADLINES + INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER + INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE + INTEGRATED_W9_RESOURCE_INDEPENDENCE + INTEGRATED_CONTROL_ATTRIBUTION + INTEGRATED_FUNDED_USER_ACTION))
     if [[ "$integrated_count" -gt 1 ]]; then
         log_error "Select exactly one integrated EXP-0066 cohort"
         exit 2
@@ -654,6 +678,43 @@ run_integrated_w6_mixed_arrival_lifecycle_gate() {
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
 
+run_integrated_current_w7_deadlines_gate() {
+    local native_profile="full_executive_current_w7_deadline_fixture"
+    local wasm_profile="full_executive_current_w7_deadlines_replay_exact_production_wasm"
+    local listing matches profile
+    listing="$(cd "$TEMPLATE_DIR" && cargo test --release -p deos-runtime --locked -- --list 2>/dev/null)"
+    for profile in "$native_profile" "$wasm_profile"; do
+        matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
+        if [[ "$matches" -ne 1 ]]; then
+            log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
+            return 1
+        fi
+    done
+    run_shell_step \
+        "Current W7 gate: native full-Executive Sleep/reentry fixture" \
+        "" \
+        "cd \"$TEMPLATE_DIR\" && cargo test --release -p deos-runtime --locked '$native_profile' -- --ignored --nocapture"
+    run_shell_step \
+        "Current W7 gate: exact production-Wasm Sleep/reentry and bounded drain" \
+        "" \
+        "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
+}
+
+run_integrated_current_w6_wake_storm_gate() {
+    local profile="full_executive_current_w6_wake_storm_replays_exact_production_wasm"
+    local listing matches
+    listing="$(cd "$TEMPLATE_DIR" && cargo test --release -p deos-runtime --locked -- --list 2>/dev/null)"
+    matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
+    if [[ "$matches" -ne 1 ]]; then
+        log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
+        return 1
+    fi
+    run_shell_step \
+        "Current W6 gate: exact production-Wasm observation wake storm and drain" \
+        "" \
+        "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
+}
+
 run_integrated_w7_due_only_active_frontier_gate() {
     local native_profile="full_executive_w7_due_only_active_frontier_fixture_scales_independently"
     local wasm_profile="full_executive_w7_due_only_active_frontier_campaign_replays_exact_production_wasm"
@@ -885,7 +946,7 @@ main() {
     capture_evidence_identity
     snapshot_wasm_artifact
     trap restore_wasm_artifact EXIT
-    log_info "Profile: $CARGO_PROFILE | quick: $QUICK_MODE | exact-heavy-profile: ${EXACT_HEAVY_PROFILE:-none} | production-reference-replay: $PRODUCTION_REFERENCE_REPLAY | occupancy: $INCLUDE_OCCUPANCY_PROFILE | integrated-w0-w1: $INTEGRATED_W0_W1 | integrated-w1-actor-only: $INTEGRATED_W1_ACTOR_ONLY | integrated-w1-continuous-user: $INTEGRATED_W1_CONTINUOUS_USER | integrated-w2-schedules: $INTEGRATED_W2_SCHEDULES | integrated-w3-opening-matrix: $INTEGRATED_W3_OPENING_MATRIX | integrated-w4-heterogeneous-effects: $INTEGRATED_W4_HETEROGENEOUS_EFFECTS | integrated-w5-lifecycle-retry-cleanup: $INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP | integrated-w6-mixed-arrival-lifecycle: $INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE | integrated-w7-due-only-active-frontier: $INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER | integrated-w8-tombstone-prefix-chunk-pressure: $INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE | integrated-w9-resource-independence: $INTEGRATED_W9_RESOURCE_INDEPENDENCE | integrated-control-attribution: $INTEGRATED_CONTROL_ATTRIBUTION | integrated-funded-user-action: $INTEGRATED_FUNDED_USER_ACTION | backpressure-audit: $BACKPRESSURE_AUDIT"
+    log_info "Profile: $CARGO_PROFILE | quick: $QUICK_MODE | exact-heavy-profile: ${EXACT_HEAVY_PROFILE:-none} | production-reference-replay: $PRODUCTION_REFERENCE_REPLAY | occupancy: $INCLUDE_OCCUPANCY_PROFILE | integrated-w0-w1: $INTEGRATED_W0_W1 | integrated-w1-actor-only: $INTEGRATED_W1_ACTOR_ONLY | integrated-w1-continuous-user: $INTEGRATED_W1_CONTINUOUS_USER | integrated-w2-schedules: $INTEGRATED_W2_SCHEDULES | integrated-w3-opening-matrix: $INTEGRATED_W3_OPENING_MATRIX | integrated-w4-heterogeneous-effects: $INTEGRATED_W4_HETEROGENEOUS_EFFECTS | integrated-w5-lifecycle-retry-cleanup: $INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP | integrated-w6-mixed-arrival-lifecycle: $INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE | integrated-current-w6-wake-storm: $INTEGRATED_CURRENT_W6_WAKE_STORM | integrated-current-w7-deadlines: $INTEGRATED_CURRENT_W7_DEADLINES | integrated-w7-due-only-active-frontier: $INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER | integrated-w8-tombstone-prefix-chunk-pressure: $INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE | integrated-w9-resource-independence: $INTEGRATED_W9_RESOURCE_INDEPENDENCE | integrated-control-attribution: $INTEGRATED_CONTROL_ATTRIBUTION | integrated-funded-user-action: $INTEGRATED_FUNDED_USER_ACTION | backpressure-audit: $BACKPRESSURE_AUDIT"
     if [[ "$BACKPRESSURE_AUDIT" == "1" ]]; then
         run_backpressure_audit
     elif [[ -n "$EXACT_HEAVY_PROFILE" ]]; then
@@ -908,6 +969,10 @@ main() {
         run_integrated_w5_lifecycle_retry_cleanup_gate
     elif [[ "$INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE" == "1" ]]; then
         run_integrated_w6_mixed_arrival_lifecycle_gate
+    elif [[ "$INTEGRATED_CURRENT_W6_WAKE_STORM" == "1" ]]; then
+        run_integrated_current_w6_wake_storm_gate
+    elif [[ "$INTEGRATED_CURRENT_W7_DEADLINES" == "1" ]]; then
+        run_integrated_current_w7_deadlines_gate
     elif [[ "$INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER" == "1" ]]; then
         run_integrated_w7_due_only_active_frontier_gate
     elif [[ "$INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE" == "1" ]]; then

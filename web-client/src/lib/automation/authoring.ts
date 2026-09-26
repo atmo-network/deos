@@ -242,7 +242,7 @@ export const DEOS_ACTORS_AUTHORING_LIMITS: ActorAuthoringLimits = {
   maxPreconditionClauses: ACTORS_MAX_PRECONDITION_CLAUSES,
   maxPredicatesPerClause: ACTORS_MAX_PREDICATES_PER_CLAUSE,
   maxConditionsPerStep: ACTORS_MAX_PREDICATES_PER_STEP,
-  maxSplitTransferLegs: 8,
+  maxSplitTransferLegs: 4,
   maxWhitelistSize: 16,
 };
 

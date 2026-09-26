@@ -707,6 +707,105 @@ impl<ObservationFeedId> ObservationCrossing<ObservationFeedId> {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
 )]
+pub struct ParkedBalanceRule<AssetId, Balance> {
+  pub asset: AssetId,
+  pub authored_min_delta: Balance,
+}
+
+#[derive(Decode, DecodeWithMemTracking, Encode, MaxEncodedLen, TypeInfo)]
+#[scale_info(skip_type_params(MaxAssets))]
+pub struct ParkedBalanceActivation<AssetId, Balance, MaxAssets: Get<u32>> {
+  pub watches: BoundedVec<ParkedBalanceRule<AssetId, Balance>, MaxAssets>,
+}
+
+impl<AssetId: Clone, Balance: Clone, MaxAssets: Get<u32>> Clone
+  for ParkedBalanceActivation<AssetId, Balance, MaxAssets>
+{
+  fn clone(&self) -> Self {
+    Self {
+      watches: self.watches.clone(),
+    }
+  }
+}
+
+impl<AssetId: core::fmt::Debug, Balance: core::fmt::Debug, MaxAssets: Get<u32>> core::fmt::Debug
+  for ParkedBalanceActivation<AssetId, Balance, MaxAssets>
+{
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    f.debug_struct("ParkedBalanceActivation")
+      .field("watches", &self.watches)
+      .finish()
+  }
+}
+
+impl<AssetId: PartialEq, Balance: PartialEq, MaxAssets: Get<u32>> PartialEq
+  for ParkedBalanceActivation<AssetId, Balance, MaxAssets>
+{
+  fn eq(&self, other: &Self) -> bool {
+    self.watches == other.watches
+  }
+}
+
+impl<AssetId: Eq, Balance: Eq, MaxAssets: Get<u32>> Eq
+  for ParkedBalanceActivation<AssetId, Balance, MaxAssets>
+{
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParkedBalanceActivationError {
+  Empty,
+  TooManyAssets,
+  DuplicateAsset,
+  ZeroAuthoredMinimum,
+}
+
+impl<AssetId, Balance, MaxAssets> ParkedBalanceActivation<AssetId, Balance, MaxAssets>
+where
+  AssetId: Ord,
+  Balance: Zero,
+  MaxAssets: Get<u32>,
+{
+  /// Confirms decoded storage or call input has the same nonempty, strict ordering and nonzero
+  /// minimums produced by [`Self::try_from_rules`].
+  pub fn is_canonical(&self) -> bool {
+    !self.watches.is_empty()
+      && self
+        .watches
+        .iter(/* deos-bypass: bounded-iter -- MaxAssets bounds authored parked-balance watches. */)
+        .all(|rule| !rule.authored_min_delta.is_zero())
+      && self
+        .watches
+        .windows(2)
+        .all(|pair| pair[0].asset < pair[1].asset)
+  }
+
+  /// Canonicalizes one authored watch set by asset and rejects ambiguous or inert entries.
+  pub fn try_from_rules(
+    mut rules: Vec<ParkedBalanceRule<AssetId, Balance>>,
+  ) -> Result<Self, ParkedBalanceActivationError> {
+    if rules.is_empty() {
+      return Err(ParkedBalanceActivationError::Empty);
+    }
+    if rules
+      .iter(/* deos-bypass: bounded-iter -- MaxAssets bounds authored parked-balance watches. */)
+      .any(|rule| rule.authored_min_delta.is_zero())
+    {
+      return Err(ParkedBalanceActivationError::ZeroAuthoredMinimum);
+    }
+    rules.sort_by(|left, right| left.asset.cmp(&right.asset));
+    if rules.windows(2).any(|pair| pair[0].asset == pair[1].asset) {
+      return Err(ParkedBalanceActivationError::DuplicateAsset);
+    }
+    Ok(Self {
+      watches: BoundedVec::try_from(rules)
+        .map_err(|_| ParkedBalanceActivationError::TooManyAssets)?,
+    })
+  }
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
 pub enum TriggerFamily {
   Manual,
   AddressEvent,
@@ -1335,26 +1434,6 @@ impl<AccountId: Eq, MaxSignedFundingSources: Get<u32>> Eq
 {
 }
 
-#[derive(
-  Clone,
-  Copy,
-  Debug,
-  Decode,
-  DecodeWithMemTracking,
-  Encode,
-  Eq,
-  Ord,
-  PartialEq,
-  PartialOrd,
-  TypeInfo,
-  MaxEncodedLen,
-)]
-pub enum OpeningSurface<AssetId> {
-  PreservableAsset(AssetId),
-  TargetAsset(AssetId),
-  StakingShares(AssetId),
-}
-
 pub const ACTOR_CONTRACT_HASH_DOMAIN: [u8; 19] = *b"DEOS_ACTOR_CONTRACT";
 pub const ACTOR_BODY_HASH_DOMAIN: [u8; 15] = *b"DEOS_ACTOR_BODY";
 pub const ACTOR_ADMISSION_HASH_DOMAIN: [u8; 20] = *b"DEOS_ACTOR_ADMISSION";
@@ -1365,13 +1444,14 @@ pub const MAX_STEPS_PER_TAIL_CHUNK: u32 = 4;
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActorContract<Trigger, BlockNumber, Steps, FundingPolicy> {
+pub struct ActorContract<Trigger, BlockNumber, Steps, FundingPolicy, ParkedBalance> {
   pub trigger: Trigger,
   pub cooldown_blocks: u32,
   pub window: Option<ScheduleWindow<BlockNumber>>,
   pub steps: Steps,
   pub funding: FundingPolicy,
   pub completion: CompletionPolicy,
+  pub parked_balance_activation: Option<ParkedBalance>,
   pub auto_close_at_cycle_nonce: Option<u64>,
 }
 
@@ -1386,12 +1466,13 @@ pub struct PipelineMachineEnvelope<Balance> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActorContractHeader<Trigger, BlockNumber, FundingPolicy, Balance, Hash> {
+pub struct ActorContractHeader<Trigger, BlockNumber, FundingPolicy, ParkedBalance, Balance, Hash> {
   pub trigger: Trigger,
   pub cooldown_blocks: u32,
   pub window: Option<ScheduleWindow<BlockNumber>>,
   pub funding: FundingPolicy,
   pub completion: CompletionPolicy,
+  pub parked_balance_activation: Option<ParkedBalance>,
   pub auto_close_at_cycle_nonce: Option<u64>,
   pub step_count: u32,
   pub semantic_contract_id: Hash,
@@ -1612,8 +1693,8 @@ impl<ActorId: PartialEq, Hash: PartialEq, Steps, Resources>
   }
 }
 
-impl<Trigger, BlockNumber, Steps, FundingPolicy>
-  ActorContract<Trigger, BlockNumber, Steps, FundingPolicy>
+impl<Trigger, BlockNumber, Steps, FundingPolicy, ParkedBalance>
+  ActorContract<Trigger, BlockNumber, Steps, FundingPolicy, ParkedBalance>
 {
   pub fn semantic_contract_id(&self) -> [u8; 32]
   where
@@ -1621,6 +1702,7 @@ impl<Trigger, BlockNumber, Steps, FundingPolicy>
     BlockNumber: Encode,
     Steps: Encode,
     FundingPolicy: Encode,
+    ParkedBalance: Encode,
   {
     (
       ACTOR_CONTRACT_HASH_DOMAIN,
@@ -1630,6 +1712,7 @@ impl<Trigger, BlockNumber, Steps, FundingPolicy>
         &self.window,
         &self.funding,
         self.completion,
+        &self.parked_balance_activation,
         self.auto_close_at_cycle_nonce,
       ),
       &self.steps,
@@ -1660,12 +1743,13 @@ impl<Trigger, BlockNumber, Steps, FundingPolicy>
     body_commitment: Hash,
     admission_identity: Hash,
     pipeline_machine_envelope: PipelineMachineEnvelope<Balance>,
-  ) -> Option<ActorContractHeader<Trigger, BlockNumber, FundingPolicy, Balance, Hash>>
+  ) -> Option<ActorContractHeader<Trigger, BlockNumber, FundingPolicy, ParkedBalance, Balance, Hash>>
   where
     Trigger: Clone,
     BlockNumber: Clone,
     Steps: AsRef<[Step]>,
     FundingPolicy: Clone,
+    ParkedBalance: Clone,
   {
     let step_count = u32::try_from(self.steps.as_ref().len()).ok()?;
     Some(ActorContractHeader {
@@ -1674,6 +1758,7 @@ impl<Trigger, BlockNumber, Steps, FundingPolicy>
       window: self.window.clone(),
       funding: self.funding.clone(),
       completion: self.completion,
+      parked_balance_activation: self.parked_balance_activation.clone(),
       auto_close_at_cycle_nonce: self.auto_close_at_cycle_nonce,
       step_count,
       semantic_contract_id,

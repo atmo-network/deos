@@ -53,12 +53,13 @@ pub use scheduler::EnqueueOutcome;
 pub mod adapters;
 pub use adapters::{
   AddressEventIngress, AdmissionCertificateAuthority, AdmissionCertificateAuthorityProvider,
-  AssetOps, CanonicalObservationState, DependencyEventIngress, DexOps, DexSwapOutcome,
-  ExecutionContext, FundingAuthority, IngressFailure, LiquidityOps, ObservationProvider,
-  ObservationTransition, ObservationTransitionIngress, RetryClass, ScalarObservationState,
-  SovereignAccountDeriver, StakingOps, StepControlExecution, StepControlOutcome, StepControlPhase,
-  StepControlPlacement, StepControlWeightContext, StepControlWeightProvider,
-  SystemActorContractValidator, TaskEffectExecution, TaskEffectWeightProvider, TaskFailure,
+  AssetOps, BalanceTransitionIngress, CanonicalObservationState, DependencyEventIngress, DexOps,
+  DexSwapOutcome, ExecutionContext, FundingAuthority, IngressFailure, LiquidityOps,
+  ObservationProvider, ObservationTransition, ObservationTransitionIngress, RetryClass,
+  ScalarObservationState, SovereignAccountDeriver, StakingOps, StepControlExecution,
+  StepControlOutcome, StepControlPhase, StepControlPlacement, StepControlWeightContext,
+  StepControlWeightProvider, SystemActorContractValidator, TaskEffectExecution,
+  TaskEffectWeightProvider, TaskFailure,
 };
 pub use types::{
   ActorStepResourceReservation, AddressEvent, BlockResourceBudget, BlockResourceDomain,
@@ -108,6 +109,14 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance, ObservationFeedId> {
   fn setup_donate_liquidity(
     owner: &AccountId,
   ) -> Result<(AssetId, AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
+  /// Optional host conversion fixture: pool endpoint, active recipient, minted asset, Actor ID.
+  fn setup_native_conversion_ingress(
+    _owner: &AccountId,
+  ) -> Result<(AccountId, AccountId, AssetId, ActorId), polkadot_sdk::sp_runtime::DispatchError> {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "BenchmarkNativeConversionUnsupported",
+    ))
+  }
   fn setup_remove_liquidity(
     owner: &AccountId,
   ) -> Result<(AssetId, AssetId, AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
@@ -117,15 +126,6 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance, ObservationFeedId> {
   fn setup_unstake(
     owner: &AccountId,
   ) -> Result<(AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
-  /// Prepare distinct funded positions with maximum encoded host receipt-account state.
-  fn setup_max_encoded_staking_positions(
-    _owner: &AccountId,
-    _max: u32,
-  ) -> Result<alloc::vec::Vec<(AssetId, Balance)>, polkadot_sdk::sp_runtime::DispatchError> {
-    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
-      "BenchmarkMaximumStakingEncodingUnsupported",
-    ))
-  }
   /// Remove an empty receipt through the host lifecycle after an Unstake Contract is admitted.
   fn remove_empty_staking_receipt(
     _owner: &AccountId,
@@ -146,6 +146,16 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance, ObservationFeedId> {
     owner: &AccountId,
     max: u32,
   ) -> Result<alloc::vec::Vec<AssetId>, polkadot_sdk::sp_runtime::DispatchError>;
+  /// Fund a two-leg SplitTransfer source and return (asset, total, empty recipient).
+  /// Half may reach the funded owner; the other half must fail the host's deposit minimum.
+  fn setup_temporary_split_transfer(
+    _owner: &AccountId,
+    _actor: &AccountId,
+  ) -> Result<(AssetId, Balance, AccountId), polkadot_sdk::sp_runtime::DispatchError> {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "BenchmarkTemporarySplitUnsupported",
+    ))
+  }
   /// Prepare distinct assets with maximum encoded host balance-account state.
   fn setup_max_encoded_predicate_assets(
     _owner: &AccountId,
@@ -492,7 +502,7 @@ pub mod pallet {
     contract_steps_bound_is_valid,
   };
   use crate::adapters::{
-    RetryClass, SovereignAccountDeriver as _, SovereignAccountPolicy, StakingOps as _,
+    RetryClass, SovereignAccountDeriver as _, SovereignAccountPolicy,
     SystemActorContractValidator as _,
   };
   use crate::scheduler::{CyclePass, ServiceCutoff};
@@ -582,8 +592,6 @@ pub mod pallet {
     type MaxContractSteps: Get<u32>;
     #[pallet::constant]
     type MaxFundingTrackedAssets: Get<u32>;
-    #[pallet::constant]
-    type MaxOpeningSnapshotEntries: Get<u32>;
     #[pallet::constant]
     type MaxPreconditionClauses: Get<u32>;
     #[pallet::constant]
@@ -765,6 +773,23 @@ pub mod pallet {
     <T as Config>::ObservationFeedId,
   >;
 
+  pub type ParkedBalanceActivationOf<T> = ParkedBalanceActivation<
+    <T as Config>::AssetId,
+    <T as Config>::Balance,
+    <T as Config>::MaxWhitelistSize,
+  >;
+
+  pub type ParkedBalanceWatchesOf<T> = BoundedVec<
+    ParkedBalanceWatch<<T as Config>::AssetId, <T as Config>::Balance>,
+    <T as Config>::MaxWhitelistSize,
+  >;
+
+  pub type ParkedBalanceEpisodeOf<T> = ParkedBalanceEpisode<
+    <T as Config>::AssetId,
+    <T as Config>::Balance,
+    <T as Config>::MaxWhitelistSize,
+  >;
+
   pub type PreconditionOf<T> = Precondition<
     Predicate<
       <T as Config>::AssetId,
@@ -811,12 +836,14 @@ pub mod pallet {
     BlockNumberFor<T>,
     ContractSteps<T>,
     FundingSourcePolicyOf<T>,
+    ParkedBalanceActivationOf<T>,
   >;
 
   pub type ActorContractHeaderOf<T> = super::types::ActorContractHeader<
     TriggerOf<T>,
     BlockNumberFor<T>,
     FundingSourcePolicyOf<T>,
+    ParkedBalanceActivationOf<T>,
     <T as Config>::Balance,
     [u8; 32],
   >;
@@ -860,37 +887,7 @@ pub mod pallet {
     StepFeeBreakdown<<T as Config>::Balance>,
   >;
 
-  pub type FundingAccumulatedOf<T> = BoundedBTreeMap<
-    <T as Config>::AssetId,
-    <T as Config>::Balance,
-    <T as Config>::MaxFundingTrackedAssets,
-  >;
-
-  pub type FundingTrackedAssetsOf<T> =
-    BoundedBTreeSet<<T as Config>::AssetId, <T as Config>::MaxFundingTrackedAssets>;
-
-  pub type FundingSnapshotOf<T> = FundingAccumulatedOf<T>;
-
-  pub type RunOpeningSnapshotOf<T> = BoundedBTreeMap<
-    OpeningSurface<<T as Config>::AssetId>,
-    <T as Config>::Balance,
-    <T as Config>::MaxOpeningSnapshotEntries,
-  >;
-
-  pub type ActorRunHeadOf<T> = ActorRunHead<BlockNumberFor<T>>;
-
-  pub type ActorRunPayloadOf<T> = ActorRunPayload<
-    <T as Config>::AssetId,
-    <T as Config>::Balance,
-    <T as Config>::MaxOpeningSnapshotEntries,
-  >;
-
-  pub type ActorRunStateOf<T> = ActorRunState<
-    <T as Config>::AssetId,
-    <T as Config>::Balance,
-    BlockNumberFor<T>,
-    <T as Config>::MaxOpeningSnapshotEntries,
-  >;
+  pub type ActorRunStateOf<T> = ActorRunState<BlockNumberFor<T>>;
 
   pub type QueuePageOf<T> = BoundedVec<QueueEntry<BlockNumberFor<T>>, <T as Config>::QueuePageSize>;
 
@@ -949,7 +946,7 @@ pub mod pallet {
     pub generation: u64,
   }
 
-  /// Complete lifecycle shape for the future actor-keyed semantic owner. Active zero-Step Actors
+  /// Complete lifecycle shape for the canonical actor-keyed semantic owner. Active zero-Step Actors
   /// still use `Active` because they retain generation, hot, and admission semantics even though
   /// execution projection has no current Step.
   #[derive(
@@ -969,7 +966,7 @@ pub mod pallet {
     Corrupt,
   }
 
-  /// Complete storage-neutral operation set for the future actor-keyed semantic owner. Every
+  /// Complete storage-neutral operation set for the canonical actor-keyed semantic owner. Every
   /// update is a compare-and-replace of the whole bounded record, so independently authored field
   /// patches cannot silently overwrite one another. Placement-only transitions need no operation.
   #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1201,7 +1198,7 @@ pub mod pallet {
     pub hot: ActorHotStateOf<T>,
     pub authority: ActorActivationAuthorityOf<T>,
     pub admission: Option<ActorAdmissionCertificateOf<T>>,
-    pub run_head: Option<ActorRunHeadOf<T>>,
+    pub run_state: Option<ActorRunStateOf<T>>,
     pub loaded_step: Option<LoadedActorStepOf<T>>,
   }
 
@@ -1238,68 +1235,9 @@ pub mod pallet {
   >;
 
   #[pallet::storage]
-  #[pallet::storage_prefix = "ActorRunHead"]
-  pub type ActorRunHeads<T: Config> =
-    StorageMap<_, Blake2_128Concat, ActorId, ActorRunHeadOf<T>, OptionQuery>;
-
-  #[pallet::storage]
-  #[pallet::storage_prefix = "ActorRunPayload"]
-  pub type ActorRunPayloads<T: Config> =
-    StorageMap<_, Blake2_128Concat, ActorId, ActorRunPayloadOf<T>, OptionQuery>;
-
-  pub struct ActorRunStateStore<T: Config>(core::marker::PhantomData<T>);
-
-  impl<T: Config> ActorRunStateStore<T> {
-    pub fn get(actor_id: ActorId) -> Option<ActorRunStateOf<T>> {
-      ActorRunState::from_tiers(
-        ActorRunHeads::<T>::get(actor_id)?,
-        ActorRunPayloads::<T>::get(actor_id)?,
-      )
-    }
-
-    pub fn insert(actor_id: ActorId, state: ActorRunStateOf<T>) {
-      let (head, payload) = state.into_tiers();
-      let payload_changed = ActorRunHeads::<T>::get(actor_id)
-        .is_none_or(|current| current.payload_commitment != head.payload_commitment);
-      ActorRunHeads::<T>::insert(actor_id, head);
-      if payload_changed {
-        ActorRunPayloads::<T>::insert(actor_id, payload);
-      }
-    }
-
-    pub fn remove(actor_id: ActorId) {
-      ActorRunHeads::<T>::remove(actor_id);
-      ActorRunPayloads::<T>::remove(actor_id);
-    }
-
-    pub fn take(actor_id: ActorId) -> Option<ActorRunStateOf<T>> {
-      let state = Self::get(actor_id)?;
-      Self::remove(actor_id);
-      Some(state)
-    }
-
-    pub fn contains_key(actor_id: ActorId) -> bool {
-      ActorRunHeads::<T>::contains_key(actor_id) && ActorRunPayloads::<T>::contains_key(actor_id)
-    }
-
-    pub fn iter_keys() -> impl Iterator<Item = ActorId> {
-      ActorRunHeads::<T>::iter_keys()
-    }
-
-    pub fn mutate<R>(
-      actor_id: ActorId,
-      mutate: impl FnOnce(&mut Option<ActorRunStateOf<T>>) -> R,
-    ) -> R {
-      let mut state = Self::get(actor_id);
-      let result = mutate(&mut state);
-      if let Some(state) = state {
-        Self::insert(actor_id, state);
-      } else {
-        Self::remove(actor_id);
-      }
-      result
-    }
-  }
+  #[pallet::storage_prefix = "ActorRunState"]
+  pub type ActorRunStateStore<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ActorRunStateOf<T>, OptionQuery>;
 
   impl<T: Config> Pallet<T> {
     pub fn actor_run_state(actor_id: ActorId) -> Option<ActorRunStateOf<T>> {
@@ -1398,6 +1336,37 @@ pub mod pallet {
 
     pub(crate) fn load_actor_contract(actor_id: ActorId) -> Option<ActorContractOf<T>> {
       Self::load_admitted_contract_geometry(actor_id).map(|(contract, _)| contract)
+    }
+
+    /// Captures one complete fixed-anchor episode from authoritative host total ownership. The
+    /// authored plan is already canonical and bounded; failure returns no partial certificate.
+    #[allow(
+      dead_code,
+      reason = "parked-balance certification is staged behind Actor Contract admission"
+    )]
+    pub(crate) fn certify_parked_balance_activation(
+      sovereign_account: &T::AccountId,
+      activation: &ParkedBalanceActivationOf<T>,
+      acknowledged_revision: DependencyRevision,
+    ) -> Result<ParkedBalanceWatchesOf<T>, ParkedBalanceCertificationError> {
+      let mut watches = ParkedBalanceWatchesOf::<T>::default();
+      for rule in activation.watches.iter(
+        /* deos-bypass: bounded-iter -- MaxWhitelistSize bounds the canonical authored plan. */
+      ) {
+        let minimum_balance = T::AssetOps::minimum_balance(rule.asset);
+        let anchor = T::AssetOps::total_balance(sovereign_account, rule.asset);
+        let watch = certify_parked_balance_watch(
+          rule.asset,
+          rule.authored_min_delta,
+          minimum_balance,
+          anchor,
+          acknowledged_revision,
+        )?;
+        watches
+          .try_push(watch)
+          .map_err(|_| ParkedBalanceCertificationError::PlanCapacityExceeded)?;
+      }
+      Ok(watches)
     }
 
     pub(crate) fn store_actor_contract(
@@ -1500,28 +1469,6 @@ pub mod pallet {
         Error::<T>::ActorInvariant
       );
       Ok(())
-    }
-
-    #[cfg(all(test, feature = "runtime-benchmarks"))]
-    pub(crate) fn control_remove_frame_owned_contract_geometry(
-      actor_id: ActorId,
-      contract: &ActorContractOf<T>,
-    ) -> bool {
-      if !ActorContractHeads::<T>::contains_key(actor_id) {
-        return false;
-      }
-      let Some(chunk_count) = u32::try_from(contract.steps.len())
-        .ok()
-        .map(|count| count.saturating_sub(1).div_ceil(MAX_STEPS_PER_TAIL_CHUNK))
-      else {
-        return false;
-      };
-      ActorActivationAuthorities::<T>::remove(actor_id);
-      ActorContractHeads::<T>::remove(actor_id);
-      for chunk_index in 0..chunk_count {
-        ActorContractTailChunks::<T>::remove(actor_id, chunk_index);
-      }
-      true
     }
 
     #[cfg(any(test, feature = "runtime-benchmarks"))]
@@ -1745,6 +1692,11 @@ pub mod pallet {
         }
         Some(ProcessResidence::Deadline { .. }) => {
           if Self::remove_deadline_member(actor).is_err() {
+            return false;
+          }
+        }
+        Some(ProcessResidence::Parked(evidence)) => {
+          if Self::release_parked_dependency_authority(actor, evidence).is_err() {
             return false;
           }
         }
@@ -2039,7 +1991,6 @@ pub mod pallet {
       step_count: u32,
       cursor: u32,
       predicate_evaluation_units: u32,
-      opening_snapshot_entries: u32,
     ) -> Option<StepControlWeightContext> {
       if step_count == 0 || step_count > T::MaxContractSteps::get() || cursor >= step_count {
         return None;
@@ -2052,7 +2003,6 @@ pub mod pallet {
             .saturating_sub(1)
             .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
           predicate_evaluation_units,
-          opening_snapshot_entries,
         });
       }
       let chunk_index = cursor.checked_sub(1)? / MAX_STEPS_PER_TAIL_CHUNK;
@@ -2065,17 +2015,11 @@ pub mod pallet {
           .min(MAX_STEPS_PER_TAIL_CHUNK),
         opening_tail_chunks: 0,
         predicate_evaluation_units,
-        opening_snapshot_entries: 0,
       })
-    }
-
-    fn opening_control_geometry(_steps: &ContractSteps<T>) -> Option<u32> {
-      Some(0)
     }
 
     pub(crate) fn execution_step_control_weight_context(
       instance: &ActiveActorViewOf<T>,
-      run: Option<&ActorRunStateOf<T>>,
       loaded_step: &LoadedActorStepOf<T>,
     ) -> Option<StepControlWeightContext> {
       let step_count = u32::try_from(instance.steps.len()).ok()?;
@@ -2088,28 +2032,13 @@ pub mod pallet {
         .precondition
         .as_ref()
         .map_or(0, Precondition::evaluation_units);
-      let opening_snapshot_entries = if cursor == 0 {
-        if instance.cycle_state == CycleState::Idle {
-          Self::opening_control_geometry(&instance.steps)?
-        } else {
-          u32::try_from(run?.opening_snapshot.len()).ok()?
-        }
-      } else {
-        0
-      };
-      Self::step_control_weight_context(
-        step_count,
-        cursor,
-        predicate_evaluation_units,
-        opening_snapshot_entries,
-      )
+      Self::step_control_weight_context(step_count, cursor, predicate_evaluation_units)
     }
 
     pub(crate) fn derive_step_resource_envelopes(
       contract: &ActorContractOf<T>,
     ) -> Option<ActorAdmissionResourcesOf<T>> {
       let step_count = u32::try_from(contract.steps.len()).ok()?;
-      let opening_snapshot_entries = Self::opening_control_geometry(&contract.steps)?;
       contract
         .steps
         .iter(/* deos-bypass: bounded-iter */)
@@ -2120,14 +2049,17 @@ pub mod pallet {
             .precondition
             .as_ref()
             .map_or(0, Precondition::evaluation_units);
-          let context = Self::step_control_weight_context(
-            step_count,
-            cursor,
-            predicate_evaluation_units,
-            opening_snapshot_entries,
-          )?;
+          let context =
+            Self::step_control_weight_context(step_count, cursor, predicate_evaluation_units)?;
+          let completion = contract
+            .parked_balance_activation
+            .as_ref()
+            .map_or(Weight::zero(), |_| {
+              T::WeightInfo::complete_cycle_to_parked_balance()
+            });
           Some(ActorStepResourceEnvelope {
-            control: T::StepControlWeight::maximum_control_weight(context, step)?,
+            control: T::StepControlWeight::maximum_control_weight(context, step)?
+              .saturating_add(completion),
             effect: T::TaskEffectWeight::maximum_effect_weight(&step.task)?,
           })
         })
@@ -2865,10 +2797,6 @@ pub mod pallet {
 
     /// Appends one generation-bound process to the inert service ring. The caller's transaction
     /// must publish the matching process and remove legacy authority before entering this boundary.
-    #[allow(
-      dead_code,
-      reason = "service-ring mutation remains unreachable until the complete carrier cutover"
-    )]
     pub(crate) fn insert_service_member(
       actor: ActorRef,
       kind: ServiceResidenceKind,
@@ -2961,10 +2889,6 @@ pub mod pallet {
     }
 
     /// Opens or resumes exactly one immutable block round without moving its persistent cursor.
-    #[allow(
-      dead_code,
-      reason = "round frontier remains inert until scheduler authority cutover"
-    )]
     pub(crate) fn begin_service_round(now: BlockNumberFor<T>) -> Result<(), ServiceRoundError> {
       if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
         return Err(ServiceRoundError::TransactionRequired);
@@ -2989,10 +2913,6 @@ pub mod pallet {
     }
 
     /// Classifies the current frontier without changing a blocked or closed head.
-    #[allow(
-      dead_code,
-      reason = "round frontier remains inert until scheduler authority cutover"
-    )]
     pub(crate) fn consider_service_head(
       now: BlockNumberFor<T>,
     ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
@@ -3044,10 +2964,6 @@ pub mod pallet {
     }
 
     /// Commits one successful retained consideration and advances to its captured successor.
-    #[allow(
-      dead_code,
-      reason = "round frontier remains inert until scheduler authority cutover"
-    )]
     pub(crate) fn advance_service_head(
       actor: ActorRef,
       now: BlockNumberFor<T>,
@@ -3072,7 +2988,7 @@ pub mod pallet {
     /// Advances one already-attempted defensive encounter without admitting another attempt.
     #[allow(
       dead_code,
-      reason = "round frontier remains inert until scheduler authority cutover"
+      reason = "retained for direct canonical Service topology and rollback regressions"
     )]
     pub(crate) fn converge_attempted_service_head(
       actor: ActorRef,
@@ -3133,7 +3049,9 @@ pub mod pallet {
         return Err(DependencySourceError::Exhausted);
       }
       let source = allocator.next;
-      if DependencySourceObservations::<T>::contains_key(source) {
+      if DependencySourceObservations::<T>::contains_key(source)
+        || DependencySourceBalances::<T>::contains_key(source)
+      {
         return Err(DependencySourceError::SourceOccupied);
       }
       match source.checked_add(1) {
@@ -3144,6 +3062,85 @@ pub mod pallet {
       DependencySourceObservations::<T>::insert(source, feed);
       DependencySourceAllocatorState::<T>::put(allocator);
       Ok(DependencySourceMutation::Allocated(source))
+    }
+
+    /// Resolves one watched asset to a collision-free retained causal source identity.
+    pub(crate) fn resolve_balance_dependency_source(
+      asset: T::AssetId,
+    ) -> Result<DependencySourceMutation, DependencySourceError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencySourceError::TransactionRequired);
+      }
+      if let Some(source) = BalanceDependencySources::<T>::get(asset) {
+        return match DependencySourceBalances::<T>::get(source) {
+          Some(reverse) if reverse == asset => Ok(DependencySourceMutation::Existing(source)),
+          Some(_) => Err(DependencySourceError::ReverseMismatch),
+          None => Err(DependencySourceError::ReverseMissing),
+        };
+      }
+      let mut allocator = DependencySourceAllocatorState::<T>::get();
+      if allocator.exhausted {
+        return Err(DependencySourceError::Exhausted);
+      }
+      let source = allocator.next;
+      if DependencySourceObservations::<T>::contains_key(source)
+        || DependencySourceBalances::<T>::contains_key(source)
+      {
+        return Err(DependencySourceError::SourceOccupied);
+      }
+      match source.checked_add(1) {
+        Some(next) => allocator.next = next,
+        None => allocator.exhausted = true,
+      }
+      BalanceDependencySources::<T>::insert(asset, source);
+      DependencySourceBalances::<T>::insert(source, asset);
+      DependencySourceAllocatorState::<T>::put(allocator);
+      Ok(DependencySourceMutation::Allocated(source))
+    }
+
+    /// Resolves one watched asset and publishes its causal dependency revision.
+    pub(crate) fn publish_balance_dependency_event(asset: T::AssetId) -> DispatchResult {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DispatchError::Other(
+          "dependency event requires transaction",
+        ));
+      }
+      let Some(source) = BalanceDependencySources::<T>::get(asset) else {
+        return Ok(());
+      };
+      if DependencySourceBalances::<T>::get(source) != Some(asset) {
+        return Err(DispatchError::Other("dependency source reverse mismatch"));
+      }
+      match Self::publish_dependency_event_with_source_retention(source) {
+        Ok(
+          DependencyPublicationMutation::Begun(_) | DependencyPublicationMutation::Coalesced { .. },
+        ) => Ok(()),
+        Ok(DependencyPublicationMutation::Exhausted) => {
+          Err(DispatchError::Other("dependency revision exhausted"))
+        }
+        Err(DependencyPublicationError::Revision(DependencyRevisionError::TransactionRequired))
+        | Err(DependencyPublicationError::SourceCarrier(
+          DependencyScanSourceError::TransactionRequired,
+        )) => Err(DispatchError::Other(
+          "dependency event requires transaction",
+        )),
+        Err(DependencyPublicationError::SourceCarrier(
+          DependencyScanSourceError::CapacityExceeded,
+        )) => Err(DispatchError::Other(
+          "dependency scan source capacity reached",
+        )),
+        Err(DependencyPublicationError::SourceCarrier(DependencyScanSourceError::ScanInactive)) => {
+          Err(DispatchError::Other("dependency scan source inactive"))
+        }
+        Err(DependencyPublicationError::SourceCarrier(DependencyScanSourceError::Missing)) => {
+          Err(DispatchError::Other("dependency scan source missing"))
+        }
+        Err(DependencyPublicationError::SourceCarrier(
+          DependencyScanSourceError::CorruptTopology,
+        )) => Err(DispatchError::Other(
+          "dependency scan source topology corrupt",
+        )),
+      }
     }
 
     /// Resolves one typed Oracle feed and publishes its event-complete dependency revision.
@@ -3620,6 +3617,103 @@ pub mod pallet {
       };
       DependencyRevisions::<T>::insert(source, state);
       Ok(outcome)
+    }
+
+    /// Resource-admits the bounded source-selector probe without reading source-owned work first.
+    pub(crate) fn dependency_scan_source_probe(
+      meter: &mut WeightMeter,
+    ) -> Result<bool, DependencyScanWorkerError> {
+      let weight = T::WeightInfo::dependency_scan_source_probe();
+      if !meter.can_consume(weight) {
+        return Err(DependencyScanWorkerError::InsufficientWeight);
+      }
+      meter.consume(weight);
+      let list = DependencyScanSourceListState::<T>::get();
+      match (list.cursor, list.count) {
+        (None, 0) => Ok(false),
+        (Some(_), count) if count > 0 => Ok(true),
+        _ => Err(DependencyScanWorkerError::Source(
+          DependencyScanSourceError::CorruptTopology,
+        )),
+      }
+    }
+
+    /// Resource-admits one fair dependency-source unit: one retained registration position or one
+    /// exact scan completion/handoff. Refusal performs no selector read; admitted failure rolls
+    /// back registration, Pending, cursor, revision, and source-carrier mutation together.
+    #[allow(
+      dead_code,
+      reason = "dependency scan worker awaits prepass resource-composition cutover"
+    )]
+    pub(crate) fn process_next_dependency_scan_unit(
+      meter: &mut WeightMeter,
+    ) -> Result<Option<DependencyScanMutation>, DependencyScanWorkerError> {
+      let weight = T::WeightInfo::process_dependency_scan_unit()
+        .max(T::WeightInfo::process_dependency_scan_completion_unit());
+      if !meter.can_consume(weight) {
+        return Err(DependencyScanWorkerError::InsufficientWeight);
+      }
+      meter.consume(weight);
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          let mut list = DependencyScanSourceListState::<T>::get();
+          let Some(source) = list.cursor else {
+            if list.count != 0 {
+              return Err(DependencyScanWorkerError::Source(
+                DependencyScanSourceError::CorruptTopology,
+              ));
+            }
+            return Ok(None);
+          };
+          if list.count == 0 {
+            return Err(DependencyScanWorkerError::Source(
+              DependencyScanSourceError::CorruptTopology,
+            ));
+          }
+          let node = DependencyScanSourceNodes::<T>::get(source).ok_or(
+            DependencyScanWorkerError::Source(DependencyScanSourceError::Missing),
+          )?;
+          let state = DependencyRevisions::<T>::get(source);
+          let target = state.scan_target.ok_or(DependencyScanWorkerError::Scan(
+            DependencyScanError::ScanMissing,
+          ))?;
+          let mutation = if state.scan_cursor < state.scan_end {
+            let mutation = Self::process_dependency_scan_member(source, target, state.scan_cursor)
+              .map_err(DependencyScanWorkerError::Scan)?;
+            list.cursor = Some(node.next);
+            DependencyScanSourceListState::<T>::put(list);
+            mutation
+          } else {
+            let mutation = Self::complete_dependency_scan(source, target, state.scan_cursor)
+              .map_err(DependencyScanWorkerError::Scan)?;
+            match mutation {
+              DependencyScanMutation::Completed => {
+                Self::remove_dependency_scan_source(source)
+                  .map_err(DependencyScanWorkerError::Source)?;
+              }
+              DependencyScanMutation::HandedOff(_) => {
+                list.cursor = Some(node.next);
+                DependencyScanSourceListState::<T>::put(list);
+              }
+              _ => {
+                return Err(DependencyScanWorkerError::Scan(
+                  DependencyScanError::CorruptTopology,
+                ));
+              }
+            }
+            mutation
+          };
+          Ok(Some(mutation))
+        })();
+        match result {
+          Ok(mutation) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(mutation))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
     }
 
     fn dependency_registration_position(
@@ -4154,28 +4248,13 @@ pub mod pallet {
       Ok(DependencyRegistrationMutation::Removed)
     }
 
-    /// Atomically unlinks one service member and irreversibly retires its canonical process.
+    /// Atomically unlinks one service member and deletes its canonical process without a tombstone.
     /// Canonical zero-Step and effectful terminal outcomes use this owner after finalization.
-    pub(crate) fn retire_service_member(
-      actor: ActorRef,
-      reason: CloseReason,
-    ) -> Result<(), ServiceRetirementError> {
+    pub(crate) fn retire_service_member(actor: ActorRef) -> Result<(), ServiceRetirementError> {
       polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
         let result = Self::remove_service_member(actor)
           .map_err(ServiceRetirementError::Ring)
-          .and_then(|_| {
-            let current = ActorProcesses::<T>::get(actor.actor_id).ok_or(
-              ServiceRetirementError::Process(ProcessPublicationError::ProcessMissing),
-            )?;
-            Self::publish_legacy_process_transition(
-              actor.actor_id,
-              current,
-              ProcessTransitionObligation::RetireOrDisable,
-              LegacyProcessTransition::Retire(reason),
-            )
-            .map(|_| ())
-            .map_err(ServiceRetirementError::Process)
-          });
+          .map(|_| ActorProcesses::<T>::remove(actor.actor_id));
         match result {
           Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
           Err(error) => {
@@ -4266,14 +4345,33 @@ pub mod pallet {
           })
           || matches!(
             process.residence,
-            Some(ProcessResidence::Parked(_))
-              if DependencyTimedReviews::<T>::get(handle.actor.actor_id)
-                .is_some_and(|review| {
-                  review.owner.actor == handle.actor
-                    && review.deadline == handle.key
-                    && PendingCheckOwners::<T>::get(handle.actor.actor_id) == Some(review.owner)
-                })
+            Some(ProcessResidence::Parked(evidence))
+              if PendingCheckOwners::<T>::get(handle.actor.actor_id)
+                .is_some_and(|owner| owner.actor == handle.actor)
+                && (DependencyTimedReviews::<T>::get(handle.actor.actor_id)
+                  .or_else(|| PendingDependencyReviews::<T>::get(handle.actor.actor_id))
+                  .is_some_and(|review| {
+                    review.owner.actor == handle.actor && review.deadline == handle.key
+                  })
+                  || matches!(handle.key,
+                    WakeupKey::Block(block) if evidence.review_at == Some(block)))
           ))
+    }
+
+    fn validate_deadline_header(header: &DeadlineHeader) -> Result<(), DeadlineMutationError> {
+      let slots = header.page_count.saturating_mul(32);
+      if header.page_count == 0
+        || header.page_count > Self::deadline_destination_page_bound()
+        || header.count > T::MaxActiveActors::get()
+        || header.count < header.page_count
+        || header.count > slots
+        || header.first_vacant_page.is_none() != (header.count == slots)
+        || header.first_page > header.last_page
+        || header.last_page >= header.next_page
+      {
+        return Err(DeadlineMutationError::CorruptCarrier);
+      }
+      Ok(())
     }
 
     /// Inserts one generation-bound process obligation into an exact retained deadline slot.
@@ -4349,6 +4447,9 @@ pub mod pallet {
         return Err(DeadlineMutationError::InvalidDestination);
       }
       let mut header = DeadlineHeaders::<T>::get(handle.key);
+      if let Some(header) = &header {
+        Self::validate_deadline_header(header)?;
+      }
       let creates_bucket = header.is_none();
       let mut page = DeadlinePages::<T>::get(handle.key, handle.page);
       match (&header, &page) {
@@ -4357,11 +4458,13 @@ pub mod pallet {
         (Some(_), Some(_)) => {}
         _ => return Err(DeadlineMutationError::InvalidDestination),
       }
-      if page
-        .as_ref()
-        .is_some_and(|page| page.entries[slot].is_some())
-      {
-        return Err(DeadlineMutationError::InvalidDestination);
+      if let Some(page) = &page {
+        if page.entries.len() != 32 {
+          return Err(DeadlineMutationError::CorruptCarrier);
+        }
+        if page.entries.get(slot) != Some(&None) {
+          return Err(DeadlineMutationError::InvalidDestination);
+        }
       }
       let next_count = header.as_ref().map_or(Ok(1), |value| {
         value
@@ -4372,11 +4475,21 @@ pub mod pallet {
       if next_count > T::MaxActiveActors::get() {
         return Err(DeadlineMutationError::CapacityExceeded);
       }
-      if page.is_none() {
+      let creates_page = page.is_none();
+      if creates_page {
+        if header
+          .as_ref()
+          .is_some_and(|header| header.page_count >= Self::deadline_destination_page_bound())
+        {
+          return Err(DeadlineMutationError::CapacityExceeded);
+        }
         let previous_page = header.as_ref().map(|value| value.last_page);
+        let next_vacant_page = header.as_ref().and_then(|value| value.first_vacant_page);
         page = Some(DeadlinePage {
           previous_page,
           next_page: None,
+          previous_vacant_page: None,
+          next_vacant_page,
           live_entries: 0,
           entries: BoundedVec::try_from(alloc::vec![None; 32])
             .map_err(|_| DeadlineMutationError::CorruptCarrier)?,
@@ -4390,9 +4503,18 @@ pub mod pallet {
           previous.next_page = Some(handle.page);
           DeadlinePages::<T>::insert(handle.key, previous_page, previous);
         }
+        if let Some(next_vacant_page) = next_vacant_page {
+          let mut next = DeadlinePages::<T>::get(handle.key, next_vacant_page)
+            .ok_or(DeadlineMutationError::CorruptCarrier)?;
+          if next.previous_vacant_page.is_some() {
+            return Err(DeadlineMutationError::CorruptCarrier);
+          }
+          next.previous_vacant_page = Some(handle.page);
+          DeadlinePages::<T>::insert(handle.key, next_vacant_page, next);
+        }
       }
       let mut page = page.ok_or(DeadlineMutationError::CorruptCarrier)?;
-      if page.live_entries >= 32 || page.entries.len() != 32 {
+      if page.live_entries >= 32 {
         return Err(DeadlineMutationError::PageFull);
       }
       page.entries[slot] = Some(handle.actor);
@@ -4400,10 +4522,10 @@ pub mod pallet {
         .live_entries
         .checked_add(1)
         .ok_or(DeadlineMutationError::CapacityExceeded)?;
-      DeadlinePages::<T>::insert(handle.key, handle.page, page);
       match header.as_mut() {
         Some(header) => {
-          if handle.page == header.next_page {
+          if creates_page {
+            header.first_vacant_page = Some(handle.page);
             header.last_page = handle.page;
             header.next_page = header
               .next_page
@@ -4413,6 +4535,34 @@ pub mod pallet {
               .page_count
               .checked_add(1)
               .ok_or(DeadlineMutationError::CapacityExceeded)?;
+          } else if page.live_entries == 32 {
+            let previous = page.previous_vacant_page;
+            let next = page.next_vacant_page;
+            if let Some(previous_id) = previous {
+              let mut previous_page = DeadlinePages::<T>::get(handle.key, previous_id)
+                .ok_or(DeadlineMutationError::CorruptCarrier)?;
+              if previous_page.next_vacant_page != Some(handle.page) {
+                return Err(DeadlineMutationError::CorruptCarrier);
+              }
+              previous_page.next_vacant_page = next;
+              DeadlinePages::<T>::insert(handle.key, previous_id, previous_page);
+            } else {
+              if header.first_vacant_page != Some(handle.page) {
+                return Err(DeadlineMutationError::CorruptCarrier);
+              }
+              header.first_vacant_page = next;
+            }
+            if let Some(next_id) = next {
+              let mut next_page = DeadlinePages::<T>::get(handle.key, next_id)
+                .ok_or(DeadlineMutationError::CorruptCarrier)?;
+              if next_page.previous_vacant_page != Some(handle.page) {
+                return Err(DeadlineMutationError::CorruptCarrier);
+              }
+              next_page.previous_vacant_page = previous;
+              DeadlinePages::<T>::insert(handle.key, next_id, next_page);
+            }
+            page.previous_vacant_page = None;
+            page.next_vacant_page = None;
           }
           header.count = next_count;
         }
@@ -4421,11 +4571,13 @@ pub mod pallet {
             first_page: 0,
             last_page: 0,
             next_page: 1,
+            first_vacant_page: Some(0),
             page_count: 1,
             count: 1,
           });
         }
       }
+      DeadlinePages::<T>::insert(handle.key, handle.page, page);
       let header = header.ok_or(DeadlineMutationError::CorruptCarrier)?;
       DeadlineHeaders::<T>::insert(handle.key, header);
       if trigger_owner {
@@ -4515,13 +4667,18 @@ pub mod pallet {
       }
       let mut header =
         DeadlineHeaders::<T>::get(handle.key).ok_or(DeadlineMutationError::CorruptCarrier)?;
+      Self::validate_deadline_header(&header)?;
       let mut page = DeadlinePages::<T>::get(handle.key, handle.page)
         .ok_or(DeadlineMutationError::CorruptCarrier)?;
       let slot = usize::from(handle.slot);
-      if page.entries.get(slot) != Some(&Some(actor)) || page.live_entries == 0 || header.count == 0
+      if page.entries.len() != 32
+        || page.entries.get(slot) != Some(&Some(actor))
+        || page.live_entries == 0
+        || page.live_entries > 32
       {
         return Err(DeadlineMutationError::CorruptCarrier);
       }
+      let was_full = page.live_entries == 32;
       page.entries[slot] = None;
       page.live_entries = page
         .live_entries
@@ -4537,10 +4694,54 @@ pub mod pallet {
         DeadlineHandles::<T>::remove(actor.actor_id);
       }
       if page.live_entries > 0 {
+        if was_full {
+          let old_head = header.first_vacant_page;
+          page.previous_vacant_page = None;
+          page.next_vacant_page = old_head;
+          if let Some(old_head) = old_head {
+            let mut old_head_page = DeadlinePages::<T>::get(handle.key, old_head)
+              .ok_or(DeadlineMutationError::CorruptCarrier)?;
+            if old_head_page.previous_vacant_page.is_some() {
+              return Err(DeadlineMutationError::CorruptCarrier);
+            }
+            old_head_page.previous_vacant_page = Some(handle.page);
+            DeadlinePages::<T>::insert(handle.key, old_head, old_head_page);
+          }
+          header.first_vacant_page = Some(handle.page);
+        } else if page.previous_vacant_page.is_none()
+          && header.first_vacant_page != Some(handle.page)
+        {
+          return Err(DeadlineMutationError::CorruptCarrier);
+        }
         DeadlinePages::<T>::insert(handle.key, handle.page, page);
         DeadlineHeaders::<T>::insert(handle.key, header);
         Self::update_deadline_index(handle.key)?;
         return Ok(handle);
+      }
+      let previous_vacant = page.previous_vacant_page;
+      let next_vacant = page.next_vacant_page;
+      if let Some(previous_id) = previous_vacant {
+        let mut previous = DeadlinePages::<T>::get(handle.key, previous_id)
+          .ok_or(DeadlineMutationError::CorruptCarrier)?;
+        if previous.next_vacant_page != Some(handle.page) {
+          return Err(DeadlineMutationError::CorruptCarrier);
+        }
+        previous.next_vacant_page = next_vacant;
+        DeadlinePages::<T>::insert(handle.key, previous_id, previous);
+      } else {
+        if header.first_vacant_page != Some(handle.page) {
+          return Err(DeadlineMutationError::CorruptCarrier);
+        }
+        header.first_vacant_page = next_vacant;
+      }
+      if let Some(next_id) = next_vacant {
+        let mut next = DeadlinePages::<T>::get(handle.key, next_id)
+          .ok_or(DeadlineMutationError::CorruptCarrier)?;
+        if next.previous_vacant_page != Some(handle.page) {
+          return Err(DeadlineMutationError::CorruptCarrier);
+        }
+        next.previous_vacant_page = previous_vacant;
+        DeadlinePages::<T>::insert(handle.key, next_id, next);
       }
       if let Some(previous_id) = page.previous_page {
         let mut previous = DeadlinePages::<T>::get(handle.key, previous_id)
@@ -4601,11 +4802,16 @@ pub mod pallet {
         return Err(DeadlineMutationError::StaleGeneration);
       }
       let slot = usize::from(destination.slot);
-      if slot >= 32
-        || DeadlinePages::<T>::get(destination.key, destination.page)
-          .is_some_and(|page| page.entries[slot].is_some())
-      {
+      if slot >= 32 {
         return Err(DeadlineMutationError::InvalidDestination);
+      }
+      if let Some(page) = DeadlinePages::<T>::get(destination.key, destination.page) {
+        if page.entries.len() != 32 {
+          return Err(DeadlineMutationError::CorruptCarrier);
+        }
+        if page.entries.get(slot) != Some(&None) {
+          return Err(DeadlineMutationError::InvalidDestination);
+        }
       }
       polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
         let outcome = (|| {
@@ -4975,83 +5181,6 @@ pub mod pallet {
       Self::store_primary_control_cell(location, cell).is_ok()
     }
 
-    #[cfg(all(test, feature = "runtime-benchmarks"))]
-    pub(crate) fn control_load_frame_contract(
-      actor_id: ActorId,
-      admission: &ActorAdmissionCertificateOf<T>,
-    ) -> Option<(ActorContractOf<T>, ActorContractHeadOf<T>)> {
-      let head = ActorContractHeads::<T>::get(actor_id)?;
-      if !admission.has_valid_identity()
-        || admission.semantic_contract_id != head.header.semantic_contract_id
-        || admission.body_commitment != head.header.body_commitment
-        || admission.admission_identity != head.header.admission_identity
-      {
-        return None;
-      }
-      let chunk_count = head
-        .header
-        .step_count
-        .saturating_sub(1)
-        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK);
-      let chunks = (0..chunk_count)
-        .map(|chunk_index| {
-          Some((
-            chunk_index,
-            ActorContractTailChunks::<T>::get(actor_id, chunk_index)?,
-          ))
-        })
-        .collect::<Option<Vec<_>>>()?;
-      let contract = Self::reconstruct_contract_geometry(actor_id, head.clone(), &chunks)?;
-      Some((contract, head))
-    }
-
-    #[cfg(all(test, feature = "runtime-benchmarks"))]
-    pub(crate) fn control_load_current_step_contract(
-      actor_id: ActorId,
-      admission: &ActorAdmissionCertificateOf<T>,
-      cursor: u32,
-    ) -> Option<(
-      ActorContractOf<T>,
-      LoadedActorStepOf<T>,
-      ActorContractHeadOf<T>,
-    )> {
-      let head = ActorContractHeads::<T>::get(actor_id)?;
-      if cursor >= head.header.step_count
-        || !admission.has_valid_identity()
-        || admission.semantic_contract_id != head.header.semantic_contract_id
-        || admission.body_commitment != head.header.body_commitment
-        || admission.admission_identity != head.header.admission_identity
-      {
-        return None;
-      }
-      let tail_chunk = if cursor == 0 {
-        None
-      } else {
-        let chunk_index = cursor.checked_sub(1)? / MAX_STEPS_PER_TAIL_CHUNK;
-        Some((
-          chunk_index,
-          ActorContractTailChunks::<T>::get(actor_id, chunk_index)?,
-        ))
-      };
-      let loaded_step = Self::load_current_step_from_geometry(
-        actor_id,
-        &head,
-        admission,
-        cursor,
-        tail_chunk.as_ref().map(|(index, chunk)| (*index, chunk)),
-      )?;
-      let contract = ActorContract {
-        trigger: head.header.trigger.clone(),
-        cooldown_blocks: head.header.cooldown_blocks,
-        window: head.header.window,
-        steps: BoundedVec::try_from(alloc::vec![loaded_step.step.clone()]).ok()?,
-        funding: head.header.funding.clone(),
-        completion: head.header.completion,
-        auto_close_at_cycle_nonce: head.header.auto_close_at_cycle_nonce,
-      };
-      Some((contract, loaded_step, head))
-    }
-
     pub(crate) fn load_current_step_from_geometry(
       actor_id: ActorId,
       head: &ActorContractHeadOf<T>,
@@ -5219,6 +5348,7 @@ pub mod pallet {
         steps: ContractSteps::<T>::try_from(steps).ok()?,
         funding: head.header.funding,
         completion: head.header.completion,
+        parked_balance_activation: head.header.parked_balance_activation,
         auto_close_at_cycle_nonce: head.header.auto_close_at_cycle_nonce,
       };
       if contract.semantic_contract_id() != head.header.semantic_contract_id
@@ -5375,13 +5505,6 @@ pub mod pallet {
         .collect()
     }
 
-    #[cfg(all(test, feature = "runtime-benchmarks"))]
-    pub(crate) fn load_control_head(
-      actor_id: ActorId,
-    ) -> Option<(ActorIdentityOf<T>, ActorHotStateOf<T>)> {
-      Self::load_frame_control_authority(actor_id).map(|(_, identity, hot, _)| (identity, hot))
-    }
-
     /// Loads one active semantic owner and its exact canonical process carrier only when the
     /// generation-bound process, concrete residence, and semantic owner agree and no legacy
     /// control authority remains.
@@ -5449,7 +5572,14 @@ pub mod pallet {
             }),
             None => deadline_handle.is_none() && evidence.review_at.is_none(),
           };
-          service_node.is_none() && owner_matches && deadline_matches
+          let episode_matches = match ParkedBalanceEpisodes::<T>::get(actor.actor_id) {
+            Some(episode) => {
+              evidence.reason == ParkNegativeReason::ParkedBalanceBelowThreshold
+                && pending_owner == Some(episode.owner)
+            }
+            None => evidence.reason != ParkNegativeReason::ParkedBalanceBelowThreshold,
+          };
+          service_node.is_none() && owner_matches && deadline_matches && episode_matches
         }
         (ProcessStatus::Disabled(_), None) => {
           service_node.is_none() && deadline_handle.is_none() && pending_owner.is_none()
@@ -5539,6 +5669,8 @@ pub mod pallet {
           if state.identity != record.identity
             || state.hot != record.hot
             || admission != record.admission
+            || state.hot.cycle_state != CycleState::Idle
+            || state.run_state.is_some()
             || loaded_step.is_none()
           {
             return Err(DependencyRegistrationError::StoredPlanMismatch);
@@ -5599,6 +5731,92 @@ pub mod pallet {
       })
     }
 
+    /// Captures and publishes one fixed-anchor parked-balance episode with a mandatory bounded
+    /// block review. The complete destination is installed before Service membership is released;
+    /// any certification, capacity, or publication refusal rolls back the anchor set as well.
+    #[allow(
+      dead_code,
+      reason = "parked-balance publication is staged behind Actor Contract admission"
+    )]
+    pub(crate) fn transfer_service_member_to_parked_balance(
+      actor: ActorRef,
+      kind: ServiceResidenceKind,
+      plan_revision: PlanRevision,
+      activation: &ParkedBalanceActivationOf<T>,
+      review_deadline: WakeupKey<BlockNumberFor<T>>,
+    ) -> Result<DependencyPlanMutation, ParkedBalanceTransitionError> {
+      let WakeupKey::Block(review_at) = review_deadline else {
+        return Err(ParkedBalanceTransitionError::InvalidReviewClock);
+      };
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          if ParkedBalanceEpisodes::<T>::contains_key(actor.actor_id) {
+            return Err(ParkedBalanceTransitionError::EpisodeAlreadyExists);
+          }
+          let (record, _) = Self::load_canonical_actor_semantic_state(actor).map_err(|_| {
+            ParkedBalanceTransitionError::Dependency(
+              DependencyRegistrationError::StoredPlanMismatch,
+            )
+          })?;
+          let watches = Self::certify_parked_balance_activation(
+            &record.identity.sovereign_account,
+            activation,
+            plan_revision,
+          )
+          .map_err(ParkedBalanceTransitionError::Certification)?;
+          let mut desired = Vec::with_capacity(activation.watches.len());
+          for rule in &activation.watches {
+            let source =
+              match Self::resolve_balance_dependency_source(rule.asset).map_err(|_| {
+                ParkedBalanceTransitionError::Dependency(
+                  DependencyRegistrationError::StoredPlanMismatch,
+                )
+              })? {
+                DependencySourceMutation::Allocated(source)
+                | DependencySourceMutation::Existing(source) => source,
+              };
+            let revision = DependencyRevisions::<T>::get(source);
+            if revision.exhausted {
+              return Err(ParkedBalanceTransitionError::Dependency(
+                DependencyRegistrationError::SourceExhausted,
+              ));
+            }
+            desired.push(DependencyPlanSource {
+              source,
+              observed_revision: revision.revision,
+            });
+          }
+          let mutation = Self::transfer_service_member_to_park(
+            actor,
+            kind,
+            plan_revision,
+            ParkNegativeReason::ParkedBalanceBelowThreshold,
+            Some(review_at),
+            &desired,
+            Some(review_deadline),
+          )
+          .map_err(ParkedBalanceTransitionError::Dependency)?;
+          let owner = PendingCheckOwner {
+            actor,
+            plan_revision,
+          };
+          ParkedBalanceEpisodes::<T>::insert(
+            actor.actor_id,
+            ParkedBalanceEpisode { owner, watches },
+          );
+          Ok(mutation)
+        })();
+        match result {
+          Ok(mutation) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(mutation))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     /// Consumes one exact negative dependency result only after its complete successor plan is
     /// durable for the same generation/plan-bound Park resident. Refusal preserves the Pending
     /// result, registrations, and Park residence.
@@ -5622,7 +5840,26 @@ pub mod pallet {
           {
             return Err(DependencyRegistrationError::StoredPlanMismatch);
           }
-          Self::consume_pending_dependency_event(expected, desired, timed_review)
+          let mutation = Self::consume_pending_dependency_event(expected, desired, timed_review)?;
+          let review_at = if evidence.reason == ParkNegativeReason::ParkedBalanceBelowThreshold {
+            match timed_review {
+              Some(WakeupKey::Block(block)) => Some(block),
+              Some(WakeupKey::Tick(_)) => {
+                return Err(DependencyRegistrationError::ClockUnavailable);
+              }
+              None => None,
+            }
+          } else {
+            evidence.review_at
+          };
+          let mut process = ActorProcesses::<T>::get(expected.owner.actor.actor_id)
+            .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+          process.residence = Some(ProcessResidence::Parked(ParkEvidence {
+            review_at,
+            ..evidence
+          }));
+          ActorProcesses::<T>::insert(expected.owner.actor.actor_id, process);
+          Ok(mutation)
         })();
         match result {
           Ok(mutation) => {
@@ -5658,7 +5895,132 @@ pub mod pallet {
           {
             return Err(DependencyRegistrationError::StoredPlanMismatch);
           }
-          Self::consume_pending_dependency_review(expected, desired, timed_review)
+          let mutation = Self::consume_pending_dependency_review(expected, desired, timed_review)?;
+          let review_at = if evidence.reason == ParkNegativeReason::ParkedBalanceBelowThreshold {
+            match timed_review {
+              Some(WakeupKey::Block(block)) => Some(block),
+              Some(WakeupKey::Tick(_)) => {
+                return Err(DependencyRegistrationError::ClockUnavailable);
+              }
+              None => None,
+            }
+          } else {
+            evidence.review_at
+          };
+          let mut process = ActorProcesses::<T>::get(expected.owner.actor.actor_id)
+            .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+          process.residence = Some(ProcessResidence::Parked(ParkEvidence {
+            review_at,
+            ..evidence
+          }));
+          ActorProcesses::<T>::insert(expected.owner.actor.actor_id, process);
+          Ok(mutation)
+        })();
+        match result {
+          Ok(mutation) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(mutation))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
+    /// Resource-admits one complete causal parked-balance Pending interpretation.
+    #[allow(
+      dead_code,
+      reason = "causal parked-balance worker awaits the Pending selector cutover"
+    )]
+    pub(crate) fn process_pending_parked_balance_event(
+      meter: &mut WeightMeter,
+      expected: PendingDependencyEvent,
+      kind: ServiceResidenceKind,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+      now: BlockNumberFor<T>,
+    ) -> Result<DependencyReviewMutation, DependencyReviewWorkerError> {
+      let weight = T::WeightInfo::process_pending_parked_balance_event();
+      if !meter.can_consume(weight) {
+        return Err(DependencyReviewWorkerError::InsufficientWeight);
+      }
+      meter.consume(weight);
+      Self::interpret_pending_parked_balance_event(expected, kind, evidence, now)
+        .map_err(DependencyReviewWorkerError::Interpretation)
+    }
+
+    /// Rechecks one causal parked-balance Pending event against current total ownership. A
+    /// subthreshold result consumes the event into the complete current source snapshot while
+    /// retaining fixed anchors and the mandatory review; a qualified result wakes B+1 Service.
+    #[allow(
+      dead_code,
+      reason = "causal parked-balance interpretation is staged behind the weighted Pending consumer"
+    )]
+    pub(crate) fn interpret_pending_parked_balance_event(
+      expected: PendingDependencyEvent,
+      kind: ServiceResidenceKind,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+      now: BlockNumberFor<T>,
+    ) -> Result<DependencyReviewMutation, DependencyRegistrationError> {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          let episode = ParkedBalanceEpisodes::<T>::get(expected.owner.actor.actor_id)
+            .filter(|episode| episode.owner == expected.owner)
+            .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+          let Some(ActorSemanticState::Active(record)) =
+            ActorSemanticStates::<T>::get(expected.owner.actor.actor_id)
+          else {
+            return Err(DependencyRegistrationError::StoredPlanMismatch);
+          };
+          let qualification = classify_parked_balance_plan(&episode.watches, |asset| {
+            (
+              T::AssetOps::minimum_balance(asset),
+              T::AssetOps::total_balance(&record.identity.sovereign_account, asset),
+            )
+          })
+          .map_err(|error| match error {
+            ParkedBalanceClassificationError::MinimumBalanceChanged => {
+              DependencyRegistrationError::ParkedBalanceMinimumChanged
+            }
+            ParkedBalanceClassificationError::ThresholdOverflow => {
+              DependencyRegistrationError::ParkedBalanceThresholdOverflow
+            }
+          })?;
+          match qualification {
+            ParkedBalanceQualification::Qualified => {
+              let timed_deadline = DependencyTimedReviews::<T>::get(expected.owner.actor.actor_id)
+                .map(|review| review.deadline)
+                .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+              if let Some(deadline) = DeadlineHandles::<T>::get(expected.owner.actor.actor_id) {
+                if deadline.actor != expected.owner.actor || timed_deadline != deadline.key {
+                  return Err(DependencyRegistrationError::StoredPlanMismatch);
+                }
+                Self::remove_deadline_member(expected.owner.actor)
+                  .map_err(|_| DependencyRegistrationError::StoredPlanMismatch)?;
+              }
+              Self::consume_positive_dependency_event_and_wake(expected, kind, evidence, now)?;
+              Ok(DependencyReviewMutation::Woke)
+            }
+            ParkedBalanceQualification::BelowThreshold => {
+              let plan = DependencyPlans::<T>::get(expected.owner.actor.actor_id);
+              let mut desired = Vec::with_capacity(plan.len());
+              for registration in &plan {
+                let revision = DependencyRevisions::<T>::get(registration.source);
+                if revision.exhausted {
+                  return Err(DependencyRegistrationError::SourceExhausted);
+                }
+                desired.push(DependencyPlanSource {
+                  source: registration.source,
+                  observed_revision: revision.revision,
+                });
+              }
+              let deadline = DependencyTimedReviews::<T>::get(expected.owner.actor.actor_id)
+                .map(|review| review.deadline);
+              Self::consume_negative_dependency_event_and_rearm(
+                expected, evidence, &desired, deadline,
+              )
+              .map(DependencyReviewMutation::Rearmed)
+            }
+          }
         })();
         match result {
           Ok(mutation) => {
@@ -5882,6 +6244,82 @@ pub mod pallet {
       })
     }
 
+    /// Interprets one due fixed-anchor balance review from current host total ownership. A
+    /// negative result re-arms the deadline without replacing any anchor; a positive result wakes
+    /// Service and reclaims the episode through the common generation-bound transition.
+    #[allow(
+      dead_code,
+      reason = "parked-balance review is staged behind Actor Contract admission"
+    )]
+    pub(crate) fn interpret_pending_parked_balance_review(
+      expected: DependencyTimedReview<BlockNumberFor<T>>,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+      kind: ServiceResidenceKind,
+      now: BlockNumberFor<T>,
+      next_review: Option<WakeupKey<BlockNumberFor<T>>>,
+    ) -> Result<DependencyReviewMutation, DependencyRegistrationError> {
+      let episode = ParkedBalanceEpisodes::<T>::get(expected.owner.actor.actor_id)
+        .filter(|episode| episode.owner == expected.owner)
+        .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+      if ActorControlLocators::<T>::contains_key(expected.owner.actor.actor_id)
+        || ActorUnsignaledControlCells::<T>::contains_key(expected.owner.actor.actor_id)
+      {
+        return Err(DependencyRegistrationError::StoredPlanMismatch);
+      }
+      let Some(ActorSemanticState::Active(record)) =
+        ActorSemanticStates::<T>::get(expected.owner.actor.actor_id)
+      else {
+        return Err(DependencyRegistrationError::StoredPlanMismatch);
+      };
+      let process = ActorProcesses::<T>::get(expected.owner.actor.actor_id)
+        .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+      if record.generation != expected.owner.actor.generation
+        || process.generation != expected.owner.actor.generation
+        || process.status != ProcessStatus::Serving
+        || process.residence != Some(ProcessResidence::Parked(evidence))
+      {
+        return Err(DependencyRegistrationError::StoredPlanMismatch);
+      }
+      Self::interpret_pending_dependency_review(
+        expected,
+        evidence,
+        kind,
+        now,
+        next_review,
+        |snapshot| {
+          if snapshot.len() != episode.watches.len()
+            || snapshot
+              .iter(/* deos-bypass: bounded-iter -- MaxContractSteps bounds the retained source snapshot. */)
+              .zip(episode.watches.iter(/* deos-bypass: bounded-iter -- admission bounds watches by MaxContractSteps. */))
+              .any(|(observed, watch)| {
+                BalanceDependencySources::<T>::get(watch.asset) != Some(observed.source)
+                  || DependencySourceBalances::<T>::get(observed.source) != Some(watch.asset)
+              })
+          {
+            return Err(DependencyRegistrationError::StoredPlanMismatch);
+          }
+          let qualification = classify_parked_balance_plan(&episode.watches, |asset| {
+            (
+              T::AssetOps::minimum_balance(asset),
+              T::AssetOps::total_balance(&record.identity.sovereign_account, asset),
+            )
+          })
+          .map_err(|error| match error {
+            ParkedBalanceClassificationError::MinimumBalanceChanged => {
+              DependencyRegistrationError::ParkedBalanceMinimumChanged
+            }
+            ParkedBalanceClassificationError::ThresholdOverflow => {
+              DependencyRegistrationError::ParkedBalanceThresholdOverflow
+            }
+          })?;
+          Ok(match qualification {
+            ParkedBalanceQualification::BelowThreshold => DependencyReviewInterpretation::Negative,
+            ParkedBalanceQualification::Qualified => DependencyReviewInterpretation::Positive,
+          })
+        },
+      )
+    }
+
     /// Interprets one exact Pending review whose complete retained plan consists of typed Oracle
     /// availability sources. Every source is read exactly once: all available sources wake the
     /// Actor, any unavailable source re-arms it, and an uninitialized or corrupt mapping preserves
@@ -5904,11 +6342,43 @@ pub mod pallet {
         now,
         next_review,
         |snapshot| {
+          let predicate_profile = if evidence.reason == ParkNegativeReason::PredicateFalse {
+            let Some(ActorSemanticState::Active(record)) =
+              ActorSemanticStates::<T>::get(expected.owner.actor.actor_id)
+            else {
+              return Err(DependencyRegistrationError::StoredPlanMismatch);
+            };
+            if record.generation != expected.owner.actor.generation
+              || record.admission.admission_identity != evidence.plan_identity
+            {
+              return Err(DependencyRegistrationError::StoredPlanMismatch);
+            }
+            let contract = Self::load_contract_geometry_with_admission(
+              expected.owner.actor.actor_id,
+              &record.admission,
+            )
+            .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+            let feeds = Self::manual_observation_profile_feeds(&contract)
+              .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+            if feeds.len() != snapshot.len() {
+              return Err(DependencyRegistrationError::StoredPlanMismatch);
+            }
+            Some((record, contract, feeds))
+          } else {
+            None
+          };
           let mut interpretation = DependencyReviewInterpretation::Positive;
-          for observed in snapshot {
+          for (index, observed) in snapshot
+            .iter(/* deos-bypass: bounded-iter -- MaxContractSteps bounds the due observation snapshot. */)
+            .enumerate()
+          {
             let feed = DependencySourceObservations::<T>::get(observed.source)
               .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
-            if ObservationDependencySources::<T>::get(feed) != Some(observed.source) {
+            if ObservationDependencySources::<T>::get(feed) != Some(observed.source)
+              || predicate_profile
+                .as_ref()
+                .is_some_and(|(_, _, feeds)| feeds.get(index) != Some(&feed))
+            {
               return Err(DependencyRegistrationError::StoredPlanMismatch);
             }
             match T::ObservationProvider::current(&feed) {
@@ -5921,9 +6391,199 @@ pub mod pallet {
               }
             }
           }
+          if interpretation == DependencyReviewInterpretation::Positive {
+            if let Some((record, contract, _)) = predicate_profile.as_ref() {
+              if !Self::evaluate_step_precondition(
+                contract
+                  .steps
+                  .first()
+                  .and_then(|step| step.precondition.as_ref()),
+                &record.identity.sovereign_account,
+                Zero::zero(),
+              )
+              .map_err(|_| DependencyRegistrationError::StoredPlanMismatch)?
+              {
+                interpretation = DependencyReviewInterpretation::Negative;
+              }
+            }
+          }
           Ok(interpretation)
         },
       )
+    }
+
+    /// Resource-admits one complete causal Oracle-availability Pending interpretation.
+    #[allow(
+      dead_code,
+      reason = "causal observation worker awaits production admission cutover"
+    )]
+    pub(crate) fn process_pending_observation_availability_event(
+      meter: &mut WeightMeter,
+      expected: PendingDependencyEvent,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+      kind: ServiceResidenceKind,
+      now: BlockNumberFor<T>,
+    ) -> Result<DependencyReviewMutation, DependencyReviewWorkerError> {
+      let weight = T::WeightInfo::process_pending_observation_availability_event()
+        .max(T::WeightInfo::process_pending_observation_predicate_event());
+      if !meter.can_consume(weight) {
+        return Err(DependencyReviewWorkerError::InsufficientWeight);
+      }
+      meter.consume(weight);
+      Self::interpret_pending_observation_availability_event(expected, evidence, kind, now)
+        .map_err(DependencyReviewWorkerError::Interpretation)
+    }
+
+    /// Rechecks one causal Oracle Pending event against the complete retained observation plan.
+    /// Unavailable current state consumes the event into one current source snapshot while
+    /// preserving the timed obligation; available current state wakes B+1 Service. Uninitialized,
+    /// exhausted, stale-authority, and mapping failures retain the event and Park authority.
+    #[allow(
+      dead_code,
+      reason = "causal observation interpretation awaits its generated weighted worker"
+    )]
+    pub(crate) fn interpret_pending_observation_availability_event(
+      expected: PendingDependencyEvent,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+      kind: ServiceResidenceKind,
+      now: BlockNumberFor<T>,
+    ) -> Result<DependencyReviewMutation, DependencyRegistrationError> {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          let plan = DependencyPlans::<T>::get(expected.owner.actor.actor_id);
+          if plan.is_empty() {
+            return Err(DependencyRegistrationError::StoredPlanMismatch);
+          }
+          let predicate_profile = if evidence.reason == ParkNegativeReason::PredicateFalse {
+            let Some(ActorSemanticState::Active(record)) =
+              ActorSemanticStates::<T>::get(expected.owner.actor.actor_id)
+            else {
+              return Err(DependencyRegistrationError::StoredPlanMismatch);
+            };
+            if record.generation != expected.owner.actor.generation
+              || record.admission.admission_identity != evidence.plan_identity
+            {
+              return Err(DependencyRegistrationError::StoredPlanMismatch);
+            }
+            let contract = Self::load_contract_geometry_with_admission(
+              expected.owner.actor.actor_id,
+              &record.admission,
+            )
+            .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+            let feeds = Self::manual_observation_profile_feeds(&contract)
+              .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+            if feeds.len() != plan.len() {
+              return Err(DependencyRegistrationError::StoredPlanMismatch);
+            }
+            Some((record, contract, feeds))
+          } else {
+            None
+          };
+          let mut desired = Vec::with_capacity(plan.len());
+          let mut available = true;
+          for (index, registration) in plan
+            .iter(/* deos-bypass: bounded-iter -- MaxContractSteps bounds the retained observation plan. */)
+            .enumerate()
+          {
+            let feed = DependencySourceObservations::<T>::get(registration.source)
+              .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+            if ObservationDependencySources::<T>::get(feed) != Some(registration.source)
+              || predicate_profile
+                .as_ref()
+                .is_some_and(|(_, _, feeds)| feeds.get(index) != Some(&feed))
+            {
+              return Err(DependencyRegistrationError::StoredPlanMismatch);
+            }
+            let revision = DependencyRevisions::<T>::get(registration.source);
+            if revision.exhausted {
+              return Err(DependencyRegistrationError::SourceExhausted);
+            }
+            desired.push(DependencyPlanSource {
+              source: registration.source,
+              observed_revision: revision.revision,
+            });
+            match T::ObservationProvider::current(&feed) {
+              crate::CanonicalObservationState::Available { .. } => {}
+              crate::CanonicalObservationState::Unavailable => available = false,
+              crate::CanonicalObservationState::Uninitialized => {
+                return Err(DependencyRegistrationError::SourceUninitialized);
+              }
+            }
+          }
+          for (registration, observed) in plan
+            .iter(/* deos-bypass: bounded-iter -- MaxContractSteps bounds the retained observation plan. */)
+            .zip(desired.iter(/* deos-bypass: bounded-iter -- MaxContractSteps bounds the current observation snapshot. */))
+          {
+            let current =
+              DependencyRegistrations::<T>::get(registration.source, expected.owner.actor.actor_id)
+                .ok_or(DependencyRegistrationError::RegistrationMissing)?;
+            if current != registration.handle
+              || current.actor != expected.owner.actor
+              || current.plan_revision != expected.owner.plan_revision
+              || current.acknowledged_revision != observed.observed_revision
+              || DependencyRevisions::<T>::get(observed.source).revision
+                != observed.observed_revision
+            {
+              return Err(DependencyRegistrationError::RevisionMismatch);
+            }
+          }
+          let applicable = if let Some((record, contract, _)) = predicate_profile.as_ref() {
+            available
+              && Self::evaluate_step_precondition(
+                contract
+                  .steps
+                  .first()
+                  .and_then(|step| step.precondition.as_ref()),
+                &record.identity.sovereign_account,
+                Zero::zero(),
+              )
+              .map_err(|_| DependencyRegistrationError::StoredPlanMismatch)?
+          } else {
+            available
+          };
+          if !applicable {
+            let deadline = DependencyTimedReviews::<T>::get(expected.owner.actor.actor_id)
+              .map(|review| review.deadline);
+            return Self::consume_negative_dependency_event_and_rearm(
+              expected, evidence, &desired, deadline,
+            )
+            .map(DependencyReviewMutation::Rearmed);
+          }
+          let timed_deadline = DependencyTimedReviews::<T>::get(expected.owner.actor.actor_id)
+            .map(|review| review.deadline)
+            .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+          if let Some(deadline) = DeadlineHandles::<T>::get(expected.owner.actor.actor_id) {
+            if deadline.actor != expected.owner.actor || timed_deadline != deadline.key {
+              return Err(DependencyRegistrationError::StoredPlanMismatch);
+            }
+            Self::remove_deadline_member(expected.owner.actor)
+              .map_err(|_| DependencyRegistrationError::StoredPlanMismatch)?;
+          }
+          Self::consume_positive_dependency_event_and_wake(expected, kind, evidence, now)?;
+          Ok(DependencyReviewMutation::Woke)
+        })();
+        match result {
+          Ok(mutation) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(mutation))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
+    /// Component-wise maximum of every complete dependency-review and pending-event owner.
+    pub(crate) fn dependency_review_weight_upper() -> Weight {
+      T::WeightInfo::process_due_observation_availability_review()
+        .max(T::WeightInfo::process_due_observation_availability_review_deep_index())
+        .max(T::WeightInfo::process_due_observation_predicate_review())
+        .max(T::WeightInfo::process_due_observation_predicate_review_deep_index())
+        .max(T::WeightInfo::process_due_parked_balance_review())
+        .max(T::WeightInfo::process_due_parked_balance_review_deep_index())
+        .max(T::WeightInfo::process_pending_parked_balance_event())
+        .max(T::WeightInfo::process_pending_observation_availability_event())
+        .max(T::WeightInfo::process_pending_observation_predicate_event())
     }
 
     /// Resource-admits and atomically carries one exact due Oracle review from retained deadline
@@ -5941,7 +6601,7 @@ pub mod pallet {
       now: BlockNumberFor<T>,
       next_review: Option<WakeupKey<BlockNumberFor<T>>>,
     ) -> Result<DependencyReviewMutation, DependencyReviewWorkerError> {
-      let weight = T::WeightInfo::process_due_observation_availability_review();
+      let weight = Self::dependency_review_weight_upper();
       if !meter.can_consume(weight) {
         return Err(DependencyReviewWorkerError::InsufficientWeight);
       }
@@ -5970,8 +6630,45 @@ pub mod pallet {
       })
     }
 
-    /// Traverses the earliest due block deadline and carries one indexed Oracle review through
-    /// its generated complete-attempt owner. Insufficient Weight performs no reads or mutation;
+    /// Resource-admits one complete fixed-anchor balance review. Classification and either
+    /// same-anchor rearm or Service wake commit atomically with Pending publication.
+    #[allow(
+      dead_code,
+      reason = "bounded parked-balance review is staged behind Actor Contract admission"
+    )]
+    pub(crate) fn process_due_parked_balance_review(
+      meter: &mut WeightMeter,
+      expected: DependencyTimedReview<BlockNumberFor<T>>,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+      kind: ServiceResidenceKind,
+      now: BlockNumberFor<T>,
+      next_review: Option<WakeupKey<BlockNumberFor<T>>>,
+    ) -> Result<DependencyReviewMutation, DependencyReviewWorkerError> {
+      let weight = T::WeightInfo::process_due_parked_balance_review();
+      if !meter.can_consume(weight) {
+        return Err(DependencyReviewWorkerError::InsufficientWeight);
+      }
+      meter.consume(weight);
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          Self::publish_due_dependency_review(expected)
+            .map_err(DependencyReviewWorkerError::Publication)?;
+          Self::interpret_pending_parked_balance_review(expected, evidence, kind, now, next_review)
+            .map_err(DependencyReviewWorkerError::Interpretation)
+        })();
+        match result {
+          Ok(mutation) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(mutation))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
+    /// Traverses the earliest due block deadline and carries one indexed review through its
+    /// family-specific complete-attempt owner. Insufficient Weight performs no reads or mutation;
     /// every admitted refusal restores the exact deadline, Pending, Park, and Service topology.
     #[allow(
       dead_code,
@@ -5983,7 +6680,7 @@ pub mod pallet {
       now: BlockNumberFor<T>,
       next_review: Option<WakeupKey<BlockNumberFor<T>>>,
     ) -> Result<(ActorRef, DependencyReviewMutation), DependencyReviewWorkerError> {
-      let weight = T::WeightInfo::process_due_observation_availability_review();
+      let weight = Self::dependency_review_weight_upper();
       if !meter.can_consume(weight) {
         return Err(DependencyReviewWorkerError::InsufficientWeight);
       }
@@ -6027,14 +6724,33 @@ pub mod pallet {
             ));
           }
           Self::remove_deadline_member(actor).map_err(DependencyReviewWorkerError::Deadline)?;
-          let mutation = Self::process_due_observation_availability_review(
-            meter,
-            expected,
-            evidence,
-            kind,
-            now,
-            next_review,
-          )?;
+          let mutation = if evidence.reason == ParkNegativeReason::ParkedBalanceBelowThreshold {
+            if let Some(pending) = PendingDependencyEvents::<T>::get(actor.actor_id) {
+              Self::process_pending_parked_balance_event(meter, pending, kind, evidence, now)?
+            } else {
+              Self::process_due_parked_balance_review(
+                meter,
+                expected,
+                evidence,
+                kind,
+                now,
+                next_review,
+              )?
+            }
+          } else if let Some(pending) = PendingDependencyEvents::<T>::get(actor.actor_id) {
+            Self::process_pending_observation_availability_event(
+              meter, pending, evidence, kind, now,
+            )?
+          } else {
+            Self::process_due_observation_availability_review(
+              meter,
+              expected,
+              evidence,
+              kind,
+              now,
+              next_review,
+            )?
+          };
           if matches!(mutation, DependencyReviewMutation::Rearmed(_)) {
             let review = DependencyTimedReviews::<T>::get(actor.actor_id).ok_or(
               DependencyReviewWorkerError::Publication(DependencyDueReviewError::ReviewMissing),
@@ -6083,6 +6799,22 @@ pub mod pallet {
       }
     }
 
+    /// Retained-bucket vacancy maintenance and bucket deletion own different storage branches.
+    pub(crate) fn deadline_return_weight_upper() -> Weight {
+      T::WeightInfo::return_due_block_deadline_to_service()
+        .max(T::WeightInfo::return_due_block_deadline_to_service_deep_index())
+    }
+
+    /// Component-wise upper bound for the three reachable non-useful Cadenced busy residences.
+    /// The useful owner remains a conservative fallback until regenerated host weights override
+    /// every newly promoted branch.
+    pub(crate) fn cadenced_busy_rearm_weight_upper() -> Weight {
+      T::WeightInfo::cadenced_running_rearm()
+        .max(T::WeightInfo::cadenced_suspended_service_rearm())
+        .max(T::WeightInfo::cadenced_suspended_deadline_rearm())
+        .max(T::WeightInfo::cadenced_trigger_occurrence())
+    }
+
     /// Classifies and processes one member from the shared earliest due block bucket. Sleeping
     /// retries return directly to Service; Parked members alone enter the timed-review worker.
     /// Classification and the selected complete branch each have an independent generated Weight
@@ -6093,7 +6825,7 @@ pub mod pallet {
     )]
     pub(crate) fn process_next_due_block_deadline(
       meter: &mut WeightMeter,
-      kind: ServiceResidenceKind,
+      _kind: ServiceResidenceKind,
       now: BlockNumberFor<T>,
       next_review: Option<WakeupKey<BlockNumberFor<T>>>,
     ) -> Result<DueBlockDeadlineMutation, DependencyReviewWorkerError> {
@@ -6106,11 +6838,11 @@ pub mod pallet {
         .map_err(DependencyReviewWorkerError::Deadline)?
       {
         DueBlockDeadlineBranch::Retry(actor) => {
-          let branch_weight = T::WeightInfo::return_due_block_deadline_to_service();
+          let branch_weight = Self::deadline_return_weight_upper();
           if !meter.can_consume(branch_weight) {
             return Err(DependencyReviewWorkerError::InsufficientWeight);
           }
-          Self::return_due_deadline_member_to_service(actor, kind, now)
+          Self::return_due_deadline_member_to_service(actor, ServiceResidenceKind::Live, now)
             .map_err(DependencyReviewWorkerError::Deadline)?;
           meter.consume(branch_weight);
           Ok(DueBlockDeadlineMutation::RetryReturned(actor))
@@ -6118,21 +6850,22 @@ pub mod pallet {
         DueBlockDeadlineBranch::Review(_) => {
           Self::process_next_due_block_observation_availability_review(
             meter,
-            kind,
+            ServiceResidenceKind::Pending,
             now,
             next_review,
           )
           .map(|(actor, mutation)| DueBlockDeadlineMutation::ReviewProcessed(actor, mutation))
         }
-        DueBlockDeadlineBranch::TemporalTrigger(_) => Err(DependencyReviewWorkerError::Deadline(
-          DeadlineMutationError::InvalidDestination,
-        )),
+        DueBlockDeadlineBranch::TemporalTrigger(_)
+        | DueBlockDeadlineBranch::TemporalTriggerBusy(_) => Err(
+          DependencyReviewWorkerError::Deadline(DeadlineMutationError::InvalidDestination),
+        ),
       }
     }
 
-    /// Classifies one member from the shared earliest due tick bucket without mutation. Tick
-    /// deadlines currently retain timed Park reviews only; a sleeping retry on this clock is an
-    /// incoherent carrier state and is never consumed by the dispatcher.
+    /// Classifies one member from the shared earliest due Tick bucket without mutation. Tick
+    /// deadlines retain timed Park reviews and temporal Triggers; a sleeping retry on this clock
+    /// is an incoherent carrier state and is never consumed by the dispatcher.
     pub(crate) fn classify_next_due_tick_deadline(
       now_tick: SchedulerTick,
     ) -> Result<DueBlockDeadlineBranch, DeadlineMutationError> {
@@ -6152,7 +6885,20 @@ pub mod pallet {
       if TriggerDeadlineHandles::<T>::get(actor.actor_id)
         .is_some_and(|handle| handle.actor == actor && handle.key == key)
       {
-        return Ok(DueBlockDeadlineBranch::TemporalTrigger(actor));
+        let ActorSemanticState::Active(semantic) = ActorSemanticStates::<T>::get(actor.actor_id)
+          .ok_or(DeadlineMutationError::ProcessMissing)?
+        else {
+          return Err(DeadlineMutationError::ProcessResidenceMismatch);
+        };
+        if semantic.generation != actor.generation {
+          return Err(DeadlineMutationError::ProcessResidenceMismatch);
+        }
+        return Ok(match semantic.hot.cycle_state {
+          CycleState::Running | CycleState::Suspended => {
+            DueBlockDeadlineBranch::TemporalTriggerBusy(actor)
+          }
+          CycleState::Idle => DueBlockDeadlineBranch::TemporalTrigger(actor),
+        });
       }
       let process =
         ActorProcesses::<T>::get(actor.actor_id).ok_or(DeadlineMutationError::ProcessMissing)?;
@@ -6163,12 +6909,78 @@ pub mod pallet {
       }
     }
 
-    /// Processes one retained timed review or temporal Trigger from the independent Tick frontier. Selection is
-    /// admitted before inspection; the existing complete review owner admits the selected branch.
+    /// Executes one selected temporal Trigger as a single transaction. The caller must admit
+    /// its occurrence owner first; that owner includes source extraction and authority loading,
+    /// while clock-frontier classification remains separately owned.
+    pub(crate) fn process_due_temporal_deadline(
+      actor: ActorRef,
+      now_tick: SchedulerTick,
+    ) -> Result<DueTickDeadlineMutation, DependencyReviewWorkerError> {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          let handle = TriggerDeadlineHandles::<T>::get(actor.actor_id).ok_or(
+            DependencyReviewWorkerError::Deadline(DeadlineMutationError::MemberMissing),
+          )?;
+          if handle.actor != actor
+            || !matches!(handle.key, WakeupKey::Tick(tick) if tick <= now_tick)
+          {
+            return Err(DependencyReviewWorkerError::Deadline(
+              DeadlineMutationError::ProcessResidenceMismatch,
+            ));
+          }
+          let Some(ActorSemanticState::Active(mut semantic)) =
+            ActorSemanticStates::<T>::get(actor.actor_id)
+          else {
+            return Err(DependencyReviewWorkerError::Deadline(
+              DeadlineMutationError::ProcessMissing,
+            ));
+          };
+          if semantic.generation != actor.generation {
+            return Err(DependencyReviewWorkerError::Deadline(
+              DeadlineMutationError::StaleGeneration,
+            ));
+          }
+          Self::remove_trigger_deadline_member(actor)
+            .map_err(DependencyReviewWorkerError::Deadline)?;
+          semantic.hot.trigger_wakeup_pointer = None;
+          ActorSemanticStates::<T>::insert(
+            actor.actor_id,
+            ActorSemanticState::Active(semantic.clone()),
+          );
+          let (state, admission, loaded_step) = Self::load_actor_service_state_with_control(
+            actor.actor_id,
+            semantic.identity,
+            semantic.hot,
+            semantic.admission,
+          )
+          .ok_or(DependencyReviewWorkerError::TemporalOccurrence)?;
+          Self::process_due_temporal_occurrence_loaded(
+            actor.actor_id,
+            state,
+            admission,
+            loaded_step,
+            now_tick,
+          )
+          .map_err(|_| DependencyReviewWorkerError::TemporalOccurrence)?;
+          Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(actor))
+        })();
+        match result {
+          Ok(mutation) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(mutation))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
+    /// Processes one retained timed review or temporal Trigger from the independent Tick frontier.
+    /// Selection is admitted before inspection, then the selected branch is admitted before mutation.
     /// Block-clock members and incoherent Tick retries remain untouched.
     pub(crate) fn process_next_due_tick_deadline(
       meter: &mut WeightMeter,
-      kind: ServiceResidenceKind,
+      _kind: ServiceResidenceKind,
       now: BlockNumberFor<T>,
       now_tick: SchedulerTick,
       next_review: Option<WakeupKey<BlockNumberFor<T>>>,
@@ -6180,78 +6992,30 @@ pub mod pallet {
       meter.consume(selector_weight);
       let branch = Self::classify_next_due_tick_deadline(now_tick)
         .map_err(DependencyReviewWorkerError::Deadline)?;
-      if let DueBlockDeadlineBranch::TemporalTrigger(actor) = branch {
-        let weight = T::WeightInfo::at_time_trigger_occurrence()
-          .max(T::WeightInfo::cadenced_trigger_occurrence());
+      let temporal = match branch {
+        DueBlockDeadlineBranch::TemporalTrigger(actor) => Some((
+          actor,
+          T::WeightInfo::at_time_trigger_occurrence()
+            .max(T::WeightInfo::cadenced_trigger_occurrence()),
+        )),
+        DueBlockDeadlineBranch::TemporalTriggerBusy(actor) => {
+          Some((actor, Self::cadenced_busy_rearm_weight_upper()))
+        }
+        _ => None,
+      };
+      if let Some((actor, weight)) = temporal {
         if !meter.can_consume(weight) {
           return Err(DependencyReviewWorkerError::InsufficientWeight);
         }
         meter.consume(weight);
-        let result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-          let result = (|| {
-            let handle = TriggerDeadlineHandles::<T>::get(actor.actor_id).ok_or(
-              DependencyReviewWorkerError::Deadline(DeadlineMutationError::MemberMissing),
-            )?;
-            if handle.actor != actor
-              || !matches!(handle.key, WakeupKey::Tick(tick) if tick <= now_tick)
-            {
-              return Err(DependencyReviewWorkerError::Deadline(
-                DeadlineMutationError::ProcessResidenceMismatch,
-              ));
-            }
-            let Some(ActorSemanticState::Active(mut semantic)) =
-              ActorSemanticStates::<T>::get(actor.actor_id)
-            else {
-              return Err(DependencyReviewWorkerError::Deadline(
-                DeadlineMutationError::ProcessMissing,
-              ));
-            };
-            if semantic.generation != actor.generation {
-              return Err(DependencyReviewWorkerError::Deadline(
-                DeadlineMutationError::StaleGeneration,
-              ));
-            }
-            Self::remove_trigger_deadline_member(actor)
-              .map_err(DependencyReviewWorkerError::Deadline)?;
-            semantic.hot.trigger_wakeup_pointer = None;
-            ActorSemanticStates::<T>::insert(
-              actor.actor_id,
-              ActorSemanticState::Active(semantic.clone()),
-            );
-            let (state, admission, loaded_step) = Self::load_actor_service_state_with_control(
-              actor.actor_id,
-              semantic.identity,
-              semantic.hot,
-              semantic.admission,
-            )
-            .ok_or(DependencyReviewWorkerError::TemporalOccurrence)?;
-            Self::process_due_temporal_occurrence_loaded(
-              actor.actor_id,
-              state,
-              admission,
-              loaded_step,
-              now_tick,
-            )
-            .map_err(|_| DependencyReviewWorkerError::TemporalOccurrence)?;
-            Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(actor))
-          })();
-          match result {
-            Ok(mutation) => {
-              polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(mutation))
-            }
-            Err(error) => {
-              polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-            }
-          }
-        });
-        return result;
+        return Self::process_due_temporal_deadline(actor, now_tick);
       }
       let DueBlockDeadlineBranch::Review(actor) = branch else {
         return Err(DependencyReviewWorkerError::Deadline(
           DeadlineMutationError::ProcessResidenceMismatch,
         ));
       };
-      let weight = T::WeightInfo::process_due_observation_availability_review();
+      let weight = Self::dependency_review_weight_upper();
       if !meter.can_consume(weight) {
         return Err(DependencyReviewWorkerError::InsufficientWeight);
       }
@@ -6285,7 +7049,7 @@ pub mod pallet {
             meter,
             expected,
             evidence,
-            kind,
+            ServiceResidenceKind::Pending,
             now,
             next_review,
           )?;
@@ -6311,6 +7075,18 @@ pub mod pallet {
       })
     }
 
+    /// Complete two-clock admission bound; mutually exclusive branches use component-wise maxima.
+    pub fn deadline_service_weight_upper() -> Weight {
+      let review = Self::dependency_review_weight_upper();
+      let temporal = T::WeightInfo::at_time_trigger_occurrence()
+        .max(T::WeightInfo::cadenced_trigger_occurrence())
+        .max(Self::cadenced_busy_rearm_weight_upper());
+      T::WeightInfo::classify_due_block_deadline()
+        .saturating_add(Self::deadline_return_weight_upper().max(review))
+        .saturating_add(T::WeightInfo::classify_due_tick_deadline())
+        .saturating_add(review.max(temporal))
+    }
+
     /// Gives each independent deadline clock one bounded mandatory-service attempt in fixed
     /// Block-then-Tick order. The complete maximum two-frontier envelope is admitted before either
     /// selector reads storage, so an absent, refused, or continuously busy Block frontier cannot
@@ -6324,14 +7100,7 @@ pub mod pallet {
       next_block_review: Option<WakeupKey<BlockNumberFor<T>>>,
       next_tick_review: Option<WakeupKey<BlockNumberFor<T>>>,
     ) -> Result<DueDeadlineServicePass, DependencyReviewWorkerError> {
-      let review = T::WeightInfo::process_due_observation_availability_review();
-      let temporal = T::WeightInfo::at_time_trigger_occurrence()
-        .max(T::WeightInfo::cadenced_trigger_occurrence());
-      let block_branch = T::WeightInfo::return_due_block_deadline_to_service().max(review);
-      let complete_envelope = T::WeightInfo::classify_due_block_deadline()
-        .saturating_add(block_branch)
-        .saturating_add(T::WeightInfo::classify_due_tick_deadline())
-        .saturating_add(review.max(temporal));
+      let complete_envelope = Self::deadline_service_weight_upper();
       if !meter.can_consume(complete_envelope) {
         return Err(DependencyReviewWorkerError::InsufficientWeight);
       }
@@ -6340,11 +7109,9 @@ pub mod pallet {
       Ok(DueDeadlineServicePass { block, tick })
     }
 
-    /// Opens one canonical Service round and executes an eligible zero-Step or successful
-    /// effectful head under one pre-admitted selector/execution envelope. Effectful failure and
-    /// retry placement remain captured for the later complete deadline/resource suffix; they are
-    /// not marked attempted or advanced. Weight, fee, state, or invariant refusal leaves the prior
-    /// round, member, process, and cursor untouched.
+    /// Admits canonical head inspection first, then the selected complete Control/effect branch.
+    /// Execution and retry/terminal placement share one transaction. Capacity, fee, or authority
+    /// refusal preserves process/ring authority, but never erases inspection or incurred work.
     pub(crate) fn service_canonical_round_head(
       meter: &mut WeightMeter,
       now: BlockNumberFor<T>,
@@ -6354,11 +7121,12 @@ pub mod pallet {
         now,
         None,
         BlockResourceDomain::ActorDrainEffect,
-        false,
+        None,
       )
       .map(|(encounter, _)| encounter)
     }
 
+    #[cfg(any(test, feature = "runtime-benchmarks"))]
     pub(crate) fn service_canonical_round_head_with_resources(
       meter: &mut WeightMeter,
       now: BlockNumberFor<T>,
@@ -6371,27 +7139,28 @@ pub mod pallet {
         now,
         Some((state, limits)),
         effect_domain,
-        false,
+        None,
       )
       .map(|(encounter, _)| encounter)
     }
 
     /// Variant for callers already holding the pass-wide `ActorControl` reservation. Nested step
-    /// control is accounted by that outer reservation, so this seam reserves only effect capacity
-    /// and leaves control settlement to the enclosing `CyclePass` reconciliation.
+    /// control reserves no second ledger share, but every branch must fit the caller's remaining
+    /// Control independently and report its full actual work to `CyclePass` reconciliation.
     pub(crate) fn service_canonical_round_head_with_reserved_control(
       meter: &mut WeightMeter,
       now: BlockNumberFor<T>,
       state: &mut BlockResourceState<BlockNumberFor<T>>,
       limits: BlockResourceLimits,
       effect_domain: BlockResourceDomain,
+      control_remaining: Weight,
     ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
       Self::service_canonical_round_head_inner(
         meter,
         now,
         Some((state, limits)),
         effect_domain,
-        true,
+        Some(control_remaining),
       )
       .map(|(encounter, _)| encounter)
     }
@@ -6404,7 +7173,7 @@ pub mod pallet {
         BlockResourceLimits,
       )>,
       effect_domain: BlockResourceDomain,
-      control_owned_by_caller: bool,
+      caller_control_remaining: Option<Weight>,
     ) -> Result<
       (
         ServiceRoundEncounter,
@@ -6423,12 +7192,16 @@ pub mod pallet {
             .max(T::WeightInfo::service_member_retire_singleton()),
         ),
       );
-      let complete_envelope = inspection_envelope.saturating_add(zero_step_envelope);
-      if !meter.can_consume(complete_envelope) {
-        return Err(ServiceRoundError::InsufficientWeight);
+      let control_owned_by_caller = caller_control_remaining.is_some();
+      let can_consume = |control: Weight, effect: Weight| {
+        meter.can_consume(control.saturating_add(effect))
+          && caller_control_remaining.is_none_or(|remaining| control.all_lte(remaining))
+      };
+      if !can_consume(selector_envelope, Weight::zero()) {
+        return Err(ServiceRoundError::DiscoveryUnavailable);
       }
-      // Admit the loaded-classification owner before ring/process/semantic/Step reads. Storage
-      // rollback cannot erase work already performed before a later branch-capacity refusal.
+      // Admit round discovery before any topology read or round-marker mutation. Empty/closed
+      // encounters need no Actor loading; eligible heads admit that separate owner below.
       let mut inspection_reservation =
         if let Some((resource_state, limits)) = resource_authority.as_mut() {
           if control_owned_by_caller {
@@ -6439,16 +7212,20 @@ pub mod pallet {
                 .reserve(
                   *limits,
                   BlockResourceDomain::ActorControl,
-                  inspection_envelope,
+                  selector_envelope,
                 )
-                .map_err(|_| ServiceRoundError::ResourceUnavailable)?,
+                .map_err(|_| ServiceRoundError::DiscoveryUnavailable)?,
             )
           }
         } else {
           None
         };
-      let resource_after_inspection = resource_authority.as_ref().map(|(state, _)| **state);
+      let mut classification_reservation = None;
+      let mut resource_after_inspection = resource_authority.as_ref().map(|(state, _)| **state);
       let mut loaded_classification = false;
+      // Set only after complete admission, before entering a mutating branch. Semantic rollback
+      // restores topology/custody, not work already performed under this envelope.
+      let mut incurred: Option<ActorStepResourceEnvelope> = None;
       let result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
         let result = (|| {
           Self::begin_service_round(now)?;
@@ -6456,6 +7233,23 @@ pub mod pallet {
           let mut execution_weight = Weight::zero();
           let mut attempt = None;
           if let ServiceRoundEncounter::Eligible(actor) = encounter {
+            if !can_consume(inspection_envelope, Weight::zero()) {
+              return Err(ServiceRoundError::InsufficientWeight);
+            }
+            if let Some((resource_state, limits)) = resource_authority.as_mut() {
+              if !control_owned_by_caller {
+                classification_reservation = Some(
+                  resource_state
+                    .reserve(
+                      *limits,
+                      BlockResourceDomain::ActorControl,
+                      loaded_classification_envelope,
+                    )
+                    .map_err(|_| ServiceRoundError::ResourceUnavailable)?,
+                );
+              }
+            }
+            resource_after_inspection = resource_authority.as_ref().map(|(state, _)| **state);
             loaded_classification = true;
             let (semantic, service_kind) = Self::load_service_actor_semantic_state_with_kind(actor)
               .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
@@ -6568,9 +7362,16 @@ pub mod pallet {
                 } else {
                   None
                 };
-              if !meter.can_consume(inspection_envelope.saturating_add(close_envelope)) {
+              if !can_consume(
+                inspection_envelope.saturating_add(close_envelope),
+                Weight::zero(),
+              ) {
                 return Err(ServiceRoundError::InsufficientWeight);
               }
+              incurred = Some(ActorStepResourceEnvelope {
+                control: close_envelope,
+                effect: Weight::zero(),
+              });
               Self::finalize_actor(actor.actor_id, &instance, reason)
                 .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
               if let (Some((resource_state, _)), Some(reservation)) =
@@ -6594,7 +7395,10 @@ pub mod pallet {
               // or retry eligibility retains its canonical Service residence. Advance the bounded
               // cursor without opening a pipeline, executing a Step, or recording an attempt.
               let advance_envelope = T::WeightInfo::service_round_admit_eligible();
-              if !meter.can_consume(inspection_envelope.saturating_add(advance_envelope)) {
+              if !can_consume(
+                inspection_envelope.saturating_add(advance_envelope),
+                Weight::zero(),
+              ) {
                 return Err(ServiceRoundError::InsufficientWeight);
               }
               let mut reservation =
@@ -6615,6 +7419,10 @@ pub mod pallet {
                 } else {
                   None
                 };
+              incurred = Some(ActorStepResourceEnvelope {
+                control: advance_envelope,
+                effect: Weight::zero(),
+              });
               Self::advance_idle_service_head(actor, now)
                 .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
               if let (Some((resource_state, _)), Some(reservation)) =
@@ -6635,9 +7443,11 @@ pub mod pallet {
               encounter = ServiceRoundEncounter::NoWork(actor);
             } else if let Some(loaded_step) = loaded_step {
               let resources = loaded_step.resources;
-              let effectful_envelope = resources
+              let terminal_control =
+                Self::service_terminal_control_upper(&state, Some(&loaded_step.step));
+              let effectful_control = resources
                 .control
-                .saturating_add(resources.effect)
+                .saturating_add(terminal_control)
                 .saturating_add(
                   T::WeightInfo::service_round_admit_eligible().max(
                     T::WeightInfo::service_member_retire_interior()
@@ -6645,7 +7455,10 @@ pub mod pallet {
                       .max(T::WeightInfo::service_member_retire_singleton()),
                   ),
                 );
-              if !meter.can_consume(inspection_envelope.saturating_add(effectful_envelope)) {
+              if !can_consume(
+                inspection_envelope.saturating_add(effectful_control),
+                resources.effect,
+              ) {
                 return Err(ServiceRoundError::InsufficientWeight);
               }
               let maximum_fee = Self::maximum_current_action_fee(
@@ -6700,7 +7513,7 @@ pub mod pallet {
                         if control_owned_by_caller {
                           Weight::zero()
                         } else {
-                          resources.control.saturating_add(suffix)
+                          effectful_control
                         },
                         resources.effect,
                       )
@@ -6709,6 +7522,10 @@ pub mod pallet {
                 } else {
                   None
                 };
+              incurred = Some(ActorStepResourceEnvelope {
+                control: effectful_control,
+                effect: resources.effect,
+              });
               let evidence = Self::execute_effectful_step_on_service_with_deadline(
                 actor,
                 service_kind,
@@ -6718,27 +7535,56 @@ pub mod pallet {
                 now,
                 retry_deadline,
               )
-              .map_err(|error| match error {
-                crate::scheduler::AttemptTransactionError::FeeCollection => {
-                  ServiceRoundError::FeeCollection
+              .map_err(|failure| {
+                incurred = Some(ActorStepResourceEnvelope {
+                  control: effectful_control,
+                  effect: failure.actual_effect_weight.unwrap_or(resources.effect),
+                });
+                match failure.cause {
+                  crate::scheduler::AttemptTransactionError::FeeCollection => {
+                    ServiceRoundError::FeeCollection
+                  }
+                  _ => ServiceRoundError::ProcessResidenceMismatch,
                 }
-                _ => ServiceRoundError::ProcessResidenceMismatch,
               })?;
-              attempt = Some(evidence.attempt);
-              let actual_control = if control_owned_by_caller {
-                Weight::zero()
+              incurred = Some(ActorStepResourceEnvelope {
+                control: effectful_control,
+                effect: evidence.actual_effect_weight,
+              });
+              // Persistent-completion profiles do not certify lifecycle destruction. Keep the
+              // admitted Step maximum plus cleanup until a complete terminal owner permits reclaim.
+              let actual_control = if evidence.attempt.is_closed() {
+                effectful_control
               } else {
                 evidence.actual_control_weight.saturating_add(suffix)
               };
+              attempt = Some(evidence.attempt);
               if let (Some((resource_state, _)), Some(reservation)) =
                 (resource_authority.as_mut(), reservation.as_mut())
               {
                 resource_state
-                  .settle_actor_step(reservation, actual_control, evidence.actual_effect_weight)
+                  .settle_actor_step(
+                    reservation,
+                    if control_owned_by_caller {
+                      Weight::zero()
+                    } else {
+                      actual_control
+                    },
+                    evidence.actual_effect_weight,
+                  )
                   .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
               }
               execution_weight = actual_control.saturating_add(evidence.actual_effect_weight);
             } else {
+              let zero_step_base = zero_step_envelope;
+              let zero_step_envelope =
+                zero_step_base.saturating_add(Self::service_terminal_control_upper(&state, None));
+              if !can_consume(
+                inspection_envelope.saturating_add(zero_step_envelope),
+                Weight::zero(),
+              ) {
+                return Err(ServiceRoundError::InsufficientWeight);
+              }
               let mut reservation =
                 if let Some((resource_state, limits)) = resource_authority.as_mut() {
                   Some(
@@ -6757,22 +7603,30 @@ pub mod pallet {
                 } else {
                   None
                 };
-              attempt = Some(
-                Self::execute_zero_step_on_service(
-                  actor,
-                  service_kind,
-                  state,
-                  &admission,
-                  now,
-                  None,
-                )
-                .map_err(|error| match error {
-                  crate::scheduler::AttemptTransactionError::FeeCollection => {
-                    ServiceRoundError::FeeCollection
-                  }
-                  _ => ServiceRoundError::ProcessResidenceMismatch,
-                })?,
-              );
+              incurred = Some(ActorStepResourceEnvelope {
+                control: zero_step_envelope,
+                effect: Weight::zero(),
+              });
+              let evidence = Self::execute_zero_step_on_service(
+                actor,
+                service_kind,
+                state,
+                &admission,
+                now,
+                None,
+              )
+              .map_err(|error| match error {
+                crate::scheduler::AttemptTransactionError::FeeCollection => {
+                  ServiceRoundError::FeeCollection
+                }
+                _ => ServiceRoundError::ProcessResidenceMismatch,
+              })?;
+              let actual_control = if evidence.is_closed() {
+                zero_step_envelope
+              } else {
+                zero_step_base
+              };
+              attempt = Some(evidence);
               if let (Some((resource_state, _)), Some(reservation)) =
                 (resource_authority.as_mut(), reservation.as_mut())
               {
@@ -6782,12 +7636,12 @@ pub mod pallet {
                     if control_owned_by_caller {
                       Weight::zero()
                     } else {
-                      zero_step_envelope
+                      actual_control
                     },
                   )
                   .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
               }
-              execution_weight = zero_step_envelope;
+              execution_weight = actual_control;
             }
           }
           Ok((encounter, execution_weight, attempt))
@@ -6814,27 +7668,118 @@ pub mod pallet {
           {
             **state = after_inspection;
           }
-          if let (Some((state, _)), Some(reservation)) =
-            (resource_authority.as_mut(), inspection_reservation.as_mut())
-          {
-            state
-              .settle(reservation, inspection_actual)
-              .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
+          for (reservation, actual) in [
+            (&mut inspection_reservation, selector_envelope),
+            (
+              &mut classification_reservation,
+              loaded_classification_envelope,
+            ),
+          ] {
+            if let (Some((state, _)), Some(reservation)) =
+              (resource_authority.as_mut(), reservation.as_mut())
+            {
+              state
+                .settle(reservation, actual)
+                .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
+            }
           }
           meter.consume(inspection_actual);
+          if let Some(work) = incurred {
+            meter.consume(work.control.saturating_add(work.effect));
+            if let Some((state, limits)) = resource_authority.as_mut() {
+              // Restore only the failed branch's ledger booking, from its already-admitted
+              // prefix. No new capacity is needed; known effects may refund within their domain.
+              let control = if control_owned_by_caller {
+                Weight::zero()
+              } else {
+                work.control
+              };
+              let retained = state
+                .reserve_actor_step(*limits, effect_domain, control, work.effect)
+                .and_then(|mut reservation| {
+                  state.settle_actor_step(&mut reservation, control, work.effect)
+                });
+              state.halt_optional_actor_work();
+              retained.map_err(|_| ServiceRoundError::ResourceUnavailable)?;
+            }
+          }
           return Err(error);
         }
       };
-      if let (Some((state, _)), Some(reservation)) =
-        (resource_authority.as_mut(), inspection_reservation.as_mut())
-      {
-        state
-          .settle(reservation, inspection_actual)
-          .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
+      for (reservation, actual) in [
+        (&mut inspection_reservation, selector_envelope),
+        (
+          &mut classification_reservation,
+          loaded_classification_envelope,
+        ),
+      ] {
+        if let (Some((state, _)), Some(reservation)) =
+          (resource_authority.as_mut(), reservation.as_mut())
+        {
+          state
+            .settle(reservation, actual)
+            .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
+        }
       }
       meter.consume(inspection_actual);
       meter.consume(execution_weight);
       Ok((encounter, attempt))
+    }
+
+    /// Releases every exact reverse owner of one Park residence without publishing a successor.
+    /// Contract replacement uses this only inside its enclosing transaction before rotating the
+    /// generation, so any stale registration or deadline refuses the whole replacement.
+    pub(crate) fn release_parked_dependency_authority(
+      actor: ActorRef,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+    ) -> Result<(), DependencyRegistrationError> {
+      let process = ActorProcesses::<T>::get(actor.actor_id)
+        .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+      let owner = PendingCheckOwners::<T>::get(actor.actor_id)
+        .filter(|owner| owner.actor == actor)
+        .ok_or(DependencyRegistrationError::PendingOwnerMismatch)?;
+      if process.generation != actor.generation
+        || process.status != ProcessStatus::Serving
+        || process.residence != Some(ProcessResidence::Parked(evidence))
+      {
+        return Err(DependencyRegistrationError::StoredPlanMismatch);
+      }
+      match ParkedBalanceEpisodes::<T>::get(actor.actor_id) {
+        Some(episode)
+          if evidence.reason == ParkNegativeReason::ParkedBalanceBelowThreshold
+            && episode.owner == owner => {}
+        None if evidence.reason != ParkNegativeReason::ParkedBalanceBelowThreshold => {}
+        _ => return Err(DependencyRegistrationError::StoredPlanMismatch),
+      }
+      let plan = DependencyPlans::<T>::get(actor.actor_id);
+      for registration in &plan {
+        if registration.handle.actor != actor
+          || registration.handle.plan_revision != owner.plan_revision
+          || DependencyRegistrations::<T>::get(registration.source, actor.actor_id)
+            != Some(registration.handle)
+        {
+          return Err(DependencyRegistrationError::StoredPlanMismatch);
+        }
+        Self::dependency_registration_position(
+          registration.source,
+          actor.actor_id,
+          registration.handle,
+        )?;
+      }
+      if DeadlineHandles::<T>::contains_key(actor.actor_id) {
+        Self::remove_deadline_member(actor)
+          .map_err(|_| DependencyRegistrationError::StoredPlanMismatch)?;
+      }
+      for registration in &plan {
+        Self::remove_dependency_registration(registration.source, registration.handle)?;
+      }
+      DependencyPlans::<T>::remove(actor.actor_id);
+      DependencyTimedReviews::<T>::remove(actor.actor_id);
+      PendingDependencyEvents::<T>::remove(actor.actor_id);
+      PendingDependencyReviews::<T>::remove(actor.actor_id);
+      PendingCheckOwners::<T>::remove(actor.actor_id);
+      ParkedBalanceEpisodes::<T>::remove(actor.actor_id);
+      Ok(())
     }
 
     /// Atomically wakes one exact generation/plan-bound Park resident into canonical Service.
@@ -6865,6 +7810,13 @@ pub mod pallet {
           {
             return Err(DependencyRegistrationError::PendingOwnerMismatch);
           }
+          match ParkedBalanceEpisodes::<T>::get(actor.actor_id) {
+            Some(episode)
+              if evidence.reason == ParkNegativeReason::ParkedBalanceBelowThreshold
+                && episode.owner == owner => {}
+            None if evidence.reason != ParkNegativeReason::ParkedBalanceBelowThreshold => {}
+            _ => return Err(DependencyRegistrationError::StoredPlanMismatch),
+          }
           let plan = DependencyPlans::<T>::get(actor.actor_id);
           for registration in &plan {
             if registration.handle.actor != actor
@@ -6880,17 +7832,28 @@ pub mod pallet {
               registration.handle,
             )?;
           }
-          if let Some(review) = DependencyTimedReviews::<T>::get(actor.actor_id) {
-            if review.owner != owner {
+          let review = DependencyTimedReviews::<T>::get(actor.actor_id);
+          if review.as_ref().is_some_and(|review| review.owner != owner) {
+            return Err(DependencyRegistrationError::StoredPlanMismatch);
+          }
+          if let Some(handle) = DeadlineHandles::<T>::get(actor.actor_id) {
+            let expected_deadline = review
+              .as_ref()
+              .map(|review| review.deadline)
+              .or_else(|| evidence.review_at.map(WakeupKey::Block));
+            if handle.actor != actor || Some(handle.key) != expected_deadline {
               return Err(DependencyRegistrationError::StoredPlanMismatch);
             }
-            DependencyTimedReviews::<T>::remove(actor.actor_id);
+            Self::remove_deadline_member(actor)
+              .map_err(|_| DependencyRegistrationError::StoredPlanMismatch)?;
           }
+          DependencyTimedReviews::<T>::remove(actor.actor_id);
           for registration in &plan {
             Self::remove_dependency_registration(registration.source, registration.handle)?;
           }
           DependencyPlans::<T>::remove(actor.actor_id);
           PendingCheckOwners::<T>::remove(actor.actor_id);
+          ParkedBalanceEpisodes::<T>::remove(actor.actor_id);
           process.residence = Some(ProcessResidence::Service(kind));
           ActorProcesses::<T>::insert(actor.actor_id, process);
           Self::insert_service_member(actor, kind, now)
@@ -6903,6 +7866,12 @@ pub mod pallet {
           }
         }
       })
+    }
+
+    /// Maximum reachable nonempty C32 pages in one deadline bucket.
+    pub fn deadline_destination_page_bound() -> u32 {
+      let actors = T::MaxActiveActors::get();
+      actors / 32 + u32::from(actors % 32 != 0)
     }
 
     /// Selects the first canonical free slot in one deadline bucket without mutation.
@@ -6918,43 +7887,35 @@ pub mod pallet {
           slot: 0,
         });
       };
-      let mut page_id = header.first_page;
-      for visited in 0..header.page_count {
-        let page =
-          DeadlinePages::<T>::get(key, page_id).ok_or(DeadlineMutationError::CorruptCarrier)?;
-        if page.entries.len() != 32 || page.live_entries > 32 {
-          return Err(DeadlineMutationError::CorruptCarrier);
-        }
-        let mut slot = 0usize;
-        while slot < 32 {
-          if page.entries[slot].is_none() {
-            return Ok(DeadlineHandle {
-              actor,
-              key,
-              page: page_id,
-              slot: u8::try_from(slot).map_err(|_| DeadlineMutationError::CorruptCarrier)?,
-            });
-          }
-          slot = slot
-            .checked_add(1)
-            .ok_or(DeadlineMutationError::CorruptCarrier)?;
-        }
-        if visited + 1 == header.page_count {
-          if page_id != header.last_page || page.next_page.is_some() {
-            return Err(DeadlineMutationError::CorruptCarrier);
-          }
-          return Ok(DeadlineHandle {
-            actor,
-            key,
-            page: header.next_page,
-            slot: 0,
-          });
-        }
-        page_id = page
-          .next_page
-          .ok_or(DeadlineMutationError::CorruptCarrier)?;
+      Self::validate_deadline_header(&header)?;
+      let Some(page_id) = header.first_vacant_page else {
+        return Ok(DeadlineHandle {
+          actor,
+          key,
+          page: header.next_page,
+          slot: 0,
+        });
+      };
+      let page =
+        DeadlinePages::<T>::get(key, page_id).ok_or(DeadlineMutationError::CorruptCarrier)?;
+      if page.entries.len() != 32
+        || page.live_entries == 0
+        || page.live_entries >= 32
+        || page.previous_vacant_page.is_some()
+      {
+        return Err(DeadlineMutationError::CorruptCarrier);
       }
-      Err(DeadlineMutationError::CorruptCarrier)
+      let slot = page
+        .entries
+        .iter(/* deos-bypass: bounded-iter — one fixed C32 deadline page. */)
+        .position(Option::is_none)
+        .ok_or(DeadlineMutationError::CorruptCarrier)?;
+      Ok(DeadlineHandle {
+        actor,
+        key,
+        page: page_id,
+        slot: u8::try_from(slot).map_err(|_| DeadlineMutationError::CorruptCarrier)?,
+      })
     }
 
     /// Atomically transfers one exact canonical Service member into a preselected deadline slot.
@@ -7072,46 +8033,84 @@ pub mod pallet {
       Ok(actor)
     }
 
-    /// Proves the complete Service-to-deadline destination without retaining any mutation.
-    pub(crate) fn probe_service_member_to_deadline(
-      actor: ActorRef,
-      destination: DeadlineHandleOf<T>,
-    ) -> Result<(), DeadlineMutationError> {
-      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-        polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(
-          Self::transfer_service_member_to_deadline(actor, destination),
-        )
-      })
-    }
-
     /// Stores identity and Hot directly through the canonical semantic owner. Canonical service
     /// mutation never recreates or updates a legacy control cell and fails closed on stale
-    /// residence authority. Generation and admission remain immutable during an attempt.
+    /// residence authority. A newly opened Run promotes Pending to Live in place without
+    /// changing ring position or eligibility. Semantic, residence and retained-hold changes
+    /// commit together, including the detector installed by temporal Opening rearm.
     pub(crate) fn try_store_service_control_state(
       actor: ActorRef,
       kind: ServiceResidenceKind,
       identity: ActorIdentityOf<T>,
       hot: ActorHotStateOf<T>,
     ) -> Result<(), crate::scheduler::EnqueueOutcome> {
-      let current = Self::load_service_actor_semantic_state(actor, kind)
-        .map_err(|_| crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
-      let mut replacement = current.clone();
-      replacement.identity = identity;
-      replacement.hot = hot;
-      Self::mutate_actor_semantic_state(
-        actor.actor_id,
-        ActorSemanticMutation::Replace {
-          expected: ActorSemanticState::Active(current),
-          replacement: ActorSemanticState::Active(replacement.clone()),
-        },
-      )
-      .map_err(|_| crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
-      matches!(
-        Self::load_service_actor_semantic_state(actor, kind),
-        Ok(stored) if stored == replacement
-      )
-      .then_some(())
-      .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          let corrupt = crate::scheduler::EnqueueOutcome::CorruptedTopology;
+          let current =
+            Self::load_service_actor_semantic_state(actor, kind).map_err(|_| corrupt)?;
+          let promoted =
+            if kind == ServiceResidenceKind::Pending && hot.cycle_state != CycleState::Idle {
+              let mut process = ActorProcesses::<T>::get(actor.actor_id).ok_or(corrupt)?;
+              let mut node = ServiceNodes::<T>::get(actor.actor_id).ok_or(corrupt)?;
+              process.residence = Some(ProcessResidence::Service(ServiceResidenceKind::Live));
+              node.kind = ServiceResidenceKind::Live;
+              Some((process, node))
+            } else {
+              None
+            };
+          let mut replacement = current.clone();
+          replacement.identity = identity;
+          replacement.hot = hot;
+          Self::mutate_actor_semantic_state(
+            actor.actor_id,
+            ActorSemanticMutation::Replace {
+              expected: ActorSemanticState::Active(current),
+              replacement: ActorSemanticState::Active(replacement.clone()),
+            },
+          )
+          .map_err(|_| corrupt)?;
+          let successor_kind = if let Some((process, node)) = promoted {
+            ActorProcesses::<T>::insert(actor.actor_id, process);
+            ServiceNodes::<T>::insert(actor.actor_id, node);
+            ServiceResidenceKind::Live
+          } else {
+            kind
+          };
+          if replacement.identity.actor_class.actor_type() == ActorType::User {
+            // Contract and maximum Run geometry are unchanged; do not reload unreached tails.
+            let existing = ActorStateHolds::<T>::get(actor.actor_id).ok_or(corrupt)?;
+            let mut target = existing.breakdown;
+            target.detector = Self::state_hold_component(
+              Self::state_hold_detector_bytes(
+                actor.actor_id,
+                replacement.hot.trigger_wakeup_pointer,
+              )
+              .map_err(|_| corrupt)?,
+            )
+            .map_err(|_| corrupt)?;
+            Self::apply_actor_state_hold(
+              actor.actor_id,
+              Some(existing),
+              replacement.identity.owner.clone(),
+              target,
+            )
+            .map_err(|_| corrupt)?;
+          }
+          matches!(
+            Self::load_service_actor_semantic_state(actor, successor_kind),
+            Ok(stored) if stored == replacement
+          )
+          .then_some(())
+          .ok_or(corrupt)
+        })();
+        match result {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
     }
 
     #[allow(
@@ -7411,9 +8410,7 @@ pub mod pallet {
       let dormant_identity = ActorIdentities::<T>::get(actor_id);
       let has_contract_or_run = ActorContractHeads::<T>::contains_key(actor_id)
         || ActorActivationAuthorities::<T>::contains_key(actor_id)
-        || ActorRunStateStore::<T>::contains_key(actor_id)
-        || ActorRunHeads::<T>::contains_key(actor_id)
-        || ActorRunPayloads::<T>::contains_key(actor_id);
+        || ActorRunStateStore::<T>::contains_key(actor_id);
       let has_legacy_authority =
         location.is_some() || ActorUnsignaledControlCells::<T>::contains_key(actor_id);
       match (&state, dormant_identity.as_ref()) {
@@ -7502,10 +8499,7 @@ pub mod pallet {
       }
       let run_state = ActorRunStateStore::<T>::get(actor_id);
       let run_is_coherent = match (hot.cycle_state, run_state.as_ref()) {
-        (CycleState::Idle, None) => {
-          !ActorRunHeads::<T>::contains_key(actor_id)
-            && !ActorRunPayloads::<T>::contains_key(actor_id)
-        }
+        (CycleState::Idle, None) => true,
         (CycleState::Running, Some(run)) => {
           run.running_is_coherent()
             && run.has_contract_authority(
@@ -7594,7 +8588,7 @@ pub mod pallet {
         hot: state.hot,
         authority,
         admission: Some(certificate),
-        run_head: None,
+        run_state: None,
         loaded_step: None,
       })
     }
@@ -7639,8 +8633,8 @@ pub mod pallet {
       {
         return None;
       }
-      let run_head = ActorRunHeads::<T>::get(actor_id);
-      let cursor = match (hot.cycle_state, run_head.as_ref()) {
+      let run_state = ActorRunStateStore::<T>::get(actor_id);
+      let cursor = match (hot.cycle_state, run_state.as_ref()) {
         (CycleState::Idle, None) => 0,
         (CycleState::Running, Some(run))
           if run.running_is_coherent()
@@ -7708,7 +8702,7 @@ pub mod pallet {
         hot,
         authority,
         admission: Some(admission),
-        run_head,
+        run_state,
         loaded_step,
       })
     }
@@ -7818,6 +8812,7 @@ pub mod pallet {
         funding: head.header.funding,
         steps,
         completion: head.header.completion,
+        parked_balance_activation: head.header.parked_balance_activation,
         auto_close_at_cycle_nonce: head.header.auto_close_at_cycle_nonce,
       };
       Some((
@@ -8198,67 +9193,78 @@ pub mod pallet {
   pub type ActorSemanticStates<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, ActorSemanticStateOf<T>, OptionQuery>;
 
-  /// Canonical generation-bound process owner. This remains inert until the legacy control
-  /// mutation cohorts atomically transfer scheduler authority into it.
+  /// Canonical generation-bound process owner for status and primary residence.
   #[pallet::storage]
   #[pallet::getter(fn actor_processes)]
   pub type ActorProcesses<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, ActorProcessOf<T>, OptionQuery>;
 
-  /// Inert canonical header for the future actor-keyed persistent service ring.
+  /// Canonical header for the actor-keyed persistent service ring.
   #[pallet::storage]
   #[pallet::getter(fn service_header)]
   pub type ServiceHeader<T: Config> =
     StorageValue<_, ServiceHeaderRecord<BlockNumberFor<T>>, ValueQuery>;
 
-  /// Inert canonical generation-bound nodes for the future persistent service ring.
+  /// Canonical generation-bound nodes for the persistent service ring.
   #[pallet::storage]
   #[pallet::getter(fn service_nodes)]
   pub type ServiceNodes<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, ServiceNode<BlockNumberFor<T>>, OptionQuery>;
 
-  /// Inert monotone scalar source allocator for exact typed Oracle-feed identities.
+  /// Monotone scalar source allocator for exact typed Oracle-feed identities.
   #[pallet::storage]
   #[pallet::getter(fn dependency_source_allocator)]
   pub type DependencySourceAllocatorState<T: Config> =
     StorageValue<_, DependencySourceAllocator, ValueQuery>;
 
-  /// Inert typed Oracle-feed to scalar dependency-source identity mapping.
+  /// Typed Oracle-feed to scalar dependency-source identity mapping.
   #[pallet::storage]
   #[pallet::getter(fn observation_dependency_sources)]
   pub type ObservationDependencySources<T: Config> =
     StorageMap<_, Blake2_128Concat, T::ObservationFeedId, DependencySourceId, OptionQuery>;
 
-  /// Inert reverse mapping proving scalar source identity ownership without a scan.
+  /// Reverse mapping proving scalar source identity ownership without a scan.
   #[pallet::storage]
   #[pallet::getter(fn dependency_source_observations)]
   pub type DependencySourceObservations<T: Config> =
     StorageMap<_, Blake2_128Concat, DependencySourceId, T::ObservationFeedId, OptionQuery>;
 
-  /// Inert checked revisions for future event-complete dependency sources.
+  /// Forward mapping from one watched asset to its collision-free causal source identity.
+  #[pallet::storage]
+  #[pallet::getter(fn balance_dependency_sources)]
+  pub type BalanceDependencySources<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::AssetId, DependencySourceId, OptionQuery>;
+
+  /// Reverse mapping proving watched-asset source identity ownership without a scan.
+  #[pallet::storage]
+  #[pallet::getter(fn dependency_source_balances)]
+  pub type DependencySourceBalances<T: Config> =
+    StorageMap<_, Blake2_128Concat, DependencySourceId, T::AssetId, OptionQuery>;
+
+  /// Checked revisions for event-complete dependency sources.
   #[pallet::storage]
   #[pallet::getter(fn dependency_revisions)]
   pub type DependencyRevisions<T: Config> =
     StorageMap<_, Blake2_128Concat, DependencySourceId, DependencyRevisionState, ValueQuery>;
 
-  /// Inert fair selector for sources that retain active dependency scans.
+  /// Fair selector for sources that retain active dependency scans.
   #[pallet::storage]
   #[pallet::getter(fn dependency_scan_source_list)]
   pub type DependencyScanSourceListState<T> = StorageValue<_, DependencyScanSourceList, ValueQuery>;
 
-  /// Inert exact circular-list membership for one active dependency source.
+  /// Exact circular-list membership for one active dependency source.
   #[pallet::storage]
   #[pallet::getter(fn dependency_scan_source_node)]
   pub type DependencyScanSourceNodes<T> =
     StorageMap<_, Blake2_128Concat, DependencySourceId, DependencyScanSourceNode, OptionQuery>;
 
-  /// Inert one-per-Actor activation-check ownership, bound to generation and plan revision.
+  /// One-per-Actor activation-check ownership, bound to generation and plan revision.
   #[pallet::storage]
   #[pallet::getter(fn pending_check_owners)]
   pub type PendingCheckOwners<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, PendingCheckOwner, OptionQuery>;
 
-  /// Inert source-owned fixed-width registration topology.
+  /// Source-owned fixed-width registration topology.
   #[pallet::storage]
   #[pallet::getter(fn dependency_registration_headers)]
   pub type DependencyRegistrationHeaders<T: Config> =
@@ -8276,7 +9282,7 @@ pub mod pallet {
     OptionQuery,
   >;
 
-  /// Inert bounded reusable holes; active scans defer reuse so their cursor cannot be retargeted.
+  /// Bounded reusable holes; active scans defer reuse so their cursor cannot be retargeted.
   #[pallet::storage]
   #[pallet::getter(fn dependency_registration_free_positions)]
   pub type DependencyRegistrationFreePositions<T: Config> = StorageDoubleMap<
@@ -8289,7 +9295,7 @@ pub mod pallet {
     OptionQuery,
   >;
 
-  /// Inert exact source/Actor positions into canonical registration pages.
+  /// Exact source/Actor positions into canonical registration pages.
   #[pallet::storage]
   #[pallet::getter(fn dependency_registration_positions)]
   pub type DependencyRegistrationPositions<T: Config> = StorageDoubleMap<
@@ -8302,7 +9308,7 @@ pub mod pallet {
     OptionQuery,
   >;
 
-  /// Inert exact source-to-Actor reverse registrations for future dependency-keyed parking.
+  /// Exact source-to-Actor reverse registrations for dependency-keyed parking.
   #[pallet::storage]
   #[pallet::getter(fn dependency_registrations)]
   pub type DependencyRegistrations<T: Config> = StorageDoubleMap<
@@ -8315,7 +9321,7 @@ pub mod pallet {
     OptionQuery,
   >;
 
-  /// Inert Actor-owned complete registration plan; this is the removal-completeness authority.
+  /// Actor-owned complete registration plan; this is the removal-completeness authority.
   #[pallet::storage]
   #[pallet::getter(fn dependency_plans)]
   pub type DependencyPlans<T: Config> = StorageMap<
@@ -8326,31 +9332,37 @@ pub mod pallet {
     ValueQuery,
   >;
 
-  /// Inert Actor-owned optional timed review retained with the complete dependency plan.
+  /// One generation/plan-bound fixed-anchor episode retained only with a parked-balance plan.
+  #[pallet::storage]
+  #[pallet::getter(fn parked_balance_episodes)]
+  pub type ParkedBalanceEpisodes<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ParkedBalanceEpisodeOf<T>, OptionQuery>;
+
+  /// Actor-owned optional timed review retained with the complete dependency plan.
   #[pallet::storage]
   #[pallet::getter(fn dependency_timed_reviews)]
   pub type DependencyTimedReviews<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, DependencyTimedReview<BlockNumberFor<T>>, OptionQuery>;
 
-  /// Inert durable Pending destination for one event-complete source notification.
+  /// Durable Pending destination for one event-complete source notification.
   #[pallet::storage]
   #[pallet::getter(fn pending_dependency_events)]
   pub type PendingDependencyEvents<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, PendingDependencyEvent, OptionQuery>;
 
-  /// Inert durable Pending destination for one due dependency review.
+  /// Durable Pending destination for one due dependency review.
   #[pallet::storage]
   #[pallet::getter(fn pending_dependency_reviews)]
   pub type PendingDependencyReviews<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, DependencyTimedReview<BlockNumberFor<T>>, OptionQuery>;
 
-  /// Inert bucket ownership for the future retained C32 deadline carrier.
+  /// Bucket ownership for the canonical retained C32 Deadline carrier.
   #[pallet::storage]
   #[pallet::getter(fn deadline_headers)]
   pub type DeadlineHeaders<T: Config> =
     StorageMap<_, Blake2_128Concat, WakeupKey<BlockNumberFor<T>>, DeadlineHeader, OptionQuery>;
 
-  /// Inert retained C32 pages for the future deadline carrier.
+  /// Retained C32 pages for the canonical Deadline carrier.
   #[pallet::storage]
   #[pallet::getter(fn deadline_pages)]
   pub type DeadlinePages<T: Config> = StorageDoubleMap<
@@ -8363,7 +9375,7 @@ pub mod pallet {
     OptionQuery,
   >;
 
-  /// Inert generation-bound reverse handles for exact process or Park deadline removal.
+  /// Generation-bound reverse handles for exact process or Park Deadline removal.
   ///
   /// Trigger deadlines use their own reverse owner because one Actor may simultaneously own a
   /// process residence and an independent temporal Trigger membership.
@@ -8372,13 +9384,13 @@ pub mod pallet {
   pub type DeadlineHandles<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, DeadlineHandleOf<T>, OptionQuery>;
 
-  /// Inert generation-bound reverse handles for exact temporal Trigger deadline removal.
+  /// Generation-bound reverse handles for exact temporal Trigger Deadline removal.
   #[pallet::storage]
   #[pallet::getter(fn trigger_deadline_handles)]
   pub type TriggerDeadlineHandles<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, DeadlineHandleOf<T>, OptionQuery>;
 
-  /// Inert C32 pages of the clock-local min-heaps over nonempty canonical deadline buckets.
+  /// C32 pages of the clock-local min-heaps over nonempty canonical Deadline buckets.
   #[pallet::storage]
   #[pallet::getter(fn deadline_index_pages)]
   pub type DeadlineIndexPages<T: Config> = StorageDoubleMap<
@@ -8391,7 +9403,7 @@ pub mod pallet {
     OptionQuery,
   >;
 
-  /// Exact reverse position for every key in the inert canonical deadline min-heaps.
+  /// Exact reverse position for every key in the canonical deadline min-heaps.
   #[pallet::storage]
   #[pallet::getter(fn deadline_index_positions)]
   pub type DeadlineIndexPositions<T: Config> =
@@ -8755,13 +9767,6 @@ pub mod pallet {
         contract_steps_bound_is_valid(T::MaxContractSteps::get()),
         "MaxContractSteps must be in 1..=255"
       );
-      assert_eq!(
-        T::MaxOpeningSnapshotEntries::get(),
-        T::MaxContractSteps::get()
-          .checked_mul(2)
-          .expect("opening amount-surface bound must fit u32"),
-        "MaxOpeningSnapshotEntries must equal two per execution-plan step"
-      );
       STORAGE_VERSION.put::<Pallet<T>>();
       if ActiveActorLimit::<T>::get() == 0 {
         ActiveActorLimit::<T>::put(Pallet::<T>::max_configurable_active_actor_limit());
@@ -8802,12 +9807,12 @@ pub mod pallet {
           .expect("genesis precondition formulas must have valid bounded DNF");
         Pallet::<T>::validate_contract_steps_shape(ActorType::System, &contract.steps)
           .expect("genesis execution plan must have valid task and predicate shapes");
+        Pallet::<T>::validate_parked_balance_activation(&contract)
+          .expect("genesis parked-balance activation must be canonical"); // deos-bypass: panic-owner — genesis integrity validation fails closed before launch.
         T::SystemActorContractValidator::validate(actor_id, &contract)
           .expect("genesis System Actor topology must be valid"); // deos-bypass: panic-owner — genesis integrity validation fails closed before launch.
         Pallet::<T>::validate_recipient_configuration(&contract.steps, &sovereign_account)
           .expect("genesis execution plan cannot transfer to its own sovereign account");
-        Pallet::<T>::validate_opening_snapshot_surfaces(&contract.steps)
-          .expect("genesis opening snapshot surfaces must be valid");
         Pallet::<T>::ensure_retry_later_allowed(mutability, &contract.steps)
           .expect("genesis System Immutable Actors cannot use RetryLater");
         Pallet::<T>::ensure_contract_steps_fits_idle_budget(ActorType::System, &contract.steps)
@@ -8996,6 +10001,8 @@ pub mod pallet {
       remaining: Weight,
       crossing: &mut crate::crossing::CrossingWorkCounters,
       fanout_pages: &mut u32,
+      max_positions: u32,
+      ordinary_weight_upper: Weight,
     ) -> Weight {
       match family {
         0 => {
@@ -9005,8 +10012,12 @@ pub mod pallet {
           consumed
         }
         1 => {
-          let (consumed, updated) =
-            Self::fanout_dirty_observations_with_pages(remaining, *fanout_pages);
+          let (consumed, updated) = Self::fanout_dirty_observations_with_quanta(
+            remaining,
+            *fanout_pages,
+            max_positions,
+            ordinary_weight_upper,
+          );
           *fanout_pages = updated;
           consumed
         }
@@ -9017,6 +10028,21 @@ pub mod pallet {
     fn service_materialization_families(
       now: BlockNumberFor<T>,
       available: Weight,
+    ) -> Option<Weight> {
+      Self::service_materialization_families_with_quantum(
+        now,
+        available,
+        T::ObservationPageSize::get(),
+        Self::observation_fanout_ordinary_weight_upper(),
+      )
+    }
+
+    /// Shared family rotation for the production full-page owner and bounded diagnostic turns.
+    pub(crate) fn service_materialization_families_with_quantum(
+      now: BlockNumberFor<T>,
+      available: Weight,
+      max_positions: u32,
+      ordinary_weight_upper: Weight,
     ) -> Option<Weight> {
       let family_cursor = MaterializationFamilyCursor::<T>::get();
       if family_cursor >= 2 {
@@ -9051,6 +10077,8 @@ pub mod pallet {
           family_budget,
           &mut crossing,
           &mut fanout_pages,
+          max_positions,
+          ordinary_weight_upper,
         );
         consumed_total = consumed_total.saturating_add(consumed);
         remaining = remaining.saturating_sub(consumed);
@@ -9062,6 +10090,8 @@ pub mod pallet {
           remaining,
           &mut crossing,
           &mut fanout_pages,
+          max_positions,
+          ordinary_weight_upper,
         ));
       }
       MaterializationFamilyCursor::<T>::put(family_cursor.saturating_add(1) % 2);
@@ -9071,6 +10101,28 @@ pub mod pallet {
 
   impl<T: Config> Pallet<T> {
     fn execute_mandatory_prepass(now: BlockNumberFor<T>) -> Result<Weight, Error<T>> {
+      Self::execute_mandatory_prepass_with_quantum(
+        now,
+        T::ObservationPageSize::get(),
+        Self::observation_fanout_ordinary_weight_upper(),
+      )
+    }
+
+    /// Benchmark-only diagnostic: reuse the full Prepass ledger without rebinding runtime Weight.
+    #[cfg(feature = "runtime-benchmarks")]
+    pub fn benchmark_mandatory_prepass_with_quantum(
+      now: BlockNumberFor<T>,
+      max_positions: u32,
+      ordinary_weight_upper: Weight,
+    ) -> Result<Weight, Error<T>> {
+      Self::execute_mandatory_prepass_with_quantum(now, max_positions, ordinary_weight_upper)
+    }
+
+    fn execute_mandatory_prepass_with_quantum(
+      now: BlockNumberFor<T>,
+      max_positions: u32,
+      ordinary_weight_upper: Weight,
+    ) -> Result<Weight, Error<T>> {
       ensure!(
         T::PrepassContext::context_ready(),
         Error::<T>::PrepassContextIncomplete
@@ -9085,6 +10137,27 @@ pub mod pallet {
       }
 
       let budget = T::BlockResourceBudget::get();
+      let deadline_maximum = Self::deadline_service_weight_upper();
+      let dependency_scan_envelope = T::WeightInfo::dependency_scan_source_probe().saturating_add(
+        T::WeightInfo::process_dependency_scan_unit()
+          .max(T::WeightInfo::process_dependency_scan_completion_unit()),
+      );
+      let fixed_materialization =
+        T::WeightInfo::materialization_coordinator_base().saturating_add(dependency_scan_envelope);
+      let drain_finalization_control = T::WeightInfo::scheduler_on_idle_base()
+        .checked_add(&T::WeightInfo::block_resource_finalize())
+        .ok_or(Error::<T>::ResourceProtocolFailed)?;
+      let mandatory_control = control_weight
+        .checked_add(&deadline_maximum)
+        .and_then(|weight| weight.checked_add(&fixed_materialization))
+        .and_then(|weight| weight.checked_add(&drain_finalization_control))
+        .ok_or(Error::<T>::ResourceProtocolFailed)?;
+      ensure!(
+        mandatory_control.all_lte(budget.limits().actor_control()),
+        Error::<T>::ResourceProtocolFailed
+      );
+      let now_tick =
+        Self::current_scheduler_tick().map_err(|_| Error::<T>::ResourceProtocolFailed)?;
       let mut state = BlockResourceState::new(now);
       if state.begin_prepass().is_err() {
         state.halt_optional_actor_work();
@@ -9102,12 +10175,37 @@ pub mod pallet {
         .settle(&mut prepass_reservation, control_weight)
         .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
 
-      let materialization_configured = T::WeightInfo::materialization_coordinator_base()
-        .saturating_add(Self::materialization_weight_limit());
+      // Deadline authority precedes competing detector and Service work. Each clock gets one
+      // admitted attempt; returned members retain the ordinary B+1 eligibility boundary.
+      let mut deadline_reservation = state
+        .reserve(
+          budget.limits(),
+          BlockResourceDomain::ActorControl,
+          deadline_maximum,
+        )
+        .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+      let mut deadline_meter = WeightMeter::with_limit(deadline_maximum);
+      let _ = Self::service_due_deadline_frontiers(
+        &mut deadline_meter,
+        ServiceResidenceKind::Live,
+        now,
+        now_tick,
+        now.checked_add(&One::one()).map(WakeupKey::Block),
+        now_tick.checked_add(1).map(WakeupKey::Tick),
+      )
+      .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+      let deadline_actual = deadline_meter.consumed();
+      state
+        .settle(&mut deadline_reservation, deadline_actual)
+        .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+
+      let materialization_configured =
+        fixed_materialization.saturating_add(Self::materialization_weight_limit());
       let materialization_remaining = budget
         .limits()
         .actor_control()
         .checked_sub(&state.usage().actor_control_used())
+        .and_then(|remaining| remaining.checked_sub(&drain_finalization_control))
         .ok_or(Error::<T>::ResourceProtocolFailed)?;
       let materialization_maximum = Weight::from_parts(
         materialization_configured
@@ -9118,11 +10216,9 @@ pub mod pallet {
           .min(materialization_remaining.proof_size()),
       );
       ensure!(
-        T::WeightInfo::materialization_coordinator_base().all_lte(materialization_maximum),
+        fixed_materialization.all_lte(materialization_maximum),
         Error::<T>::ResourceProtocolFailed
       );
-      let materialization_family_budget =
-        materialization_maximum.saturating_sub(T::WeightInfo::materialization_coordinator_base());
       let mut materialization_reservation = state
         .reserve(
           budget.limits(),
@@ -9130,11 +10226,26 @@ pub mod pallet {
           materialization_maximum,
         )
         .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
-      let materialization_weight =
-        Self::service_materialization_families(now, materialization_family_budget)
-          .ok_or(Error::<T>::ResourceProtocolFailed)?;
-      let materialization_actual =
-        T::WeightInfo::materialization_coordinator_base().saturating_add(materialization_weight);
+      let mut dependency_scan_meter = WeightMeter::with_limit(dependency_scan_envelope);
+      if Self::dependency_scan_source_probe(&mut dependency_scan_meter)
+        .map_err(|_| Error::<T>::ResourceProtocolFailed)?
+      {
+        Self::process_next_dependency_scan_unit(&mut dependency_scan_meter)
+          .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+      }
+      let materialization_family_budget = materialization_maximum
+        .saturating_sub(T::WeightInfo::materialization_coordinator_base())
+        .saturating_sub(dependency_scan_meter.consumed());
+      let materialization_weight = Self::service_materialization_families_with_quantum(
+        now,
+        materialization_family_budget,
+        max_positions,
+        ordinary_weight_upper,
+      )
+      .ok_or(Error::<T>::ResourceProtocolFailed)?;
+      let materialization_actual = T::WeightInfo::materialization_coordinator_base()
+        .saturating_add(dependency_scan_meter.consumed())
+        .saturating_add(materialization_weight);
       state
         .settle(&mut materialization_reservation, materialization_actual)
         .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
@@ -9143,9 +10254,6 @@ pub mod pallet {
         .limits()
         .actor_control()
         .checked_sub(&state.usage().actor_control_used())
-        .ok_or(Error::<T>::ResourceProtocolFailed)?;
-      let drain_finalization_control = T::WeightInfo::scheduler_on_idle_base()
-        .checked_add(&T::WeightInfo::block_resource_finalize())
         .ok_or(Error::<T>::ResourceProtocolFailed)?;
       let prepass_control = control_remaining
         .checked_sub(&drain_finalization_control)
@@ -9167,6 +10275,7 @@ pub mod pallet {
       CurrentBlockResourceState::<T>::put(state);
       Ok(
         control_weight
+          .saturating_add(deadline_actual)
           .saturating_add(materialization_actual)
           .saturating_add(pass.consumed),
       )
@@ -9213,13 +10322,6 @@ pub mod pallet {
       assert_eq!(
         configured_horizon, expected_horizon,
         "MaxExecutionDelayBlocks must cover exactly ten Julian years"
-      );
-      assert_eq!(
-        T::MaxOpeningSnapshotEntries::get(),
-        T::MaxContractSteps::get()
-          .checked_mul(2)
-          .expect("validated plan bound fits u32"),
-        "MaxOpeningSnapshotEntries must equal twice MaxContractSteps"
       );
       assert!(
         T::MinUserBalance::get() >= T::AssetOps::minimum_balance(T::FeeNativeAssetId::get()),
@@ -9281,43 +10383,20 @@ pub mod pallet {
         fanout_limit.ref_time() > 0 && fanout_limit.proof_size() > 0,
         "observation fanout Weight limit must be non-zero in both dimensions"
       );
-      let fanout_unit = T::WeightInfo::observation_fanout_base().saturating_add(
-        Self::observation_fanout_ordinary_weight_upper()
-          .max(T::WeightInfo::observation_fanout_terminal()),
-      );
+      let fanout_unit = Self::materialization_family_minimum(1);
       assert!(
         fanout_unit.all_lte(fanout_limit),
         "positive observation fanout cap must admit one complete page unit"
       );
-      let crossing_branch = T::WeightInfo::crossing_transition_unit()
-        .max(T::WeightInfo::crossing_leaf_unit())
-        .max(T::WeightInfo::crossing_page_unit())
-        .max(T::WeightInfo::crossing_rearm_unit())
-        .max(T::WeightInfo::crossing_rearm_pair_unit())
-        .max(T::WeightInfo::crossing_coalesced_unit())
-        .max(T::WeightInfo::crossing_coalesced_pair_unit())
-        .max(T::WeightInfo::crossing_placed_unit())
-        .max(T::WeightInfo::crossing_placed_pair_unit())
-        .max(T::WeightInfo::crossing_skip_unit())
-        .max(T::WeightInfo::crossing_skip_pair_unit())
-        .max(T::WeightInfo::crossing_actor_unit());
-      let crossing_unit = T::WeightInfo::crossing_worker_base()
-        .saturating_add(T::WeightInfo::crossing_work_probe())
-        .saturating_add(
-          T::WeightInfo::crossing_fire_pair_probe()
-            .max(T::WeightInfo::crossing_rearm_pair_probe())
-            .max(T::WeightInfo::crossing_skip_pair_probe()),
-        )
-        .saturating_add(crossing_branch);
       assert!(
-        crossing_unit.all_lte(crossing_limit),
-        "positive Crossing cap must admit one complete maximum unit"
+        Self::materialization_family_minimum(0).all_lte(crossing_limit),
+        "positive Crossing cap must admit one complete minimum quantum"
       );
       let minimum_quanta = Self::materialization_family_minimum(0)
         .saturating_add(Self::materialization_family_minimum(1));
       assert!(
         minimum_quanta.all_lte(Self::materialization_weight_limit()),
-        "shared materialization envelope must admit one complete maximum unit from every family"
+        "shared materialization envelope must admit one complete minimum quantum from every family"
       );
       let actor_service = Self::guaranteed_actor_service_weight()
         .expect("configured housekeeping Weight must fit ActorOnIdleReserve");
@@ -9404,36 +10483,7 @@ pub mod pallet {
       } else {
         Weight::zero()
       };
-      let before_deadlines = fixed_weight.saturating_add(materialization_weight);
-      let deadline_weight = if control_authority
-        .as_ref()
-        .is_some_and(|(state, _)| state.optional_actor_work_halted())
-      {
-        Weight::zero()
-      } else {
-        now
-          .checked_add(&One::one())
-          .zip(Self::current_scheduler_tick().ok())
-          .and_then(|(next_block, now_tick)| {
-            now_tick
-              .checked_add(1)
-              .map(|next_tick| (now_tick, next_block, next_tick))
-          })
-          .map_or_else(Weight::zero, |(now_tick, next_block, next_tick)| {
-            let mut meter =
-              WeightMeter::with_limit(control_available.saturating_sub(before_deadlines));
-            let _ = Self::service_due_deadline_frontiers(
-              &mut meter,
-              ServiceResidenceKind::Live,
-              now,
-              now_tick,
-              Some(WakeupKey::Block(next_block)),
-              Some(WakeupKey::Tick(next_tick)),
-            );
-            meter.consumed()
-          })
-      };
-      let housekeeping_weight = before_deadlines.saturating_add(deadline_weight);
+      let housekeeping_weight = fixed_weight.saturating_add(materialization_weight);
       let remaining_after_housekeeping = available.saturating_sub(housekeeping_weight);
       Self::settle_on_idle_control(&mut control_authority, housekeeping_weight);
       let pass = match CurrentBlockResourceState::<T>::get() {
@@ -9442,38 +10492,29 @@ pub mod pallet {
             && state.phase() == BlockResourcePhase::ExternalPhase =>
         {
           let budget = T::BlockResourceBudget::get();
-          let optional_actor_work_halted = state.optional_actor_work_halted();
           if state.begin_drain().is_err() {
             state.halt_optional_actor_work();
             CurrentBlockResourceState::<T>::put(state);
             return housekeeping_weight;
           }
-          let mut service_meter = WeightMeter::with_limit(remaining_after_housekeeping);
-          if !optional_actor_work_halted {
-            let _ = Self::service_canonical_round_head_with_resources(
-              &mut service_meter,
-              now,
-              &mut state,
-              budget.limits(),
-              BlockResourceDomain::ActorDrainEffect,
-            );
-          }
-          let service_weight = service_meter.consumed();
           let control_maximum = budget
             .limits()
             .actor_control()
             .checked_sub(&state.usage().actor_control_used())
             .unwrap_or_else(Weight::zero);
-          let mut pass = if breaker_active || optional_actor_work_halted {
+          let pass = if breaker_active || state.optional_actor_work_halted() {
             CyclePass {
               consumed: Weight::zero(),
               effect_consumed: Weight::zero(),
               effect_reconciliation_uncertain: false,
-              starved: false,
+              // A halt carried from Prepass is still blocked service, not recovery. Breaker
+              // deferral remains the independent observability freeze.
+              starvation_observed: !breaker_active,
+              starved: !breaker_active,
             }
           } else {
             Self::execute_cycle_to_cutoff_with_resources(
-              remaining_after_housekeeping.saturating_sub(service_weight),
+              remaining_after_housekeeping,
               0,
               &mut state,
               budget.limits(),
@@ -9481,7 +10522,6 @@ pub mod pallet {
               control_maximum,
             )
           };
-          pass.consumed = pass.consumed.saturating_add(service_weight);
           if state.finish_drain(budget, budget.fixed_envelope()).is_err() {
             state.halt_optional_actor_work();
           } else if let Ok(snapshot) = state.finalized_snapshot() {
@@ -9496,27 +10536,20 @@ pub mod pallet {
           return housekeeping_weight;
         }
         None => {
-          let mut service_meter = WeightMeter::with_limit(remaining_after_housekeeping);
-          let _ = Self::service_canonical_round_head(&mut service_meter, now);
-          let service_weight = service_meter.consumed();
-          let mut pass = if breaker_active {
+          if breaker_active {
             CyclePass {
               consumed: Weight::zero(),
               effect_consumed: Weight::zero(),
               effect_reconciliation_uncertain: false,
+              starvation_observed: false,
               starved: false,
             }
           } else {
-            Self::execute_cycle_to_cutoff(
-              remaining_after_housekeeping.saturating_sub(service_weight),
-              0,
-            )
-          };
-          pass.consumed = pass.consumed.saturating_add(service_weight);
-          pass
+            Self::execute_cycle_to_cutoff(remaining_after_housekeeping, 0)
+          }
         }
       };
-      if !breaker_active {
+      if !breaker_active && pass.starvation_observed {
         Self::update_idle_starvation_state(now, pass.starved);
       }
       housekeeping_weight.saturating_add(pass.consumed)
@@ -9739,12 +10772,6 @@ pub mod pallet {
       actual_effect_weight: Weight,
       fee: BalanceOf<T>,
     },
-    FundingAccumulated {
-      actor_id: ActorId,
-      asset: T::AssetId,
-      added: BalanceOf<T>,
-      accumulated: BalanceOf<T>,
-    },
     SweepBatchProcessed {
       requested: u32,
       closed: u32,
@@ -9781,7 +10808,9 @@ pub mod pallet {
     ImmutableActor,
     InsufficientBalance,
     InsufficientFee,
+    TriggerFeeCollectionFailed,
     InvalidAmountResolution,
+    InvalidParkedBalanceActivation,
     InvalidPredicate,
     InvalidAutoCloseNonce,
     InvalidScheduleWindow,
@@ -9805,8 +10834,6 @@ pub mod pallet {
     SovereignAccountCollision,
     ReservedSovereignAccount,
     TooManyContractSteps,
-    SnapshotUnavailable,
-    FundingAccumulatorOverflow,
     QueueTicketExhausted,
     SchedulerIndexExhausted,
     AutoCloseNonceHorizonExceeded,
@@ -9842,6 +10869,35 @@ pub mod pallet {
     PrepassDuplicateOrStale,
     ResourceProtocolFailed,
     PrepassContextIncomplete,
+  }
+
+  impl<T: Config> Pallet<T> {
+    fn manual_observation_profile_feeds(
+      contract: &ActorContractOf<T>,
+    ) -> Option<Vec<T::ObservationFeedId>> {
+      let precondition = contract.steps.first()?.precondition.as_ref()?;
+      let mut feeds = Vec::new();
+      for clause in precondition.clauses.iter(/* deos-bypass: bounded-iter -- MaxPreconditionClauses bounds Step-0 CNF. */)
+      {
+        for predicate in clause.iter(/* deos-bypass: bounded-iter -- MaxPredicatesPerClause bounds each Step-0 clause. */)
+        {
+          let feed = match predicate {
+            Predicate::ObservationAbove { feed, .. }
+            | Predicate::ObservationBelow { feed, .. }
+            | Predicate::ObservationEquals { feed, .. }
+            | Predicate::ObservationNotEquals { feed, .. } => *feed,
+            _ => return None,
+          };
+          feeds.push(feed);
+        }
+      }
+      if feeds.is_empty() {
+        return None;
+      }
+      feeds.sort_unstable();
+      feeds.dedup();
+      Some(feeds)
+    }
   }
 
   #[pallet::call]
@@ -9981,8 +11037,7 @@ pub mod pallet {
       let state = Self::active_actor_state_for_frame_control(actor_id)?;
       ensure!(
         state.hot.cycle_state != CycleState::Idle
-          || (!ActorRunHeads::<T>::contains_key(actor_id)
-            && !ActorRunPayloads::<T>::contains_key(actor_id)),
+          || !ActorRunStateStore::<T>::contains_key(actor_id),
         Error::<T>::ActorInvariant
       );
       let continuation = state.run_state.clone();
@@ -10061,7 +11116,11 @@ pub mod pallet {
     }
 
     #[pallet::call_index(6)]
-    #[pallet::weight(T::WeightInfo::manual_trigger().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
+    #[pallet::weight(
+      T::WeightInfo::manual_trigger()
+        .max(T::WeightInfo::manual_observation_park())
+        .saturating_add(Pallet::<T>::close_dispatch_weight_upper())
+    )]
     pub fn manual_trigger(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResultWithPostInfo {
       let state = Self::active_actor_state_for_frame_control(actor_id)?;
       let continuation = state.run_state.clone();
@@ -10090,11 +11149,14 @@ pub mod pallet {
         return Ok(().into());
       }
       let actor_type = snapshot.actor_class.actor_type();
-      let breakdown = Self::trigger_fee_for_weight(
-        actor_type,
-        TriggerFamily::Manual,
-        T::WeightInfo::manual_trigger(),
-      );
+      let observation_feeds = Self::manual_observation_profile_feeds(&state.contract);
+      let occurrence_weight = if observation_feeds.is_some() {
+        T::WeightInfo::manual_observation_park()
+      } else {
+        T::WeightInfo::manual_trigger()
+      };
+      let breakdown =
+        Self::trigger_fee_for_weight(actor_type, TriggerFamily::Manual, occurrence_weight);
       let mut trigger_processed = false;
       Self::with_control_transaction(|| {
         let Some(ActorSemanticState::Active(record)) = ActorSemanticStates::<T>::get(actor_id)
@@ -10105,22 +11167,68 @@ pub mod pallet {
           actor_id,
           generation: record.generation,
         };
+        let observation_negative = if observation_feeds.is_some() {
+          !Self::evaluate_step_precondition(
+            state
+              .contract
+              .steps
+              .first()
+              .and_then(|step| step.precondition.as_ref()),
+            &snapshot.sovereign_account,
+            Zero::zero(),
+          )?
+        } else {
+          false
+        };
+        let plan_revision = state.identity.cycle_nonce;
+        let now = frame_system::Pallet::<T>::block_number();
         let outcome = Self::commit_canonical_trigger_occurrence_with_authority(
           actor,
           actor_type,
           &snapshot.sovereign_account,
           breakdown,
           state,
-          frame_system::Pallet::<T>::block_number(),
+          now,
         )?;
         if matches!(outcome, crate::scheduler::ActivationOutcome::Latched) {
+          if observation_negative {
+            let feeds = observation_feeds.ok_or(Error::<T>::ActorInvariant)?;
+            let mut desired = Vec::new();
+            for feed in feeds {
+              let source = match Self::resolve_observation_dependency_source(feed)
+                .map_err(|_| Error::<T>::ActorInvariant)?
+              {
+                DependencySourceMutation::Allocated(source)
+                | DependencySourceMutation::Existing(source) => source,
+              };
+              let revision = DependencyRevisions::<T>::get(source);
+              ensure!(!revision.exhausted, Error::<T>::ActorInvariant);
+              desired.push(DependencyPlanSource {
+                source,
+                observed_revision: revision.revision,
+              });
+            }
+            let review_at = now
+              .checked_add(&One::one())
+              .ok_or(Error::<T>::ActorInvariant)?;
+            Self::transfer_service_member_to_park(
+              actor,
+              ServiceResidenceKind::Pending,
+              plan_revision,
+              ParkNegativeReason::PredicateFalse,
+              Some(review_at),
+              &desired,
+              Some(WakeupKey::Block(review_at)),
+            )
+            .map_err(|_| Error::<T>::ActorInvariant)?;
+          }
           Self::deposit_event(Event::ManualTriggerSet { actor_id });
         }
         trigger_processed = true;
         Ok(())
       })?;
       Ok(PostDispatchInfo {
-        actual_weight: Some(T::WeightInfo::manual_trigger()),
+        actual_weight: Some(occurrence_weight),
         pays_fee: if actor_type == ActorType::User && trigger_processed {
           Pays::No
         } else {
@@ -10192,12 +11300,12 @@ pub mod pallet {
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_mutation_allowed(&snapshot, now)?;
       Self::validate_contract_steps_shape(snapshot.actor_class.actor_type(), &contract.steps)?;
+      Self::validate_parked_balance_activation(&contract)?;
       if snapshot.actor_class.actor_type() == ActorType::System {
         T::SystemActorContractValidator::validate(actor_id, &contract)
           .map_err(|_| Error::<T>::SystemActorTopologyInvalid)?;
       }
       Self::validate_recipient_configuration(&contract.steps, &snapshot.sovereign_account)?;
-      Self::validate_opening_snapshot_surfaces(&contract.steps)?;
       Self::ensure_contract_steps_fits_idle_budget(
         snapshot.actor_class.actor_type(),
         &contract.steps,
@@ -10611,6 +11719,7 @@ pub mod pallet {
           steps: contract_steps.clone(),
           funding: FundingSourcePolicy::OwnerOnly,
           completion: CompletionPolicy::Persistent,
+          parked_balance_activation: None,
           auto_close_at_cycle_nonce: None,
         })
         .map(|resources| {
@@ -10713,7 +11822,11 @@ pub mod pallet {
             .saturating_add(T::WeightInfo::record_crossing_worker_fault())
         }
         1 => T::WeightInfo::observation_fanout_base()
-          .saturating_add(Self::observation_fanout_ordinary_weight_upper())
+          .saturating_add(T::WeightInfo::observation_fanout_branch_probe())
+          .saturating_add(
+            Self::observation_fanout_ordinary_weight_upper()
+              .max(T::WeightInfo::observation_fanout_terminal()),
+          )
           .saturating_add(T::WeightInfo::record_observation_fanout_worker_fault()),
         _ => Weight::zero(),
       }
@@ -10748,6 +11861,7 @@ pub mod pallet {
           steps: contract_steps.clone(),
           funding: FundingSourcePolicy::OwnerOnly,
           completion: CompletionPolicy::Persistent,
+          parked_balance_activation: None,
           auto_close_at_cycle_nonce: None,
         })
         .ok_or(Error::<T>::ActorRunInvariant)?;
@@ -11040,10 +12154,7 @@ pub mod pallet {
         }
       };
       let (owner, target_breakdown) = match (existing.as_ref(), target) {
-        (Some(existing), Some((owner, breakdown))) => {
-          ensure!(existing.owner == owner, Error::<T>::StateHoldInvariant);
-          (owner, breakdown)
-        }
+        (Some(_), Some((owner, breakdown))) => (owner, breakdown),
         (None, Some(target)) => target,
         (Some(existing), None) => (
           existing.owner.clone(),
@@ -11057,9 +12168,22 @@ pub mod pallet {
         ),
         (None, None) => return Ok(()),
       };
+      Self::apply_actor_state_hold(actor_id, existing, owner, target_breakdown)
+    }
+
+    fn apply_actor_state_hold(
+      actor_id: ActorId,
+      existing: Option<ActorStateHoldRecordOf<T>>,
+      owner: T::AccountId,
+      target_breakdown: ActorStateHoldBreakdownOf<T>,
+    ) -> DispatchResult {
+      ensure!(
+        existing.as_ref().is_none_or(|record| record.owner == owner),
+        Error::<T>::StateHoldInvariant
+      );
       if existing
         .as_ref()
-        .is_some_and(|record| record.owner == owner && record.breakdown == target_breakdown)
+        .is_some_and(|record| record.breakdown == target_breakdown)
       {
         return Ok(());
       }
@@ -11147,7 +12271,7 @@ pub mod pallet {
       let native = T::FeeNativeAssetId::get();
       let fee_sink = T::FeeSink::get();
       T::FeeCollector::collect_fee(sovereign_account, &fee_sink, native, breakdown.trigger_fee)
-        .map_err(|_| Error::<T>::InsufficientFee.into())
+        .map_err(|_| Error::<T>::TriggerFeeCollectionFailed.into())
     }
 
     /// Atomically charges one useful Trigger occurrence and replaces an exact canonical
@@ -11374,25 +12498,9 @@ pub mod pallet {
         );
         match result {
           Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(true)),
-          Err(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok(false)),
-        }
-      })
-    }
-
-    pub(crate) fn try_charge_automatic_trigger_occurrence(
-      actor_type: ActorType,
-      sovereign_account: &T::AccountId,
-      breakdown: TriggerFeeBreakdown<T::Balance>,
-    ) -> Result<bool, DispatchError> {
-      polkadot_sdk::frame_support::storage::with_transaction(|| {
-        match Self::charge_trigger_occurrence(actor_type, sovereign_account, breakdown) {
-          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(true)),
-          Err(error) if error == Error::<T>::InsufficientFee.into() => {
-            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok(false))
-          }
-          Err(error) => {
-            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-          }
+          Err(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::TriggerFeeCollectionFailed.into(),
+          )),
         }
       })
     }
@@ -11492,6 +12600,7 @@ pub mod pallet {
         steps: contract_steps.clone(),
         funding: FundingSourcePolicy::OwnerOnly,
         completion: CompletionPolicy::Persistent,
+        parked_balance_activation: None,
         auto_close_at_cycle_nonce: None,
       })
       .and_then(|resources| resources.get(cursor).copied())
@@ -11514,6 +12623,7 @@ pub mod pallet {
         steps: contract_steps.clone(),
         funding: FundingSourcePolicy::OwnerOnly,
         completion: CompletionPolicy::Persistent,
+        parked_balance_activation: None,
         auto_close_at_cycle_nonce: None,
       };
       let resources =
@@ -11842,7 +12952,7 @@ pub mod pallet {
       }
       Self::validate_future_schedule_targets(&contract)?;
       Self::validate_contract_steps_shape(actor_type, &contract.steps)?;
-      Self::validate_opening_snapshot_surfaces(&contract.steps)?;
+      Self::validate_parked_balance_activation(&contract)?;
       Self::ensure_retry_later_allowed(mutability, &contract.steps)?;
       if let Some(target_nonce) = contract.auto_close_at_cycle_nonce {
         Self::ensure_auto_close_target(0, target_nonce)?;
@@ -12072,12 +13182,12 @@ pub mod pallet {
       }
       Self::validate_future_schedule_targets(&contract)?;
       Self::validate_contract_steps_shape(actor_type, &contract.steps)?;
+      Self::validate_parked_balance_activation(&contract)?;
       if actor_type == ActorType::System {
         T::SystemActorContractValidator::validate(actor_id, &contract)
           .map_err(|_| Error::<T>::SystemActorTopologyInvalid)?;
       }
       Self::validate_recipient_configuration(&contract.steps, &identity.sovereign_account)?;
-      Self::validate_opening_snapshot_surfaces(&contract.steps)?;
       Self::ensure_retry_later_allowed(identity.mutability, &contract.steps)?;
       if let Some(target_nonce) = contract.auto_close_at_cycle_nonce {
         Self::ensure_auto_close_target(identity.cycle_nonce, target_nonce)?;
@@ -12555,6 +13665,23 @@ pub mod pallet {
       Ok(())
     }
 
+    fn validate_parked_balance_activation(contract: &ActorContractOf<T>) -> DispatchResult {
+      ensure!(
+        contract
+          .parked_balance_activation
+          .as_ref()
+          .is_none_or(|activation| {
+            activation.is_canonical()
+              && activation.watches.len() <= T::MaxContractSteps::get() as usize
+              && !contract.steps.is_empty()
+              && contract.completion == CompletionPolicy::Persistent
+              && contract.auto_close_at_cycle_nonce.is_none()
+          }),
+        Error::<T>::InvalidParkedBalanceActivation
+      );
+      Ok(())
+    }
+
     fn validate_contract_steps_shape(
       _actor_type: ActorType,
       contract_steps: &ContractSteps<T>,
@@ -12697,18 +13824,6 @@ pub mod pallet {
           ),
         Error::<T>::InvalidAmountResolution
       );
-      Ok(())
-    }
-
-    fn validate_opening_snapshot_surfaces(contract_steps: &ContractSteps<T>) -> DispatchResult {
-      for surface in Self::opening_surfaces(contract_steps, 0) {
-        if let OpeningSurface::StakingShares(position_asset) = surface {
-          ensure!(
-            T::StakingOps::share_asset(position_asset).is_some(),
-            Error::<T>::InvalidAmountResolution
-          );
-        }
-      }
       Ok(())
     }
 
@@ -12909,6 +14024,8 @@ pub mod pallet {
       )
     }
 
+    /// Finalizes a retained/legacy frame after its caller has detached any canonical publication.
+    /// Service attempts instead finalize consumed state and retire the process in one transaction.
     pub(crate) fn finalize_actor_from_retained_state(
       actor_id: ActorId,
       state: ActiveActorStateOf<T>,
@@ -13209,11 +14326,285 @@ pub mod pallet {
     }
 
     #[cfg(feature = "try-runtime")]
+    fn do_try_state_service_ring() -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
+      use alloc::collections::{BTreeMap, BTreeSet};
+      use polkadot_sdk::sp_runtime::TryRuntimeError;
+      let nodes: BTreeMap<_, _> = ServiceNodes::<T>::iter().collect();
+      let header = ServiceHeader::<T>::get();
+      if usize::try_from(header.count).ok() != Some(nodes.len())
+        || header.count > T::MaxActiveActors::get()
+        || header.cursor.is_none() != nodes.is_empty()
+      {
+        return Err(TryRuntimeError::Other(
+          "Service header disagrees with resident cardinality",
+        ));
+      }
+      for (actor_id, node) in &nodes {
+        if !matches!(ActorSemanticStates::<T>::get(actor_id),
+          Some(ActorSemanticState::Active(record)) if record.generation == node.generation)
+          || !ActorProcesses::<T>::get(actor_id).is_some_and(|process| {
+            process.generation == node.generation
+              && process.status == ProcessStatus::Serving
+              && process.residence == Some(ProcessResidence::Service(node.kind))
+          })
+        {
+          return Err(TryRuntimeError::Other(
+            "Service node has no matching active process owner",
+          ));
+        }
+      }
+      let Some(first) = header.cursor else {
+        return Ok(());
+      };
+      let first_node = nodes
+        .get(&first.actor_id)
+        .filter(|node| node.generation == first.generation)
+        .ok_or(TryRuntimeError::Other(
+          "Service cursor does not resolve to its generation",
+        ))?;
+      let tail = first_node.previous;
+      let mut previous = tail;
+      let mut current = first;
+      let mut visited = BTreeSet::new();
+      for _ in 0..header.count {
+        let node = nodes
+          .get(&current.actor_id)
+          .filter(|node| node.generation == current.generation)
+          .ok_or(TryRuntimeError::Other(
+            "Service link does not resolve to its generation",
+          ))?;
+        if !visited.insert(current.actor_id) || node.previous != previous {
+          return Err(TryRuntimeError::Other(
+            "Service ring repeats a member or has a broken backlink",
+          ));
+        }
+        previous = current;
+        current = node.next;
+      }
+      if current != first || previous != tail {
+        return Err(TryRuntimeError::Other(
+          "Service ring does not close at its exact cursor",
+        ));
+      }
+      Ok(())
+    }
+
+    #[cfg(feature = "try-runtime")]
+    fn do_try_state_deadline_carrier() -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
+      use alloc::collections::{BTreeMap, BTreeSet};
+      use polkadot_sdk::sp_runtime::TryRuntimeError;
+      let mut slots = BTreeMap::new();
+      for (trigger, actor_id, handle) in DeadlineHandles::<T>::iter(/* deos-bypass: bounded-iter -- TryRuntime-only carrier audit. */)
+        .map(|(id, handle)| (false, id, handle))
+        .chain(TriggerDeadlineHandles::<T>::iter().map(|(id, handle)| (true, id, handle)))
+      {
+        if actor_id != handle.actor.actor_id {
+          return Err(TryRuntimeError::Other(
+            "Deadline handle disagrees with its Actor map key",
+          ));
+        }
+        let (record, process) = Self::load_canonical_actor_semantic_state(handle.actor)
+          .map_err(|_| TryRuntimeError::Other("Deadline handle has no matching active owner"))?;
+        if trigger {
+          let WakeupKey::Tick(tick) = handle.key else {
+            return Err(TryRuntimeError::Other(
+              "Trigger Deadline handle is not Tick-owned",
+            ));
+          };
+          if record.hot.trigger_wakeup_pointer
+            != Some(TriggerWakeupPointer {
+              tick,
+              page_id: handle.page,
+              slot: u32::from(handle.slot),
+            })
+          {
+            return Err(TryRuntimeError::Other(
+              "Trigger Deadline handle disagrees with its hot pointer",
+            ));
+          }
+        } else if !Self::deadline_handle_matches_process(handle, &process) {
+          return Err(TryRuntimeError::Other(
+            "Deadline handle disagrees with process or Park review residence",
+          ));
+        }
+        // Process/Park deadlines need no hot pointer. Both families still owe distinct slots.
+        if slots
+          .insert((handle.key, handle.page, handle.slot), handle.actor)
+          .is_some()
+        {
+          return Err(TryRuntimeError::Other(
+            "multiple Deadline handles own one physical slot",
+          ));
+        }
+      }
+      let headers: BTreeMap<_, _> = DeadlineHeaders::<T>::iter().collect();
+      let pages: BTreeMap<_, _> = DeadlinePages::<T>::iter()
+        .map(|(key, id, page)| ((key, id), page))
+        .collect();
+      for ((key, id), page) in &pages {
+        let live = page.entries.iter(/* deos-bypass: bounded-iter -- fixed C32. */).filter(|entry| entry.is_some()).count();
+        if !headers.contains_key(key)
+          || page.entries.len() != 32
+          || live == 0
+          || live != usize::from(page.live_entries)
+        {
+          return Err(TryRuntimeError::Other(
+            "Deadline page has no header or invalid width/occupancy",
+          ));
+        }
+        for (slot, actor) in
+          page.entries.iter(/* deos-bypass: bounded-iter -- fixed C32. */).enumerate()
+        {
+          if let Some(actor) = actor {
+            let slot =
+              u8::try_from(slot).map_err(|_| TryRuntimeError::Other("Deadline slot exceeds u8"))?;
+            if slots.remove(&(*key, *id, slot)) != Some(*actor) {
+              return Err(TryRuntimeError::Other(
+                "Deadline slot has no exact reverse handle",
+              ));
+            }
+          }
+        }
+      }
+      if !slots.is_empty() {
+        return Err(TryRuntimeError::Other(
+          "Deadline handle has no occupied physical slot",
+        ));
+      }
+      let mut visited_pages = BTreeSet::new();
+      for (key, header) in &headers {
+        Self::validate_deadline_header(header)
+          .map_err(|_| TryRuntimeError::Other("Deadline header violates its scalar bounds"))?;
+        let mut current = Some(header.first_page);
+        let mut previous = None;
+        let mut count = 0u32;
+        let mut vacant = BTreeSet::new();
+        for _ in 0..header.page_count {
+          let id = current.ok_or(TryRuntimeError::Other(
+            "Deadline page chain ends before its count",
+          ))?;
+          let page = pages
+            .get(&(*key, id))
+            .ok_or(TryRuntimeError::Other("Deadline page link has no target"))?;
+          if id >= header.next_page
+            || !visited_pages.insert((*key, id))
+            || page.previous_page != previous
+          {
+            return Err(TryRuntimeError::Other(
+              "Deadline page chain has invalid links or allocation bounds",
+            ));
+          }
+          count = count
+            .checked_add(u32::from(page.live_entries))
+            .ok_or(TryRuntimeError::Other("Deadline live count overflows"))?;
+          if page.live_entries < 32 {
+            vacant.insert(id);
+          } else if page.previous_vacant_page.is_some() || page.next_vacant_page.is_some() {
+            return Err(TryRuntimeError::Other(
+              "full Deadline page retains vacancy links",
+            ));
+          }
+          previous = Some(id);
+          current = page.next_page;
+        }
+        if current.is_some() || previous != Some(header.last_page) || count != header.count {
+          return Err(TryRuntimeError::Other(
+            "Deadline page chain disagrees with header tail/count",
+          ));
+        }
+        current = header.first_vacant_page;
+        previous = None;
+        // Bound traversal by the actual nonfull pages, not potentially corrupt vacancy links.
+        for _ in 0..vacant.len() {
+          let id = current.ok_or(TryRuntimeError::Other(
+            "Deadline vacancy chain omits a nonfull page",
+          ))?;
+          let page = pages.get(&(*key, id)).ok_or(TryRuntimeError::Other(
+            "Deadline vacancy link has no target",
+          ))?;
+          if !vacant.remove(&id) || page.previous_vacant_page != previous {
+            return Err(TryRuntimeError::Other(
+              "Deadline vacancy chain repeats a page or has invalid links",
+            ));
+          }
+          previous = Some(id);
+          current = page.next_vacant_page;
+        }
+        if current.is_some() || !vacant.is_empty() {
+          return Err(TryRuntimeError::Other(
+            "Deadline vacancy chain is not the exact nonfull-page set",
+          ));
+        }
+      }
+      if visited_pages.len() != pages.len() {
+        return Err(TryRuntimeError::Other(
+          "Deadline page is outside its header chain",
+        ));
+      }
+      let positions: BTreeMap<_, _> = DeadlineIndexPositions::<T>::iter().collect();
+      let index_pages: BTreeMap<_, _> = DeadlineIndexPages::<T>::iter()
+        .map(|(clock, id, page)| ((clock, id), page))
+        .collect();
+      if positions.len() != headers.len() {
+        return Err(TryRuntimeError::Other(
+          "Deadline index positions disagree with header cardinality",
+        ));
+      }
+      let mut expected_pages = BTreeSet::new();
+      for clock in [WakeupClock::Block, WakeupClock::Tick] {
+        let len = DeadlineIndexLen::<T>::get(clock);
+        if len > T::MaxActiveActors::get()
+          || usize::try_from(len).ok()
+            != Some(headers.keys().filter(|key| key.clock() == clock).count())
+        {
+          return Err(TryRuntimeError::Other(
+            "Deadline index length disagrees with its clock's headers",
+          ));
+        }
+        for id in 0..len.div_ceil(32) {
+          let coordinate = (clock, u64::from(id));
+          let page = index_pages
+            .get(&coordinate)
+            .ok_or(TryRuntimeError::Other("Deadline index page is missing"))?;
+          if page.len() != (len - id * 32).min(32) as usize {
+            return Err(TryRuntimeError::Other(
+              "Deadline index pages are not packed C32",
+            ));
+          }
+          expected_pages.insert(coordinate);
+        }
+        for index in 0..len {
+          let key = Self::deadline_index_get(clock, index)
+            .ok_or(TryRuntimeError::Other("Deadline index entry is missing"))?;
+          if key.clock() != clock
+            || !headers.contains_key(&key)
+            || positions.get(&key) != Some(&index)
+          {
+            return Err(TryRuntimeError::Other(
+              "Deadline index entry has no exact header/reverse position",
+            ));
+          }
+          if index > 0
+            && Self::deadline_index_get(clock, (index - 1) / 2).is_none_or(|parent| parent > key)
+          {
+            return Err(TryRuntimeError::Other(
+              "Deadline index violates min-heap ordering",
+            ));
+          }
+        }
+      }
+      if expected_pages.len() != index_pages.len() {
+        return Err(TryRuntimeError::Other("Deadline index has an orphan page"));
+      }
+      Ok(())
+    }
+
+    #[cfg(feature = "try-runtime")]
     pub(crate) fn do_try_state() -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
       use polkadot_sdk::sp_runtime::TryRuntimeError;
-      if MaterializationFamilyCursor::<T>::get() >= 3 {
+      if MaterializationFamilyCursor::<T>::get() >= 2 {
         return Err(TryRuntimeError::Other(
-          "materialization family cursor is outside the canonical three-family domain",
+          "materialization family cursor is outside the canonical two-family domain",
         ));
       }
       let limit = Self::effective_active_actor_limit();
@@ -13260,6 +14651,36 @@ pub mod pallet {
               ));
             }
           }
+        }
+      }
+      // Forward checks above validate active/disabled processes and reject dormant ownership.
+      // The inverse check also catches close tombstones after their semantic identity is gone.
+      for actor_id in ActorProcesses::<T>::iter_keys() {
+        if !semantic_identities.contains_key(&actor_id) {
+          return Err(TryRuntimeError::Other(
+            "canonical process has no semantic Actor owner",
+          ));
+        }
+      }
+      for (actor_id, episode) in ParkedBalanceEpisodes::<T>::iter(
+        /* deos-bypass: bounded-iter -- at most one episode per MaxActiveActors-bounded active Actor. */
+      ) {
+        let Some(ActorSemanticState::Active(record)) = ActorSemanticStates::<T>::get(actor_id)
+        else {
+          return Err(TryRuntimeError::Other(
+            "parked-balance episode has no active semantic owner",
+          ));
+        };
+        if episode.owner.actor
+          != (ActorRef {
+            actor_id,
+            generation: record.generation,
+          })
+          || Self::load_canonical_actor_semantic_state(episode.owner.actor).is_err()
+        {
+          return Err(TryRuntimeError::Other(
+            "parked-balance episode disagrees with its generation-bound Park owner",
+          ));
         }
       }
       let actual_active_count = u32::try_from(active_actor_ids.len())
@@ -13513,12 +14934,7 @@ pub mod pallet {
           ActorClass::System { .. } => {}
         }
       }
-      for actor_id in ActorRunHeads::<T>::iter_keys() {
-        if !ActorRunPayloads::<T>::contains_key(actor_id) {
-          return Err(TryRuntimeError::Other(
-            "ActorRunHead has no immutable ActorRunPayload",
-          ));
-        }
+      for actor_id in ActorRunStateStore::<T>::iter_keys() {
         let LoadedActorStateOf::Active(state) = Self::load_actor_state_for_frame_control(actor_id)
         else {
           return Err(TryRuntimeError::Other(
@@ -13587,18 +15003,6 @@ pub mod pallet {
             ));
           }
         }
-        if !run_state.opening_snapshot.is_empty() {
-          return Err(TryRuntimeError::Other(
-            "ActorRunState retains removed Opening state",
-          ));
-        }
-      }
-      for actor_id in ActorRunPayloads::<T>::iter_keys() {
-        if !ActorRunHeads::<T>::contains_key(actor_id) {
-          return Err(TryRuntimeError::Other(
-            "ActorRunPayload has no mutable ActorRunHead",
-          ));
-        }
       }
       for (actor_id, identity) in &semantic_identities {
         if !matches!(
@@ -13613,9 +15017,7 @@ pub mod pallet {
           ));
         }
         max_id = Some(max_id.map_or(*actor_id, |prev| prev.max(*actor_id)));
-        if ActorRunHeads::<T>::contains_key(actor_id)
-          || ActorRunPayloads::<T>::contains_key(actor_id)
-        {
+        if ActorRunStateStore::<T>::contains_key(actor_id) {
           return Err(TryRuntimeError::Other(
             "Dormant identity owns active scheduler or readiness state",
           ));
@@ -14225,6 +15627,8 @@ pub mod pallet {
           }
         }
       }
+      Self::do_try_state_service_ring()?;
+      Self::do_try_state_deadline_carrier()?;
       let next_id = NextActorId::<T>::get();
       if let Some(max_actor_id) = max_id {
         if next_id <= max_actor_id {

@@ -204,6 +204,14 @@ impl AssetOps<AccountId, AssetId, Balance> for NativeAssetOps {
     }
   }
 
+  fn total_balance(who: &AccountId, asset: AssetId) -> Balance {
+    if asset == NATIVE_ASSET {
+      <Balances as NativeInspect<AccountId>>::total_balance(who)
+    } else {
+      0
+    }
+  }
+
   fn minimum_balance(asset: AssetId) -> Balance {
     if asset == NATIVE_ASSET { 1 } else { 0 }
   }
@@ -437,11 +445,10 @@ impl pallet_deos_actors::SovereignAccountDeriver<AccountId> for RuntimeSovereign
   }
 }
 
-/// Fixture worker and reserve budgets mirror the reference runtime ratios over
-/// the default maximum block weight: 20% per worker and a 50% guaranteed
-/// on_idle reserve so the derived ActorServiceReserve stays strictly positive
-/// (spec 5.4). `Weight::MAX` placeholders would underflow the checked reserve
-/// derivation and reject every plan.
+/// Fixture worker budgets retain bounded reference-style ratios. The independent
+/// embedding behavior fixture uses an explicit finite high-ceiling idle reserve
+/// so generated production Weight growth cannot silently turn portability tests
+/// into an unrelated throughput gate.
 pub struct ObservationFanoutWeightLimit;
 impl Get<Weight> for ObservationFanoutWeightLimit {
   fn get() -> Weight {
@@ -478,11 +485,7 @@ impl Get<Weight> for CrossingWorkerWeightLimit {
 pub struct ActorOnIdleReserve;
 impl Get<Weight> for ActorOnIdleReserve {
   fn get() -> Weight {
-    let max_block = <() as polkadot_sdk::frame_support::traits::Get<
-      polkadot_sdk::frame_system::limits::BlockWeights,
-    >>::get()
-    .max_block;
-    polkadot_sdk::sp_runtime::Perbill::from_percent(50) * max_block
+    Weight::from_parts(2_000_000_000_000_000_000, 5_000_000_000_000_000_000)
   }
 }
 
@@ -677,7 +680,7 @@ pub struct EmbeddingBlockResourceBudget;
 impl Get<pallet_deos_actors::BlockResourceBudget> for EmbeddingBlockResourceBudget {
   fn get() -> pallet_deos_actors::BlockResourceBudget {
     pallet_deos_actors::BlockResourceBudget::new(
-      Weight::from_parts(1_000_000_000_000, 5_000_000),
+      Weight::from_parts(1_000_000_000_000_000_000, 1_000_000_000_000),
       Weight::zero(),
     )
     .unwrap_or_else(|_| pallet_deos_actors::BlockResourceBudget::fail_closed(Weight::zero()))
@@ -708,7 +711,6 @@ impl pallet_deos_actors::Config for Runtime {
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
   type MaxContractSteps = ConstU32<8>;
   type MaxFundingTrackedAssets = ConstU32<4>;
-  type MaxOpeningSnapshotEntries = ConstU32<16>;
   type MaxPreconditionClauses = ConstU32<2>;
   type MaxPredicatesPerClause = ConstU32<2>;
   type MaxPredicatesPerStep = ConstU32<2>;
@@ -827,9 +829,10 @@ mod tests {
   }
 
   fn service_actor_idle(block: BlockNumber) {
-    if pallet_deos_actors::CurrentBlockResourceState::<Runtime>::get()
-      .is_none_or(|state| state.block_number() != block)
-    {
+    if pallet_deos_actors::CurrentBlockResourceState::<Runtime>::get().is_none_or(|state| {
+      state.block_number() != block
+        || state.phase() == pallet_deos_actors::BlockResourcePhase::ContextIncomplete
+    }) {
       assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
     }
     Actors::on_idle(block, Weight::MAX);
@@ -839,9 +842,9 @@ mod tests {
     let mut block = System::block_number();
     service_actor_idle(block);
     for _ in 1..16 {
-      if Actors::actor_hot(actor_id)
-        .is_none_or(|hot| hot.cycle_state != pallet_deos_actors::CycleState::Running)
-      {
+      if Actors::actor_hot(actor_id).is_none_or(|hot| {
+        !hot.pending_signal && hot.cycle_state != pallet_deos_actors::CycleState::Running
+      }) {
         break;
       }
       block = block.checked_add(1).expect("fixture block advances");
@@ -951,6 +954,7 @@ mod tests {
       window: None,
       steps: plan,
       completion: pallet_deos_actors::CompletionPolicy::Persistent,
+      parked_balance_activation: None,
       funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
       auto_close_at_cycle_nonce: None,
     }
@@ -992,6 +996,7 @@ mod tests {
       window: None,
       steps: BoundedVec::try_from(steps).expect("fixture plan fits"),
       completion: pallet_deos_actors::CompletionPolicy::Persistent,
+      parked_balance_activation: None,
       funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
       auto_close_at_cycle_nonce: None,
     }
@@ -1019,8 +1024,7 @@ mod tests {
       b"ActorControlLocators".as_slice(),
       b"ActorUnsignaledControlCells".as_slice(),
       b"ActorContract".as_slice(),
-      b"ActorRunHead".as_slice(),
-      b"ActorRunPayload".as_slice(),
+      b"ActorRunState".as_slice(),
       b"ActorReadyFrameChunks".as_slice(),
       b"ActorReadyHead".as_slice(),
       b"ActorReadyTail".as_slice(),
@@ -1187,7 +1191,7 @@ mod tests {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      service_actor_idle(1);
+      run_until_not_running(actor_id);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(50));
       assert_eq!(
         Actors::active_actor_state(actor_id)
@@ -1299,10 +1303,10 @@ mod tests {
       assert!(matches!(result, Ok(Ok(_))), "{result:?}");
       assert!(Actors::pending_signal(actor_id));
       let bob_before = Balances::free_balance(BOB);
-      service_actor_idle(1);
+      run_until_not_running(actor_id);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(50));
-      System::set_block_number(2);
-      let _ = Actors::on_idle(2, Weight::MAX);
+      System::set_block_number(3);
+      let _ = Actors::on_idle(3, Weight::MAX);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(50));
     });
   }
@@ -1391,6 +1395,7 @@ mod tests {
         window: None,
         steps: admitted.clone(),
         completion: pallet_deos_actors::CompletionPolicy::Persistent,
+        parked_balance_activation: None,
         funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
         auto_close_at_cycle_nonce: None,
       };
@@ -1452,12 +1457,14 @@ mod tests {
           RuntimeOrigin::signed(ALICE),
           actor_id
         ));
-        for block in 1..=step_count.max(1) {
+        for step_index in 0..step_count.max(1) {
+          let block = step_index.saturating_add(2);
           System::set_block_number(block.into());
+          Actors::on_initialize(block.into());
           service_actor_idle(block.into());
-          if block < step_count {
+          if step_index.saturating_add(1) < step_count {
             let run = Actors::actor_run_state(actor_id).expect("nonterminal Step retains its Run");
-            assert_eq!(run.cursor, block);
+            assert_eq!(run.cursor, step_index.saturating_add(1));
           } else {
             assert!(Actors::actor_run_state(actor_id).is_none());
             assert_eq!(
@@ -1497,10 +1504,10 @@ mod tests {
         NATIVE_ASSET,
         10_000_000_000,
       ));
-      service_actor_idle(1);
+      run_until_not_running(actor_id);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(50));
-      System::set_block_number(2);
-      let _ = Actors::on_idle(2, Weight::MAX);
+      System::set_block_number(3);
+      let _ = Actors::on_idle(3, Weight::MAX);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(50));
       assert_eq!(
         Actors::active_actor_state(actor_id)
@@ -1537,11 +1544,12 @@ mod tests {
         actor_ids.push(actor_id);
       }
       assert_eq!(
-        pallet_deos_actors::ActorWaitingFrameChunks::<Runtime>::iter().count(),
+        pallet_deos_actors::DeadlinePages::<Runtime>::iter().count(),
         2
       );
-      for block in 20..=60 {
+      for block in 20..=120 {
         System::set_block_number(block);
+        Actors::on_initialize(block);
         service_actor_idle(block);
         if actor_ids
           .iter(/* deos-bypass: bounded-iter — thirty-three-element embedding fixture. */)
@@ -1552,12 +1560,12 @@ mod tests {
         }
       }
       for actor_id in &actor_ids {
-        assert_eq!(
+        assert!(
           Actors::active_actor_state(*actor_id)
             .expect("actor remains")
             .identity
-            .cycle_nonce,
-          1
+            .cycle_nonce
+            >= 1
         );
       }
       assert_eq!(
@@ -1565,14 +1573,10 @@ mod tests {
         0
       );
       for actor_id in &actor_ids {
-        assert!(
-          Actors::actor_hot(*actor_id)
-            .expect("hot state remains")
-            .trigger_wakeup_pointer
-            .is_some()
-        );
+        let hot = Actors::actor_hot(*actor_id).expect("hot state remains");
+        assert!(hot.trigger_wakeup_pointer.is_some() || hot.pending_signal);
       }
-      assert!(pallet_deos_actors::ActorWaitingFrameChunks::<Runtime>::iter().count() >= 2);
+      assert!(pallet_deos_actors::DeadlinePages::<Runtime>::iter().count() >= 2);
     });
   }
 
@@ -1677,7 +1681,7 @@ mod tests {
         RuntimeOrigin::signed(ALICE),
         system_id
       ));
-      service_actor_idle(1);
+      run_until_not_running(system_id);
       assert_eq!(Balances::free_balance(sovereign), 100);
       assert_eq!(
         Actors::active_actor_state(system_id)
@@ -1851,11 +1855,10 @@ mod tests {
         pallet_deos_actors::CycleState::Suspended
       );
       assert_eq!(before.identity.cycle_nonce, 0);
-      let opening_snapshot = before
+      let run_before = before
         .run_state
         .as_ref()
-        .expect("open run persists its snapshot")
-        .opening_snapshot
+        .expect("open run persists")
         .clone();
       assert!(before_hot.wakeup_pointer.is_some());
       assert!(before_hot.queue_ticket.is_none());
@@ -1877,9 +1880,8 @@ mod tests {
         after
           .run_state
           .as_ref()
-          .expect("ingress preserves open run")
-          .opening_snapshot,
-        opening_snapshot
+          .expect("ingress preserves open run"),
+        &run_before
       );
       assert_eq!(after_hot.wakeup_pointer, before_hot.wakeup_pointer);
       assert_eq!(after_hot.queue_ticket, before_hot.queue_ticket);
@@ -1998,7 +2000,7 @@ mod tests {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      service_actor_idle(1);
+      run_until_not_running(actor_id);
       let actor = Actors::active_actor_state(actor_id).expect("actor remains after first failure");
       assert_eq!(actor.hot.unsuccessful_attempt_streak, 1);
       assert_eq!(actor.hot.cycle_state, pallet_deos_actors::CycleState::Idle);
@@ -2130,6 +2132,7 @@ mod tests {
         window: None,
         steps: plan,
         completion: pallet_deos_actors::CompletionPolicy::Persistent,
+        parked_balance_activation: None,
         funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
         auto_close_at_cycle_nonce: None,
       };

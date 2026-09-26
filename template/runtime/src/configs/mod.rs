@@ -362,9 +362,9 @@ pub fn frame_and_other_fixed_weight() -> Weight {
     .unwrap_or(Weight::MAX)
 }
 
-// The generated three-family materialization minima plus one ready-tombstone cleanup need
-// 34% of the schedulable envelope; one exact third cannot admit the complete proof reservation.
-const ACTOR_CONTROL_RATIO: (u64, u64) = (17, 50);
+// One exact third of schedulable Weight; never round a Perbill above this ceiling.
+// Fanout quanta must fit the resulting Actor Control headroom independently of Action effects.
+const ACTOR_CONTROL_RATIO: (u64, u64) = (1, 3);
 
 parameter_types! {
   pub AuthorshipFixedWeight: Weight =

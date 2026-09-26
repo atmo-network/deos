@@ -371,10 +371,9 @@ impl<T: Config> Pallet<T> {
     if let Some(run_state) = state.as_ref() {
       ensure!(
         run_state.cycle_nonce == expected_cycle_nonce
-          && existing_run.as_ref().is_none_or(|existing| {
-            existing.cycle_nonce == run_state.cycle_nonce
-              && existing.opening_snapshot == run_state.opening_snapshot
-          })
+          && existing_run
+            .as_ref()
+            .is_none_or(|existing| existing.cycle_nonce == run_state.cycle_nonce)
           && run_state.cursor < step_count
           && run_state.has_contract_authority(
             admission.semantic_contract_id,
@@ -846,8 +845,6 @@ impl<T: Config> Pallet<T> {
             &instance.sovereign_account,
             instance.actor_class.actor_type(),
             plan.maximum_fee.total_fee,
-            &run.opening_snapshot,
-            &FundingSnapshotOf::<T>::default(),
           )
         },
         Err,
@@ -1190,8 +1187,6 @@ impl<T: Config> Pallet<T> {
             &instance.sovereign_account,
             instance.actor_class.actor_type(),
             plan.maximum_fee.total_fee,
-            &run.opening_snapshot,
-            &FundingSnapshotOf::<T>::default(),
           )
         },
         Err,
@@ -1493,8 +1488,6 @@ impl<T: Config> Pallet<T> {
       || instance.steps.len() != step_count as usize
       || plan.run.is_some()
       || ActorRunStateStore::<T>::contains_key(actor_id)
-      || ActorRunHeads::<T>::contains_key(actor_id)
-      || ActorRunPayloads::<T>::contains_key(actor_id)
       || !plan.hot.pending_signal
       || plan.ticket.actor_id != actor_id
       || plan.ticket.cursor != 0
@@ -1521,13 +1514,6 @@ impl<T: Config> Pallet<T> {
     if plan.maximum_fee != expected_fee {
       return Err(AttemptTransactionError::Invariant);
     }
-    let opening_snapshot = Self::capture_opening_snapshot(
-      instance.actor_class.actor_type(),
-      &instance.sovereign_account,
-      &instance.steps,
-      plan.maximum_fee.total_fee,
-    );
-    let funding_snapshot = FundingSnapshotOf::<T>::default();
     let cycle_nonce = plan.ticket.cycle_nonce;
     plan.hot.last_cycle_block = Some(now);
     Self::deposit_event(Event::CycleStarted {
@@ -1550,8 +1536,6 @@ impl<T: Config> Pallet<T> {
             &instance.sovereign_account,
             instance.actor_class.actor_type(),
             plan.maximum_fee.total_fee,
-            &opening_snapshot,
-            &funding_snapshot,
           )
         },
         Err,
@@ -1659,7 +1643,6 @@ impl<T: Config> Pallet<T> {
             last_attempt_block: now,
             last_committed_step_block: None,
             eligible_at,
-            opening_snapshot,
             cumulative_outcomes: outcomes,
             last_step_outcome: Some(StepOutcome::FundingUnavailable),
             suspension: Some(SuspensionReason::FundingUnavailable),
@@ -1771,7 +1754,6 @@ impl<T: Config> Pallet<T> {
                 last_attempt_block: now,
                 last_committed_step_block: None,
                 eligible_at,
-                opening_snapshot,
                 cumulative_outcomes: outcomes,
                 last_step_outcome: Some(last_step_outcome),
                 suspension: Some(SuspensionReason::Temporary),
@@ -1859,7 +1841,6 @@ impl<T: Config> Pallet<T> {
         last_attempt_block: now,
         last_committed_step_block: Some(now),
         eligible_at,
-        opening_snapshot,
         cumulative_outcomes: outcomes,
         last_step_outcome: Some(last_step_outcome),
         suspension: None,
@@ -1994,42 +1975,11 @@ impl<T: Config> Pallet<T> {
       .map_err(|_| DispatchError::Other("StepFeeTransferFailed"))
   }
 
-  pub(crate) fn opening_surfaces(
-    _contract_steps: &ContractSteps<T>,
-    _start_cursor: usize,
-  ) -> alloc::vec::Vec<OpeningSurface<T::AssetId>> {
-    alloc::vec::Vec::new()
-  }
-
-  pub(crate) fn capture_opening_snapshot(
-    actor_type: ActorType,
-    actor: &T::AccountId,
-    contract_steps: &ContractSteps<T>,
-    reserved: T::Balance,
-  ) -> RunOpeningSnapshotOf<T> {
-    let mut snapshot = RunOpeningSnapshotOf::<T>::default();
-    for surface in Self::opening_surfaces(contract_steps, 0) {
-      let balance = match surface {
-        OpeningSurface::PreservableAsset(asset) => {
-          Self::preservable_balance(actor_type, actor, asset, reserved)
-        }
-        OpeningSurface::TargetAsset(asset) => Self::spendable_balance(actor, asset, reserved),
-        OpeningSurface::StakingShares(asset) => T::StakingOps::share_balance(actor, asset),
-      };
-      snapshot
-        .try_insert(surface, balance)
-        .unwrap_or_else(|_| panic!("trigger surfaces fit MaxOpeningSnapshotEntries"));
-    }
-    snapshot
-  }
-
   fn prepare_task(
     task: &TaskOf<T>,
     actor: &T::AccountId,
     actor_type: ActorType,
     reserved: T::Balance,
-    trigger_balances: &RunOpeningSnapshotOf<T>,
-    funding_snapshots: &FundingSnapshotOf<T>,
   ) -> Result<PreparedTaskOutcome<T>, DispatchError> {
     match task {
       ActorTask::Transfer { to, asset, amount } => {
@@ -2039,8 +1989,6 @@ impl<T: Config> Pallet<T> {
           actor,
           actor_type,
           reserved,
-          trigger_balances,
-          funding_snapshots,
           AmountResolutionPolicy::PreserveSpend,
         )? {
           Ok(value) => value,
@@ -2067,8 +2015,6 @@ impl<T: Config> Pallet<T> {
           actor,
           actor_type,
           reserved,
-          trigger_balances,
-          funding_snapshots,
           AmountResolutionPolicy::PreserveSpend,
         )? {
           Ok(value) => value,
@@ -2104,8 +2050,6 @@ impl<T: Config> Pallet<T> {
           actor,
           actor_type,
           reserved,
-          trigger_balances,
-          funding_snapshots,
           AmountResolutionPolicy::PreserveSpend,
         )? {
           Ok(value) => value,
@@ -2130,8 +2074,6 @@ impl<T: Config> Pallet<T> {
           actor,
           actor_type,
           reserved,
-          trigger_balances,
-          funding_snapshots,
           AmountResolutionPolicy::Mint,
         )? {
           Ok(value) => value,
@@ -2157,8 +2099,6 @@ impl<T: Config> Pallet<T> {
           actor,
           actor_type,
           reserved,
-          trigger_balances,
-          funding_snapshots,
           AmountResolutionPolicy::PreserveSpend,
         )? {
           Ok(value) => value,
@@ -2187,8 +2127,6 @@ impl<T: Config> Pallet<T> {
           actor,
           actor_type,
           reserved,
-          trigger_balances,
-          funding_snapshots,
           AmountResolutionPolicy::Mint,
         )? {
           Ok(value) => value,
@@ -2227,8 +2165,6 @@ impl<T: Config> Pallet<T> {
           actor,
           actor_type,
           reserved,
-          trigger_balances,
-          funding_snapshots,
           AmountResolutionPolicy::PreserveSpend,
         )?;
         let outcome_b = Self::resolve_for_task(
@@ -2237,8 +2173,6 @@ impl<T: Config> Pallet<T> {
           actor,
           actor_type,
           reserved,
-          trigger_balances,
-          funding_snapshots,
           AmountResolutionPolicy::PreserveSpend,
         )?;
         match (outcome_a, outcome_b) {
@@ -2274,8 +2208,6 @@ impl<T: Config> Pallet<T> {
           actor,
           actor_type,
           reserved,
-          trigger_balances,
-          funding_snapshots,
           AmountResolutionPolicy::PreserveSpend,
         )? {
           Ok(value) => value,
@@ -2302,8 +2234,6 @@ impl<T: Config> Pallet<T> {
           actor,
           actor_type,
           reserved,
-          trigger_balances,
-          funding_snapshots,
           AmountResolutionPolicy::PreserveSpend,
         )? {
           Ok(value) => value,
@@ -2329,8 +2259,6 @@ impl<T: Config> Pallet<T> {
           actor,
           actor_type,
           reserved,
-          trigger_balances,
-          funding_snapshots,
           AmountResolutionPolicy::PreserveSpend,
         )? {
           Ok(value) => value,
@@ -2350,13 +2278,7 @@ impl<T: Config> Pallet<T> {
         ))
       }
       ActorTask::Unstake { asset, shares } => {
-        let resolved = match Self::resolve_unstake_shares(
-          shares,
-          *asset,
-          actor,
-          trigger_balances,
-          funding_snapshots,
-        )? {
+        let resolved = match Self::resolve_unstake_shares(shares, *asset, actor)? {
           AmountResolutionOutcome::Resolved(value) => value,
           AmountResolutionOutcome::Skipped => return Ok(PreparedTaskOutcome::Skipped),
           AmountResolutionOutcome::FundingUnavailable => {
@@ -2370,6 +2292,24 @@ impl<T: Config> Pallet<T> {
       }
       ActorTask::StopCycle => Ok(PreparedTaskOutcome::Executable(PreparedTask::StopCycle)),
     }
+  }
+
+  /// Measures the exact invoked SplitTransfer Task body without its surrounding Step control.
+  #[cfg(feature = "runtime-benchmarks")]
+  pub(crate) fn benchmark_prepared_split_transfer(
+    actor: &T::AccountId,
+    asset: T::AssetId,
+    total: T::Balance,
+    legs: SplitTransferLegsOf<T>,
+  ) -> Result<(), TaskFailure> {
+    Self::execute_prepared_task(
+      PreparedTask::SplitTransfer { asset, total, legs },
+      0,
+      0,
+      0,
+      actor,
+      ActorType::System,
+    )
   }
 
   fn execute_prepared_task(
@@ -2654,21 +2594,10 @@ impl<T: Config> Pallet<T> {
     actor: &T::AccountId,
     actor_type: ActorType,
     reserved: T::Balance,
-    trigger_balances: &RunOpeningSnapshotOf<T>,
-    funding_snapshots: &FundingSnapshotOf<T>,
     policy: AmountResolutionPolicy,
   ) -> Result<Result<T::Balance, TaskResolutionOutcome>, DispatchError> {
     Ok(
-      match Self::resolve_amount_with_policy(
-        spec,
-        asset,
-        actor,
-        actor_type,
-        reserved,
-        trigger_balances,
-        funding_snapshots,
-        policy,
-      )? {
+      match Self::resolve_amount_with_policy(spec, actor, asset, actor_type, reserved, policy)? {
         AmountResolutionOutcome::Resolved(value) => Ok(value),
         AmountResolutionOutcome::Skipped => Err(TaskResolutionOutcome::Skipped),
         AmountResolutionOutcome::FundingUnavailable => {
@@ -2815,8 +2744,6 @@ impl<T: Config> Pallet<T> {
     spec: &AmountResolution<T::Balance>,
     position_asset: T::AssetId,
     who: &T::AccountId,
-    _trigger_share_balances: &RunOpeningSnapshotOf<T>,
-    _funding_snapshots: &FundingSnapshotOf<T>,
   ) -> Result<AmountResolutionOutcome<T::Balance>, DispatchError> {
     ensure!(
       T::StakingOps::share_asset(position_asset).is_some(),
@@ -2838,12 +2765,10 @@ impl<T: Config> Pallet<T> {
 
   fn resolve_amount_with_policy(
     spec: &AmountResolution<T::Balance>,
-    asset: T::AssetId,
     who: &T::AccountId,
+    asset: T::AssetId,
     actor_type: ActorType,
     reserved: T::Balance,
-    _trigger_balances: &RunOpeningSnapshotOf<T>,
-    _funding_snapshots: &FundingSnapshotOf<T>,
     policy: AmountResolutionPolicy,
   ) -> Result<AmountResolutionOutcome<T::Balance>, DispatchError> {
     let spendable_current = Self::spendable_balance(who, asset, reserved);
@@ -2927,18 +2852,14 @@ mod step_control_tests {
         before_conditions,
       );
 
-      let opening_snapshot = RunOpeningSnapshotOf::<Test>::default();
-      let funding_snapshots = FundingSnapshotOf::<Test>::default();
       let before_resolution = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
       assert_eq!(
         Pallet::<Test>::resolve_amount_with_policy(
           &AmountResolution::Percent(Perbill::from_percent(50)),
-          TestAsset::Native,
           &ALICE,
+          TestAsset::Native,
           ActorType::System,
           0,
-          &opening_snapshot,
-          &funding_snapshots,
           AmountResolutionPolicy::PreserveSpend,
         ),
         Ok(AmountResolutionOutcome::Resolved(

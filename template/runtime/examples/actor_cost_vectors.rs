@@ -135,6 +135,7 @@ fn active_contract(
     window: None,
     steps,
     completion: CompletionPolicy::Persistent,
+    parked_balance_activation: None,
     funding: FundingSourcePolicy::OwnerOnly,
     auto_close_at_cycle_nonce: None,
   }
@@ -188,6 +189,7 @@ fn create_system_vector(destination: &AccountId) -> Value {
       window: None,
       steps,
       completion: CompletionPolicy::Persistent,
+      parked_balance_activation: None,
       funding: FundingSourcePolicy::RuntimePolicy,
       auto_close_at_cycle_nonce: None,
     }),

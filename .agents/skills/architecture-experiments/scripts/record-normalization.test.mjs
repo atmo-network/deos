@@ -106,6 +106,13 @@ export function selfTest(realSkillDir) {
     fs.writeFileSync(backlogFile, '- [ ] **N1.2 / Fixture.** Current consumer.\n- [ ] **N1.3 / Fixture.** Closure owner.\n');
     fs.appendFileSync(indexFile, activeLineage.replace('| parked-balance-v1 | None |', `| parked-balance-v1 | Exact bridge: ${'a'.repeat(40)}/${'b'.repeat(64)} |`));
     assert.deepEqual(validate(skill, options).errors, []); count++;
+    reset();
+    const namedLineage = activeLineage.replace('N1.2 | Round/wake proof | N1.3', '`Actors/Specification And Architecture` | Round/wake proof | `Release/0.7.27 Assurance`');
+    fs.writeFileSync(backlogFile, '- [ ] `Actors/Specification And Architecture`: Current consumer.\n- [ ] `Release/0.7.27 Assurance`: Closure owner.\n');
+    fs.appendFileSync(indexFile, namedLineage);
+    assert.deepEqual(validate(skill, options).errors, []); count++;
+    change(indexFile, '`Release/0.7.27 Assurance`', '`Release/0.7.28 Assurance`');
+    assert(validate(skill, options).errors.some((error) => error.includes('dangling current task Release/0.7.28 Assurance'))); count++;
     fs.rmSync(backlogFile);
 
     // Former identity checks use an actual frozen baseline buffer, never the live file.

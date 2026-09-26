@@ -1,6 +1,9 @@
 use super::{
   contract::ActorContractCommitment,
-  lifecycle::{ActorId, ActorRef, CloseReason, ProcessPublicationError, ServiceResidenceKind},
+  lifecycle::{
+    ActorId, ActorRef, CloseReason, ParkedBalanceCertificationError, ParkedBalanceWatch,
+    ProcessPublicationError, ServiceResidenceKind,
+  },
 };
 use frame::prelude::*;
 
@@ -11,11 +14,9 @@ pub type WakeupSlot = u32;
 pub type WakeupCursorIndex = u32;
 pub type SchedulerTick = u64;
 
-/// Inert storage shape for the future actor-keyed persistent service ring.
+/// Canonical header for the actor-keyed persistent Service ring.
 ///
-/// `cursor` is the next member to encounter; `count` is occupancy only. The
-/// historical control cells remain scheduler authority until the whole ring is
-/// populated and cut over atomically.
+/// `cursor` is the next member to encounter and `count` is exact occupancy.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
@@ -35,7 +36,7 @@ impl<BlockNumber> Default for ServiceHeaderRecord<BlockNumber> {
   }
 }
 
-/// One generation-bound member of the future Live/Pending service ring.
+/// One generation-bound member of the canonical Live/Pending Service ring.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
@@ -48,7 +49,7 @@ pub struct ServiceNode<BlockNumber> {
   pub last_considered: BlockNumber,
 }
 
-/// Rejected transaction-local mutations of the inert canonical service ring.
+/// Rejected transaction-local mutations of the canonical Service ring.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceRingMutationError {
   TransactionRequired,
@@ -70,14 +71,13 @@ pub enum ServicePublicationError {
   Ring(ServiceRingMutationError),
 }
 
-/// Failure of one atomic service-ring unlink and irreversible process retirement owner.
+/// Failure of one atomic service-ring unlink and synchronous process reclamation owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceRetirementError {
   Ring(ServiceRingMutationError),
-  Process(ProcessPublicationError),
 }
 
-/// Read-only classification of the current inert service-ring frontier.
+/// Read-only classification of the current Service-round frontier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceRoundEncounter {
   Empty,
@@ -95,9 +95,11 @@ pub enum ServiceRoundEncounter {
   BreakerRefused(ActorRef),
 }
 
-/// Rejected transaction-local operations on the inert service-ring round frontier.
+/// Rejected transaction-local operations on the Service-round frontier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceRoundError {
+  /// No discovery was admitted; the caller has no evidence about the current frontier.
+  DiscoveryUnavailable,
   InsufficientWeight,
   ResourceUnavailable,
   TransactionRequired,
@@ -230,6 +232,24 @@ pub struct PendingCheckOwner {
   pub plan_revision: PlanRevision,
 }
 
+/// Fixed-anchor evidence retained for exactly one generation/plan-bound parked episode.
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+#[scale_info(skip_type_params(MaxWatches))]
+pub struct ParkedBalanceEpisode<AssetId, Balance, MaxWatches: Get<u32>> {
+  pub owner: PendingCheckOwner,
+  pub watches: BoundedVec<ParkedBalanceWatch<AssetId, Balance>, MaxWatches>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParkedBalanceTransitionError {
+  Certification(ParkedBalanceCertificationError),
+  Dependency(DependencyRegistrationError),
+  InvalidReviewClock,
+  EpisodeAlreadyExists,
+}
+
 /// One exact event cause retained after source traversal publishes Pending authority.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
@@ -319,6 +339,7 @@ pub enum DueBlockDeadlineBranch {
   Retry(ActorRef),
   Review(ActorRef),
   TemporalTrigger(ActorRef),
+  TemporalTriggerBusy(ActorRef),
 }
 
 /// One classified transition from the shared block-deadline frontier.
@@ -440,6 +461,8 @@ pub enum DependencyRegistrationError {
   PendingReviewMismatch,
   DeadlineNotFuture,
   ClockUnavailable,
+  ParkedBalanceMinimumChanged,
+  ParkedBalanceThresholdOverflow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -472,6 +495,13 @@ pub enum DependencyScanMutation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyScanWorkerError {
+  InsufficientWeight,
+  Source(DependencyScanSourceError),
+  Scan(DependencyScanError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DependencyScanError {
   TransactionRequired,
   SourceExhausted,
@@ -496,6 +526,7 @@ pub struct DeadlineHeader {
   pub first_page: u64,
   pub last_page: u64,
   pub next_page: u64,
+  pub first_vacant_page: Option<u64>,
   pub page_count: u32,
   pub count: u32,
 }
@@ -507,6 +538,8 @@ pub struct DeadlineHeader {
 pub struct DeadlinePage {
   pub previous_page: Option<u64>,
   pub next_page: Option<u64>,
+  pub previous_vacant_page: Option<u64>,
+  pub next_vacant_page: Option<u64>,
   pub live_entries: u8,
   pub entries: BoundedVec<Option<ActorRef>, ConstU32<32>>,
 }
@@ -522,7 +555,7 @@ pub struct DeadlineHandle<BlockNumber> {
   pub slot: u8,
 }
 
-/// Rejected transaction-local mutations of the inert canonical deadline carrier.
+/// Rejected transaction-local mutations of the canonical Deadline carrier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeadlineMutationError {
   TransactionRequired,
@@ -538,7 +571,7 @@ pub enum DeadlineMutationError {
   CapacityExceeded,
 }
 
-/// Rejected transaction-local mutations of the inert deadline-key min-heaps.
+/// Rejected transaction-local mutations of the canonical Deadline-key min-heaps.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeadlineIndexMutationError {
   TransactionRequired,

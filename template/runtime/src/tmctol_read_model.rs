@@ -94,8 +94,7 @@ impl TmctolReadModel {
         || pallet_deos_actors::ActorContractHeads::<Runtime>::contains_key(actor_id)
         || pallet_deos_actors::ActorActivationAuthorities::<Runtime>::contains_key(actor_id)
         || has_tail_chunk
-        || pallet_deos_actors::ActorRunHeads::<Runtime>::contains_key(actor_id)
-        || pallet_deos_actors::ActorRunPayloads::<Runtime>::contains_key(actor_id);
+        || pallet_deos_actors::ActorRunStateStore::<Runtime>::contains_key(actor_id);
     let status = if is_immutable_system_actor && !active_state_exists {
       GuaranteeStatus::Satisfied
     } else {

@@ -5,6 +5,196 @@ use crate::{
 };
 
 #[test]
+fn terminal_service_reserves_cleanup_before_any_step_mutation() {
+  use crate::WeightInfo;
+  for actor_type in [ActorType::User, ActorType::System] {
+    for (zero_step, reason) in [
+      (false, CloseReason::AutoCloseNonceReached),
+      (true, CloseReason::AutoCloseNonceReached),
+      (false, CloseReason::ProductiveCycleCompleted),
+      (false, CloseReason::RetryAttemptsExhausted),
+      (false, CloseReason::ConsecutiveFailures),
+    ] {
+      for pass_owned in [false, true] {
+        for deficit in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+          new_test_ext().execute_with(|| {
+            System::set_block_number(1);
+            let failure = matches!(
+              reason,
+              CloseReason::RetryAttemptsExhausted | CloseReason::ConsecutiveFailures
+            );
+            if reason == CloseReason::ConsecutiveFailures {
+              set_max_consecutive_failures(1);
+            }
+            let mut step = if failure {
+              setup_temporary_retry_pool();
+              set_temporary_dex_failure(true);
+              let mut step = temporary_retry_swap_plan()[0].clone();
+              step.on_error = StepErrorPolicy::AbortCycle;
+              step
+            } else {
+              make_step(Task::Transfer {
+                to: BOB,
+                asset: TestAsset::Native,
+                amount: AmountResolution::Fixed(10),
+              })
+            };
+            if reason == CloseReason::RetryAttemptsExhausted {
+              step.on_error = StepErrorPolicy::RetryLater { max_attempts: 2 };
+            }
+            let steps = if zero_step {
+              BoundedVec::default()
+            } else {
+              contract_steps_with_step(step)
+            };
+            let mut contract = system_active_contract(manual_schedule(), None, steps).unwrap();
+            match reason {
+              CloseReason::AutoCloseNonceReached => contract.auto_close_at_cycle_nonce = Some(1),
+              CloseReason::ProductiveCycleCompleted => {
+                contract.completion = crate::CompletionPolicy::CloseAfterProductiveCycle;
+              }
+              _ => {}
+            }
+            let id = Actors::next_actor_id();
+            if actor_type == ActorType::User {
+              prefund_active_user_creation(ALICE, &contract.steps);
+              assert_ok!(Actors::create_user_actor(
+                RuntimeOrigin::signed(ALICE),
+                Mutability::Mutable,
+                Some(contract)
+              ));
+            } else {
+              assert_ok!(Actors::create_system_actor(
+                RuntimeOrigin::root(),
+                ALICE,
+                Mutability::Mutable,
+                Some(contract)
+              ));
+            }
+            fund_native(id, 1_000);
+            assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+            System::set_block_number(2);
+            if reason == CloseReason::RetryAttemptsExhausted {
+              let mut setup =
+                polkadot_sdk::frame_support::weights::WeightMeter::with_limit(Weight::MAX);
+              assert_ok!(Actors::service_canonical_round_head(&mut setup, 2));
+              assert_eq!(
+                Actors::actor_run_state(id)
+                  .unwrap()
+                  .unsuccessful_attempts_at_cursor,
+                1
+              );
+              System::set_block_number(3);
+            }
+            let now = System::block_number();
+            polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+              assert_ok!(Actors::begin_service_round(now));
+              polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+            });
+            let (step_control, effect) = if zero_step {
+              (
+                TestWeightInfo::scheduler_inner_zero_step_complete(),
+                Weight::zero(),
+              )
+            } else {
+              let resources = Actors::load_current_step_from_storage(id, 0)
+                .unwrap()
+                .resources;
+              (resources.control, resources.effect)
+            };
+            let inspection = TestWeightInfo::service_round_begin_populated()
+              .saturating_add(TestWeightInfo::service_round_probe_eligible())
+              .saturating_add(TestWeightInfo::scheduler_actor_state_probe());
+            let suffix = TestWeightInfo::service_round_admit_eligible()
+              .max(TestWeightInfo::service_member_retire_interior())
+              .max(TestWeightInfo::service_member_retire_pair_cursor())
+              .max(TestWeightInfo::service_member_retire_singleton());
+            let full_control = inspection
+              .saturating_add(step_control)
+              .saturating_add(suffix)
+              .saturating_add(Actors::close_dispatch_weight_upper());
+            let root =
+              polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+            for short in [true, false] {
+              let control = if short {
+                full_control.saturating_sub(deficit)
+              } else {
+                full_control
+              };
+              let limits =
+                crate::BlockResourceLimits::new(control, effect.saturating_mul(2), effect, effect)
+                  .unwrap();
+              let mut state = crate::BlockResourceState::new(now);
+              assert_ok!(state.begin_prepass());
+              let consumed = if pass_owned {
+                Actors::execute_cycle_to_cutoff_with_resources(
+                  full_control.saturating_add(effect),
+                  0,
+                  &mut state,
+                  limits,
+                  crate::BlockResourceDomain::ActorBaseEffect,
+                  control,
+                )
+                .consumed
+              } else {
+                let mut meter = polkadot_sdk::frame_support::weights::WeightMeter::with_limit(
+                  full_control.saturating_add(effect),
+                );
+                let result = Actors::service_canonical_round_head_with_resources(
+                  &mut meter,
+                  now,
+                  &mut state,
+                  limits,
+                  crate::BlockResourceDomain::ActorBaseEffect,
+                );
+                assert_eq!(result.is_err(), short);
+                meter.consumed()
+              };
+              assert_eq!(state.outstanding_reservations(), 0);
+              assert!(!state.optional_actor_work_halted());
+              if short {
+                assert_eq!(
+                  polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+                  root,
+                  "{actor_type:?} {reason:?} zero={zero_step} caller={pass_owned} {deficit:?}"
+                );
+                assert_eq!(consumed, inspection);
+                assert_eq!(state.usage().actor_effect_used(), Weight::zero());
+              } else {
+                assert_eq!(
+                  state.usage().actor_control_used(),
+                  full_control,
+                  "{actor_type:?} {reason:?} zero={zero_step} caller={pass_owned}"
+                );
+                assert_eq!(state.usage().actor_effect_used(), effect);
+                assert_eq!(consumed, full_control.saturating_add(effect));
+                assert!(Actors::actor_identity(id).is_none());
+                assert!(!ActorProcesses::<Test>::contains_key(id));
+                assert!(!ServiceNodes::<Test>::contains_key(id));
+                assert!(!crate::ActorRunStateStore::<Test>::contains_key(id));
+                #[cfg(feature = "try-runtime")]
+                assert_ok!(Actors::do_try_state());
+                assert!(has_actor_event(|event| matches!(
+                  event,
+                  Event::ActorClosed { actor_id, reason: actual }
+                    if *actor_id == id && *actual == reason
+                )));
+                if !zero_step {
+                  assert_eq!(
+                    last_step_control_execution().unwrap().placement,
+                    crate::StepControlPlacement::None
+                  );
+                }
+              }
+            }
+          });
+        }
+      }
+    }
+  }
+}
+
+#[test]
 fn cancelled_run_returns_idle_without_a_deferred_manual_cycle() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -149,60 +339,62 @@ fn user_pipeline_insolvency_closes_before_effect_capacity_deferral() {
 fn canonical_weight_refusal_reads_no_actor_cold_state() {
   for actor_type in [ActorType::System, ActorType::User] {
     let mut ext = new_test_ext();
-    let (actor_id, process_key, service_key, contract_key, payload_key, envelope) = ext
-      .execute_with(|| {
-        System::set_block_number(1);
-        let actor_id = match actor_type {
-          ActorType::System => create_system_with(
-            ALICE,
-            manual_schedule(),
-            None,
-            transfer_contract_steps(BOB, 10),
-          ),
-          ActorType::User => create_user_with(
-            ALICE,
-            Mutability::Mutable,
-            manual_schedule(),
-            None,
-            transfer_contract_steps(BOB, 10),
-          ),
-        };
-        fund_native(actor_id, 1_000_000_000_000_000);
-        assert_ok!(Actors::manual_trigger(
-          RuntimeOrigin::signed(ALICE),
-          actor_id
-        ));
-        // The occurrence published at block 1 is served at B+1.
-        System::set_block_number(2);
-        let selector = <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated()
-          .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible());
-        let complete = selector.saturating_add(
-          <TestWeightInfo as crate::WeightInfo>::scheduler_inner_zero_step_complete()
-            .saturating_add(
-              <TestWeightInfo as crate::WeightInfo>::service_round_admit_eligible().max(
-                <TestWeightInfo as crate::WeightInfo>::service_member_retire_interior().max(
-                  <TestWeightInfo as crate::WeightInfo>::service_member_retire_pair_cursor()
-                    .max(<TestWeightInfo as crate::WeightInfo>::service_member_retire_singleton()),
-                ),
-              ),
-            ),
-        );
-        (
-          actor_id,
-          crate::ActorProcesses::<Test>::hashed_key_for(actor_id),
-          crate::ServiceNodes::<Test>::hashed_key_for(actor_id),
-          crate::ActorContractHeads::<Test>::hashed_key_for(actor_id),
-          crate::ActorRunPayloads::<Test>::hashed_key_for(actor_id),
-          (selector, complete),
-        )
-      });
+    let (
+      actor_id,
+      process_key,
+      service_key,
+      semantic_key,
+      contract_key,
+      payload_key,
+      selector,
+      envelope,
+    ) = ext.execute_with(|| {
+      System::set_block_number(1);
+      let actor_id = match actor_type {
+        ActorType::System => create_system_with(
+          ALICE,
+          manual_schedule(),
+          None,
+          transfer_contract_steps(BOB, 10),
+        ),
+        ActorType::User => create_user_with(
+          ALICE,
+          Mutability::Mutable,
+          manual_schedule(),
+          None,
+          transfer_contract_steps(BOB, 10),
+        ),
+      };
+      fund_native(actor_id, 1_000_000_000_000_000);
+      assert_ok!(Actors::manual_trigger(
+        RuntimeOrigin::signed(ALICE),
+        actor_id
+      ));
+      // The occurrence published at block 1 is served at B+1.
+      System::set_block_number(2);
+      let selector = <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated()
+        .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible());
+      let inspection = selector
+        .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_actor_state_probe());
+      (
+        actor_id,
+        crate::ActorProcesses::<Test>::hashed_key_for(actor_id),
+        crate::ServiceNodes::<Test>::hashed_key_for(actor_id),
+        crate::ActorSemanticStates::<Test>::hashed_key_for(actor_id),
+        crate::ActorContractHeads::<Test>::hashed_key_for(actor_id),
+        crate::ActorRunStateStore::<Test>::hashed_key_for(actor_id),
+        selector,
+        inspection,
+      )
+    });
     ext.commit_all().expect("commit fixture before recording");
     let before = ext.execute_with(|| polkadot_sdk::sp_io::storage::root(StateVersion::V1));
     ext.commit_all().expect("commit root calculation");
-    let (selector, complete) = envelope;
-    for scarce in [
-      complete.saturating_sub(Weight::from_parts(1, 0)),
-      selector.saturating_sub(Weight::from_parts(1, 0)),
+    for (scarce, discovered) in [
+      (selector.saturating_sub(Weight::from_parts(1, 0)), false),
+      (selector.saturating_sub(Weight::from_parts(0, 1)), false),
+      (envelope.saturating_sub(Weight::from_parts(1, 0)), true),
+      (envelope.saturating_sub(Weight::from_parts(0, 1)), true),
     ] {
       let recorder =
         polkadot_sdk::sp_trie::recorder::Recorder::<polkadot_sdk::sp_core::Blake2Hasher>::default();
@@ -210,12 +402,28 @@ fn canonical_weight_refusal_reads_no_actor_cold_state() {
         let mut refused = WeightMeter::with_limit(scarce);
         assert_eq!(
           Actors::service_canonical_round_head(&mut refused, 2),
-          Err(crate::ServiceRoundError::InsufficientWeight)
+          Err(if discovered {
+            crate::ServiceRoundError::InsufficientWeight
+          } else {
+            crate::ServiceRoundError::DiscoveryUnavailable
+          })
         );
-        assert_eq!(refused.consumed(), Weight::zero());
+        assert_eq!(
+          refused.consumed(),
+          if discovered { selector } else { Weight::zero() }
+        );
       });
       let recorded = recorder.recorded_keys();
-      for key in [&process_key, &service_key, &contract_key, &payload_key] {
+      for key in [&process_key, &service_key] {
+        assert_eq!(
+          recorded
+            .values()
+            .any(|keys| keys.keys().any(|read| read.as_ref() == key.as_slice())),
+          discovered,
+          "topology reads require discovery admission"
+        );
+      }
+      for key in [&semantic_key, &contract_key, &payload_key] {
         assert!(
           !recorded
             .values()
@@ -622,6 +830,109 @@ fn composite_publication_rehomes_an_existing_temporal_trigger_pointer() {
 }
 
 #[test]
+fn temporal_actors_share_one_deadline_heap_key_until_last_close() {
+  for close_first_created in [true, false] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let before = crate::DeadlineIndexLen::<Test>::get(WakeupClock::Tick);
+      let first = create_system_with(
+        BOB,
+        timer_schedule(5),
+        None,
+        contract_steps_with_step(make_step(Task::StopCycle)),
+      );
+      let first_handle = crate::TriggerDeadlineHandles::<Test>::get(first)
+        .expect("first temporal Actor owns a canonical deadline");
+      let key = first_handle.key;
+      let index = crate::DeadlineIndexPositions::<Test>::get(key).expect("bucket is indexed");
+      assert_eq!(
+        crate::DeadlineIndexLen::<Test>::get(WakeupClock::Tick),
+        before + 1
+      );
+      let second = create_system_with(
+        CHARLIE,
+        timer_schedule(5),
+        None,
+        contract_steps_with_step(make_step(Task::StopCycle)),
+      );
+      let second_handle = crate::TriggerDeadlineHandles::<Test>::get(second)
+        .expect("second temporal Actor shares the deadline bucket");
+      assert_eq!(second_handle.key, key);
+      assert_eq!(second_handle.page, first_handle.page);
+      assert_ne!(second_handle.slot, first_handle.slot);
+      assert_eq!(crate::DeadlineHeaders::<Test>::get(key).unwrap().count, 2);
+      assert_eq!(
+        crate::DeadlineIndexLen::<Test>::get(WakeupClock::Tick),
+        before + 1
+      );
+      assert_eq!(crate::DeadlineIndexPositions::<Test>::get(key), Some(index));
+      let (closed, survivor) = if close_first_created {
+        (first_handle, second_handle)
+      } else {
+        (second_handle, first_handle)
+      };
+      assert_ok!(Actors::close_actor(
+        RuntimeOrigin::root(),
+        closed.actor.actor_id
+      ));
+      assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+        closed.actor.actor_id
+      ));
+      assert!(!ActorProcesses::<Test>::contains_key(closed.actor.actor_id));
+      assert_eq!(crate::DeadlineHeaders::<Test>::get(key).unwrap().count, 1);
+      assert_eq!(
+        crate::TriggerDeadlineHandles::<Test>::get(survivor.actor.actor_id),
+        Some(survivor)
+      );
+      let page = crate::DeadlinePages::<Test>::get(key, survivor.page).unwrap();
+      assert_eq!(page.entries[usize::from(closed.slot)], None);
+      assert_eq!(
+        page.entries[usize::from(survivor.slot)],
+        Some(survivor.actor)
+      );
+      assert_eq!(
+        crate::DeadlineIndexLen::<Test>::get(WakeupClock::Tick),
+        before + 1
+      );
+      assert_eq!(crate::DeadlineIndexPositions::<Test>::get(key), Some(index));
+      assert_eq!(
+        crate::DeadlineIndexPages::<Test>::get(WakeupClock::Tick, u64::from(index / 32)).unwrap()
+          [(index % 32) as usize],
+        key,
+      );
+      #[cfg(feature = "try-runtime")]
+      Actors::do_try_state().expect("surviving generation retains complete deadline authority");
+      assert_ok!(Actors::close_actor(
+        RuntimeOrigin::root(),
+        survivor.actor.actor_id
+      ));
+      assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+        survivor.actor.actor_id
+      ));
+      assert!(!ActorProcesses::<Test>::contains_key(
+        survivor.actor.actor_id
+      ));
+      assert!(!crate::DeadlineHeaders::<Test>::contains_key(key));
+      assert!(!crate::DeadlineIndexPositions::<Test>::contains_key(key));
+      assert!(
+        crate::DeadlinePages::<Test>::iter_prefix(key)
+          .next()
+          .is_none()
+      );
+      assert_eq!(
+        crate::DeadlineIndexLen::<Test>::get(WakeupClock::Tick),
+        before
+      );
+      assert!(!crate::ActorWaitingCursorIndices::<Test>::contains_key(key));
+      assert!(!crate::ActorWaitingOccupancies::<Test>::contains_key(key));
+      assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 0);
+      #[cfg(feature = "try-runtime")]
+      Actors::do_try_state().expect("last close releases the shared deadline key");
+    });
+  }
+}
+
+#[test]
 fn canonical_cadenced_deadline_publishes_pending_service() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -682,6 +993,157 @@ fn canonical_cadenced_deadline_publishes_pending_service() {
       Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
     )));
   });
+}
+
+#[test]
+fn temporal_deadline_dispatch_preserves_source_on_resource_refusal() {
+  for schedule in [at_time_schedule(1), timer_schedule(1)] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let fee = if matches!(schedule.trigger, Trigger::AtTime { .. }) {
+        at_time_trigger_fee()
+      } else {
+        cadenced_trigger_fee()
+      };
+      let actor_id = create_user_with(
+        ALICE,
+        Mutability::Mutable,
+        schedule,
+        None,
+        inert_contract_steps(),
+      );
+      fund_native(actor_id, 1_000_000_000_000_000);
+      let source = crate::TriggerDeadlineHandles::<Test>::get(actor_id).unwrap();
+      let payer = sovereign_account(actor_id);
+      System::set_block_number(2);
+      clear_fee_collections();
+      let balance = native_balance(&payer);
+      let selector = <TestWeightInfo as crate::WeightInfo>::classify_due_tick_deadline();
+      let branch = <TestWeightInfo as crate::WeightInfo>::at_time_trigger_occurrence()
+        .max(<TestWeightInfo as crate::WeightInfo>::cadenced_trigger_occurrence());
+      let complete = selector.saturating_add(branch);
+      let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      for (limit, consumed) in [
+        (
+          Weight::from_parts(selector.ref_time() - 1, u64::MAX),
+          Weight::zero(),
+        ),
+        (
+          Weight::from_parts(u64::MAX, selector.proof_size() - 1),
+          Weight::zero(),
+        ),
+        (
+          Weight::from_parts(complete.ref_time() - 1, u64::MAX),
+          selector,
+        ),
+        (
+          Weight::from_parts(u64::MAX, complete.proof_size() - 1),
+          selector,
+        ),
+      ] {
+        let mut meter = WeightMeter::with_limit(limit);
+        assert_eq!(
+          Actors::process_next_due_tick_deadline(
+            &mut meter,
+            ServiceResidenceKind::Pending,
+            2,
+            2,
+            None,
+          ),
+          Err(crate::DependencyReviewWorkerError::InsufficientWeight)
+        );
+        assert_eq!(meter.consumed(), consumed);
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+          root
+        );
+        assert_eq!(
+          crate::TriggerDeadlineHandles::<Test>::get(actor_id),
+          Some(source)
+        );
+        assert_eq!(native_balance(&payer), balance);
+        assert!(fee_collections().is_empty());
+      }
+      // This proves the declared admission boundary, not sufficiency of retained coefficients.
+      let mut meter = WeightMeter::with_limit(complete);
+      assert_eq!(
+        Actors::process_next_due_tick_deadline(
+          &mut meter,
+          ServiceResidenceKind::Pending,
+          2,
+          2,
+          None,
+        ),
+        Ok(crate::DueTickDeadlineMutation::TemporalTriggerProcessed(
+          source.actor
+        ))
+      );
+      assert_eq!(meter.consumed(), complete);
+      assert_eq!(fee_collections(), vec![fee]);
+      assert_eq!(native_balance(&payer), balance - fee);
+      assert!(Actors::pending_signal(actor_id));
+      assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+        actor_id
+      ));
+      #[cfg(feature = "try-runtime")]
+      assert_ok!(Actors::do_try_state());
+    });
+  }
+}
+
+#[test]
+fn temporal_deadline_transaction_restores_source_after_loading_refusal() {
+  for schedule in [at_time_schedule(1), timer_schedule(1)] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let actor_id = create_user_with(
+        ALICE,
+        Mutability::Mutable,
+        schedule,
+        None,
+        inert_contract_steps(),
+      );
+      let source = crate::TriggerDeadlineHandles::<Test>::get(actor_id).unwrap();
+      let payer = sovereign_account(actor_id);
+      System::set_block_number(2);
+      clear_fee_collections();
+      let balance = native_balance(&payer);
+      let head = crate::ActorContractHeads::<Test>::take(actor_id).unwrap();
+      let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      let mut meter = WeightMeter::with_limit(Weight::MAX);
+      assert_eq!(
+        Actors::process_next_due_tick_deadline(
+          &mut meter,
+          ServiceResidenceKind::Pending,
+          2,
+          2,
+          None,
+        ),
+        Err(crate::DependencyReviewWorkerError::TemporalOccurrence)
+      );
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        root,
+        "failed authority loading restores earlier source removal and semantic writes"
+      );
+      assert_eq!(
+        crate::TriggerDeadlineHandles::<Test>::get(actor_id),
+        Some(source)
+      );
+      assert_eq!(native_balance(&payer), balance);
+      assert!(fee_collections().is_empty());
+      crate::ActorContractHeads::<Test>::insert(actor_id, head);
+      assert_eq!(
+        Actors::process_due_temporal_deadline(source.actor, 2),
+        Ok(crate::DueTickDeadlineMutation::TemporalTriggerProcessed(
+          source.actor
+        ))
+      );
+      assert!(Actors::pending_signal(actor_id));
+      #[cfg(feature = "try-runtime")]
+      assert_ok!(Actors::do_try_state());
+    });
+  }
 }
 
 #[test]
@@ -2315,12 +2777,9 @@ fn mandatory_hook_preserves_public_retry_prefix_and_canonical_residence() {
     assert_eq!(native_balance(&BOB), recipient_before + 1);
 
     set_asset_balance(&sovereign, TestAsset::Local(77), 1_000);
-    frame_system::Pallet::<Test>::set_block_number(5);
-    Actors::on_initialize(5);
-    run_idle(Weight::MAX);
+    run_canonical_block_at(5, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_some());
-    frame_system::Pallet::<Test>::set_block_number(6);
-    run_idle(Weight::MAX);
+    run_canonical_block_at(6, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
     assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
@@ -3043,6 +3502,189 @@ fn manual_trigger_survives_paused_queue_pop_and_resume() {
   });
 }
 
+fn prepare_due_deadline_frontiers() -> (Vec<u64>, Vec<u64>) {
+  System::set_block_number(1);
+  let mut sleepers = Vec::new();
+  for _ in 0..2 {
+    let mut step = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Local(77),
+      amount: AmountResolution::Fixed(10),
+    });
+    step.on_error = StepErrorPolicy::RetryLater { max_attempts: 2 };
+    let id = create_system_with(
+      ALICE,
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 2,
+      },
+      None,
+      BoundedVec::try_from(vec![step]).unwrap(),
+    );
+    fund_native(id, 1_000);
+    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+    sleepers.push(id);
+  }
+  System::set_block_number(2);
+  run_prepass();
+  for id in &sleepers {
+    assert_eq!(
+      Actors::deadline_handles(id).unwrap().key,
+      WakeupKey::Block(4)
+    );
+    assert_eq!(Actors::actor_run_state(*id).unwrap().cursor, 0);
+  }
+  Actors::on_idle(2, Weight::MAX);
+  Actors::on_finalize(2);
+  let timers = (0..2)
+    .map(|_| create_system_with(ALICE, at_time_schedule(2), None, BoundedVec::default()))
+    .collect::<Vec<_>>();
+  (sleepers, timers)
+}
+
+#[test]
+fn mandatory_prepass_services_both_deadline_clocks_before_external_dispatch() {
+  new_test_ext().execute_with(|| {
+    let (sleepers, timers) = prepare_due_deadline_frontiers();
+    let runs = sleepers
+      .iter()
+      .copied()
+      .map(Actors::actor_run_state)
+      .collect::<Vec<_>>();
+    let custody = sleepers
+      .iter()
+      .map(|id| native_balance(&sovereign_account(*id)))
+      .collect::<Vec<_>>();
+    let residents = (0..4)
+      .map(|_| {
+        let id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+        assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+        id
+      })
+      .collect::<Vec<_>>();
+    System::set_block_number(4);
+    run_prepass();
+    assert_eq!(
+      Actors::block_resource_state().unwrap().phase(),
+      crate::BlockResourcePhase::ExternalPhase
+    );
+    assert!(
+      Actors::deadline_handles(sleepers[0]).is_none(),
+      "Block return belongs to Prepass, not on_idle"
+    );
+    assert!(
+      Actors::trigger_deadline_handles(timers[0]).is_none(),
+      "Tick detection belongs to Prepass, not on_idle"
+    );
+    for id in [sleepers[0], timers[0]] {
+      assert_eq!(Actors::service_nodes(id).unwrap().eligible_from, 5);
+      assert_eq!(Actors::active_actor_view(id).unwrap().cycle_nonce, 0);
+    }
+    assert!(Actors::deadline_handles(sleepers[1]).is_some());
+    assert!(Actors::trigger_deadline_handles(timers[1]).is_some());
+    assert_eq!(
+      residents
+        .iter()
+        .filter(|id| Actors::active_actor_view(**id).unwrap().cycle_nonce == 1)
+        .count(),
+      3
+    );
+    assert_eq!(
+      sleepers
+        .iter()
+        .copied()
+        .map(Actors::actor_run_state)
+        .collect::<Vec<_>>(),
+      runs
+    );
+    assert_eq!(
+      sleepers
+        .iter()
+        .map(|id| native_balance(&sovereign_account(*id)))
+        .collect::<Vec<_>>(),
+      custody
+    );
+    Actors::on_idle(4, Weight::MAX);
+    assert!(
+      Actors::deadline_handles(sleepers[1]).is_some(),
+      "Drain cannot duplicate the mandatory deadline quantum"
+    );
+    assert!(Actors::trigger_deadline_handles(timers[1]).is_some());
+    assert_eq!(Actors::active_actor_view(timers[0]).unwrap().cycle_nonce, 0);
+    assert_eq!(
+      Actors::block_resource_state()
+        .unwrap()
+        .outstanding_reservations(),
+      0
+    );
+    Actors::on_finalize(4);
+  });
+}
+
+#[test]
+fn mandatory_prepass_deadline_reservation_refuses_each_dimension_before_mutation() {
+  use crate::weights::WeightInfo;
+  for shortfall in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+    new_test_ext().execute_with(|| {
+      let (sleepers, timers) = prepare_due_deadline_frontiers();
+      System::set_block_number(4);
+      type W = <Test as crate::Config>::WeightInfo;
+      let finalization = W::scheduler_on_idle_base().saturating_add(W::block_resource_finalize());
+      let minimum = W::scheduler_on_initialize_cutoff()
+        .saturating_add(Actors::deadline_service_weight_upper())
+        .saturating_add(W::materialization_coordinator_base())
+        .saturating_add(W::dependency_scan_source_probe())
+        .saturating_add(
+          W::process_dependency_scan_unit().max(W::process_dependency_scan_completion_unit()),
+        )
+        .saturating_add(finalization);
+      let refused = minimum.checked_sub(&shortfall).unwrap();
+      set_block_resource_budget(
+        crate::BlockResourceBudget::new_with_control_ratio(
+          refused.saturating_mul(3),
+          Weight::zero(),
+          1,
+          3,
+        )
+        .unwrap(),
+      );
+      assert_eq!(
+        TestBlockResourceBudget::get().limits().actor_control(),
+        refused
+      );
+      assert_noop!(
+        Actors::actor_prepass(RuntimeOrigin::none()),
+        crate::Error::<Test>::ResourceProtocolFailed
+      );
+      assert!(Actors::deadline_handles(sleepers[0]).is_some());
+      assert!(Actors::trigger_deadline_handles(timers[0]).is_some());
+      set_block_resource_budget(
+        crate::BlockResourceBudget::new_with_control_ratio(
+          minimum.saturating_mul(3),
+          Weight::zero(),
+          1,
+          3,
+        )
+        .unwrap(),
+      );
+      run_prepass();
+      assert!(Actors::deadline_handles(sleepers[0]).is_none());
+      assert!(Actors::trigger_deadline_handles(timers[0]).is_none());
+      let state = Actors::block_resource_state().unwrap();
+      assert!(
+        state
+          .usage()
+          .actor_control_used()
+          .saturating_add(finalization)
+          .all_lte(minimum)
+      );
+      assert_eq!(state.outstanding_reservations(), 0);
+      Actors::on_idle(4, Weight::MAX);
+      Actors::on_finalize(4);
+    });
+  }
+}
+
 #[test]
 fn mandatory_prepass_pass_admits_effectful_service_without_double_reserving_control() {
   new_test_ext().execute_with(|| {
@@ -3083,6 +3725,353 @@ fn mandatory_prepass_pass_admits_effectful_service_without_double_reserving_cont
 }
 
 #[test]
+fn service_discovery_refuses_before_round_mutation_in_each_dimension() {
+  use crate::WeightInfo;
+  for pass_owned in [false, true] {
+    for deficit in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+      for (with_actor, closed) in [(false, false), (true, false), (true, true)] {
+        new_test_ext().execute_with(|| {
+          System::set_block_number(1);
+          if with_actor {
+            let id = create_system_with(
+              ALICE,
+              manual_schedule(),
+              None,
+              transfer_contract_steps(BOB, 1),
+            );
+            fund_native(id, 1_000);
+            assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+          }
+          System::set_block_number(2);
+          if closed {
+            let mut setup =
+              polkadot_sdk::frame_support::weights::WeightMeter::with_limit(Weight::MAX);
+            assert_ok!(Actors::service_canonical_round_head(&mut setup, 2));
+          }
+          let selector = TestWeightInfo::service_round_begin_populated()
+            .saturating_add(TestWeightInfo::service_round_probe_eligible());
+          let short = selector.saturating_sub(deficit);
+          let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+          let mut state = crate::BlockResourceState::new(2);
+          assert_ok!(state.begin_prepass());
+          let pass = if pass_owned {
+            Actors::execute_cycle_to_cutoff_with_resources(
+              Weight::MAX,
+              0,
+              &mut state,
+              TestBlockResourceBudget::get().limits(),
+              crate::BlockResourceDomain::ActorBaseEffect,
+              short,
+            )
+          } else {
+            Actors::execute_cycle(short)
+          };
+          assert_eq!(
+            polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+            root,
+            "unadmitted discovery must not open a round"
+          );
+          assert_eq!(pass.consumed, Weight::zero());
+          assert!(
+            !pass.starved,
+            "uninspected work is not evidence of starvation"
+          );
+          assert!(!pass.starvation_observed);
+          assert_eq!(state.usage().actor_control_used(), Weight::zero());
+          assert_eq!(state.usage().actor_effect_used(), Weight::zero());
+          assert_eq!(state.outstanding_reservations(), 0);
+          assert!(!state.optional_actor_work_halted());
+        });
+      }
+    }
+  }
+}
+
+#[test]
+fn service_discovery_classifies_without_admitting_actor_loading() {
+  use crate::WeightInfo;
+  for pass_owned in [false, true] {
+    for (with_actor, closed) in [(false, false), (true, false), (true, true)] {
+      new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        if with_actor {
+          let id = create_system_with(
+            ALICE,
+            manual_schedule(),
+            None,
+            transfer_contract_steps(BOB, 1),
+          );
+          fund_native(id, 1_000);
+          assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+        }
+        System::set_block_number(2);
+        if closed {
+          let mut setup =
+            polkadot_sdk::frame_support::weights::WeightMeter::with_limit(Weight::MAX);
+          assert_ok!(Actors::service_canonical_round_head(&mut setup, 2));
+        }
+        let selector = TestWeightInfo::service_round_begin_populated()
+          .saturating_add(TestWeightInfo::service_round_probe_eligible());
+        let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+        let mut state = crate::BlockResourceState::new(2);
+        assert_ok!(state.begin_prepass());
+        let pass = if pass_owned {
+          Actors::execute_cycle_to_cutoff_with_resources(
+            Weight::MAX,
+            0,
+            &mut state,
+            TestBlockResourceBudget::get().limits(),
+            crate::BlockResourceDomain::ActorBaseEffect,
+            selector,
+          )
+        } else {
+          Actors::execute_cycle(selector)
+        };
+        assert_eq!(
+          pass.consumed, selector,
+          "one admitted discovery owns its work"
+        );
+        assert_eq!(pass.starved, with_actor && !closed);
+        assert!(pass.starvation_observed);
+        if with_actor {
+          assert_eq!(
+            polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+            root,
+            "a refused head or closed round preserves exact authority"
+          );
+        } else {
+          assert_eq!(Actors::service_header().round_block, Some(2));
+          assert_eq!(Actors::service_header().count, 0);
+        }
+        assert_eq!(
+          state.usage().actor_control_used(),
+          if pass_owned { selector } else { Weight::zero() }
+        );
+        assert_eq!(state.usage().actor_effect_used(), Weight::zero());
+        assert_eq!(state.outstanding_reservations(), 0);
+        assert!(!state.optional_actor_work_halted());
+      });
+    }
+  }
+}
+
+#[test]
+fn service_discovery_stops_on_defensive_attempt_marker() {
+  use crate::WeightInfo;
+  for pass_owned in [false, true] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let id = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        transfer_contract_steps(BOB, 1),
+      );
+      fund_native(id, 1_000);
+      assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+      System::set_block_number(2);
+      let mut setup = WeightMeter::with_limit(Weight::MAX);
+      assert_ok!(Actors::service_canonical_round_head(&mut setup, 2));
+      // Corrupt only the consideration marker after a real attempt. The independent process
+      // marker must still prevent replay; this is a defensive witness, not normal publication.
+      crate::ServiceNodes::<Test>::mutate(id, |node| node.as_mut().unwrap().last_considered = 1);
+      let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+      let selector = TestWeightInfo::service_round_begin_populated()
+        .saturating_add(TestWeightInfo::service_round_probe_eligible());
+      let mut state = crate::BlockResourceState::new(2);
+      assert_ok!(state.begin_prepass());
+      let pass = if pass_owned {
+        Actors::execute_cycle_to_cutoff_with_resources(
+          Weight::MAX,
+          0,
+          &mut state,
+          TestBlockResourceBudget::get().limits(),
+          crate::BlockResourceDomain::ActorBaseEffect,
+          selector,
+        )
+      } else {
+        Actors::execute_cycle(selector)
+      };
+      assert_eq!(pass.consumed, selector);
+      assert!(pass.starvation_observed && !pass.starved);
+      assert_eq!(state.outstanding_reservations(), 0);
+      assert!(!state.optional_actor_work_halted());
+      assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), root);
+    });
+  }
+}
+
+#[test]
+fn pass_owned_control_matches_direct_service_actual_accounting() {
+  for actor_type in [ActorType::User, ActorType::System] {
+    for zero_step in [false, true] {
+      let run = |pass_owned| {
+        new_test_ext().execute_with(|| {
+          System::set_block_number(1);
+          let steps = if zero_step {
+            BoundedVec::default()
+          } else {
+            transfer_contract_steps(BOB, 1)
+          };
+          let id = match actor_type {
+            ActorType::User => {
+              create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps)
+            }
+            ActorType::System => create_system_with(ALICE, manual_schedule(), None, steps),
+          };
+          fund_native(id, 1_000);
+          assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+          System::set_block_number(2);
+          let limits = TestBlockResourceBudget::get().limits();
+          let mut state = crate::BlockResourceState::new(2);
+          assert_ok!(state.begin_prepass());
+          let consumed = if pass_owned {
+            Actors::execute_cycle_to_cutoff_with_resources(
+              Weight::MAX,
+              0,
+              &mut state,
+              limits,
+              crate::BlockResourceDomain::ActorBaseEffect,
+              limits.actor_control(),
+            )
+            .consumed
+          } else {
+            let mut meter =
+              polkadot_sdk::frame_support::weights::WeightMeter::with_limit(Weight::MAX);
+            assert_ok!(Actors::service_canonical_round_head_with_resources(
+              &mut meter,
+              2,
+              &mut state,
+              limits,
+              crate::BlockResourceDomain::ActorBaseEffect
+            ));
+            // Compare the same work: the pass also discovers the now-closed round.
+            assert_eq!(
+              Actors::service_canonical_round_head_with_resources(
+                &mut meter,
+                2,
+                &mut state,
+                limits,
+                crate::BlockResourceDomain::ActorBaseEffect,
+              ),
+              Ok(crate::ServiceRoundEncounter::Closed)
+            );
+            meter.consumed()
+          };
+          assert_eq!(Actors::active_actor_view(id).unwrap().cycle_nonce, 1);
+          assert!(!state.optional_actor_work_halted());
+          assert_eq!(state.outstanding_reservations(), 0);
+          assert_eq!(
+            consumed,
+            state
+              .usage()
+              .actor_control_used()
+              .saturating_add(state.usage().actor_effect_used())
+          );
+          (
+            consumed,
+            state.usage().actor_control_used(),
+            state.usage().actor_effect_used(),
+          )
+        })
+      };
+      assert_eq!(
+        run(true),
+        run(false),
+        "pass reservation changes ownership, not actual work: {actor_type:?}, zero_step={zero_step}"
+      );
+    }
+  }
+}
+
+#[test]
+fn pass_owned_control_cannot_borrow_effect_capacity_or_bypass_a_refused_head() {
+  use crate::WeightInfo;
+  for proof_shortfall in [false, true] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let ids = (0..2)
+        .map(|_| {
+          let id = create_system_with(
+            ALICE,
+            manual_schedule(),
+            None,
+            transfer_contract_steps(BOB, 1),
+          );
+          fund_native(id, 1_000);
+          assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+          id
+        })
+        .collect::<Vec<_>>();
+      System::set_block_number(2);
+      let actor = crate::ActorRef {
+        actor_id: ids[0],
+        generation: Actors::service_nodes(ids[0]).unwrap().generation,
+      };
+      let semantic =
+        Actors::load_service_actor_semantic_state(actor, crate::ServiceResidenceKind::Pending)
+          .unwrap();
+      let resources = Actors::load_actor_service_state_with_control(
+        ids[0],
+        semantic.identity,
+        semantic.hot,
+        semantic.admission,
+      )
+      .and_then(|(_, _, step)| step)
+      .unwrap()
+      .resources;
+      let inspection = TestWeightInfo::service_round_begin_populated()
+        .saturating_add(TestWeightInfo::service_round_probe_eligible())
+        .saturating_add(TestWeightInfo::scheduler_actor_state_probe());
+      let suffix = TestWeightInfo::service_round_admit_eligible()
+        .max(TestWeightInfo::service_member_retire_interior())
+        .max(TestWeightInfo::service_member_retire_pair_cursor())
+        .max(TestWeightInfo::service_member_retire_singleton());
+      let complete_control = inspection
+        .saturating_add(resources.control)
+        .saturating_add(suffix);
+      let control_limit = complete_control.saturating_sub(if proof_shortfall {
+        Weight::from_parts(0, 1)
+      } else {
+        Weight::from_parts(1, 0)
+      });
+      assert!(inspection.all_lte(control_limit));
+      assert_ok!(
+        polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+            Actors::begin_service_round(2),
+          )
+        })
+      );
+      let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      let mut state = crate::BlockResourceState::new(2);
+      assert_ok!(state.begin_prepass());
+      let pass = Actors::execute_cycle_to_cutoff_with_resources(
+        complete_control.saturating_add(resources.effect),
+        0,
+        &mut state,
+        TestBlockResourceBudget::get().limits(),
+        crate::BlockResourceDomain::ActorBaseEffect,
+        control_limit,
+      );
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        root
+      );
+      assert!(pass.starved);
+      assert_eq!(pass.consumed, inspection);
+      assert_eq!(state.usage().actor_control_used(), inspection);
+      assert_eq!(state.usage().actor_effect_used(), Weight::zero());
+      assert_eq!(state.outstanding_reservations(), 0);
+      assert!(
+        !state.optional_actor_work_halted(),
+        "ordinary capacity refusal is not corrupt accounting"
+      );
+    });
+  }
+}
+
+#[test]
 fn global_fifo_eventually_services_system_actor_after_many_users() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -3103,16 +4092,14 @@ fn global_fifo_eventually_services_system_actor_after_many_users() {
       fund_native(user_id, 1_000);
     }
     let system_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
-    // With MaxExecutionsPerBlock=3 and mixed User/System contention,
-    // run enough blocks for the bounded queue to service the System actor.
-    for block in 2..=20 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      run_idle(Weight::MAX);
+    // One temporal member per block plus B+1 Service covers the finite due population.
+    for block in 2..=u64::from(user_count) + 3 {
+      run_canonical_block_at(block, Weight::MAX);
     }
     let system = Actors::active_actor_view(system_id).expect("system Actors exists");
     assert!(
       system.cycle_nonce >= 1,
-      "system actor must execute at least once over 20 blocks (nonce={})",
+      "system actor must execute after the finite due population (nonce={})",
       system.cycle_nonce,
     );
   });
@@ -3124,8 +4111,7 @@ fn global_fifo_services_system_actor_when_it_is_the_only_ready_work() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let system_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
     for block in 2..=4 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      run_idle(Weight::MAX);
+      run_canonical_block_at(block, Weight::MAX);
     }
     let system = Actors::active_actor_view(system_id).expect("system Actors exists");
     assert!(system.cycle_nonce >= 1);
@@ -3653,8 +4639,8 @@ fn run_retry_preserves_independent_external_timer_cadence() {
     set_temporary_dex_failure(true);
 
     let cadence_due = scheduled_wakeup_block(actor_id).expect("cadenced wakeup");
-    frame_system::Pallet::<Test>::set_block_number(cadence_due);
-    run_idle(Weight::MAX);
+    run_canonical_block_at(cadence_due, Weight::MAX);
+    run_canonical_block_at(cadence_due + 1, Weight::MAX);
 
     let hot = Actors::actor_hot(actor_id).expect("suspended cadence actor");
     assert_eq!(
@@ -3947,17 +4933,31 @@ fn shared_materialization_remainder_follows_rotated_first_family_after_reserving
 fn empty_materialization_families_charge_only_their_measured_probes_and_yield() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let expected = <TestWeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
+    let expected = <TestWeightInfo as crate::WeightInfo>::scheduler_on_initialize_cutoff()
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::dependency_scan_source_probe())
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_on_idle_base())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::materialization_coordinator_base())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::crossing_worker_base())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::observation_fanout_base())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::block_resource_finalize())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::classify_due_block_deadline())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::classify_due_tick_deadline())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_begin_populated())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible());
+      // Prepass and Drain each own their admitted empty-round discovery.
+      .saturating_add(
+        <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated().saturating_mul(2),
+      )
+      .saturating_add(
+        <TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible().saturating_mul(2),
+      );
 
-    assert_eq!(Actors::on_idle(1, Weight::MAX), expected);
+    let prepass = Actors::actor_prepass(RuntimeOrigin::none())
+      .unwrap()
+      .actual_weight
+      .unwrap();
+    assert_eq!(
+      prepass.saturating_add(Actors::on_idle(1, Weight::MAX)),
+      expected
+    );
     assert_eq!(Actors::materialization_family_cursor(), 1);
     assert_eq!(Actors::queue_occupancy(), 0);
     assert_eq!(Actors::crossing_pending_feed_list().count, 0);
@@ -3995,6 +4995,169 @@ fn materialization_family_cursor_rotates_deterministically_and_corruption_fails_
     #[cfg(feature = "try-runtime")]
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
   });
+}
+
+#[test]
+fn bounded_idle_scan_preserves_healthy_pass_exit() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let ids = (0..2)
+      .map(|_| {
+        let id = create_system_with(ALICE, manual_schedule(), None, BoundedVec::default());
+        assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+        id
+      })
+      .collect::<Vec<_>>();
+    System::set_block_number(2);
+    Actors::execute_cycle(Weight::MAX);
+    for id in &ids {
+      let state = Actors::active_actor_view(*id).unwrap();
+      assert_eq!(state.cycle_nonce, 1);
+      assert!(!state.pending_signal);
+    }
+    TestMaxQueueEntriesScannedPerBlock::set(1);
+    System::set_block_number(3);
+    let pass = Actors::execute_cycle(Weight::MAX);
+    assert!(
+      pass.starvation_observed,
+      "an admitted bounded scan retains the healthy cap-exit policy"
+    );
+    assert!(!pass.starved);
+    assert_eq!(Actors::service_nodes(ids[0]).unwrap().last_considered, 3);
+    assert_eq!(Actors::service_nodes(ids[1]).unwrap().last_considered, 2);
+    assert_eq!(
+      crate::ActorProcesses::<Test>::get(ids[0])
+        .unwrap()
+        .last_attempted,
+      Some(2)
+    );
+  });
+}
+
+#[test]
+fn uninspected_drain_preserves_starvation_evidence() {
+  use crate::WeightInfo;
+  for remove_head in [false, true] {
+    for deficit in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+      new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let id = create_system_with(
+          ALICE,
+          manual_schedule(),
+          None,
+          transfer_contract_steps(BOB, 1),
+        );
+        fund_native(id, 1_000);
+        assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+        let threshold = TestMaxIdleStarvationBlocks::get();
+        for block in 2..=u64::from(threshold) + 1 {
+          System::set_block_number(block);
+          run_drain_only(starvation_blocked_budget(id));
+        }
+        let alerted = IdleStarvationPhase::Alerted {
+          consecutive_blocks: threshold,
+        };
+        assert_eq!(IdleStarvationState::<Test>::get(), alerted);
+        let now = u64::from(threshold) + 2;
+        System::set_block_number(now);
+        if remove_head {
+          assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), id));
+        }
+        let open_external = |block| {
+          let mut state = crate::BlockResourceState::new(block);
+          assert_ok!(state.begin_prepass());
+          assert_ok!(state.open_external_phase());
+          crate::CurrentBlockResourceState::<Test>::put(state);
+        };
+        open_external(now);
+        let header = Actors::service_header();
+        let events = System::events();
+        let fixed = TestWeightInfo::scheduler_on_idle_base()
+          .saturating_add(TestWeightInfo::block_resource_finalize());
+        let selector = TestWeightInfo::service_round_begin_populated()
+          .saturating_add(TestWeightInfo::service_round_probe_eligible());
+        assert_eq!(
+          Actors::on_idle(now, fixed.saturating_add(selector).saturating_sub(deficit)),
+          fixed
+        );
+        assert_eq!(Actors::service_header(), header);
+        assert_eq!(
+          IdleStarvationState::<Test>::get(),
+          alerted,
+          "no discovery means neither an additional starvation block nor recovery"
+        );
+        assert_eq!(System::events(), events);
+        let state = Actors::block_resource_state().unwrap();
+        assert_eq!(state.phase(), crate::BlockResourcePhase::Finalizable);
+        assert_eq!(state.outstanding_reservations(), 0);
+        assert!(!state.optional_actor_work_halted());
+        Actors::on_finalize(now);
+        System::set_block_number(now + 1);
+        open_external(now + 1);
+        Actors::on_idle(now + 1, Weight::MAX);
+        assert!(
+          !IdleStarvationState::<Test>::exists(),
+          "paid service or paid absence establishes recovery"
+        );
+      });
+    }
+  }
+}
+
+#[test]
+fn drain_admitted_progress_survives_a_sub_discovery_remainder() {
+  use crate::WeightInfo;
+  for deficit in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let id = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        transfer_contract_steps(BOB, 1),
+      );
+      fund_native(id, 1_000);
+      assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+      System::set_block_number(2);
+      let mut state = crate::BlockResourceState::new(2);
+      assert_ok!(state.begin_prepass());
+      assert_ok!(state.open_external_phase());
+      crate::CurrentBlockResourceState::<Test>::put(state);
+      let resources = Actors::load_current_step_from_storage(id, 0)
+        .unwrap()
+        .resources;
+      let selector = TestWeightInfo::service_round_begin_populated()
+        .saturating_add(TestWeightInfo::service_round_probe_eligible());
+      let suffix = TestWeightInfo::service_round_admit_eligible()
+        .max(TestWeightInfo::service_member_retire_interior())
+        .max(TestWeightInfo::service_member_retire_pair_cursor())
+        .max(TestWeightInfo::service_member_retire_singleton());
+      let control = selector
+        .saturating_add(TestWeightInfo::scheduler_actor_state_probe())
+        .saturating_add(resources.control)
+        .saturating_add(suffix);
+      let fixed = TestWeightInfo::scheduler_on_idle_base()
+        .saturating_add(TestWeightInfo::block_resource_finalize());
+      let complete = fixed
+        .saturating_add(control)
+        .saturating_add(resources.effect);
+      let before = native_balance(&BOB);
+      let consumed = Actors::on_idle(2, complete.saturating_add(selector).saturating_sub(deficit));
+      assert_eq!(consumed, complete);
+      assert_eq!(native_balance(&BOB), before + 1);
+      assert_eq!(Actors::active_actor_view(id).unwrap().cycle_nonce, 1);
+      assert!(!IdleStarvationState::<Test>::exists());
+      let state = Actors::block_resource_state().unwrap();
+      assert_eq!(
+        state.usage().actor_control_used(),
+        fixed.saturating_add(control)
+      );
+      assert_eq!(state.usage().actor_effect_used(), resources.effect);
+      assert_eq!(state.outstanding_reservations(), 0);
+      assert!(!state.optional_actor_work_halted());
+      Actors::on_finalize(2);
+    });
+  }
 }
 
 #[test]
@@ -4504,6 +5667,12 @@ fn underfunded_at_time_occurrence_selects_prepaid_custody_neutral_apoptosis() {
 
     assert!(fee_collections().is_empty());
     assert!(!Actors::active_actor_exists(actor_id));
+    assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
     assert_eq!(native_balance(&sovereign), custody_before);
     assert!(has_actor_event(|event| matches!(
       event,
@@ -4512,6 +5681,8 @@ fn underfunded_at_time_occurrence_selects_prepaid_custody_neutral_apoptosis() {
         reason: CloseReason::TriggerAdmissionInsufficient,
       } if *id == actor_id
     )));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
   });
 }
 
@@ -4585,37 +5756,96 @@ fn frame_only_zero_step_at_time_uses_only_canonical_control() {
 }
 
 #[test]
-fn at_time_collection_failure_rolls_back_consumption_and_retains_wakeup() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      at_time_schedule(1),
-      None,
-      inert_contract_steps(),
-    );
-    let sovereign = sovereign_account(actor_id);
-    let before = native_balance(&sovereign);
-    set_fail_fee_sink_transfer(true);
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    service_canonical_temporal_frontiers(2);
-    set_fail_fee_sink_transfer(false);
-
-    assert_eq!(native_balance(&sovereign), before);
-    let hot = Actors::actor_hot(actor_id).expect("process remains active");
-    assert!(!hot.pending_signal);
-    assert!(hot.queue_ticket.is_none());
-    assert!(hot.trigger_wakeup_pointer.is_some());
-    assert!(matches!(
-      hot.trigger_runtime_state,
-      TriggerRuntimeState::AtTime {
-        consumed: false,
-        ..
+fn temporal_collection_failure_preserves_exact_source_and_retries_once() {
+  for schedule in [at_time_schedule(1), timer_schedule(1)] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let one_shot = matches!(schedule.trigger, Trigger::AtTime { .. });
+      let fee = if one_shot {
+        at_time_trigger_fee()
+      } else {
+        cadenced_trigger_fee()
+      };
+      let actor_id = create_user_with(
+        ALICE,
+        Mutability::Mutable,
+        schedule,
+        None,
+        inert_contract_steps(),
+      );
+      let sovereign = sovereign_account(actor_id);
+      let balance = native_balance(&sovereign);
+      let sink_balance = native_balance(&TestFeeSink::get());
+      let source = crate::TriggerDeadlineHandles::<Test>::get(actor_id).unwrap();
+      let hot = Actors::actor_hot(actor_id).unwrap();
+      System::set_block_number(2);
+      let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      set_fail_fee_sink_transfer(true);
+      let mut meter = WeightMeter::with_limit(Weight::MAX);
+      assert_eq!(
+        Actors::process_next_due_tick_deadline(
+          &mut meter,
+          ServiceResidenceKind::Pending,
+          2,
+          2,
+          None,
+        ),
+        Err(crate::DependencyReviewWorkerError::TemporalOccurrence)
+      );
+      set_fail_fee_sink_transfer(false);
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        root,
+        "collector failure restores extraction, cadence rearm, holds and readiness together"
+      );
+      assert_eq!(
+        crate::TriggerDeadlineHandles::<Test>::get(actor_id),
+        Some(source)
+      );
+      assert_eq!(Actors::actor_hot(actor_id), Some(hot));
+      assert_eq!(native_balance(&sovereign), balance);
+      assert_eq!(native_balance(&TestFeeSink::get()), sink_balance);
+      clear_fee_collections();
+      assert_eq!(
+        Actors::process_next_due_tick_deadline(
+          &mut meter,
+          ServiceResidenceKind::Pending,
+          2,
+          2,
+          None,
+        ),
+        Ok(crate::DueTickDeadlineMutation::TemporalTriggerProcessed(
+          source.actor
+        ))
+      );
+      assert_eq!(fee_collections(), vec![fee]);
+      assert_eq!(native_balance(&sovereign), balance - fee);
+      assert_eq!(native_balance(&TestFeeSink::get()), sink_balance + fee);
+      let hot = Actors::actor_hot(actor_id).unwrap();
+      assert!(hot.pending_signal && hot.trigger_wakeup_pointer.is_none());
+      if one_shot {
+        assert!(matches!(
+          hot.trigger_runtime_state,
+          TriggerRuntimeState::AtTime { consumed: true, .. }
+        ));
       }
-    ));
-  });
+      assert_eq!(
+        Actors::process_next_due_tick_deadline(
+          &mut meter,
+          ServiceResidenceKind::Pending,
+          2,
+          2,
+          None,
+        ),
+        Err(crate::DependencyReviewWorkerError::Deadline(
+          crate::DeadlineMutationError::MemberMissing
+        ))
+      );
+      assert_eq!(fee_collections(), vec![fee]);
+      #[cfg(feature = "try-runtime")]
+      assert_ok!(Actors::do_try_state());
+    });
+  }
 }
 
 #[test]
@@ -4702,8 +5932,7 @@ fn uninitialized_genesis_cadence_reanchors_canonically() {
       hot.trigger_runtime_state = TriggerRuntimeState::Cadenced { anchor_tick: None };
     });
 
-    frame_system::Pallet::<Test>::set_block_number(100);
-    Actors::on_idle(100, Weight::MAX);
+    run_canonical_block_at(100, Weight::MAX);
 
     let (identity, hot, _) = Actors::load_control_authority_with_authority(actor_id)
       .expect("canonical semantic authority exists");
@@ -4734,6 +5963,101 @@ fn uninitialized_genesis_cadence_reanchors_canonically() {
   });
 }
 
+#[test]
+fn temporal_bootstrap_rearm_respects_independent_resource_dimensions() {
+  for schedule in [at_time_schedule(1), timer_schedule(1)] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let actor_id = create_system_with(ALICE, schedule.clone(), None, inert_contract_steps());
+      mutate_actor_hot_coherent(actor_id, |hot| {
+        hot.trigger_runtime_state = match schedule.trigger {
+          Trigger::AtTime { .. } => TriggerRuntimeState::AtTime {
+            anchor_tick: None,
+            consumed: false,
+          },
+          Trigger::Cadenced { .. } => TriggerRuntimeState::Cadenced { anchor_tick: None },
+          _ => unreachable!("fixture is temporal"),
+        };
+      });
+      let source = crate::TriggerDeadlineHandles::<Test>::get(actor_id).unwrap();
+      let process = ActorProcesses::<Test>::get(actor_id).unwrap().encode();
+      let identity = Actors::actor_identity(actor_id).unwrap();
+      System::set_block_number(100);
+      System::reset_events();
+      clear_fee_collections();
+      let selector = <TestWeightInfo as crate::WeightInfo>::classify_due_tick_deadline();
+      let branch = <TestWeightInfo as crate::WeightInfo>::at_time_trigger_occurrence()
+        .max(<TestWeightInfo as crate::WeightInfo>::cadenced_trigger_occurrence());
+      let complete = selector.saturating_add(branch);
+      let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      for limit in [
+        Weight::from_parts(complete.ref_time() - 1, u64::MAX),
+        Weight::from_parts(u64::MAX, complete.proof_size() - 1),
+      ] {
+        let mut meter = WeightMeter::with_limit(limit);
+        assert_eq!(
+          Actors::process_next_due_tick_deadline(
+            &mut meter,
+            ServiceResidenceKind::Pending,
+            100,
+            100,
+            None,
+          ),
+          Err(crate::DependencyReviewWorkerError::InsufficientWeight)
+        );
+        assert_eq!(meter.consumed(), selector);
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1,),
+          root
+        );
+        assert_eq!(
+          crate::TriggerDeadlineHandles::<Test>::get(actor_id),
+          Some(source)
+        );
+      }
+
+      let mut meter = WeightMeter::with_limit(complete);
+      assert_eq!(
+        Actors::process_next_due_tick_deadline(
+          &mut meter,
+          ServiceResidenceKind::Pending,
+          100,
+          100,
+          None,
+        ),
+        Ok(crate::DueTickDeadlineMutation::TemporalTriggerProcessed(
+          source.actor
+        ))
+      );
+      assert_eq!(meter.consumed(), complete);
+      let hot = Actors::actor_hot(actor_id).unwrap();
+      assert!(!hot.pending_signal);
+      assert_eq!(
+        hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
+        Some(101)
+      );
+      assert!(matches!(
+        hot.trigger_runtime_state,
+        TriggerRuntimeState::AtTime {
+          anchor_tick: Some(100),
+          consumed: false
+        } | TriggerRuntimeState::Cadenced {
+          anchor_tick: Some(100)
+        }
+      ));
+      assert_eq!(
+        ActorProcesses::<Test>::get(actor_id).unwrap().encode(),
+        process
+      );
+      assert_eq!(Actors::actor_identity(actor_id), Some(identity));
+      assert!(fee_collections().is_empty());
+      assert!(System::events().is_empty());
+      #[cfg(feature = "try-runtime")]
+      assert_ok!(Actors::do_try_state());
+    });
+  }
+}
+
 #[cfg(feature = "runtime-benchmarks")]
 #[test]
 fn uninitialized_genesis_cadence_reanchors_in_benchmark_fixture() {
@@ -4745,8 +6069,7 @@ fn uninitialized_genesis_cadence_reanchors_in_benchmark_fixture() {
       hot.trigger_runtime_state = TriggerRuntimeState::Cadenced { anchor_tick: None };
     });
 
-    frame_system::Pallet::<Test>::set_block_number(100);
-    Actors::on_idle(100, Weight::MAX);
+    run_canonical_block_at(100, Weight::MAX);
 
     let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
     assert_eq!(instance.cycle_nonce, 0);
@@ -4948,55 +6271,608 @@ fn cadenced_rearm_uses_frozen_opening_authority() {
   });
 }
 
-#[test]
-fn busy_cadenced_occurrence_advances_deadline_without_future_cycle() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let steps = BoundedVec::try_from(
-      (0..6)
-        .map(|_| {
-          make_step(Task::Transfer {
-            to: BOB,
-            asset: TestAsset::Native,
-            amount: AmountResolution::Fixed(1),
-          })
+fn prepare_busy_cadenced_actor(actor_type: ActorType, failed_attempts: u32) -> ActorId {
+  System::set_block_number(1);
+  let mut steps = BoundedVec::try_from(
+    (0..6)
+      .map(|_| {
+        make_step(Task::Transfer {
+          to: BOB,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Fixed(1),
         })
-        .collect::<Vec<_>>(),
-    )
-    .expect("six-Step Contract fits");
+      })
+      .collect::<Vec<_>>(),
+  )
+  .expect("six-Step Contract fits");
+  if failed_attempts > 0 {
+    steps[0] = StepOf::<Test> {
+      precondition: None,
+      task: Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(u128::from(u64::MAX)),
+      },
+      on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
+    };
+  }
+  let actor_id = match actor_type {
+    ActorType::User => create_user_with(ALICE, Mutability::Mutable, timer_schedule(5), None, steps),
+    ActorType::System => create_system_with(ALICE, timer_schedule(5), None, steps),
+  };
+  fund_native(actor_id, 1_000_000);
+  System::set_block_number(6);
+  service_canonical_temporal_frontiers(6);
+  System::set_block_number(7);
+  Actors::execute_cycle(Weight::MAX);
+  if failed_attempts == 2 {
+    System::set_block_number(8);
+    Actors::execute_cycle(Weight::MAX);
+  }
+  let run = Actors::actor_run_state(actor_id).expect("ordinary Opening retains a Run");
+  assert_eq!(run.unsuccessful_attempts_at_cursor, failed_attempts);
+  let hot = Actors::actor_hot(actor_id).unwrap();
+  assert_eq!(
+    hot.cycle_state,
+    if failed_attempts == 0 {
+      CycleState::Running
+    } else {
+      CycleState::Suspended
+    }
+  );
+  assert!(!hot.pending_signal);
+  assert_eq!(
+    crate::TriggerDeadlineHandles::<Test>::get(actor_id)
+      .unwrap()
+      .key,
+    WakeupKey::Tick(11)
+  );
+  let residence = ActorProcesses::<Test>::get(actor_id).unwrap().residence;
+  if failed_attempts == 2 {
+    assert!(matches!(
+      residence,
+      Some(ProcessResidence::Deadline {
+        key: WakeupKey::Block(10),
+        ..
+      })
+    ));
+  } else {
+    assert_eq!(
+      residence,
+      Some(ProcessResidence::Service(ServiceResidenceKind::Live))
+    );
+  }
+  #[cfg(feature = "try-runtime")]
+  Actors::do_try_state()
+    .unwrap_or_else(|error| panic!("busy {actor_type:?}/{failed_attempts}: {error:?}"));
+  actor_id
+}
+
+#[test]
+fn pending_service_opening_promotes_in_place_and_rejects_stale_kind() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let mut actors = Vec::new();
+    for actor_type in [ActorType::User, ActorType::System, ActorType::User] {
+      let steps = BoundedVec::try_from(vec![
+        make_step(Task::Transfer {
+          to: BOB,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Fixed(1),
+        });
+        2
+      ])
+      .unwrap();
+      let actor_id = match actor_type {
+        ActorType::User => {
+          create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps)
+        }
+        ActorType::System => create_system_with(ALICE, manual_schedule(), None, steps),
+      };
+      fund_native(actor_id, 1_000_000);
+      let origin = if actor_type == ActorType::User {
+        RuntimeOrigin::signed(ALICE)
+      } else {
+        RuntimeOrigin::root()
+      };
+      assert_ok!(Actors::manual_trigger(origin, actor_id));
+      actors.push((actor_id, ServiceNodes::<Test>::get(actor_id).unwrap()));
+    }
+    // Capture topology only after all admissions have established peer links.
+    for (actor_id, node) in &mut actors {
+      *node = ServiceNodes::<Test>::get(actor_id).unwrap();
+    }
+    System::set_block_number(2);
+    Actors::execute_cycle(Weight::MAX);
+    for (actor_id, before) in actors {
+      assert_eq!(before.kind, ServiceResidenceKind::Pending);
+      let after = ServiceNodes::<Test>::get(actor_id).unwrap();
+      assert_eq!(after.kind, ServiceResidenceKind::Live);
+      assert_eq!(
+        (
+          after.generation,
+          after.previous,
+          after.next,
+          after.eligible_from
+        ),
+        (
+          before.generation,
+          before.previous,
+          before.next,
+          before.eligible_from
+        )
+      );
+      assert_eq!(
+        ActorProcesses::<Test>::get(actor_id).unwrap().residence,
+        Some(ProcessResidence::Service(ServiceResidenceKind::Live))
+      );
+      let state = Actors::active_actor_state(actor_id).unwrap();
+      assert_eq!(state.hot.cycle_state, CycleState::Running);
+      assert_eq!(state.run_state.as_ref().unwrap().cursor, 1);
+      let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      assert!(
+        Actors::try_store_service_control_state(
+          Actors::load_actor_ref(actor_id).unwrap(),
+          ServiceResidenceKind::Pending,
+          state.identity,
+          state.hot,
+        )
+        .is_err()
+      );
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        root
+      );
+    }
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
+  });
+}
+
+#[test]
+fn pending_service_opening_hold_refusal_restores_readiness_and_effects() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let steps = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(1),
+      });
+      2
+    ])
+    .unwrap();
     let actor_id = create_user_with(ALICE, Mutability::Mutable, timer_schedule(1), None, steps);
     fund_native(actor_id, 1_000_000);
-    // The occurrence at tick 2 publishes one Pending Service for B+1. Opening it on the next block
-    // executes the head plus one bounded drain cohort, re-arms the next cadence deadline, and
-    // leaves the Pipeline Running with a positive cursor.
-    frame_system::Pallet::<Test>::set_block_number(2);
+    System::set_block_number(2);
     service_canonical_temporal_frontiers(2);
-    run_next_idle(Weight::MAX);
-    let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
-    clear_fee_collections();
-    System::reset_events();
-
-    // The next cadence occurrence fires while the Pipeline is still busy. It only advances the
-    // deadline and must not charge a Trigger fee or publish a future cycle.
-    frame_system::Pallet::<Test>::set_block_number(4);
-    service_canonical_temporal_frontiers(4);
-
-    assert!(fee_collections().is_empty());
-    let hot = Actors::actor_hot(actor_id).expect("busy Cadenced Actor remains active");
-    assert_eq!(hot.cycle_state, CycleState::Running);
-    assert!(!hot.pending_signal);
-    assert_eq!(
-      hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
-      Some(5)
+    let before = crate::ActorSemanticStates::<Test>::get(actor_id);
+    let node = ServiceNodes::<Test>::get(actor_id).unwrap();
+    let hold = actor_state_hold_total(actor_id);
+    let custody = (
+      native_balance(&sovereign_account(actor_id)),
+      native_balance(&BOB),
+      native_balance(&TestFeeSink::get()),
     );
-    assert!(!has_actor_event(|event| matches!(
-      event,
-      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
-    )));
-    let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
-    assert_eq!(run_after.cursor, run_before.cursor);
-    assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);
+    let owner_free = Balances::free_balance(ALICE);
+    assert_ok!(Balances::force_set_balance(
+      RuntimeOrigin::root(),
+      ALICE,
+      <Test as polkadot_sdk::pallet_balances::Config>::ExistentialDeposit::get()
+    ));
+    System::set_block_number(3);
+    Actors::execute_cycle(Weight::MAX);
+    assert_eq!(crate::ActorSemanticStates::<Test>::get(actor_id), before);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
+    assert_eq!(
+      ServiceNodes::<Test>::get(actor_id).unwrap().kind,
+      ServiceResidenceKind::Pending
+    );
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).unwrap().residence,
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert_eq!(
+      (
+        native_balance(&sovereign_account(actor_id)),
+        native_balance(&BOB),
+        native_balance(&TestFeeSink::get())
+      ),
+      custody
+    );
+    assert_eq!(actor_state_hold_total(actor_id), hold);
+    assert_ok!(Balances::force_set_balance(
+      RuntimeOrigin::root(),
+      ALICE,
+      owner_free
+    ));
+    System::set_block_number(4);
+    Actors::execute_cycle(Weight::MAX);
+    assert_eq!(Actors::actor_run_state(actor_id).unwrap().cursor, 1);
+    let after = ServiceNodes::<Test>::get(actor_id).unwrap();
+    assert_eq!(after.kind, ServiceResidenceKind::Live);
+    assert_eq!(
+      (
+        after.generation,
+        after.previous,
+        after.next,
+        after.eligible_from
+      ),
+      (
+        node.generation,
+        node.previous,
+        node.next,
+        node.eligible_from
+      )
+    );
+    assert!(
+      actor_state_hold_total(actor_id) > hold,
+      "Opening holds the newly rearmed cadence detector"
+    );
+    assert_eq!(
+      native_balance(&BOB),
+      custody.1 + 1,
+      "the refused effect commits only once on recovery"
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
   });
+}
+
+#[test]
+fn cadenced_occurrence_wakes_parked_balance_and_removes_review_deadline() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      timer_schedule(5),
+      None,
+      contract_steps_with_step(make_step(Task::StopCycle)),
+    );
+    let mut contract = Actors::actor_contract(actor_id).unwrap();
+    contract.parked_balance_activation = Some(
+      crate::ParkedBalanceActivationOf::<Test>::try_from_rules(vec![crate::ParkedBalanceRule {
+        asset: TestAsset::Local(9),
+        authored_min_delta: 100,
+      }])
+      .unwrap(),
+    );
+    assert_ok!(Actors::update_contract(
+      RuntimeOrigin::signed(ALICE),
+      actor_id,
+      contract,
+    ));
+    fund_native(actor_id, 1_000_000_000_000_000);
+    let actor = Actors::load_actor_ref(actor_id).unwrap();
+    System::set_block_number(6);
+    service_canonical_temporal_frontiers(6);
+    System::set_block_number(7);
+    Actors::execute_cycle(Weight::MAX);
+    let evidence = match ActorProcesses::<Test>::get(actor_id).unwrap().residence {
+      Some(ProcessResidence::Parked(evidence)) => evidence,
+      residence => panic!("completed cadence must be Parked, got {residence:?}"),
+    };
+    assert_eq!(evidence.review_at, Some(8));
+    assert_eq!(
+      crate::TriggerDeadlineHandles::<Test>::get(actor_id)
+        .unwrap()
+        .key,
+      WakeupKey::Tick(11)
+    );
+    assert_eq!(
+      crate::DeadlineHandles::<Test>::get(actor_id).unwrap().key,
+      WakeupKey::Block(8)
+    );
+    assert!(
+      Actors::actor_hot(actor_id)
+        .unwrap()
+        .wakeup_pointer
+        .is_none()
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
+
+    System::set_block_number(8);
+    let mut meter = WeightMeter::with_limit(Weight::MAX);
+    assert!(matches!(Actors::process_next_due_block_deadline(
+      &mut meter, ServiceResidenceKind::Pending, 8, Some(WakeupKey::Block(100)),
+    ), Ok(crate::DueBlockDeadlineMutation::ReviewProcessed(
+      processed, crate::DependencyReviewMutation::Rearmed(_),
+    )) if processed == actor));
+    assert!(matches!(
+      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Parked(_))
+    ));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
+
+    System::set_block_number(11);
+    let trigger_source = crate::TriggerDeadlineHandles::<Test>::get(actor_id).unwrap();
+    let review_source = crate::DeadlineHandles::<Test>::get(actor_id).unwrap();
+    let sovereign = sovereign_account(actor_id);
+    let balances = (
+      native_balance(&sovereign),
+      native_balance(&TestFeeSink::get()),
+    );
+    let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    clear_fee_collections();
+    set_fail_fee_sink_transfer(true);
+    let mut meter = WeightMeter::with_limit(Weight::MAX);
+    assert_eq!(
+      Actors::process_next_due_tick_deadline(
+        &mut meter,
+        ServiceResidenceKind::Pending,
+        11,
+        11,
+        None,
+      ),
+      Err(crate::DependencyReviewWorkerError::TemporalOccurrence)
+    );
+    set_fail_fee_sink_transfer(false);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1,),
+      root,
+      "late collector refusal restores cadence and Park authority"
+    );
+    assert_eq!(
+      crate::TriggerDeadlineHandles::<Test>::get(actor_id),
+      Some(trigger_source)
+    );
+    assert_eq!(
+      crate::DeadlineHandles::<Test>::get(actor_id),
+      Some(review_source)
+    );
+    assert_eq!(
+      (
+        native_balance(&sovereign),
+        native_balance(&TestFeeSink::get())
+      ),
+      balances
+    );
+    clear_fee_collections();
+    let mut meter = WeightMeter::with_limit(Weight::MAX);
+    assert_eq!(
+      Actors::process_next_due_tick_deadline(
+        &mut meter,
+        ServiceResidenceKind::Pending,
+        11,
+        11,
+        None,
+      ),
+      Ok(crate::DueTickDeadlineMutation::TemporalTriggerProcessed(
+        actor
+      ))
+    );
+    assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(!crate::ParkedBalanceEpisodes::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(!crate::PendingCheckOwners::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).unwrap().residence,
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    let hot = Actors::actor_hot(actor_id).unwrap();
+    assert!(hot.pending_signal && hot.trigger_wakeup_pointer.is_none());
+    assert_eq!(fee_collections(), vec![cadenced_trigger_fee()]);
+    assert_eq!(
+      native_balance(&sovereign),
+      balances.0 - cadenced_trigger_fee()
+    );
+    assert_eq!(
+      native_balance(&TestFeeSink::get()),
+      balances.1 + cadenced_trigger_fee()
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
+  });
+}
+
+#[test]
+fn busy_cadenced_rearm_refuses_each_resource_dimension_before_mutation() {
+  for failed_attempts in 0..=2 {
+    new_test_ext().execute_with(|| {
+      let actor_id = prepare_busy_cadenced_actor(ActorType::User, failed_attempts);
+      let actor = Actors::load_actor_ref(actor_id).unwrap();
+      let source = crate::TriggerDeadlineHandles::<Test>::get(actor_id).unwrap();
+      assert_eq!(
+        Actors::classify_next_due_tick_deadline(11),
+        Ok(crate::DueBlockDeadlineBranch::TemporalTriggerBusy(actor))
+      );
+      let selector = <TestWeightInfo as crate::WeightInfo>::classify_due_tick_deadline();
+      let branch = Actors::cadenced_busy_rearm_weight_upper();
+      let complete = selector.saturating_add(branch);
+      let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      for (limit, consumed) in [
+        (
+          Weight::from_parts(selector.ref_time() - 1, u64::MAX),
+          Weight::zero(),
+        ),
+        (
+          Weight::from_parts(u64::MAX, selector.proof_size() - 1),
+          Weight::zero(),
+        ),
+        (
+          Weight::from_parts(complete.ref_time() - 1, u64::MAX),
+          selector,
+        ),
+        (
+          Weight::from_parts(u64::MAX, complete.proof_size() - 1),
+          selector,
+        ),
+      ] {
+        let mut meter = WeightMeter::with_limit(limit);
+        assert_eq!(
+          Actors::process_next_due_tick_deadline(
+            &mut meter,
+            ServiceResidenceKind::Pending,
+            11,
+            11,
+            None,
+          ),
+          Err(crate::DependencyReviewWorkerError::InsufficientWeight)
+        );
+        assert_eq!(meter.consumed(), consumed);
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+          root
+        );
+        assert_eq!(
+          crate::TriggerDeadlineHandles::<Test>::get(actor_id),
+          Some(source)
+        );
+      }
+    });
+  }
+}
+
+#[cfg(feature = "try-runtime")]
+#[test]
+fn try_state_carrier_deduplicates_process_and_trigger_slots() {
+  new_test_ext().execute_with(|| {
+    let actor_id = prepare_busy_cadenced_actor(ActorType::System, 2);
+    let process = crate::DeadlineHandles::<Test>::get(actor_id).unwrap();
+    let trigger = crate::TriggerDeadlineHandles::<Test>::get(actor_id).unwrap();
+    assert_ne!(process.key, trigger.key);
+    assert!(
+      Actors::actor_hot(actor_id)
+        .unwrap()
+        .wakeup_pointer
+        .is_none()
+    );
+    assert_ok!(Actors::do_try_state());
+    let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      // Corrupt the already-produced result: individually coherent handles cannot share a slot.
+      crate::DeadlineHandles::<Test>::insert(actor_id, trigger);
+      ActorProcesses::<Test>::mutate(actor_id, |process| {
+        process.as_mut().unwrap().residence = Some(ProcessResidence::Deadline {
+          key: trigger.key,
+          page: trigger.page,
+          slot: trigger.slot,
+        });
+      });
+      let corrupted =
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      assert_eq!(
+        Actors::do_try_state(),
+        Err(polkadot_sdk::sp_runtime::TryRuntimeError::Other(
+          "multiple Deadline handles own one physical slot"
+        ))
+      );
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        corrupted
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      before
+    );
+    assert_ok!(Actors::do_try_state());
+  });
+}
+
+#[test]
+fn busy_cadenced_occurrence_rearms_without_fees_or_future_cycle() {
+  for actor_type in [ActorType::User, ActorType::System] {
+    for failed_attempts in 0..=2 {
+      for funded in [false, true] {
+        new_test_ext().execute_with(|| {
+          let actor_id = prepare_busy_cadenced_actor(actor_type, failed_attempts);
+          let identity = Actors::actor_identity(actor_id).unwrap();
+          if !funded {
+            deplete_user_sovereign(
+              actor_id,
+              native_balance(&identity.sovereign_account) - TestMinUserBalance::get(),
+            );
+          }
+          let run = Actors::actor_run_state(actor_id).unwrap().encode();
+          let mut expected_hot = Actors::actor_hot(actor_id).unwrap();
+          let publication = (
+            ActorProcesses::<Test>::get(actor_id),
+            ServiceNodes::<Test>::get(actor_id),
+            crate::ServiceHeader::<Test>::get(),
+            crate::DeadlineHandles::<Test>::get(actor_id),
+          );
+          let balances = (
+            native_balance(&identity.sovereign_account),
+            native_balance(&BOB),
+            native_balance(&TestFeeSink::get()),
+          );
+          let actor = Actors::load_actor_ref(actor_id).unwrap();
+          clear_fee_collections();
+          System::reset_events();
+          set_fail_fee_sink_transfer(true);
+          // Section 2.3 owns current-state coalescing: busy service buys no deferred Cycle.
+          // A missed cadence also advances straight to the next aligned future point.
+          for (now, next) in [(11, 16), (23, 26)] {
+            System::set_block_number(now);
+            let mut meter = WeightMeter::with_limit(Weight::MAX);
+            assert_eq!(
+              Actors::process_next_due_tick_deadline(
+                &mut meter,
+                ServiceResidenceKind::Pending,
+                now,
+                now,
+                None
+              ),
+              Ok(crate::DueTickDeadlineMutation::TemporalTriggerProcessed(
+                actor
+              ))
+            );
+            assert!(
+              fee_collections().is_empty(),
+              "busy service never invokes the collector"
+            );
+            let source = crate::TriggerDeadlineHandles::<Test>::get(actor_id).unwrap();
+            assert_eq!((source.actor, source.key), (actor, WakeupKey::Tick(next)));
+            expected_hot.trigger_wakeup_pointer = Some(crate::TriggerWakeupPointer {
+              tick: next,
+              page_id: source.page,
+              slot: u32::from(source.slot),
+            });
+            assert_eq!(Actors::actor_hot(actor_id), Some(expected_hot.clone()));
+            assert_eq!(Actors::actor_identity(actor_id), Some(identity.clone()));
+            assert_eq!(Actors::actor_run_state(actor_id).unwrap().encode(), run);
+            assert_eq!(
+              (
+                ActorProcesses::<Test>::get(actor_id),
+                ServiceNodes::<Test>::get(actor_id),
+                crate::ServiceHeader::<Test>::get(),
+                crate::DeadlineHandles::<Test>::get(actor_id),
+              ),
+              publication
+            );
+            assert_eq!(
+              (
+                native_balance(&identity.sovereign_account),
+                native_balance(&BOB),
+                native_balance(&TestFeeSink::get())
+              ),
+              balances
+            );
+            assert!(
+              System::events().is_empty(),
+              "unexpected busy-work events: {:?}",
+              System::events()
+            );
+            #[cfg(feature = "try-runtime")]
+            assert_ok!(Actors::do_try_state());
+          }
+          set_fail_fee_sink_transfer(false);
+        });
+      }
+    }
+  }
 }
 
 #[test]
@@ -5014,6 +6890,11 @@ fn underfunded_cadenced_occurrence_advances_without_fee_readiness_or_apoptosis()
     let balance = native_balance(&sovereign);
     deplete_user_sovereign(actor_id, balance - TestMinUserBalance::get());
     clear_fee_collections();
+    System::reset_events();
+    set_fail_fee_sink_transfer(true);
+    let identity = Actors::actor_identity(actor_id).unwrap();
+    let process = ActorProcesses::<Test>::get(actor_id).unwrap().encode();
+    let service = ServiceNodes::<Test>::get(actor_id).encode();
 
     frame_system::Pallet::<Test>::set_block_number(2);
     service_canonical_temporal_frontiers(2);
@@ -5028,40 +6909,16 @@ fn underfunded_cadenced_occurrence_advances_without_fee_readiness_or_apoptosis()
       Some(3)
     );
     assert_eq!(native_balance(&sovereign), TestMinUserBalance::get());
-  });
-}
-
-#[test]
-fn cadenced_collection_failure_advances_deadline_without_readiness() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      timer_schedule(1),
-      None,
-      inert_contract_steps(),
-    );
-    let sovereign = sovereign_account(actor_id);
-    let before = native_balance(&sovereign);
-    set_fail_fee_sink_transfer(true);
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    service_canonical_temporal_frontiers(2);
-    set_fail_fee_sink_transfer(false);
-
-    assert_eq!(native_balance(&sovereign), before);
-    let hot = Actors::actor_hot(actor_id).expect("process remains active");
-    assert!(!hot.pending_signal);
-    assert!(hot.queue_ticket.is_none());
+    assert_eq!(Actors::actor_identity(actor_id), Some(identity));
     assert_eq!(
-      hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
-      Some(3)
+      ActorProcesses::<Test>::get(actor_id).unwrap().encode(),
+      process
     );
-    assert!(!has_actor_event(|event| matches!(
-      event,
-      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
-    )));
+    assert_eq!(ServiceNodes::<Test>::get(actor_id).encode(), service);
+    assert!(System::events().is_empty());
+    set_fail_fee_sink_transfer(false);
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
   });
 }
 

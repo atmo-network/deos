@@ -36,6 +36,10 @@ export function validate(skillDir, { writeIndex = false, repoFiles, gitRead } = 
   const template = fs.readFileSync(path.join(skillDir, 'templates/EXP-NNNN.md'), 'utf8');
   const root = path.resolve(skillDir, '../../..');
   const backlog = fs.existsSync(path.join(root, 'BACKLOG.md')) ? fs.readFileSync(path.join(root, 'BACKLOG.md'), 'utf8') : '';
+  const currentBacklogOwners = new Set([
+    ...[...backlog.matchAll(/^- \[ \] `([^`]+)`: /gm)].map((match) => match[1]),
+    ...[...backlog.matchAll(/^- \[ \] \*\*(N\d+(?:\.\d+)?) \/[^*]+\*\*/gm)].map((match) => match[1]),
+  ]);
   const fail = (key, message) => errors.push(`${key}: ${message}`);
   const compare = (key, label, a, b) => {
     if (JSON.stringify(a) !== JSON.stringify(b)) fail(key, `${label} differ from template (${b.join(' | ')})`);
@@ -135,9 +139,14 @@ export function validate(skillDir, { writeIndex = false, repoFiles, gitRead } = 
           if (!currentLineageApplicability.has(applicability)) fail(index.file, `${lineageId} has unqualified applicability ${applicability}`);
           if (!currentLineageProofs.has(proof)) fail(index.file, `${lineageId} has invalid Required proof ${proof}`);
           for (const value of [consumers, owner]) {
-            const tasks = value.match(/N\d+(?:\.\d+)?/g) ?? [];
-            if (!tasks.length) fail(index.file, `${lineageId} is missing a current transfer owner`);
-            for (const task of tasks) if (!backlog.includes(`**${task} /`)) fail(index.file, `${lineageId} references dangling current task ${task}`);
+            const owners = [
+              ...(value.match(/N\d+(?:\.\d+)?/g) ?? []),
+              ...[...value.matchAll(/`([^`]+)`/g)].map((match) => match[1]),
+            ];
+            if (!owners.length) fail(index.file, `${lineageId} is missing a current transfer owner`);
+            for (const backlogOwner of owners) {
+              if (!currentBacklogOwners.has(backlogOwner)) fail(index.file, `${lineageId} references dangling current task ${backlogOwner}`);
+            }
           }
         }
         const imports = subsection(active, 'Deliberate Claim Imports');

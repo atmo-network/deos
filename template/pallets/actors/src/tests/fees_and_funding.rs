@@ -877,7 +877,7 @@ fn manual_trigger_collection_failure_rolls_back_readiness_and_fee_movement() {
 
     assert_noop!(
       Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id),
-      Error::<Test>::InsufficientFee
+      Error::<Test>::TriggerFeeCollectionFailed
     );
     set_fail_fee_sink_transfer(false);
 
@@ -942,7 +942,7 @@ fn canonical_fee_bearing_activation_is_atomic_with_publication() {
         state.clone(),
         1,
       ),
-      Error::<Test>::InsufficientFee
+      Error::<Test>::TriggerFeeCollectionFailed
     );
     set_fail_fee_sink_transfer(false);
     assert_eq!(
@@ -1046,7 +1046,7 @@ fn canonical_park_occurrence_rollback_restores_dependency_authority() {
         state,
         1,
       ),
-      Error::<Test>::InsufficientFee
+      Error::<Test>::TriggerFeeCollectionFailed
     );
     set_fail_fee_sink_transfer(false);
     assert_eq!(
@@ -1473,9 +1473,9 @@ fn underfunded_address_event_advances_without_fee_readiness_or_apoptosis() {
 }
 
 #[test]
-fn address_event_collection_failure_preserves_source_progress_without_readiness() {
+fn address_event_collection_failure_rolls_back_certified_movement_and_retries_once() {
   new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
+    System::set_block_number(1);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
@@ -1485,27 +1485,38 @@ fn address_event_collection_failure_preserves_source_progress_without_readiness(
     );
     let sovereign = sovereign_account(actor_id);
     let sovereign_before = native_balance(&sovereign);
+    let source_before = native_balance(&BOB);
     let sink_before = native_balance(&TestFeeSink::get());
+    let event = crate::AddressEvent {
+      source: Some(BOB),
+      destination: sovereign,
+      asset: TestAsset::Native,
+      amount: 100,
+      provenance: Some(crate::FundingProvenance::Signed),
+    };
+    let deliver = || {
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        let result = (|| -> Result<(), DispatchError> {
+          Actors::preflight_ingress(&event).map_err(|failure| failure.error)?;
+          MockAssetOps::transfer(&BOB, &sovereign, TestAsset::Native, event.amount)
+            .map_err(|failure| failure.error)?;
+          Actors::notify_ingress(&event).map_err(|failure| failure.error)
+        })();
+        match result {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    };
     set_fail_fee_sink_transfer(true);
-
-    assert_ok!(Actors::notify_address_event(
-      actor_id,
-      TestAsset::Native,
-      1,
-      &ALICE,
-    ));
+    assert_noop!(deliver(), Error::<Test>::TriggerFeeCollectionFailed);
     set_fail_fee_sink_transfer(false);
-
+    assert_eq!(native_balance(&BOB), source_before);
     assert_eq!(native_balance(&sovereign), sovereign_before);
     assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
-    let hot = ActorSemanticStates::<Test>::get(actor_id)
-      .and_then(|state| match state {
-        ActorSemanticState::Active(record) => Some(record.hot),
-        ActorSemanticState::Dormant(_) => None,
-      })
-      .expect("process remains live");
-    assert!(!hot.pending_signal);
-    assert!(hot.queue_ticket.is_none());
+    assert!(!Actors::pending_signal(actor_id));
     assert!(matches!(
       ActorProcesses::<Test>::get(actor_id),
       Some(crate::ActorProcess {
@@ -1516,9 +1527,22 @@ fn address_event_collection_failure_preserves_source_progress_without_readiness(
     ));
     assert_eq!(ServiceHeader::<Test>::get().count, 0);
     assert!(!has_actor_event(|event| matches!(
-      event,
-      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
+      event, Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
     )));
+    clear_fee_collections();
+    assert_ok!(deliver());
+    let fee = address_event_trigger_fee();
+    assert_eq!(fee_collections(), vec![fee]);
+    assert_eq!(native_balance(&BOB), source_before - event.amount);
+    assert_eq!(
+      native_balance(&sovereign),
+      sovereign_before + event.amount - fee
+    );
+    assert_eq!(native_balance(&TestFeeSink::get()), sink_before + fee);
+    assert!(Actors::pending_signal(actor_id));
+    assert_eq!(ServiceHeader::<Test>::get().count, 1);
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
   });
 }
 
@@ -2010,8 +2034,8 @@ fn non_invoked_task_releases_effect_weight_after_maximum_admission() {
       .expect("current Step resources exist")
       .resources;
     assert_ne!(resources.effect, Weight::zero());
-    // Canonical Service admission owns the selector envelope; a non-invoked Step consumes no
-    // step control or effect and releases the reserved effect envelope.
+    // A non-invoked Task releases effect capacity, not the Step's predicate/control work.
+    // This mock reports its declared Control maximum as actual.
     let inspection = <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated()
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_actor_state_probe());
@@ -2031,7 +2055,19 @@ fn non_invoked_task_releases_effect_weight_after_maximum_admission() {
       budget.limits().actor_control(),
     );
 
-    assert_eq!(pass.consumed, inspection);
+    let suffix = <TestWeightInfo as crate::WeightInfo>::service_round_admit_eligible()
+      .max(<TestWeightInfo as crate::WeightInfo>::service_member_retire_interior())
+      .max(<TestWeightInfo as crate::WeightInfo>::service_member_retire_pair_cursor())
+      .max(<TestWeightInfo as crate::WeightInfo>::service_member_retire_singleton());
+    assert_eq!(
+      pass.consumed,
+      inspection
+        .saturating_add(resources.control)
+        .saturating_add(suffix)
+        // The pass also pays the concluding closed-round discovery.
+        .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_begin_populated())
+        .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible())
+    );
     assert_eq!(
       pass.reconciled_domains(),
       Some((pass.consumed, Weight::zero()))
@@ -2158,7 +2194,9 @@ fn valid_actual_control_replaces_the_maximum_in_pass_consumption() {
       pass.consumed,
       inspection
         .saturating_add(actual_control)
-        .saturating_add(suffix),
+        .saturating_add(suffix)
+        .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_begin_populated())
+        .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible()),
     );
   });
 }
@@ -2296,9 +2334,12 @@ fn assert_missing_actual_weight_rolls_back_without_fee_collection(missing_contro
     ));
     // Canonical occurrence publication admits the Pending Service at B+1.
     frame_system::Pallet::<Test>::set_block_number(2);
-    // Warm the canonical `round_block` advance so the atomicity assertion isolates the attempt
-    // rollback from the per-block round-bookkeeping mutation.
-    let _ = Actors::execute_cycle(Weight::from_parts(1, 1));
+    // Round opening now shares the rejected attempt's rollback boundary.
+    let resources = Actors::load_current_step_from_storage(actor_id, 0)
+      .unwrap()
+      .resources;
+    let known_effect = Weight::from_parts(17, 23);
+    set_task_effect_actual_weight_override(Some(known_effect));
     if missing_control {
       set_missing_step_control_actual_weight(true);
     } else {
@@ -2328,13 +2369,24 @@ fn assert_missing_actual_weight_rolls_back_without_fee_collection(missing_contro
     let inspection = <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated()
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_actor_state_probe());
-    assert_eq!(
-      pass.reconciled_domains(),
-      Some((inspection, Weight::zero()))
-    );
-    assert_eq!(resource_state.usage().actor_control_used(), inspection);
-    assert_eq!(resource_state.usage().actor_effect_used(), Weight::zero());
+    let suffix = <TestWeightInfo as crate::WeightInfo>::service_round_admit_eligible()
+      .max(<TestWeightInfo as crate::WeightInfo>::service_member_retire_interior())
+      .max(<TestWeightInfo as crate::WeightInfo>::service_member_retire_pair_cursor())
+      .max(<TestWeightInfo as crate::WeightInfo>::service_member_retire_singleton());
+    let control = inspection
+      .saturating_add(resources.control)
+      .saturating_add(suffix);
+    let effect = if missing_control {
+      known_effect
+    } else {
+      resources.effect
+    };
+    assert_eq!(pass.reconciled_domains(), Some((control, effect)));
+    assert_eq!(pass.consumed, control.saturating_add(effect));
+    assert_eq!(resource_state.usage().actor_control_used(), control);
+    assert_eq!(resource_state.usage().actor_effect_used(), effect);
     assert_eq!(resource_state.outstanding_reservations(), 0);
+    assert!(resource_state.optional_actor_work_halted());
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
       root_before,
@@ -2382,9 +2434,7 @@ fn greater_than_reserved_actual_effect_weight_rolls_back_the_complete_attempt() 
       ));
       // Canonical occurrence publication admits the Pending Service at B+1.
       frame_system::Pallet::<Test>::set_block_number(2);
-      // Warm the canonical `round_block` advance so the atomicity assertion isolates the attempt
-      // rollback from the per-block round-bookkeeping mutation.
-      let _ = Actors::execute_cycle(Weight::from_parts(1, 1));
+      // Round opening now shares the rejected attempt's rollback boundary.
       set_task_effect_actual_weight_override(Some(reserved.saturating_add(excess)));
       frame_system::Pallet::<Test>::reset_events();
       let bob_before = native_balance(&BOB);
@@ -2431,9 +2481,7 @@ fn greater_than_reserved_actual_control_weight_rolls_back_the_complete_attempt()
       ));
       // Canonical occurrence publication admits the Pending Service at B+1.
       frame_system::Pallet::<Test>::set_block_number(2);
-      // Warm the canonical `round_block` advance so the atomicity assertion isolates the attempt
-      // rollback from the per-block round-bookkeeping mutation.
-      let _ = Actors::execute_cycle(Weight::from_parts(1, 1));
+      // Round opening now shares the rejected attempt's rollback boundary.
       let reserved = Actors::load_current_step_from_storage(actor_id, 0)
         .expect("current Step resources exist")
         .resources
@@ -2464,6 +2512,425 @@ fn greater_than_reserved_actual_control_weight_rolls_back_the_complete_attempt()
       ));
     });
   }
+}
+
+#[test]
+fn invalid_actual_domains_retain_admission_in_each_component() {
+  for invalid_control in [false, true] {
+    for excess in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+      new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let id = create_system_with(
+          ALICE,
+          manual_schedule(),
+          None,
+          transfer_contract_steps(BOB, 10),
+        );
+        fund_native(id, 100);
+        assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+        System::set_block_number(2);
+        let resources = Actors::load_current_step_from_storage(id, 0)
+          .unwrap()
+          .resources;
+        let known_effect = Weight::from_parts(17, 23);
+        if invalid_control {
+          set_step_control_actual_weight_override(Some(resources.control.saturating_add(excess)));
+          set_task_effect_actual_weight_override(Some(known_effect));
+        } else {
+          set_task_effect_actual_weight_override(Some(resources.effect.saturating_add(excess)));
+        }
+        let mut state = crate::BlockResourceState::new(2);
+        assert_ok!(state.begin_prepass());
+        let limits = TestBlockResourceBudget::get().limits();
+        let pass = Actors::execute_cycle_to_cutoff_with_resources(
+          Weight::MAX,
+          0,
+          &mut state,
+          limits,
+          crate::BlockResourceDomain::ActorBaseEffect,
+          limits.actor_control(),
+        );
+        let effect = if invalid_control {
+          known_effect
+        } else {
+          resources.effect
+        };
+        assert_eq!(pass.effect_consumed, effect);
+        assert_eq!(state.usage().actor_effect_used(), effect);
+        assert!(
+          state
+            .usage()
+            .actor_control_used()
+            .all_gte(resources.control)
+        );
+        assert_eq!(
+          pass.consumed,
+          state.usage().actor_control_used().saturating_add(effect)
+        );
+        assert!(state.optional_actor_work_halted());
+        assert_eq!(state.outstanding_reservations(), 0);
+        assert_eq!(Actors::actor_identity(id).unwrap().cycle_nonce, 0);
+      });
+    }
+  }
+}
+
+#[test]
+fn late_fee_rollback_retains_work_and_preserves_committed_prefixes() {
+  for (pass_owned, terminal) in [(false, false), (true, false), (false, true), (true, true)] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let prefix = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        BoundedVec::try_from(vec![
+          make_step(Task::Transfer {
+            to: CHARLIE,
+            asset: TestAsset::Native,
+            amount: AmountResolution::Fixed(1)
+          });
+          2
+        ])
+        .unwrap(),
+      );
+      let steps = BoundedVec::try_from(vec![
+        make_step(Task::Transfer {
+          to: BOB,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Fixed(10)
+        });
+        2
+      ])
+      .unwrap();
+      let mut contract = user_active_contract(manual_schedule(), None, steps).unwrap();
+      contract.auto_close_at_cycle_nonce = terminal.then_some(1);
+      prefund_active_user_creation(ALICE, &contract.steps);
+      let failing = Actors::next_actor_id();
+      assert_ok!(Actors::create_user_actor(
+        RuntimeOrigin::signed(ALICE),
+        Mutability::Mutable,
+        Some(contract)
+      ));
+      let tail = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        transfer_contract_steps(BOB, 100),
+      );
+      for id in [prefix, failing, tail] {
+        fund_native(id, 1_000);
+      }
+      for id in [prefix, failing] {
+        assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+      }
+      System::set_block_number(2);
+      let mut setup_meter =
+        polkadot_sdk::frame_support::weights::WeightMeter::with_limit(Weight::MAX);
+      let opening_resources = Actors::load_current_step_from_storage(failing, 0)
+        .unwrap()
+        .resources;
+      let inspection = <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated()
+        .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible())
+        .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_actor_state_probe());
+      let suffix = <TestWeightInfo as crate::WeightInfo>::service_round_admit_eligible()
+        .max(<TestWeightInfo as crate::WeightInfo>::service_member_retire_interior())
+        .max(<TestWeightInfo as crate::WeightInfo>::service_member_retire_pair_cursor())
+        .max(<TestWeightInfo as crate::WeightInfo>::service_member_retire_singleton());
+      for id in [prefix, failing] {
+        let before = setup_meter.consumed();
+        assert_ok!(Actors::service_canonical_round_head(&mut setup_meter, 2));
+        if id == failing {
+          assert_eq!(
+            setup_meter.consumed().saturating_sub(before),
+            inspection
+              .saturating_add(opening_resources.control)
+              .saturating_add(suffix)
+              .saturating_add(opening_resources.effect),
+            "a committed nonterminal Step releases the unused cleanup allowance"
+          );
+        }
+      }
+      let run = Actors::actor_run_state(failing).unwrap();
+      assert_eq!(run.cursor, 1, "ordinary Opening commits the first Task");
+      assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), tail));
+      System::set_block_number(3);
+      let known_effect = Weight::from_parts(17, 23);
+      set_task_effect_actual_weight_override(Some(known_effect));
+      let limits = TestBlockResourceBudget::get().limits();
+      let mut state = crate::BlockResourceState::new(3);
+      assert_ok!(state.begin_prepass());
+      let mut prefix_meter =
+        polkadot_sdk::frame_support::weights::WeightMeter::with_limit(Weight::MAX);
+      assert_ok!(Actors::service_canonical_round_head_with_resources(
+        &mut prefix_meter,
+        3,
+        &mut state,
+        limits,
+        crate::BlockResourceDomain::ActorBaseEffect
+      ));
+      assert_eq!(Actors::actor_identity(prefix).unwrap().cycle_nonce, 1);
+      let prior_usage = state.usage();
+      let resources = Actors::load_current_step_from_storage(failing, 1)
+        .unwrap()
+        .resources;
+      clear_fee_collections();
+      set_fail_fee_sink_transfer_from(Some(sovereign_account(failing)));
+      let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      let charged = if pass_owned {
+        let pass = Actors::execute_cycle_to_cutoff_with_resources(
+          Weight::MAX,
+          0,
+          &mut state,
+          limits,
+          crate::BlockResourceDomain::ActorBaseEffect,
+          limits
+            .actor_control()
+            .saturating_sub(prior_usage.actor_control_used()),
+        );
+        assert_eq!(pass.effect_consumed, known_effect);
+        assert!(pass.reconciled_domains().is_some());
+        pass.consumed
+      } else {
+        let mut meter = polkadot_sdk::frame_support::weights::WeightMeter::with_limit(Weight::MAX);
+        assert_eq!(
+          Actors::service_canonical_round_head_with_resources(
+            &mut meter,
+            3,
+            &mut state,
+            limits,
+            crate::BlockResourceDomain::ActorBaseEffect
+          ),
+          Err(crate::ServiceRoundError::FeeCollection)
+        );
+        meter.consumed()
+      };
+      assert_eq!(
+        charged,
+        inspection
+          .saturating_add(resources.control)
+          .saturating_add(suffix)
+          .saturating_add(if terminal {
+            Actors::close_dispatch_weight_upper()
+          } else {
+            Weight::zero()
+          })
+          .saturating_add(known_effect)
+      );
+      assert_eq!(
+        last_step_control_execution().unwrap().placement,
+        if terminal {
+          crate::StepControlPlacement::None
+        } else {
+          crate::StepControlPlacement::Queue
+        }
+      );
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        root
+      );
+      assert_eq!(Actors::actor_run_state(failing), Some(run));
+      assert_eq!(Actors::actor_identity(tail).unwrap().cycle_nonce, 0);
+      assert_eq!(
+        fee_collections().len(),
+        1,
+        "the late Action collector, not Opening, was invoked"
+      );
+      assert_eq!(
+        state.usage().actor_effect_used(),
+        prior_usage.actor_effect_used().saturating_add(known_effect)
+      );
+      assert_eq!(
+        prefix_meter.consumed().saturating_add(charged),
+        state
+          .usage()
+          .actor_control_used()
+          .saturating_add(state.usage().actor_effect_used())
+      );
+      assert_eq!(state.outstanding_reservations(), 0);
+      assert!(state.optional_actor_work_halted());
+      let stopped = Actors::execute_cycle_to_cutoff_with_resources(
+        Weight::MAX,
+        0,
+        &mut state,
+        limits,
+        crate::BlockResourceDomain::ActorBaseEffect,
+        Weight::zero(),
+      );
+      assert_eq!(stopped.consumed, Weight::zero());
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        root
+      );
+    });
+  }
+}
+
+#[test]
+fn failed_zero_step_opening_retains_control_only_and_source_authority() {
+  use crate::WeightInfo;
+  for (pass_owned, terminal) in [(false, false), (true, false), (false, true), (true, true)] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let mut contract =
+        user_active_contract(manual_schedule(), None, BoundedVec::default()).unwrap();
+      contract.auto_close_at_cycle_nonce = terminal.then_some(1);
+      prefund_active_user_creation(ALICE, &contract.steps);
+      let id = Actors::next_actor_id();
+      assert_ok!(Actors::create_user_actor(
+        RuntimeOrigin::signed(ALICE),
+        Mutability::Mutable,
+        Some(contract)
+      ));
+      fund_native(id, 1_000);
+      assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+      System::set_block_number(2);
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        assert_ok!(Actors::begin_service_round(2));
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+      set_fail_fee_sink_transfer(true);
+      let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      let limits = TestBlockResourceBudget::get().limits();
+      let mut state = crate::BlockResourceState::new(2);
+      assert_ok!(state.begin_prepass());
+      let consumed = if pass_owned {
+        Actors::execute_cycle_to_cutoff_with_resources(
+          Weight::MAX,
+          0,
+          &mut state,
+          limits,
+          crate::BlockResourceDomain::ActorBaseEffect,
+          limits.actor_control(),
+        )
+        .consumed
+      } else {
+        let mut meter = polkadot_sdk::frame_support::weights::WeightMeter::with_limit(Weight::MAX);
+        assert_eq!(
+          Actors::service_canonical_round_head_with_resources(
+            &mut meter,
+            2,
+            &mut state,
+            limits,
+            crate::BlockResourceDomain::ActorBaseEffect
+          ),
+          Err(crate::ServiceRoundError::FeeCollection)
+        );
+        meter.consumed()
+      };
+      let inspection = TestWeightInfo::service_round_begin_populated()
+        .saturating_add(TestWeightInfo::service_round_probe_eligible())
+        .saturating_add(TestWeightInfo::scheduler_actor_state_probe());
+      let suffix = TestWeightInfo::service_round_admit_eligible()
+        .max(TestWeightInfo::service_member_retire_interior())
+        .max(TestWeightInfo::service_member_retire_pair_cursor())
+        .max(TestWeightInfo::service_member_retire_singleton());
+      assert_eq!(
+        consumed,
+        inspection
+          .saturating_add(TestWeightInfo::scheduler_inner_zero_step_complete())
+          .saturating_add(suffix)
+          .saturating_add(if terminal {
+            Actors::close_dispatch_weight_upper()
+          } else {
+            Weight::zero()
+          })
+      );
+      assert_eq!(state.usage().actor_control_used(), consumed);
+      assert_eq!(state.usage().actor_effect_used(), Weight::zero());
+      assert!(state.optional_actor_work_halted());
+      assert_eq!(state.outstanding_reservations(), 0);
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        root
+      );
+    });
+  }
+}
+
+#[test]
+fn mandatory_prepass_retains_rollback_weight_and_drain_does_not_retry() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 10),
+    );
+    fund_native(id, 1_000);
+    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+    let before = (
+      Actors::actor_identity(id),
+      Actors::actor_hot(id),
+      native_balance(&BOB),
+      native_balance(&sovereign_account(id)),
+    );
+    System::set_block_number(2);
+    Actors::on_initialize(2);
+    clear_fee_collections();
+    set_missing_task_effect_actual_weight(true);
+    let post = Actors::actor_prepass(RuntimeOrigin::none()).unwrap();
+    let state = Actors::block_resource_state().unwrap();
+    let usage = state.usage();
+    assert!(state.optional_actor_work_halted());
+    assert_eq!(state.phase(), crate::BlockResourcePhase::ExternalPhase);
+    assert_eq!(state.outstanding_reservations(), 0);
+    assert_eq!(usage.actor_effect_used(), Weight::from_parts(33, 44));
+    assert_eq!(
+      post.actual_weight,
+      Some(
+        usage
+          .actor_control_used()
+          .saturating_add(usage.actor_effect_used())
+      )
+    );
+    assert_eq!(
+      (
+        Actors::actor_identity(id),
+        Actors::actor_hot(id),
+        native_balance(&BOB),
+        native_balance(&sovereign_account(id))
+      ),
+      before
+    );
+    assert_eq!(fee_collections().len(), 1);
+    let drain = Actors::on_idle(2, Weight::MAX);
+    let final_state = Actors::block_resource_state().unwrap();
+    assert_eq!(final_state.phase(), crate::BlockResourcePhase::Finalizable);
+    assert_eq!(final_state.outstanding_reservations(), 0);
+    assert_eq!(
+      final_state.usage().actor_effect_used(),
+      usage.actor_effect_used()
+    );
+    assert_eq!(
+      post.actual_weight.unwrap().saturating_add(drain),
+      final_state
+        .usage()
+        .actor_control_used()
+        .saturating_add(final_state.usage().actor_effect_used())
+    );
+    assert_eq!(
+      fee_collections().len(),
+      1,
+      "Drain must not repeat the rejected Action"
+    );
+    Actors::on_finalize(2);
+    assert_eq!(IdleStarvationState::<Test>::get(), IdleStarvationPhase::Starving { consecutive_blocks: 1 });
+    let threshold = TestMaxIdleStarvationBlocks::get();
+    for block in 3..=u64::from(threshold) + 1 {
+      run_canonical_block_at(block, Weight::MAX);
+    }
+    assert_eq!(IdleStarvationState::<Test>::get(), IdleStarvationPhase::Alerted { consecutive_blocks: threshold });
+    assert!(!has_actor_event(|event| matches!(event, Event::IdleStarvationRecovered { .. })));
+    assert_eq!(Actors::actor_identity(id).unwrap().cycle_nonce, 0);
+    set_missing_task_effect_actual_weight(false);
+    run_canonical_block_at(u64::from(threshold) + 2, Weight::MAX);
+    assert_eq!(IdleStarvationState::<Test>::get(), IdleStarvationPhase::Healthy);
+    assert!(has_actor_event(|event| matches!(event, Event::IdleStarvationRecovered { consecutive_blocks } if *consecutive_blocks == threshold)));
+    assert_eq!(Actors::actor_identity(id).unwrap().cycle_nonce, 1);
+  });
 }
 
 #[test]

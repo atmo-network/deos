@@ -21,15 +21,15 @@ const upgradeEvidence = await readFile(
   'utf8',
 );
 
-test('browser Actor summaries consume compact Contract and Run heads only', () => {
+test('browser Actor summaries consume compact Contract head and Run state only', () => {
   assert.match(adapter, /Actors\.ActorContractHead\.getValue/);
-  assert.match(adapter, /Actors\.ActorRunHead\.getValue/);
+  assert.match(adapter, /Actors\.ActorRunState\.getValue/);
   assert.match(adapter, /readActorControlProjection/);
   assert.doesNotMatch(adapter, /Actors\.ActorIdentities\.getValue/);
   assert.doesNotMatch(adapter, /Actors\.ActorHot\.getValue/);
   assert.doesNotMatch(adapter, /Actors\.ActorContract\.getValue/);
-  assert.doesNotMatch(adapter, /Actors\.ActorRunState\.getValue/);
   assert.doesNotMatch(adapter, /Actors\.ActorContractTailChunk\.getValue/);
+  assert.doesNotMatch(adapter, /Actors\.ActorRunHead\.getValue/);
   assert.doesNotMatch(adapter, /Actors\.ActorRunPayload\.getValue/);
 });
 

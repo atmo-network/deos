@@ -890,24 +890,6 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  #[cfg(all(test, feature = "runtime-benchmarks"))]
-  pub(crate) fn control_move_crossing_membership_without_hot(
-    actor_id: ActorId,
-    crossing: ObservationCrossing<T::ObservationFeedId>,
-    next_phase: CrossingPhase,
-    locator: CrossingMembershipLocator<T::ObservationFeedId>,
-    actor_type: ActorType,
-  ) -> DispatchResult {
-    Self::remove_crossing_member_preserving_feed_queue(actor_id, actor_type)?;
-    Self::insert_crossing_member(
-      actor_id,
-      crossing,
-      next_phase,
-      locator.generation,
-      actor_type,
-    )
-  }
-
   #[cfg(test)]
   pub(crate) fn test_move_crossing_membership_without_hot(
     actor_id: ActorId,
@@ -2298,7 +2280,12 @@ impl<T: Config> Pallet<T> {
       if !fire_classification.resolves_fire() {
         return Ok(CrossingWorkPlan::SkipPostInstallationPairPending);
       }
-      let second_offset = page.entries.len().saturating_sub(1) as u32;
+      // Skipping preserves source positions; the pair unit executes the adjacent member,
+      // unlike a membership move that compacts the tail into the cursor's slot.
+      let second_offset = cursor
+        .offset
+        .checked_add(1)
+        .ok_or(Error::<T>::CrossingIndexInvariant)?;
       let second_snapshot =
         Self::snapshot_crossing_source_prefix(key, cursor.page, &page, second_offset, 1)?;
       let second_preflight = Self::preflight_crossing_cohort(
@@ -2616,55 +2603,6 @@ impl<T: Config> Pallet<T> {
     Self::advance_crossing_pending_feed(feed)
   }
 
-  fn charge_crossing_fire_occurrence(
-    actor_id: ActorId,
-  ) -> Result<Option<crate::TriggerFeeBreakdown<T::Balance>>, DispatchError> {
-    use crate::weights::WeightInfo as _;
-
-    let LoadedActorStateOf::Active(loaded) = Self::load_actor_state(actor_id) else {
-      return Err(Error::<T>::ActorInvariant.into());
-    };
-    let actor_type = loaded.identity.actor_class.actor_type();
-    let breakdown = Self::trigger_fee_for_weight(
-      actor_type,
-      TriggerFamily::ObservationCrossing,
-      T::WeightInfo::observation_crossing_trigger_occurrence(),
-    );
-    Self::try_charge_automatic_trigger_occurrence(
-      actor_type,
-      &loaded.identity.sovereign_account,
-      breakdown,
-    )
-    .map(|charged| charged.then_some(breakdown))
-  }
-
-  fn deposit_crossing_fire_occurrence(
-    actor_id: ActorId,
-    breakdown: crate::TriggerFeeBreakdown<T::Balance>,
-  ) {
-    Self::deposit_event(Event::TriggerOccurrenceProcessed {
-      actor_id,
-      trigger_family: breakdown.trigger_family,
-      fee: breakdown.trigger_fee,
-    });
-  }
-
-  fn charge_crossing_placed_cohort(authority: &CrossingPlacedCohortAuthority<T>) -> DispatchResult {
-    let mut charged = Vec::with_capacity(authority.candidates.len());
-    for candidate in &authority.candidates {
-      let Some(breakdown) = Self::charge_crossing_fire_occurrence(candidate.member.actor_id)?
-      else {
-        return Err(Error::<T>::InsufficientFee.into());
-      };
-      charged.push((candidate.member.actor_id, breakdown));
-    }
-    for (actor_id, breakdown) in charged {
-      IndexedTriggerDetectionDisabled::<T>::insert(actor_id, ());
-      Self::deposit_crossing_fire_occurrence(actor_id, breakdown);
-    }
-    Ok(())
-  }
-
   fn do_crossing_work_unit() -> Result<CrossingWorkOutcome, DispatchError> {
     let list = CrossingPendingFeedListState::<T>::get();
     if list.count == 0 {
@@ -2858,9 +2796,8 @@ impl<T: Config> Pallet<T> {
               IndexedTriggerDetectionDisabled::<T>::insert(member.actor_id, ());
               activation = Some(activated);
             }
-            // A detected occurrence whose fee transfer cannot complete advances the certified
-            // traversal without readiness, matching the automatic-trigger contract: the atomic
-            // commit restored the pre-activation root, so the phase move simply persists.
+            // Only proven underfunding consumes the fire without readiness. Collection failure
+            // propagates so the outer unit restores both the phase move and source frontier.
             Err(error) if error == Error::<T>::InsufficientFee.into() => {}
             Err(error) => return Err(error),
           }
@@ -3127,9 +3064,6 @@ impl<T: Config> Pallet<T> {
       .ok_or(Error::<T>::CrossingIndexInvariant)?;
     let key = authority.candidates[0].locator.key;
     if authority.tail_refill.is_some() {
-      Self::charge_crossing_placed_cohort(&authority)?;
-    }
-    if authority.tail_refill.is_some() {
       Self::commit_non_tail_placed_cohort_authority(authority)?;
     } else if count == 2 {
       Self::commit_placed_pair_authority(authority)?;
@@ -3162,6 +3096,14 @@ impl<T: Config> Pallet<T> {
       Err(error) if error == Error::<T>::InsufficientFee.into() => Self::do_crossing_work_unit(),
       result => result,
     }
+  }
+
+  /// Benchmarks the actual rollback-and-scalar fallback without exporting its private outcome.
+  #[cfg(feature = "runtime-benchmarks")]
+  pub(crate) fn benchmark_crossing_placed_batch_or_single_unit(
+    admitted_candidates: u32,
+  ) -> DispatchResult {
+    Self::do_crossing_placed_batch_or_single_unit(admitted_candidates).map(|_| ())
   }
 
   pub(crate) fn crossing_plan_weight_for_admission(
@@ -3276,7 +3218,7 @@ impl<T: Config> Pallet<T> {
     Ok(first.combine(second))
   }
 
-  #[cfg(feature = "runtime-benchmarks")]
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
   pub(crate) fn crossing_placed_batch_work_unit(
     admitted_candidates: u32,
   ) -> Result<bool, DispatchError> {

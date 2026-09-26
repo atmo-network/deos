@@ -10,6 +10,7 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
   import {
     ACTORS_AUTHORING_TASK_TYPES,
     type ActorAuthoringTask,
+    DEOS_ACTORS_AUTHORING_LIMITS,
     createActorAuthoringTask,
   } from '$lib/automation/authoring';
   import type { ActorContractType } from '$lib/automation/contract-artifact';
@@ -58,7 +59,11 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
   }
 
   function addSplitLeg() {
-    if (task.type !== 'SplitTransfer' || task.legs.length >= 8) return;
+    if (
+      task.type !== 'SplitTransfer' ||
+      task.legs.length >= DEOS_ACTORS_AUTHORING_LIMITS.maxSplitTransferLegs
+    )
+      return;
     task = {
       ...task,
       legs: [...task.legs, { to: '', shareParts: 0 }],
@@ -108,13 +113,15 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
     <div class="grid gap-2">
       <div class="flex items-center justify-between gap-2">
         <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">
-          Transfer legs · {task.legs.length}/8
+          Transfer legs · {task.legs
+            .length}/{DEOS_ACTORS_AUTHORING_LIMITS.maxSplitTransferLegs}
         </div>
         <Button
           size="sm"
           variant="ghost"
           onclick={addSplitLeg}
-          disabled={task.legs.length >= 8}
+          disabled={task.legs.length >=
+            DEOS_ACTORS_AUTHORING_LIMITS.maxSplitTransferLegs}
           class="inline-flex items-center gap-1"
         >
           <Plus size={12} /> Add leg

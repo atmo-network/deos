@@ -54,6 +54,12 @@ pub trait DependencyEventIngress<SourceId> {
   fn note_dependency_event(source: SourceId) -> DispatchResult;
 }
 
+/// Bounded causal accelerator for a committed total-owned asset mutation. Correctness retains the
+/// mandatory timed review unless the host separately certifies complete mutation coverage.
+pub trait BalanceTransitionIngress<AssetId> {
+  fn note_balance_transition(asset: AssetId) -> DispatchResult;
+}
+
 /// Minimal authoritative actor context for adapter operations whose policy depends on Actors type.
 pub struct ExecutionContext<'a, AccountId> {
   pub actor: &'a AccountId,
@@ -280,6 +286,10 @@ pub trait AssetOps<AccountId, AssetId, Balance> {
   /// Adapter-visible transferable balance before Actors-local fee reservation.
   fn balance(who: &AccountId, asset: AssetId) -> Balance;
 
+  /// Authoritative total ownership used only by parked-balance activation. This must include held,
+  /// frozen, or reserved ownership and remain distinct from task-spendable `balance`.
+  fn total_balance(who: &AccountId, asset: AssetId) -> Balance;
+
   fn minimum_balance(asset: AssetId) -> Balance;
 
   /// Preflights the exact transfer consequence under unchanged ledger state.
@@ -341,7 +351,6 @@ pub struct StepControlWeightContext {
   pub steps_in_fragment: u32,
   pub opening_tail_chunks: u32,
   pub predicate_evaluation_units: u32,
-  pub opening_snapshot_entries: u32,
 }
 
 /// Runtime-owned maximum Actor-control Weight used by admission before semantic evaluation.
@@ -541,6 +550,10 @@ impl<AccountId, AssetId, Balance: Default> AssetOps<AccountId, AssetId, Balance>
   }
 
   fn balance(_: &AccountId, _: AssetId) -> Balance {
+    Balance::default()
+  }
+
+  fn total_balance(_: &AccountId, _: AssetId) -> Balance {
     Balance::default()
   }
 

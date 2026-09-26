@@ -89,15 +89,12 @@
         "handled above",
         "admitted execution plans have checked evaluation fees",
         "admitted User plans preserve their fee reservation",
-        "admitted opening predicates fit MaxOpeningPredicateResults",
-        "trigger surfaces fit MaxOpeningSnapshotEntries",
-        "suffix surfaces fit MaxOpeningSnapshotEntries",
         "predicates fit",
         "clauses fit",
         "one predicate fits",
         "one clause fits"
       ],
-      "rationale": "These exact execution assertions are mechanically precluded by the canonical actor loader, admission bounds, exhaustive StepOutcome control mapping, checked Opening nonce derivation, integrity checks, or transactional finalization; the four compact fit messages belong to the file-local test module. Any differently worded site is unowned and fails the full-tree audit.",
+      "rationale": "These exact execution assertions are mechanically precluded by the canonical actor loader, admission bounds, exhaustive StepOutcome control mapping, checked Opening nonce derivation, integrity checks, or transactional finalization; the remaining compact fit messages belong to the file-local test module. Any differently worded site is unowned and fails the full-tree audit.",
       "expiry": "Replace an entry when its assertion becomes typed failure or when its preclusion owner changes."
     },
     {
@@ -114,6 +111,7 @@
         "genesis auto-close target must be nonzero",
         "genesis precondition formulas must have valid bounded DNF",
         "genesis execution plan must have valid task and predicate shapes",
+        "genesis parked-balance activation must be canonical",
         "genesis System Actor topology must be valid",
         "genesis execution plan cannot transfer to its own sovereign account",
         "genesis opening snapshot surfaces must be valid",

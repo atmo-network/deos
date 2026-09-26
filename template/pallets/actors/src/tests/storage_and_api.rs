@@ -1,36 +1,43 @@
 use super::*;
+#[cfg(feature = "try-runtime")]
+use crate::TriggerDeadlineHandles;
 use crate::weights::WeightInfo as _;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
   ActorRef, ActorSemanticExecutionProjection, ActorSemanticLoadError, ActorSemanticMutation,
   ActorSemanticMutationError, ActorSemanticProjectionError, ActorSemanticRecord,
   ActorSemanticState, ActorSemanticStates, ActorStepResourceEnvelope, ActorUnsignaledControlCells,
-  ActorWaitingOccupancies, CanonicalOccurrenceError, CanonicalOccurrencePlan,
-  CanonicalOccurrencePublication, CloseReason, CompletionPolicy, DeadlineHandle, DeadlineHandles,
-  DeadlineHeader, DeadlineHeaders, DeadlineIndexLen, DeadlineIndexMutationError,
-  DeadlineIndexPages, DeadlineIndexPositions, DeadlineMutationError, DeadlinePages,
-  DependencyDueReviewError, DependencyDueReviewMutation, DependencyPlanMutation,
-  DependencyPlanSource, DependencyPlans, DependencyPublicationError, DependencyPublicationMutation,
-  DependencyRegistrationError, DependencyRegistrationFreePositions, DependencyRegistrationHandle,
-  DependencyRegistrationHeaders, DependencyRegistrationMutation, DependencyRegistrationPages,
-  DependencyRegistrationPosition, DependencyRegistrationPositions, DependencyRegistrations,
-  DependencyReviewMutation, DependencyReviewWorkerError, DependencyRevisionError,
-  DependencyRevisionMutation, DependencyRevisionState, DependencyRevisions, DependencyScanError,
-  DependencyScanMutation, DependencyScanSourceError, DependencyScanSourceList,
-  DependencyScanSourceListState, DependencyScanSourceMutation, DependencyScanSourceNode,
-  DependencyScanSourceNodes, DependencySourceAllocator, DependencySourceAllocatorState,
+  ActorWaitingOccupancies, BalanceDependencySources, BlockResourceDomain, CanonicalOccurrenceError,
+  CanonicalOccurrencePlan, CanonicalOccurrencePublication, CloseReason, CompletionPolicy,
+  DeadlineHandle, DeadlineHandles, DeadlineHeader, DeadlineHeaders, DeadlineIndexLen,
+  DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions, DeadlineMutationError,
+  DeadlinePage, DeadlinePages, DependencyDueReviewError, DependencyDueReviewMutation,
+  DependencyPlanMutation, DependencyPlanSource, DependencyPlans, DependencyPublicationError,
+  DependencyPublicationMutation, DependencyRegistrationError, DependencyRegistrationFreePositions,
+  DependencyRegistrationHandle, DependencyRegistrationHeaders, DependencyRegistrationMutation,
+  DependencyRegistrationPages, DependencyRegistrationPosition, DependencyRegistrationPositions,
+  DependencyRegistrations, DependencyReviewMutation, DependencyReviewWorkerError,
+  DependencyRevisionError, DependencyRevisionMutation, DependencyRevisionState,
+  DependencyRevisions, DependencyScanError, DependencyScanMutation, DependencyScanSourceError,
+  DependencyScanSourceList, DependencyScanSourceListState, DependencyScanSourceMutation,
+  DependencyScanSourceNode, DependencyScanSourceNodes, DependencyScanWorkerError,
+  DependencySourceAllocator, DependencySourceAllocatorState, DependencySourceBalances,
   DependencySourceError, DependencySourceMutation, DependencySourceObservations,
   DependencyTimedReview, DependencyTimedReviewMutation, DependencyTimedReviews,
   DormantActorSemanticRecord, DueBlockDeadlineMutation, DueTickDeadlineMutation,
   LegacyProcessPlacement, LegacyProcessTransition, ObservationDependencySources, ParkEvidence,
-  ParkNegativeReason, PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent,
+  ParkNegativeReason, ParkedBalanceActivation, ParkedBalanceActivationError,
+  ParkedBalanceActivationOf, ParkedBalanceCertificationError, ParkedBalanceClassificationError,
+  ParkedBalanceEpisodes, ParkedBalanceQualification, ParkedBalanceRule,
+  ParkedBalanceTransitionError, PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent,
   PendingDependencyEvents, PendingDependencyReviews, PipelineMachineFeeStrategy,
   ProcessCompileError, ProcessDisableCause, ProcessDisablement, ProcessPublicationError,
   ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
   ProcessTransitionObligation, ScalarObservationState, ServiceHeader, ServiceHeaderRecord,
   ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind, ServiceRetirementError,
   ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis,
-  UnsignaledProcessEvidence, apply_actor_semantic_mutation, compile_legacy_process,
+  UnsignaledProcessEvidence, apply_actor_semantic_mutation, certify_parked_balance_watch,
+  classify_parked_balance, classify_parked_balance_plan, compile_legacy_process,
   next_actor_generation, plan_canonical_occurrence, plan_legacy_process_transition,
   project_actor_semantic_execution,
 };
@@ -56,6 +63,816 @@ fn process_skeleton_uses_generation_bound_references() {
       actor_id: 7,
       generation: 12
     }
+  );
+}
+
+#[test]
+fn parked_balance_activation_is_nonempty_unique_and_canonical() {
+  type Activation = ParkedBalanceActivation<u32, u128, ConstU32<2>>;
+  assert_eq!(
+    Activation::try_from_rules(vec![]),
+    Err(ParkedBalanceActivationError::Empty)
+  );
+  assert_eq!(
+    Activation::try_from_rules(vec![ParkedBalanceRule {
+      asset: 1,
+      authored_min_delta: 0,
+    }]),
+    Err(ParkedBalanceActivationError::ZeroAuthoredMinimum)
+  );
+  assert_eq!(
+    Activation::try_from_rules(vec![
+      ParkedBalanceRule {
+        asset: 1,
+        authored_min_delta: 10,
+      },
+      ParkedBalanceRule {
+        asset: 1,
+        authored_min_delta: 20,
+      },
+    ]),
+    Err(ParkedBalanceActivationError::DuplicateAsset)
+  );
+  assert_eq!(
+    Activation::try_from_rules(vec![
+      ParkedBalanceRule {
+        asset: 3,
+        authored_min_delta: 30,
+      },
+      ParkedBalanceRule {
+        asset: 2,
+        authored_min_delta: 20,
+      },
+      ParkedBalanceRule {
+        asset: 1,
+        authored_min_delta: 10,
+      },
+    ]),
+    Err(ParkedBalanceActivationError::TooManyAssets)
+  );
+  let activation = Activation::try_from_rules(vec![
+    ParkedBalanceRule {
+      asset: 2,
+      authored_min_delta: 20,
+    },
+    ParkedBalanceRule {
+      asset: 1,
+      authored_min_delta: 10,
+    },
+  ])
+  .expect("bounded unique watch set certifies");
+  assert_eq!(
+    activation.watches.as_slice(),
+    &[
+      ParkedBalanceRule {
+        asset: 1,
+        authored_min_delta: 10,
+      },
+      ParkedBalanceRule {
+        asset: 2,
+        authored_min_delta: 20,
+      },
+    ],
+    "asset order is canonical regardless of author input order"
+  );
+}
+
+#[test]
+fn actor_contract_admits_only_canonical_parked_balance_activation() {
+  new_test_ext().execute_with(|| {
+    let activation = ParkedBalanceActivationOf::<Test>::try_from_rules(vec![
+      ParkedBalanceRule {
+        asset: TestAsset::Local(9),
+        authored_min_delta: 100,
+      },
+      ParkedBalanceRule {
+        asset: TestAsset::Native,
+        authored_min_delta: 200,
+      },
+    ])
+    .expect("canonical activation");
+    let mut contract = system_active_contract(manual_schedule(), None, inert_contract_steps())
+      .expect("active Contract");
+    let without_activation = contract.semantic_contract_id();
+    contract.parked_balance_activation = Some(activation.clone());
+    assert_ne!(contract.semantic_contract_id(), without_activation);
+    assert_ok!(Actors::create_system_actor(
+      RuntimeOrigin::root(),
+      ALICE,
+      Mutability::Mutable,
+      Some(contract),
+    ));
+    let actor_id = Actors::next_actor_id().saturating_sub(1);
+    assert_eq!(
+      Actors::actor_contract(actor_id)
+        .expect("admitted Contract reconstructs")
+        .parked_balance_activation,
+      Some(activation)
+    );
+
+    let mut malformed = system_active_contract(manual_schedule(), None, inert_contract_steps())
+      .expect("active Contract");
+    malformed.parked_balance_activation = Some(ParkedBalanceActivation {
+      watches: BoundedVec::default(),
+    });
+    assert_noop!(
+      Actors::create_system_actor(
+        RuntimeOrigin::root(),
+        BOB,
+        Mutability::Mutable,
+        Some(malformed),
+      ),
+      Error::<Test>::InvalidParkedBalanceActivation
+    );
+  });
+}
+
+#[test]
+fn temporal_balance_headers_reject_terminal_and_empty_contracts() {
+  new_test_ext().execute_with(|| {
+    for trigger in [Trigger::at_time(100), Trigger::cadenced(100)] {
+      for incompatible in 0..3 {
+        let mut contract = system_active_contract(
+          Schedule {
+            trigger: trigger.clone(),
+            cooldown_blocks: 0,
+          },
+          None,
+          inert_contract_steps(),
+        )
+        .unwrap();
+        contract.parked_balance_activation = Some(
+          ParkedBalanceActivationOf::<Test>::try_from_rules(vec![ParkedBalanceRule {
+            asset: TestAsset::Native,
+            authored_min_delta: 100,
+          }])
+          .unwrap(),
+        );
+        match incompatible {
+          0 => contract.steps = BoundedVec::default(),
+          1 => contract.auto_close_at_cycle_nonce = Some(1),
+          _ => contract.completion = CompletionPolicy::CloseAfterProductiveCycle,
+        }
+        assert_noop!(
+          Actors::create_system_actor(
+            RuntimeOrigin::root(),
+            ALICE,
+            Mutability::Mutable,
+            Some(contract),
+          ),
+          Error::<Test>::InvalidParkedBalanceActivation
+        );
+      }
+    }
+  });
+}
+
+#[test]
+fn completed_authored_contract_captures_anchor_and_enters_park() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let activation = ParkedBalanceActivationOf::<Test>::try_from_rules(vec![
+      ParkedBalanceRule {
+        asset: TestAsset::Native,
+        authored_min_delta: 100,
+      },
+      ParkedBalanceRule {
+        asset: TestAsset::Local(9),
+        authored_min_delta: 100,
+      },
+    ])
+    .expect("canonical activation");
+    let mut contract = system_active_contract(
+      manual_schedule(),
+      None,
+      contract_steps_with_step(make_step(Task::StopCycle)),
+    )
+    .expect("active Contract");
+    contract.parked_balance_activation = Some(activation);
+    let actor_id = Actors::next_actor_id();
+    assert_ok!(Actors::create_system_actor(
+      RuntimeOrigin::root(),
+      ALICE,
+      Mutability::Mutable,
+      Some(contract),
+    ));
+    let actor = Actors::load_actor_ref(actor_id).expect("Actor reference");
+    mutate_actor_hot_coherent(actor_id, |hot| hot.pending_signal = true);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1)
+      .expect("canonical Service carrier publishes");
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let mut meter = WeightMeter::with_limit(Weight::MAX);
+    let service = Actors::service_canonical_round_head_inner(
+      &mut meter,
+      2,
+      None,
+      BlockResourceDomain::ActorControl,
+      None,
+    );
+    assert_eq!(
+      service.map(|(encounter, attempt)| (encounter, attempt.is_some())),
+      Ok((ServiceRoundEncounter::Eligible(actor), true))
+    );
+
+    let episode = ParkedBalanceEpisodes::<Test>::get(actor_id)
+      .expect("completed Contract owns one parked-balance episode");
+    assert_eq!(episode.owner.actor, actor);
+    assert_eq!(episode.owner.plan_revision, 1);
+    assert_eq!(episode.watches.len(), 2);
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(
+      DeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(3))
+    );
+    assert!(matches!(
+      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Parked(ParkEvidence {
+        reason: ParkNegativeReason::ParkedBalanceBelowThreshold,
+        review_at: Some(3),
+        ..
+      }))
+    ));
+
+    let native_source = BalanceDependencySources::<Test>::get(TestAsset::Native)
+      .expect("native watch owns a causal source");
+    let local_source = BalanceDependencySources::<Test>::get(TestAsset::Local(9))
+      .expect("non-native watch owns a causal source");
+    let sovereign = Actors::actor_identity(actor_id)
+      .expect("Actor identity")
+      .sovereign_account;
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      set_asset_balance(&sovereign, TestAsset::Native, 25);
+      let result = <Actors as crate::BalanceTransitionIngress<TestAsset>>::note_balance_transition(
+        TestAsset::Native,
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("committed native mutation publishes its causal revision");
+    assert_eq!(DependencyRevisions::<Test>::get(native_source).revision, 1);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::process_dependency_scan_member(native_source, 1, 0),
+        Ok(DependencyScanMutation::Advanced(1))
+      );
+      assert_eq!(
+        Actors::complete_dependency_scan(native_source, 1, 1),
+        Ok(DependencyScanMutation::Completed)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert_eq!(
+      PendingDependencyEvents::<Test>::get(actor_id),
+      Some(PendingDependencyEvent {
+        owner: episode.owner,
+        source: native_source,
+        revision: 1,
+      })
+    );
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      set_asset_balance(&sovereign, TestAsset::Local(9), 40);
+      let result = <Actors as crate::BalanceTransitionIngress<TestAsset>>::note_balance_transition(
+        TestAsset::Local(9),
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("committed non-native mutation publishes its causal revision");
+    assert_eq!(DependencyRevisions::<Test>::get(local_source).revision, 1);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::process_dependency_scan_member(local_source, 1, 0),
+        Ok(DependencyScanMutation::Advanced(1))
+      );
+      assert_eq!(
+        Actors::complete_dependency_scan(local_source, 1, 1),
+        Ok(DependencyScanMutation::Completed)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert_eq!(
+      PendingDependencyEvents::<Test>::get(actor_id),
+      Some(PendingDependencyEvent {
+        owner: episode.owner,
+        source: native_source,
+        revision: 1,
+      }),
+      "a racing asset revision preserves the first current Pending obligation"
+    );
+    assert_eq!(
+      DependencyRegistrations::<Test>::get(local_source, actor_id)
+        .expect("non-native registration remains live")
+        .acknowledged_revision,
+      1,
+      "the later source is acknowledged only after its scan preserves the complete Pending recheck"
+    );
+    let Some(ProcessResidence::Parked(evidence)) =
+      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence)
+    else {
+      panic!("completed Actor remains parked");
+    };
+    let first_pending = PendingDependencyEvents::<Test>::get(actor_id).expect("Pending event");
+    let event_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_pending_parked_balance_event();
+    let mut no_event_weight = WeightMeter::with_limit(Weight::zero());
+    assert_eq!(
+      Actors::process_pending_parked_balance_event(
+        &mut no_event_weight,
+        first_pending,
+        ServiceResidenceKind::Live,
+        evidence,
+        2,
+      ),
+      Err(DependencyReviewWorkerError::InsufficientWeight)
+    );
+    assert_eq!(PendingDependencyEvents::<Test>::get(actor_id), Some(first_pending));
+    assert!(ParkedBalanceEpisodes::<Test>::contains_key(actor_id));
+    let mut negative_event_meter = WeightMeter::with_limit(event_weight);
+    assert_eq!(
+      Actors::process_pending_parked_balance_event(
+        &mut negative_event_meter,
+        first_pending,
+        ServiceResidenceKind::Live,
+        evidence,
+        2,
+      ),
+      Ok(DependencyReviewMutation::Rearmed(DependencyPlanMutation {
+        retained: 2,
+        timed_review: DependencyTimedReviewMutation::Retained,
+        ..Default::default()
+      }))
+    );
+    assert_eq!(
+      ParkedBalanceEpisodes::<Test>::get(actor_id)
+        .expect("subthreshold current recheck retains episode")
+        .watches,
+      episode.watches
+    );
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      set_asset_balance(&sovereign, TestAsset::Native, 100);
+      let result = <Actors as crate::BalanceTransitionIngress<TestAsset>>::note_balance_transition(
+        TestAsset::Native,
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("threshold native mutation publishes a second revision");
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::process_dependency_scan_member(native_source, 2, 0),
+        Ok(DependencyScanMutation::Advanced(1))
+      );
+      assert_eq!(
+        Actors::complete_dependency_scan(native_source, 2, 1),
+        Ok(DependencyScanMutation::Completed)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert!(PendingDependencyEvents::<Test>::contains_key(actor_id));
+    frame_system::Pallet::<Test>::set_block_number(3);
+    let due_weight = event_weight
+      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review())
+      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review());
+    let mut positive_event_meter = WeightMeter::with_limit(due_weight);
+    assert_eq!(
+      Actors::process_next_due_block_observation_availability_review(
+        &mut positive_event_meter,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+      ),
+      Ok((actor, DependencyReviewMutation::Woke))
+    );
+    assert!(!ParkedBalanceEpisodes::<Test>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ServiceNodes::<Test>::get(actor_id).map(|node| node.eligible_from),
+      Some(4)
+    );
+  });
+}
+
+#[test]
+fn balance_causal_ingress_saturation_rolls_back_revision_publication() {
+  new_test_ext().execute_with(|| {
+    let asset = TestAsset::Local(77);
+    let source = 900;
+    BalanceDependencySources::<Test>::insert(asset, source);
+    DependencySourceBalances::<Test>::insert(source, asset);
+    DependencyScanSourceListState::<Test>::put(DependencyScanSourceList {
+      cursor: Some(901),
+      count: <<Test as crate::Config>::MaxActiveActors as Get<u32>>::get()
+        .saturating_mul(<<Test as crate::Config>::MaxContractSteps as Get<u32>>::get()),
+    });
+    let outcome = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      set_asset_balance(&ALICE, asset, 500);
+      match <Actors as crate::BalanceTransitionIngress<TestAsset>>::note_balance_transition(asset) {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    });
+    assert_eq!(
+      outcome,
+      Err(DispatchError::Other(
+        "dependency scan source capacity reached"
+      ))
+    );
+    assert_eq!(DependencyRevisions::<Test>::get(source).revision, 0);
+    assert!(!DependencyScanSourceNodes::<Test>::contains_key(source));
+  });
+}
+
+#[test]
+fn parked_balance_activation_captures_one_atomic_host_owned_anchor_set() {
+  new_test_ext().execute_with(|| {
+    set_asset_balance(&ALICE, TestAsset::Local(9), 700);
+    let activation = ParkedBalanceActivationOf::<Test>::try_from_rules(vec![
+      ParkedBalanceRule {
+        asset: TestAsset::Local(9),
+        authored_min_delta: 200,
+      },
+      ParkedBalanceRule {
+        asset: TestAsset::Native,
+        authored_min_delta: 100,
+      },
+    ])
+    .expect("bounded unique activation certifies");
+    let watches = Actors::certify_parked_balance_activation(&ALICE, &activation, 11)
+      .expect("host minima and total balances certify");
+    assert_eq!(watches.len(), 2);
+    for watch in watches
+      .iter(/* deos-bypass: bounded-iter -- test activation has two watches. */)
+    {
+      assert_eq!(watch.acknowledged_revision, 11);
+      assert_eq!(
+        watch.anchor,
+        MockAssetOps::total_balance(&ALICE, watch.asset),
+        "every anchor uses total ownership from the same certification transition"
+      );
+      assert_eq!(
+        watch.certified_minimum_balance,
+        MockAssetOps::minimum_balance(watch.asset)
+      );
+    }
+  });
+}
+
+#[test]
+fn parked_balance_episode_publishes_atomically_and_positive_review_reclaims_it() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    set_asset_balance(
+      &record.identity.sovereign_account,
+      TestAsset::Local(9),
+      1_000,
+    );
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    let activation = ParkedBalanceActivationOf::<Test>::try_from_rules(vec![
+      ParkedBalanceRule {
+        asset: TestAsset::Native,
+        authored_min_delta: 100,
+      },
+      ParkedBalanceRule {
+        asset: TestAsset::Local(9),
+        authored_min_delta: 200,
+      },
+    ])
+    .unwrap();
+    assert_eq!(
+      Actors::transfer_service_member_to_parked_balance(
+        actor,
+        ServiceResidenceKind::Live,
+        5,
+        &activation,
+        WakeupKey::Tick(2),
+      ),
+      Err(ParkedBalanceTransitionError::InvalidReviewClock)
+    );
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!ParkedBalanceEpisodes::<Test>::contains_key(actor_id));
+
+    assert_eq!(
+      Actors::transfer_service_member_to_parked_balance(
+        actor,
+        ServiceResidenceKind::Live,
+        5,
+        &activation,
+        WakeupKey::Block(2),
+      ),
+      Ok(DependencyPlanMutation {
+        installed: 2,
+        timed_review: DependencyTimedReviewMutation::Installed,
+        ..Default::default()
+      })
+    );
+    let owner = PendingCheckOwner {
+      actor,
+      plan_revision: 5,
+    };
+    let episode = ParkedBalanceEpisodes::<Test>::get(actor_id).expect("episode retained");
+    assert_eq!(episode.owner, owner);
+    assert_eq!(episode.watches.len(), 2);
+    let fixed_anchors = episode.watches.clone();
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    let evidence = ParkEvidence {
+      plan_identity: record.admission.admission_identity,
+      reason: ParkNegativeReason::ParkedBalanceBelowThreshold,
+      review_at: Some(2),
+    };
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
+      Some(Some(ProcessResidence::Parked(evidence)))
+    );
+    let mut stale_episode = episode.clone();
+    stale_episode.owner.plan_revision += 1;
+    ParkedBalanceEpisodes::<Test>::insert(actor_id, stale_episode);
+    assert_eq!(
+      Actors::load_canonical_actor_semantic_state(actor),
+      Err(ActorSemanticLoadError::Corrupt),
+      "an episode cannot borrow another plan revision"
+    );
+    ParkedBalanceEpisodes::<Test>::insert(actor_id, episode);
+    assert!(Actors::load_canonical_actor_semantic_state(actor).is_ok());
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let review_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review()
+      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review());
+    let mut no_weight = WeightMeter::with_limit(Weight::zero());
+    assert_eq!(
+      Actors::process_next_due_block_observation_availability_review(
+        &mut no_weight,
+        ServiceResidenceKind::Live,
+        2,
+        Some(WakeupKey::Block(3)),
+      ),
+      Err(DependencyReviewWorkerError::InsufficientWeight)
+    );
+    assert!(DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
+    set_asset_minimum_balance(2);
+    let mut drift_meter = WeightMeter::with_limit(review_weight);
+    assert_eq!(
+      Actors::process_next_due_block_observation_availability_review(
+        &mut drift_meter,
+        ServiceResidenceKind::Live,
+        2,
+        Some(WakeupKey::Block(3)),
+      ),
+      Err(DependencyReviewWorkerError::Interpretation(
+        DependencyRegistrationError::ParkedBalanceMinimumChanged
+      ))
+    );
+    assert!(DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ParkedBalanceEpisodes::<Test>::get(actor_id)
+        .expect("minimum drift refusal retains episode")
+        .watches,
+      fixed_anchors
+    );
+    set_asset_minimum_balance(1);
+    let mut negative_meter = WeightMeter::with_limit(review_weight);
+    assert_eq!(
+      Actors::process_next_due_block_observation_availability_review(
+        &mut negative_meter,
+        ServiceResidenceKind::Live,
+        2,
+        Some(WakeupKey::Block(3)),
+      ),
+      Ok((
+        actor,
+        DependencyReviewMutation::Rearmed(DependencyPlanMutation {
+          retained: 2,
+          timed_review: DependencyTimedReviewMutation::Installed,
+          ..Default::default()
+        })
+      ))
+    );
+    assert_eq!(
+      ParkedBalanceEpisodes::<Test>::get(actor_id)
+        .expect("negative review retains episode")
+        .watches,
+      fixed_anchors,
+      "negative current checks keep the fixed episode anchors"
+    );
+    let rearmed_evidence = ParkEvidence {
+      review_at: Some(3),
+      ..evidence
+    };
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
+      Some(Some(ProcessResidence::Parked(rearmed_evidence)))
+    );
+    assert_eq!(
+      DeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(3))
+    );
+
+    MockAssetOps::transfer(
+      &record.identity.sovereign_account,
+      &BOB,
+      TestAsset::Local(9),
+      200,
+    )
+    .expect("reverse movement commits");
+    frame_system::Pallet::<Test>::set_block_number(3);
+    let mut positive_meter = WeightMeter::with_limit(review_weight);
+    assert_eq!(
+      Actors::process_next_due_block_observation_availability_review(
+        &mut positive_meter,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+      ),
+      Ok((actor, DependencyReviewMutation::Woke))
+    );
+    assert!(!ParkedBalanceEpisodes::<Test>::contains_key(actor_id));
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
+  });
+}
+
+#[test]
+fn parked_balance_cleanup_covers_replacement_deactivation_and_close() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let ActorSemanticState::Active(before) = ActorSemanticStates::<Test>::get(actor_id).unwrap()
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, before.generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    let activation = ParkedBalanceActivationOf::<Test>::try_from_rules(vec![ParkedBalanceRule {
+      asset: TestAsset::Native,
+      authored_min_delta: 100,
+    }])
+    .unwrap();
+    Actors::transfer_service_member_to_parked_balance(
+      actor,
+      ServiceResidenceKind::Live,
+      8,
+      &activation,
+      WakeupKey::Block(2),
+    )
+    .unwrap();
+
+    let mut replacement = Actors::load_actor_contract(actor_id).unwrap();
+    replacement.cooldown_blocks = 7;
+    assert_ok!(polkadot_sdk::frame_support::storage::with_transaction(
+      || {
+        let result = Actors::store_actor_contract(actor_id, replacement.clone());
+        if result.is_ok() {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+        } else {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(result)
+        }
+      }
+    ));
+    let ActorSemanticState::Active(after) = ActorSemanticStates::<Test>::get(actor_id).unwrap()
+    else {
+      panic!("replacement Actor is active");
+    };
+    assert_eq!(after.generation, before.generation + 1);
+    assert!(!ParkedBalanceEpisodes::<Test>::contains_key(actor_id));
+    assert!(!PendingCheckOwners::<Test>::contains_key(actor_id));
+    assert!(DependencyPlans::<Test>::get(actor_id).is_empty());
+    assert!(!DependencyTimedReviews::<Test>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| process.generation),
+      Some(after.generation),
+      "replacement publishes only the new generation"
+    );
+
+    for deactivate in [true, false] {
+      let lifecycle_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+      let ActorSemanticState::Active(lifecycle_record) =
+        ActorSemanticStates::<Test>::get(lifecycle_id).unwrap()
+      else {
+        panic!("lifecycle Actor is active");
+      };
+      let lifecycle_actor = actor_ref(lifecycle_id, lifecycle_record.generation);
+      ActorControlLocators::<Test>::remove(lifecycle_id);
+      ActorUnsignaledControlCells::<Test>::remove(lifecycle_id);
+      publish_test_service_member(lifecycle_actor, ServiceResidenceKind::Live, 1).unwrap();
+      Actors::transfer_service_member_to_parked_balance(
+        lifecycle_actor,
+        ServiceResidenceKind::Live,
+        9,
+        &activation,
+        WakeupKey::Block(2),
+      )
+      .unwrap();
+      if deactivate {
+        assert_ok!(Actors::deactivate_actor(
+          RuntimeOrigin::root(),
+          lifecycle_id
+        ));
+        assert!(matches!(
+          ActorSemanticStates::<Test>::get(lifecycle_id),
+          Some(ActorSemanticState::Dormant(_))
+        ));
+      } else {
+        assert_ok!(Actors::close_actor(RuntimeOrigin::root(), lifecycle_id));
+        assert!(!ActorSemanticStates::<Test>::contains_key(lifecycle_id));
+      }
+      assert!(!ActorProcesses::<Test>::contains_key(lifecycle_id));
+      assert!(!ParkedBalanceEpisodes::<Test>::contains_key(lifecycle_id));
+      assert!(!PendingCheckOwners::<Test>::contains_key(lifecycle_id));
+      assert!(DependencyPlans::<Test>::get(lifecycle_id).is_empty());
+      assert!(!DependencyTimedReviews::<Test>::contains_key(lifecycle_id));
+      assert!(!DeadlineHandles::<Test>::contains_key(lifecycle_id));
+    }
+  });
+}
+
+#[test]
+fn parked_balance_watch_uses_inclusive_absolute_delta_and_keeps_its_anchor() {
+  let watch = certify_parked_balance_watch(7u32, 80u128, 1u128, 1_000u128, 4)
+    .expect("nonzero representable minimum certifies");
+  assert_eq!(watch.anchor, 1_000);
+  assert_eq!(watch.acknowledged_revision, 4);
+  assert_eq!(
+    classify_parked_balance(&watch, 1, 1_099),
+    Ok(ParkedBalanceQualification::BelowThreshold)
+  );
+  assert_eq!(
+    classify_parked_balance(&watch, 1, 1_100),
+    Ok(ParkedBalanceQualification::Qualified),
+    "equality at max(authored delta, 100 * minimum) qualifies"
+  );
+  assert_eq!(
+    classify_parked_balance(&watch, 1, 900),
+    Ok(ParkedBalanceQualification::Qualified),
+    "movement in the reverse direction uses the same fixed anchor"
+  );
+  assert_eq!(watch.anchor, 1_000, "classification cannot move the anchor");
+
+  let authored_dominates = certify_parked_balance_watch(7u32, 150u128, 1u128, 1_000u128, 4)
+    .expect("authored threshold certifies");
+  assert_eq!(
+    classify_parked_balance(&authored_dominates, 1, 1_149),
+    Ok(ParkedBalanceQualification::BelowThreshold)
+  );
+  assert_eq!(
+    classify_parked_balance(&authored_dominates, 1, 850),
+    Ok(ParkedBalanceQualification::Qualified)
+  );
+}
+
+#[test]
+fn parked_balance_plan_checks_every_minimum_and_qualifies_any_absolute_delta() {
+  let watches = [
+    certify_parked_balance_watch(1u32, 100u128, 1u128, 1_000u128, 4).unwrap(),
+    certify_parked_balance_watch(2u32, 500u128, 2u128, 2_000u128, 7).unwrap(),
+  ];
+  assert_eq!(
+    classify_parked_balance_plan(&watches, |asset| match asset {
+      1 => (1, 1_100),
+      2 => (2, 2_100),
+      _ => unreachable!(),
+    }),
+    Ok(ParkedBalanceQualification::Qualified)
+  );
+  assert_eq!(
+    classify_parked_balance_plan(&watches, |asset| match asset {
+      1 => (1, 1_100),
+      2 => (3, 2_100),
+      _ => unreachable!(),
+    }),
+    Err(ParkedBalanceClassificationError::MinimumBalanceChanged),
+    "a later watch's drift is not hidden by an earlier qualification"
+  );
+}
+
+#[test]
+fn parked_balance_watch_rejects_invalid_or_changed_minimums_without_saturation() {
+  assert_eq!(
+    certify_parked_balance_watch(7u32, 1u128, 0u128, 1_000u128, 0),
+    Err(ParkedBalanceCertificationError::ZeroMinimumBalance)
+  );
+  assert_eq!(
+    certify_parked_balance_watch(7u32, 1u8, 3u8, 10u8, 0),
+    Err(ParkedBalanceCertificationError::ThresholdOverflow)
+  );
+  let watch =
+    certify_parked_balance_watch(7u32, 100u128, 1u128, 1_000u128, 0).expect("watch certifies");
+  assert_eq!(
+    classify_parked_balance(&watch, 2, 1_100),
+    Err(ParkedBalanceClassificationError::MinimumBalanceChanged)
   );
 }
 
@@ -1492,8 +2309,9 @@ fn due_review_deadline_traversal_is_weight_gated_and_atomic() {
     );
 
     let selector_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_block_deadline();
-    let review_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review();
-    let retry_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::return_due_block_deadline_to_service();
+    let review_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review()
+      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review());
+    let retry_weight = Actors::deadline_return_weight_upper();
     let mut branch_refused =
       WeightMeter::with_limit(selector_weight.saturating_add(retry_weight));
     assert_eq!(
@@ -1612,7 +2430,8 @@ fn due_tick_review_uses_its_own_frontier_and_preserves_refused_work() {
     assert!(matches!(Actors::classify_next_due_tick_deadline(6), Err(DeadlineMutationError::InvalidDestination)));
 
     let selector_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_tick_deadline();
-    let review_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review();
+    let review_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review()
+      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review());
     let mut selector_refused = WeightMeter::with_limit(Weight::zero());
     assert_eq!(
       Actors::process_next_due_tick_deadline(&mut selector_refused, ServiceResidenceKind::Live, 7, 7, Some(WakeupKey::Tick(8))),
@@ -1627,7 +2446,7 @@ fn due_tick_review_uses_its_own_frontier_and_preserves_refused_work() {
     assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
 
     let block_selector = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_block_deadline();
-    let retry_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::return_due_block_deadline_to_service();
+    let retry_weight = Actors::deadline_return_weight_upper();
     let complete = block_selector
       .saturating_add(retry_weight.max(review_weight))
       .saturating_add(selector_weight)
@@ -1702,8 +2521,9 @@ fn mandatory_deadline_service_reserves_both_independent_frontiers() {
 
     let block_selector = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_block_deadline();
     let tick_selector = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_tick_deadline();
-    let review = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review();
-    let retry = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::return_due_block_deadline_to_service();
+    let review = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review()
+      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review());
+    let retry = Actors::deadline_return_weight_upper();
     let complete = block_selector
       .saturating_add(retry.max(review))
       .saturating_add(tick_selector)
@@ -1751,7 +2571,7 @@ fn mandatory_deadline_service_reserves_both_independent_frontiers() {
 }
 
 #[test]
-fn on_idle_services_due_block_and_tick_frontiers_with_current_clocks() {
+fn mandatory_prepass_services_due_reviews_on_both_current_clocks() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(6);
     let mut actors = Vec::new();
@@ -1800,7 +2620,10 @@ fn on_idle_services_due_block_and_tick_frontiers_with_current_clocks() {
         .all(|actor| DeadlineHandles::<Test>::contains_key(actor.actor_id))
     );
 
-    let consumed = Actors::on_idle(7, Weight::MAX);
+    let consumed = Actors::actor_prepass(RuntimeOrigin::none())
+      .unwrap()
+      .actual_weight
+      .unwrap();
     assert_ne!(consumed, Weight::zero());
     assert!(
       actors
@@ -2022,6 +2845,288 @@ fn due_review_interpreter_routes_one_snapshot_without_consuming_refusals() {
     );
     assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
     assert!(ServiceNodes::<Test>::contains_key(actor_id));
+  });
+}
+
+#[test]
+fn manual_observation_profile_parks_on_false_and_age_review_rechecks_current_predicate() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_observation(
+      12,
+      ScalarObservationState::Fresh {
+        value: 5,
+        observed_at: 1,
+      },
+    );
+    let mut steps = inert_contract_steps();
+    steps[0].precondition = all_conditions(vec![Predicate::ObservationAbove {
+      feed: 12,
+      threshold: 10,
+      max_age_blocks: 1,
+    }]);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, steps);
+    let post = Actors::manual_trigger(RuntimeOrigin::root(), actor_id)
+      .expect("Manual observation occurrence enters Park");
+    assert_eq!(
+      post.actual_weight,
+      Some(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::manual_observation_park())
+    );
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    let Some(ProcessResidence::Parked(evidence)) =
+      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence)
+    else {
+      panic!("false Manual observation profile enters Park");
+    };
+    assert_eq!(evidence.reason, ParkNegativeReason::PredicateFalse);
+    assert_eq!(evidence.review_at, Some(2));
+    let parked_record = match ActorSemanticStates::<Test>::get(actor_id) {
+      Some(ActorSemanticState::Active(record)) => record,
+      _ => panic!("parked Actor remains active"),
+    };
+    assert_eq!(evidence.plan_identity, parked_record.admission.admission_identity);
+    assert!(
+      Actors::load_contract_geometry_with_admission(actor_id, &parked_record.admission).is_some()
+    );
+    assert_eq!(DependencyPlans::<Test>::get(actor_id).len(), 1);
+    assert_eq!(
+      DependencyTimedReviews::<Test>::get(actor_id).map(|review| review.deadline),
+      Some(WakeupKey::Block(2))
+    );
+
+    set_observation(12, ScalarObservationState::Stale);
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let due_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review()
+      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_pending_observation_availability_event());
+    let mut due_meter = WeightMeter::with_limit(due_weight);
+    assert_eq!(
+      Actors::process_next_due_block_observation_availability_review(
+        &mut due_meter,
+        ServiceResidenceKind::Pending,
+        2,
+        Some(WakeupKey::Block(3)),
+      ),
+      Ok((
+        actor,
+        DependencyReviewMutation::Rearmed(DependencyPlanMutation {
+          retained: 1,
+          timed_review: DependencyTimedReviewMutation::Installed,
+          ..Default::default()
+        })
+      ))
+    );
+    assert_eq!(
+      DependencyTimedReviews::<Test>::get(actor_id).map(|review| review.deadline),
+      Some(WakeupKey::Block(3))
+    );
+
+    set_observation(
+      12,
+      ScalarObservationState::Fresh {
+        value: 20,
+        observed_at: 2,
+      },
+    );
+    let source = DependencyPlans::<Test>::get(actor_id)[0].source;
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::publish_dependency_event_with_source_retention(source)
+        .expect("equal-value freshness advances the causal revision");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    let scan_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_dependency_scan_unit();
+    let mut member_meter = WeightMeter::with_limit(scan_weight);
+    assert_eq!(
+      Actors::process_next_dependency_scan_unit(&mut member_meter),
+      Ok(Some(DependencyScanMutation::Advanced(1)))
+    );
+    let mut completion_meter = WeightMeter::with_limit(scan_weight);
+    assert_eq!(
+      Actors::process_next_dependency_scan_unit(&mut completion_meter),
+      Ok(Some(DependencyScanMutation::Completed))
+    );
+    let pending = PendingDependencyEvents::<Test>::get(actor_id).expect("causal event exists");
+    let Some(ProcessResidence::Parked(current_evidence)) =
+      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence)
+    else {
+      panic!("negative age review remains parked");
+    };
+    let event_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_pending_observation_availability_event();
+    let mut event_meter = WeightMeter::with_limit(event_weight);
+    assert!(matches!(
+      Actors::process_pending_observation_availability_event(
+        &mut event_meter,
+        pending,
+        current_evidence,
+        ServiceResidenceKind::Pending,
+        2,
+      ),
+      Ok(DependencyReviewMutation::Woke)
+    ));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+  });
+}
+
+#[test]
+fn causal_observation_pending_rearms_current_snapshot_or_wakes_service() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    let source = 33;
+    let feed = 11;
+    ObservationDependencySources::<Test>::insert(feed, source);
+    DependencySourceObservations::<Test>::insert(source, feed);
+    set_observation(feed, ScalarObservationState::Unavailable);
+    let owner = PendingCheckOwner {
+      actor,
+      plan_revision: 12,
+    };
+    let evidence = ParkEvidence {
+      plan_identity: record.admission.admission_identity,
+      reason: ParkNegativeReason::SourceUnavailable,
+      review_at: Some(3),
+    };
+    Actors::transfer_service_member_to_park(
+      actor,
+      ServiceResidenceKind::Live,
+      owner.plan_revision,
+      evidence.reason,
+      evidence.review_at,
+      &[DependencyPlanSource {
+        source,
+        observed_revision: 0,
+      }],
+      Some(WakeupKey::Block(3)),
+    )
+    .unwrap();
+
+    let publish_and_scan = || {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        Actors::publish_dependency_event_with_source_retention(source)
+          .expect("revision publication enters the source selector");
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+      let scan_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_dependency_scan_unit();
+      let mut no_scan_weight = WeightMeter::with_limit(Weight::zero());
+      assert_eq!(
+        Actors::process_next_dependency_scan_unit(&mut no_scan_weight),
+        Err(DependencyScanWorkerError::InsufficientWeight)
+      );
+      assert_eq!(DependencyScanSourceListState::<Test>::get().count, 1);
+      let mut member_meter = WeightMeter::with_limit(scan_weight);
+      assert_eq!(
+        Actors::process_next_dependency_scan_unit(&mut member_meter),
+        Ok(Some(DependencyScanMutation::Advanced(1)))
+      );
+      let mut completion_meter = WeightMeter::with_limit(scan_weight);
+      assert_eq!(
+        Actors::process_next_dependency_scan_unit(&mut completion_meter),
+        Ok(Some(DependencyScanMutation::Completed))
+      );
+    };
+
+    publish_and_scan();
+    let unavailable = PendingDependencyEvents::<Test>::get(actor_id).expect("Pending event");
+    let event_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_pending_observation_availability_event();
+    let mut no_weight = WeightMeter::with_limit(Weight::zero());
+    assert_eq!(
+      Actors::process_pending_observation_availability_event(
+        &mut no_weight,
+        unavailable,
+        evidence,
+        ServiceResidenceKind::Live,
+        1,
+      ),
+      Err(DependencyReviewWorkerError::InsufficientWeight)
+    );
+    assert_eq!(PendingDependencyEvents::<Test>::get(actor_id), Some(unavailable));
+    let mut event_meter = WeightMeter::with_limit(event_weight);
+    assert_eq!(
+      Actors::process_pending_observation_availability_event(
+        &mut event_meter,
+        unavailable,
+        evidence,
+        ServiceResidenceKind::Live,
+        1,
+      ),
+      Ok(DependencyReviewMutation::Rearmed(DependencyPlanMutation {
+        retained: 1,
+        timed_review: DependencyTimedReviewMutation::Retained,
+        ..Default::default()
+      }))
+    );
+    assert_eq!(
+      DependencyRegistrations::<Test>::get(source, actor_id)
+        .map(|registration| registration.acknowledged_revision),
+      Some(1)
+    );
+    assert_eq!(
+      DependencyTimedReviews::<Test>::get(actor_id).map(|review| review.deadline),
+      Some(WakeupKey::Block(3))
+    );
+
+    set_observation(
+      feed,
+      ScalarObservationState::Fresh {
+        value: 7,
+        observed_at: 1,
+      },
+    );
+    publish_and_scan();
+    let available = PendingDependencyEvents::<Test>::get(actor_id).expect("Pending event");
+    race_observation_source_revision_once(source);
+    assert_eq!(
+      Actors::interpret_pending_observation_availability_event(
+        available,
+        evidence,
+        ServiceResidenceKind::Live,
+        1,
+      ),
+      Err(DependencyRegistrationError::RevisionMismatch)
+    );
+    assert_eq!(
+      PendingDependencyEvents::<Test>::get(actor_id),
+      Some(available)
+    );
+    publish_and_scan();
+    frame_system::Pallet::<Test>::set_block_number(3);
+    let due_weight = event_weight
+      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_parked_balance_review())
+      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review())
+      .max(<<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_pending_parked_balance_event());
+    let mut due_meter = WeightMeter::with_limit(due_weight);
+    assert_eq!(
+      Actors::process_next_due_block_observation_availability_review(
+        &mut due_meter,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+      ),
+      Ok((actor, DependencyReviewMutation::Woke))
+    );
+    assert!(!PendingDependencyEvents::<Test>::contains_key(actor_id));
+    assert!(!DependencyTimedReviews::<Test>::contains_key(actor_id));
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ServiceNodes::<Test>::get(actor_id).map(|node| node.eligible_from),
+      Some(4)
+    );
   });
 }
 
@@ -2273,7 +3378,7 @@ fn canonical_effectful_later_retry_moves_through_deadline_and_reenters_once() {
 
     frame_system::Pallet::<Test>::set_block_number(retry_at);
     let selector_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_block_deadline();
-    let retry_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::return_due_block_deadline_to_service();
+    let retry_weight = Actors::deadline_return_weight_upper();
     let deadline_weight = selector_weight.saturating_add(retry_weight);
     let mut no_weight = WeightMeter::with_limit(Weight::zero());
     assert_eq!(
@@ -2298,6 +3403,29 @@ fn canonical_effectful_later_retry_moves_through_deadline_and_reenters_once() {
     );
     assert!(DeadlineHandles::<Test>::contains_key(actor_id));
     assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    let source_root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+    for shortfall in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+      let mut refused = WeightMeter::with_limit(
+        deadline_weight
+          .checked_sub(&shortfall)
+          .expect("each complete Deadline dimension is positive"),
+      );
+      assert_eq!(
+        Actors::process_next_due_block_deadline(
+          &mut refused,
+          ServiceResidenceKind::Live,
+          retry_at,
+          None,
+        ),
+        Err(DependencyReviewWorkerError::InsufficientWeight)
+      );
+      assert_eq!(refused.consumed(), selector_weight);
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+        source_root,
+        "branch refusal must retain the exact due source and canonical Service state"
+      );
+    }
     let mut admitted = WeightMeter::with_limit(deadline_weight);
     assert_eq!(
       Actors::process_next_due_block_deadline(
@@ -2394,14 +3522,17 @@ fn canonical_effectful_terminal_attempt_rolls_back_then_cleans_before_service_un
     );
     assert!(!ActorSemanticStates::<Test>::contains_key(actor_id));
     assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
     assert_eq!(
-      ActorProcesses::<Test>::get(actor_id).map(|process| (process.status, process.residence)),
-      Some((
-        ProcessStatus::Retired(CloseReason::ProductiveCycleCompleted),
-        None,
-      ))
+      ServiceHeader::<Test>::get(),
+      ServiceHeaderRecord {
+        round_block: Some(3),
+        ..ServiceHeaderRecord::default()
+      },
+      "the paid final discovery opens an empty round, not an Actor residence"
     );
-    assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
   });
 }
 
@@ -2438,19 +3569,367 @@ fn canonical_zero_step_terminal_attempt_cleans_before_service_unlink() {
     Actors::execute_cycle(Weight::MAX);
     assert!(!ActorSemanticStates::<Test>::contains_key(actor_id));
     assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
     assert_eq!(
-      ActorProcesses::<Test>::get(actor_id).map(|process| (process.status, process.residence)),
-      Some((
-        ProcessStatus::Retired(CloseReason::AutoCloseNonceReached),
-        None,
+      ServiceHeader::<Test>::get(),
+      ServiceHeaderRecord {
+        round_block: Some(now),
+        ..ServiceHeaderRecord::default()
+      },
+      "the paid final discovery opens an empty round, not an Actor residence"
+    );
+  });
+}
+
+#[cfg(feature = "try-runtime")]
+fn assert_carrier_corruption_rejected(
+  label: &str,
+  corrupt: impl FnOnce(),
+) -> polkadot_sdk::sp_runtime::TryRuntimeError {
+  let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+  let error = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+    corrupt();
+    let corrupted = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let error =
+      Actors::do_try_state().expect_err(&format!("{label}: corrupt carrier must be rejected"));
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      corrupted,
+      "{label}: validation must not repair or mutate state"
+    );
+    polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(error)
+  });
+  assert_eq!(
+    polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+    before
+  );
+  assert_ok!(Actors::do_try_state());
+  error
+}
+
+#[cfg(feature = "try-runtime")]
+#[test]
+fn try_state_carrier_service_ring_rejects_orphans_and_broken_topology() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Actors::begin_service_round(1),
+        )
+      })
+    );
+    assert_ok!(Actors::do_try_state()); // A paid empty round may retain its round marker.
+    let actors: Vec<_> = (0..4)
+      .map(|_| {
+        let id = create_system_with(ALICE, manual_schedule(), None, BoundedVec::default());
+        assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), id));
+        Actors::load_actor_ref(id).unwrap()
+      })
+      .collect();
+    let dormant = create_system_with(ALICE, manual_schedule(), None, BoundedVec::default());
+    assert_ok!(Actors::deactivate_actor(RuntimeOrigin::root(), dormant));
+    assert_eq!(ServiceHeader::<Test>::get().count, 4);
+    assert_ok!(Actors::do_try_state());
+    for owner in [dormant, 99_999] {
+      assert_carrier_corruption_rejected("ownerless Service node", || {
+        ServiceNodes::<Test>::insert(
+          owner,
+          ServiceNodes::<Test>::get(actors[0].actor_id).unwrap(),
+        );
+        ServiceHeader::<Test>::mutate(|header| header.count += 1);
+      });
+    }
+    assert_carrier_corruption_rejected("Service cardinality", || {
+      ServiceHeader::<Test>::mutate(|header| header.count += 1);
+    });
+    assert_carrier_corruption_rejected("missing Service cursor", || {
+      ServiceHeader::<Test>::mutate(|header| header.cursor = None);
+    });
+    assert_carrier_corruption_rejected("stale Service cursor", || {
+      ServiceHeader::<Test>::mutate(|header| header.cursor.as_mut().unwrap().generation += 1);
+    });
+    assert_carrier_corruption_rejected("Service backlink", || {
+      ServiceNodes::<Test>::mutate(actors[1].actor_id, |node| {
+        node.as_mut().unwrap().previous = actors[1]
+      });
+    });
+    assert_carrier_corruption_rejected("stale Service next generation", || {
+      ServiceNodes::<Test>::mutate(actors[0].actor_id, |node| {
+        node.as_mut().unwrap().next.generation += 1
+      });
+    });
+    assert_carrier_corruption_rejected("two disconnected Service rings", || {
+      for pair in actors.chunks(2) {
+        for (actor, peer) in [(pair[0], pair[1]), (pair[1], pair[0])] {
+          ServiceNodes::<Test>::mutate(actor.actor_id, |node| {
+            let node = node.as_mut().unwrap();
+            node.next = peer;
+            node.previous = peer;
+          });
+        }
+      }
+    });
+    // Removing real peers covers pair/singleton/empty rings without fabricating residence.
+    for actor in actors {
+      assert_ok!(Actors::close_actor(RuntimeOrigin::root(), actor.actor_id));
+      assert_ok!(Actors::do_try_state());
+    }
+    assert_carrier_corruption_rejected("cursor without any Service member", || {
+      ServiceHeader::<Test>::mutate(|header| header.cursor = Some(actor_ref(99_999, 1)));
+    });
+  });
+}
+
+#[cfg(feature = "try-runtime")]
+fn prepare_carrier_deadlines() -> (u64, u64) {
+  System::set_block_number(1);
+  setup_temporary_retry_pool();
+  let mut schedule = manual_schedule();
+  schedule.cooldown_blocks = 4;
+  let sleeper = create_system_with(ALICE, schedule, None, temporary_retry_swap_plan());
+  fund_native(sleeper, 100);
+  set_temporary_dex_failure(true);
+  assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), sleeper));
+  run_next_idle(Weight::MAX);
+  assert!(DeadlineHandles::<Test>::contains_key(sleeper));
+  assert!(Actors::actor_hot(sleeper).unwrap().wakeup_pointer.is_none());
+  let temporal = create_system_with(ALICE, at_time_schedule(1_000), None, BoundedVec::default());
+  assert!(TriggerDeadlineHandles::<Test>::contains_key(temporal));
+  assert!(matches!(
+    ActorProcesses::<Test>::get(temporal).unwrap().status,
+    ProcessStatus::Disabled(_)
+  ));
+  assert_ok!(Actors::do_try_state());
+  (sleeper, temporal)
+}
+
+#[cfg(feature = "try-runtime")]
+#[test]
+fn try_state_carrier_deadline_handles_require_exact_live_owners() {
+  new_test_ext().execute_with(|| {
+    let (sleeper, temporal) = prepare_carrier_deadlines();
+    let dormant = create_system_with(ALICE, manual_schedule(), None, BoundedVec::default());
+    assert_ok!(Actors::deactivate_actor(RuntimeOrigin::root(), dormant));
+    for trigger in [false, true] {
+      let handle = if trigger {
+        TriggerDeadlineHandles::<Test>::get(temporal)
+      } else {
+        DeadlineHandles::<Test>::get(sleeper)
+      }
+      .unwrap();
+      for owner in [dormant, 99_999] {
+        for mismatched_key in [false, true] {
+          assert_carrier_corruption_rejected("Deadline handle inverse owner", || {
+            let mut orphan = handle;
+            if !mismatched_key {
+              orphan.actor.actor_id = owner;
+            }
+            if trigger {
+              TriggerDeadlineHandles::<Test>::insert(owner, orphan);
+            } else {
+              DeadlineHandles::<Test>::insert(owner, orphan);
+            }
+          });
+        }
+      }
+    }
+    assert_carrier_corruption_rejected("extra Trigger on non-temporal owner", || {
+      let mut handle = TriggerDeadlineHandles::<Test>::get(temporal).unwrap();
+      handle.actor = Actors::load_actor_ref(sleeper).unwrap();
+      TriggerDeadlineHandles::<Test>::insert(sleeper, handle);
+    });
+    assert_carrier_corruption_rejected("stale Trigger generation", || {
+      TriggerDeadlineHandles::<Test>::mutate(temporal, |handle| {
+        handle.as_mut().unwrap().actor.generation += 1
+      });
+    });
+    assert_carrier_corruption_rejected("stale process Deadline generation", || {
+      DeadlineHandles::<Test>::mutate(sleeper, |handle| {
+        handle.as_mut().unwrap().actor.generation += 1
+      });
+    });
+  });
+}
+
+#[cfg(feature = "try-runtime")]
+#[test]
+fn try_state_carrier_deadline_pages_and_index_are_bijective() {
+  new_test_ext().execute_with(|| {
+    let (_, temporal) = prepare_carrier_deadlines();
+    // One full and one sparse C32 page; distinct keys also cross an index-page boundary.
+    for _ in 0..32 {
+      create_system_with(ALICE, at_time_schedule(1_000), None, BoundedVec::default());
+    }
+    for ticks in 2_000..2_033 {
+      create_system_with(ALICE, at_time_schedule(ticks), None, BoundedVec::default());
+    }
+    let handle = TriggerDeadlineHandles::<Test>::get(temporal).unwrap();
+    let header = DeadlineHeaders::<Test>::get(handle.key).unwrap();
+    assert_eq!(header.page_count, 2);
+    assert_eq!(header.count, 33);
+    assert_eq!(
+      DeadlineIndexPages::<Test>::iter_prefix(WakeupClock::Tick).count(),
+      2
+    );
+    assert_ok!(Actors::do_try_state());
+    assert_carrier_corruption_rejected("orphan occupied Deadline slot", || {
+      DeadlinePages::<Test>::mutate(handle.key, header.last_page, |page| {
+        let page = page.as_mut().unwrap();
+        page.entries[31] = Some(actor_ref(99_999, 1));
+        page.live_entries += 1;
+      });
+      DeadlineHeaders::<Test>::mutate(handle.key, |header| header.as_mut().unwrap().count += 1);
+    });
+    assert_carrier_corruption_rejected("copied Deadline page without reverse handles", || {
+      DeadlinePages::<Test>::insert(
+        handle.key,
+        header.next_page,
+        DeadlinePages::<Test>::get(handle.key, header.last_page).unwrap(),
+      );
+    });
+    assert_eq!(
+      assert_carrier_corruption_rejected("disconnected but fully owned Deadline page", || {
+        DeadlinePages::<Test>::mutate(handle.key, header.first_page, |page| {
+          page.as_mut().unwrap().next_page = None
+        });
+        DeadlineHeaders::<Test>::mutate(handle.key, |stored| {
+          let stored = stored.as_mut().unwrap();
+          stored.last_page = stored.first_page;
+          stored.page_count = 1;
+          stored.count = 32;
+          stored.first_vacant_page = None;
+        });
+      }),
+      polkadot_sdk::sp_runtime::TryRuntimeError::Other("Deadline page is outside its header chain")
+    );
+    assert_carrier_corruption_rejected("orphan Deadline header", || {
+      DeadlineHeaders::<Test>::insert(WakeupKey::Tick(99_999), header);
+    });
+    assert_carrier_corruption_rejected("Deadline live count", || {
+      DeadlinePages::<Test>::mutate(handle.key, header.last_page, |page| {
+        page.as_mut().unwrap().live_entries += 1
+      });
+    });
+    assert_carrier_corruption_rejected("Deadline page backlink", || {
+      DeadlinePages::<Test>::mutate(handle.key, header.last_page, |page| {
+        page.as_mut().unwrap().previous_page = None
+      });
+    });
+    assert_carrier_corruption_rejected("Deadline page chain cycle", || {
+      DeadlinePages::<Test>::mutate(handle.key, header.last_page, |page| {
+        page.as_mut().unwrap().next_page = Some(header.first_page)
+      });
+    });
+    assert_carrier_corruption_rejected("missing Deadline vacancy authority", || {
+      DeadlineHeaders::<Test>::mutate(handle.key, |header| {
+        header.as_mut().unwrap().first_vacant_page = None
+      });
+    });
+    assert_carrier_corruption_rejected("full page in vacancy list", || {
+      DeadlineHeaders::<Test>::mutate(handle.key, |stored| {
+        stored.as_mut().unwrap().first_vacant_page = Some(header.first_page)
+      });
+    });
+    assert_carrier_corruption_rejected("Deadline vacancy cycle", || {
+      DeadlinePages::<Test>::mutate(handle.key, header.last_page, |page| {
+        page.as_mut().unwrap().next_vacant_page = Some(header.last_page)
+      });
+    });
+    assert_carrier_corruption_rejected("orphan Deadline index position", || {
+      DeadlineIndexPositions::<Test>::insert(WakeupKey::Tick(99_999), 0);
+    });
+    assert_carrier_corruption_rejected("orphan Deadline index page", || {
+      DeadlineIndexPages::<Test>::insert(
+        WakeupClock::Tick,
+        99_999,
+        DeadlineIndexPages::<Test>::get(WakeupClock::Tick, 0).unwrap(),
+      );
+    });
+    assert_eq!(
+      assert_carrier_corruption_rejected("Deadline index page packing", || {
+        DeadlineIndexPages::<Test>::mutate(WakeupClock::Tick, 0, |page| {
+          assert!(page.as_mut().unwrap().pop().is_some());
+        });
+      }),
+      polkadot_sdk::sp_runtime::TryRuntimeError::Other("Deadline index pages are not packed C32")
+    );
+    assert_carrier_corruption_rejected("Deadline index length", || {
+      DeadlineIndexLen::<Test>::mutate(WakeupClock::Tick, |len| *len += 1);
+    });
+    assert_carrier_corruption_rejected("Deadline index reverse position", || {
+      DeadlineIndexPositions::<Test>::mutate(handle.key, |index| *index = Some(99_999));
+    });
+    assert_carrier_corruption_rejected("Deadline heap order with correct reverse indices", || {
+      DeadlineIndexPages::<Test>::mutate(WakeupClock::Tick, 0, |page| {
+        let page = page.as_mut().unwrap();
+        page.as_mut().swap(0, 1);
+        DeadlineIndexPositions::<Test>::insert(page[0], 0);
+        DeadlineIndexPositions::<Test>::insert(page[1], 1);
+      });
+    });
+    let sparse_member = DeadlinePages::<Test>::get(handle.key, header.last_page)
+      .unwrap()
+      .entries
+      .iter()
+      .flatten()
+      .next()
+      .unwrap()
+      .actor_id;
+    assert_ok!(Actors::close_actor(RuntimeOrigin::root(), temporal));
+    assert_eq!(
+      DeadlineHeaders::<Test>::get(handle.key)
+        .unwrap()
+        .first_vacant_page,
+      Some(header.first_page)
+    );
+    assert_ok!(Actors::do_try_state());
+    assert_ok!(Actors::close_actor(RuntimeOrigin::root(), sparse_member));
+    assert!(!DeadlinePages::<Test>::contains_key(
+      handle.key,
+      header.last_page
+    ));
+    assert_ok!(Actors::do_try_state());
+    for _ in 0..2 {
+      create_system_with(ALICE, at_time_schedule(1_000), None, BoundedVec::default());
+      assert_ok!(Actors::do_try_state());
+    }
+    assert_eq!(
+      DeadlineHeaders::<Test>::get(handle.key).unwrap().last_page,
+      header.next_page,
+      "reclaimed page ids need not be contiguous"
+    );
+  });
+}
+
+#[cfg(feature = "try-runtime")]
+#[test]
+fn try_state_rejects_orphan_canonical_processes() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(Actors::do_try_state());
+    ActorProcesses::<Test>::insert(
+      999,
+      ActorProcess {
+        generation: 1,
+        last_attempted: Some(1),
+        status: ProcessStatus::Retired(CloseReason::AutoCloseNonceReached),
+        residence: None,
+      },
+    );
+    assert_eq!(
+      Actors::do_try_state(),
+      Err(polkadot_sdk::sp_runtime::TryRuntimeError::Other(
+        "canonical process has no semantic Actor owner"
       ))
     );
-    assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
+    ActorProcesses::<Test>::remove(999);
+    assert_ok!(Actors::do_try_state());
   });
 }
 
 #[test]
-fn service_retirement_atomically_unlinks_each_topology_and_retires_the_process() {
+fn service_retirement_atomically_unlinks_each_topology_and_reclaims_the_process() {
   new_test_ext().execute_with(|| {
     let members = [
       actor_ref(920, 1),
@@ -2463,15 +3942,46 @@ fn service_retirement_atomically_unlinks_each_topology_and_retires_the_process()
         .expect("service publication succeeds");
     }
 
+    let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert_eq!(
+      Actors::retire_service_member(actor_ref(members[0].actor_id, 2)),
+      Err(ServiceRetirementError::Ring(
+        ServiceRingMutationError::StaleGeneration
+      ))
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root
+    );
+    ActorProcesses::<Test>::mutate(members[0].actor_id, |process| {
+      process.as_mut().unwrap().residence = None;
+    });
+    let corrupt_root =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert_eq!(
+      Actors::retire_service_member(members[0]),
+      Err(ServiceRetirementError::Ring(
+        ServiceRingMutationError::ProcessResidenceMismatch
+      ))
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      corrupt_root
+    );
+    ActorProcesses::<Test>::insert(
+      members[0].actor_id,
+      serving_process(members[0], ServiceResidenceKind::Live),
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root
+    );
+
     for actor in [members[2], members[0], members[3], members[1]] {
-      Actors::retire_service_member(actor, CloseReason::OwnerInitiated)
+      Actors::retire_service_member(actor)
         .expect("interior, cursor, pair, and singleton retirement succeeds");
       assert!(!ServiceNodes::<Test>::contains_key(actor.actor_id));
-      assert_eq!(
-        ActorProcesses::<Test>::get(actor.actor_id)
-          .map(|process| (process.status, process.residence)),
-        Some((ProcessStatus::Retired(CloseReason::OwnerInitiated), None))
-      );
+      assert!(!ActorProcesses::<Test>::contains_key(actor.actor_id));
     }
     assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
 
@@ -2479,11 +3989,17 @@ fn service_retirement_atomically_unlinks_each_topology_and_retires_the_process()
     publish_test_service_member(corrupt, ServiceResidenceKind::Live, 2)
       .expect("service publication succeeds");
     ServiceHeader::<Test>::mutate(|header| header.cursor = None);
+    let corrupt_root =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
     assert_eq!(
-      Actors::retire_service_member(corrupt, CloseReason::OwnerInitiated),
+      Actors::retire_service_member(corrupt),
       Err(ServiceRetirementError::Ring(
         ServiceRingMutationError::CorruptRing
       ))
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      corrupt_root
     );
     assert!(ServiceNodes::<Test>::contains_key(corrupt.actor_id));
     assert_eq!(
@@ -2586,33 +4102,6 @@ fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
       RequiredProcessTransition::PublishTypedResidence,
       PlannerIntent::Publish,
       AtomicPublicationSite::EveryDirectCaller,
-      AtomicOutcome::SuccessorOrRollback,
-    ),
-    (
-      "scheduler.rs",
-      "control_finalize_underfunded_at_time",
-      TransactionBoundary::CallerTransactional,
-      RequiredProcessTransition::RetireOrDisable,
-      PlannerIntent::RetireOrDisable,
-      AtomicPublicationSite::EveryDirectCaller,
-      AtomicOutcome::TerminalOrRollback,
-    ),
-    (
-      "scheduler.rs",
-      "control_normalize_ready_head",
-      TransactionBoundary::FunctionTransactional,
-      RequiredProcessTransition::CarrierOnly,
-      PlannerIntent::CarrierOnly,
-      AtomicPublicationSite::CarrierNoProcessPublication,
-      AtomicOutcome::CarrierOnlyOrRollback,
-    ),
-    (
-      "scheduler.rs",
-      "control_remove_ready_primary",
-      TransactionBoundary::FunctionTransactional,
-      RequiredProcessTransition::AtomicSuccessorOrRemoval,
-      PlannerIntent::Replace,
-      AtomicPublicationSite::MutationOwner,
       AtomicOutcome::SuccessorOrRollback,
     ),
     (
@@ -2755,7 +4244,6 @@ fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
       RequiredProcessTransition::PublishTypedResidence,
       RequiredProcessTransition::PreserveProcess,
       RequiredProcessTransition::AtomicSuccessorOrRemoval,
-      RequiredProcessTransition::RetireOrDisable,
       RequiredProcessTransition::CarrierOnly,
     ])
   );
@@ -5605,7 +7093,10 @@ fn mandatory_service_frontier_dispatches_the_selected_zero_step_kind() {
       Actors::service_canonical_round_head(&mut refused, 5),
       Err(ServiceRoundError::InsufficientWeight)
     );
-    assert_eq!(refused.consumed(), Weight::zero());
+    assert_eq!(
+      refused.consumed(),
+      selector.saturating_add(<Test as crate::Config>::WeightInfo::scheduler_actor_state_probe())
+    );
     assert_eq!(ServiceHeader::<Test>::get(), before_header);
     assert_eq!(ActorProcesses::<Test>::get(actor_id), Some(before_process));
 
@@ -6015,6 +7506,7 @@ fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
     assert!(ServiceNodes::<Test>::contains_key(actor_id));
 
     frame_system::Pallet::<Test>::set_block_number(6);
+    let complete = complete.saturating_add(Actors::close_dispatch_weight_upper());
     let inspection =
       selector.saturating_add(<Test as crate::Config>::WeightInfo::scheduler_actor_state_probe());
     let before_header = ServiceHeader::<Test>::get();
@@ -6029,8 +7521,9 @@ fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
       before_run.cumulative_outcomes,
     );
     for deficit in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
-      let close = Actors::close_dispatch_weight_upper();
-      let remaining = inspection.saturating_add(close).saturating_sub(deficit);
+      let remaining = complete
+        .saturating_sub(resources.effect)
+        .saturating_sub(deficit);
       let consumed_before = budget.limits().actor_control().saturating_sub(remaining);
       let mut resource_refused = crate::BlockResourceState::new(6);
       assert_ok!(resource_refused.begin_prepass());
@@ -6042,7 +7535,7 @@ fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
           crate::BlockResourceDomain::ActorControl,
           consumed_before,
         )
-        .expect("test leaves only a component-wise late terminal-refusal boundary");
+        .expect("test leaves a one-unit shortfall in complete terminal Control admission");
       assert_ok!(resource_refused.settle(&mut prior, consumed_before));
       let resource_refused_before = resource_refused;
       let mut refused_meter = WeightMeter::with_limit(complete);
@@ -6106,12 +7599,7 @@ fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
     assert_ne!(resource_state.usage(), resource_before.usage());
     assert_eq!(resource_state.outstanding_reservations(), 0);
     assert!(!ActorSemanticStates::<Test>::contains_key(actor_id));
-    assert_eq!(
-      ActorProcesses::<Test>::get(actor_id)
-        .expect("terminal attempt evidence remains queryable")
-        .last_attempted,
-      Some(5)
-    );
+    assert!(!ActorProcesses::<Test>::contains_key(actor_id));
     assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
     assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
@@ -6207,6 +7695,7 @@ fn mandatory_service_closes_at_global_failure_limit_and_rolls_back_refusal() {
     assert_eq!(first_semantic.hot.unsuccessful_attempt_streak, 1);
 
     frame_system::Pallet::<Test>::set_block_number(6);
+    let complete = complete.saturating_add(Actors::close_dispatch_weight_upper());
     let before_header = ServiceHeader::<Test>::get();
     let before_semantic = ActorSemanticStates::<Test>::get(actor_id).unwrap();
     let before_process = ActorProcesses::<Test>::get(actor_id).unwrap();
@@ -6240,7 +7729,7 @@ fn mandatory_service_closes_at_global_failure_limit_and_rolls_back_refusal() {
         budget.limits(),
         crate::BlockResourceDomain::ActorDrainEffect,
       ),
-      Err(ServiceRoundError::ResourceUnavailable)
+      Err(ServiceRoundError::DiscoveryUnavailable)
     );
     assert_eq!(refused_meter.consumed(), Weight::zero());
     assert_eq!(resource_refused, resource_refused_before);
@@ -6283,12 +7772,7 @@ fn mandatory_service_closes_at_global_failure_limit_and_rolls_back_refusal() {
     assert_ne!(resource_state.usage(), resource_before.usage());
     assert_eq!(resource_state.outstanding_reservations(), 0);
     assert!(!ActorSemanticStates::<Test>::contains_key(actor_id));
-    assert_eq!(
-      ActorProcesses::<Test>::get(actor_id)
-        .expect("terminal global-exhaustion evidence remains queryable")
-        .last_attempted,
-      Some(5)
-    );
+    assert!(!ActorProcesses::<Test>::contains_key(actor_id));
     assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
     assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
@@ -6385,9 +7869,36 @@ fn mandatory_service_continues_after_failed_step_without_repeating_the_prefix() 
     assert_eq!(running.cursor, 1);
     assert_eq!(running.cumulative_outcomes.failed_steps, 1);
     assert!(ServiceNodes::<Test>::contains_key(actor_id));
+    let parked_balance =
+      ParkedBalanceActivationOf::<Test>::try_from_rules(vec![ParkedBalanceRule {
+        asset: TestAsset::Native,
+        authored_min_delta: 100,
+      }])
+      .unwrap();
+    assert_eq!(
+      Actors::transfer_service_member_to_parked_balance(
+        actor,
+        ServiceResidenceKind::Live,
+        17,
+        &parked_balance,
+        WakeupKey::Block(6),
+      ),
+      Err(ParkedBalanceTransitionError::Dependency(
+        DependencyRegistrationError::StoredPlanMismatch
+      )),
+      "a coherent Running cycle cannot acquire parked-balance authority"
+    );
+    assert_eq!(
+      ActorRunStateStore::<Test>::get(actor_id)
+        .expect("busy refusal retains Run")
+        .encode(),
+      running.encode()
+    );
+    assert!(!ParkedBalanceEpisodes::<Test>::contains_key(actor_id));
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
 
     frame_system::Pallet::<Test>::set_block_number(6);
-    let semantic = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Pending)
+    let semantic = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
       .expect("continued Actor remains in canonical Service");
     let second_resources = Actors::load_actor_service_state_with_control(
       actor_id,
@@ -6436,10 +7947,15 @@ fn mandatory_service_continues_after_failed_step_without_repeating_the_prefix() 
 fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let mut step = make_step(Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Local(1),
-      amount: AmountResolution::Fixed(1),
+    setup_temporary_retry_pool();
+    set_temporary_dex_failure(true);
+    let known_effect = Weight::from_parts(17, 23);
+    set_task_effect_actual_weight_override(Some(known_effect));
+    let mut step = make_step(Task::SwapIn {
+      asset_in: TestAsset::Native,
+      asset_out: TestAsset::Local(77),
+      amount_in: AmountResolution::Fixed(10),
+      slippage_tolerance: Perbill::one(),
     });
     step.on_error = StepErrorPolicy::RetryLater { max_attempts: 3 };
     let actor_id = create_system_with(
@@ -6469,6 +7985,7 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
     let before_header = ServiceHeader::<Test>::get();
     let before_process = ActorProcesses::<Test>::get(actor_id).unwrap();
     assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
+    fund_native(actor_id, 100);
     let retry_key = WakeupKey::Block(5);
     DeadlineHeaders::<Test>::insert(
       retry_key,
@@ -6476,6 +7993,7 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
         first_page: 0,
         last_page: 0,
         next_page: 1,
+        first_vacant_page: Some(0),
         page_count: 1,
         count: 1,
       },
@@ -6499,6 +8017,7 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
     assert_ok!(resource_state.open_external_phase());
     assert_ok!(resource_state.begin_drain());
     let resource_before = resource_state;
+    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     let mut meter = WeightMeter::with_limit(complete.saturating_add(inspection));
     assert_eq!(
       Actors::service_canonical_round_head_with_resources(
@@ -6510,7 +8029,26 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
       ),
       Err(ServiceRoundError::ProcessResidenceMismatch)
     );
-    assert_eq!(meter.consumed(), inspection);
+    assert_eq!(
+      meter.consumed(),
+      inspection
+        .saturating_add(resources.control)
+        .saturating_add(suffix)
+        .saturating_add(known_effect)
+    );
+    assert_eq!(resource_state.usage().actor_effect_used(), known_effect);
+    assert_eq!(
+      meter.consumed(),
+      resource_state
+        .usage()
+        .actor_control_used()
+        .saturating_add(known_effect)
+    );
+    assert!(resource_state.optional_actor_work_halted());
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+      root_before
+    );
     assert_ne!(resource_state.usage(), resource_before.usage());
     assert_eq!(resource_state.outstanding_reservations(), 0);
     assert_eq!(ServiceHeader::<Test>::get(), before_header);
@@ -6563,21 +8101,35 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
       assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 0);
     }
 
+    // Repair cannot clear the current-block halt. Only a fresh block reopens service authority.
     assert_eq!(
       Actors::service_canonical_round_head_with_resources(
         &mut meter,
         2,
         &mut resource_state,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect
+      ),
+      Err(ServiceRoundError::DiscoveryUnavailable)
+    );
+    frame_system::Pallet::<Test>::set_block_number(3);
+    let retry_key = WakeupKey::Block(6);
+    resource_state = crate::BlockResourceState::new(3);
+    assert_ok!(resource_state.begin_prepass());
+    assert_ok!(resource_state.open_external_phase());
+    assert_ok!(resource_state.begin_drain());
+    meter = WeightMeter::with_limit(complete);
+    assert_eq!(
+      Actors::service_canonical_round_head_with_resources(
+        &mut meter,
+        3,
+        &mut resource_state,
+        budget.limits(),
         crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Ok(ServiceRoundEncounter::Eligible(actor))
     );
-    assert!(
-      meter
-        .consumed()
-        .all_lte(complete.saturating_add(inspection))
-    );
+    assert!(meter.consumed().all_lte(complete));
     assert_ne!(resource_state.usage(), resource_before.usage());
     assert_eq!(resource_state.outstanding_reservations(), 0);
     assert!(!ServiceNodes::<Test>::contains_key(actor_id));
@@ -6591,13 +8143,13 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
     ));
     let run = ActorRunStateStore::<Test>::get(actor_id).expect("retry Run remains canonical");
     assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
-    assert_eq!(run.eligible_at, 5);
+    assert_eq!(run.eligible_at, 6);
     assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 0);
   });
 }
 
 #[test]
-fn on_idle_recovers_later_retry_and_completes_once_in_fresh_drain() {
+fn mandatory_prepass_recovers_later_retry_and_completes_once_next_block() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let mut step = make_step(Task::Transfer {
@@ -6627,13 +8179,7 @@ fn on_idle_recovers_later_retry_and_completes_once_in_fresh_drain() {
     ActorControlLocators::<Test>::remove(actor_id);
     frame_system::Pallet::<Test>::set_block_number(2);
 
-    let open_resource_block = |now| {
-      let mut state = crate::BlockResourceState::new(now);
-      state.begin_prepass().unwrap();
-      state.open_external_phase().unwrap();
-      crate::CurrentBlockResourceState::<Test>::put(state);
-    };
-    open_resource_block(2);
+    run_prepass();
     assert_ne!(Actors::on_idle(2, Weight::MAX), Weight::zero());
     assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 0);
     assert!(!ServiceNodes::<Test>::contains_key(actor_id));
@@ -6656,14 +8202,14 @@ fn on_idle_recovers_later_retry_and_completes_once_in_fresh_drain() {
 
     set_asset_balance(&sovereign, TestAsset::Local(1), 10);
     frame_system::Pallet::<Test>::set_block_number(5);
-    open_resource_block(5);
+    run_prepass();
     assert_ne!(Actors::on_idle(5, Weight::MAX), Weight::zero());
     assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 0);
     assert!(ServiceNodes::<Test>::contains_key(actor_id));
     assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
 
     frame_system::Pallet::<Test>::set_block_number(6);
-    open_resource_block(6);
+    run_prepass();
     assert_ne!(Actors::on_idle(6, Weight::MAX), Weight::zero());
     assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 1);
     assert!(ServiceNodes::<Test>::contains_key(actor_id));
@@ -7041,6 +8587,28 @@ fn canonical_deadline_carrier_covers_fragmentation_full_pages_move_and_rollback(
         slot: 0,
       })
     );
+    let page_one = DeadlineHandle {
+      actor: actor_ref(239, 4),
+      key,
+      page: 1,
+      slot: 0,
+    };
+    ActorProcesses::<Test>::insert(page_one.actor.actor_id, deadline_process(page_one));
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::insert_deadline_member(page_one),
+      )
+    })
+    .expect("second page insertion succeeds");
+    assert_eq!(
+      Actors::plan_deadline_destination(planned_actor, key),
+      Ok(DeadlineHandle {
+        actor: planned_actor,
+        key,
+        page: 1,
+        slot: 1,
+      })
+    );
 
     let removed = DeadlineHandle {
       actor: actor_ref(207, 3),
@@ -7097,7 +8665,7 @@ fn canonical_deadline_carrier_covers_fragmentation_full_pages_move_and_rollback(
       DeadlineHeaders::<Test>::get(key)
         .expect("source header")
         .count,
-      31
+      32
     );
 
     let before = DeadlineHandles::<Test>::get(first.actor.actor_id);
@@ -7115,6 +8683,465 @@ fn canonical_deadline_carrier_covers_fragmentation_full_pages_move_and_rollback(
       polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
     });
     assert_eq!(DeadlineHandles::<Test>::get(first.actor.actor_id), before);
+  });
+}
+
+fn storage_root() -> Vec<u8> {
+  polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1)
+}
+
+fn deadline_mutation<R>(
+  apply: impl FnOnce() -> Result<R, DeadlineMutationError>,
+) -> Result<R, DeadlineMutationError> {
+  use polkadot_sdk::frame_support::storage::{TransactionOutcome, with_transaction_unchecked};
+  with_transaction_unchecked(|| match apply() {
+    Ok(value) => TransactionOutcome::Commit(Ok(value)),
+    Err(error) => TransactionOutcome::Rollback(Err(error)),
+  })
+}
+
+fn assert_deadline_vacancy_topology(
+  key: WakeupKey<u64>,
+  expected: &BTreeMap<u64, DeadlineHandle<u64>>,
+) {
+  let pages: BTreeMap<_, _> = DeadlinePages::<Test>::iter_prefix(key).collect();
+  let Some(header) = DeadlineHeaders::<Test>::get(key) else {
+    assert!(expected.is_empty());
+    assert!(pages.is_empty());
+    assert!(!DeadlineIndexPositions::<Test>::contains_key(key));
+    return;
+  };
+  assert_eq!(header.count as usize, expected.len());
+  assert_eq!(header.page_count as usize, pages.len());
+  assert!(header.page_count <= Actors::deadline_destination_page_bound());
+  assert!(header.last_page < header.next_page);
+  assert!(DeadlineIndexPositions::<Test>::contains_key(key));
+
+  let mut physical = BTreeSet::new();
+  let mut nonfull = BTreeSet::new();
+  let mut actual = BTreeMap::new();
+  let mut previous = None;
+  let mut cursor = Some(header.first_page);
+  while let Some(id) = cursor {
+    assert!(physical.insert(id), "physical page cycle");
+    let page = pages.get(&id).expect("physical page exists");
+    assert_eq!(page.previous_page, previous);
+    assert_eq!(page.entries.len(), 32);
+    assert_eq!(
+      usize::from(page.live_entries),
+      page.entries.iter().filter(|entry| entry.is_some()).count()
+    );
+    assert!(page.live_entries > 0);
+    if page.live_entries < 32 {
+      nonfull.insert(id);
+    } else {
+      assert_eq!(page.previous_vacant_page, None);
+      assert_eq!(page.next_vacant_page, None);
+    }
+    for (slot, actor) in page.entries.iter().enumerate() {
+      if let Some(actor) = actor {
+        let handle = DeadlineHandle {
+          actor: *actor,
+          key,
+          page: id,
+          slot: slot as u8,
+        };
+        assert!(actual.insert(actor.actor_id, handle).is_none());
+        assert_eq!(DeadlineHandles::<Test>::get(actor.actor_id), Some(handle));
+        assert_eq!(
+          ActorProcesses::<Test>::get(actor.actor_id),
+          Some(deadline_process(handle))
+        );
+      }
+    }
+    previous = Some(id);
+    cursor = page.next_page;
+  }
+  assert_eq!(previous, Some(header.last_page));
+  assert_eq!(physical, pages.keys().copied().collect());
+  assert_eq!(&actual, expected);
+
+  let mut vacancies = BTreeSet::new();
+  previous = None;
+  cursor = header.first_vacant_page;
+  while let Some(id) = cursor {
+    assert!(vacancies.insert(id), "vacancy page cycle");
+    let page = pages.get(&id).expect("vacancy page exists");
+    assert_eq!(page.previous_vacant_page, previous);
+    assert!(page.live_entries < 32);
+    previous = Some(id);
+    cursor = page.next_vacant_page;
+  }
+  assert_eq!(
+    vacancies, nonfull,
+    "every nonfull page is reachable exactly once"
+  );
+}
+
+fn insert_planned_deadline(actor: ActorRef, key: WakeupKey<u64>) -> DeadlineHandle<u64> {
+  let before = storage_root();
+  let handle = Actors::plan_deadline_destination(actor, key).expect("destination exists");
+  assert_eq!(storage_root(), before, "planning is read-only");
+  deadline_mutation(|| {
+    ActorProcesses::<Test>::insert(actor.actor_id, deadline_process(handle));
+    Actors::insert_deadline_member(handle)
+  })
+  .expect("planned insertion succeeds");
+  handle
+}
+
+#[test]
+fn deadline_vacancy_membership_survives_all_page_removal_orders_and_refills() {
+  for order in [
+    [0, 1, 2],
+    [0, 2, 1],
+    [1, 0, 2],
+    [1, 2, 0],
+    [2, 0, 1],
+    [2, 1, 0],
+  ] {
+    new_test_ext().execute_with(|| {
+      let key = WakeupKey::Block(77);
+      let mut expected = BTreeMap::new();
+      for id in 0..96 {
+        let handle = insert_planned_deadline(actor_ref(10_000 + id, 1), key);
+        expected.insert(handle.actor.actor_id, handle);
+        assert_deadline_vacancy_topology(key, &expected);
+      }
+      let mut holes = Vec::new();
+      for page in order {
+        let id = 10_000 + page * 32 + 15;
+        let handle = expected.remove(&id).unwrap();
+        assert_eq!(
+          deadline_mutation(|| Actors::remove_deadline_member(handle.actor)),
+          Ok(handle)
+        );
+        holes.push(handle);
+        assert_deadline_vacancy_topology(key, &expected);
+      }
+      // Fill retained holes from vacancy tail to head, including physical/vacancy neighbor overlap.
+      for old in holes {
+        let handle = DeadlineHandle {
+          actor: actor_ref(old.actor.actor_id, 2),
+          ..old
+        };
+        deadline_mutation(|| {
+          ActorProcesses::<Test>::insert(handle.actor.actor_id, deadline_process(handle));
+          Actors::insert_deadline_member(handle)
+        })
+        .unwrap();
+        expected.insert(handle.actor.actor_id, handle);
+        assert_deadline_vacancy_topology(key, &expected);
+        let before = storage_root();
+        assert_eq!(
+          deadline_mutation(|| Actors::remove_deadline_member(old.actor)),
+          Err(DeadlineMutationError::StaleGeneration)
+        );
+        assert_eq!(storage_root(), before);
+      }
+      for page in order {
+        for turn in 0..32 {
+          let id = 10_000 + page * 32 + (turn * 17) % 32;
+          let handle = expected.remove(&id).unwrap();
+          assert_eq!(
+            deadline_mutation(|| Actors::remove_deadline_member(handle.actor)),
+            Ok(handle)
+          );
+          assert!(!DeadlineHandles::<Test>::contains_key(id));
+          assert_deadline_vacancy_topology(key, &expected);
+        }
+      }
+      let replacement = insert_planned_deadline(actor_ref(10_000, 3), key);
+      assert_eq!((replacement.page, replacement.slot), (0, 0));
+      expected.insert(replacement.actor.actor_id, replacement);
+      assert_deadline_vacancy_topology(key, &expected);
+    });
+  }
+}
+
+#[test]
+fn deadline_vacancy_moves_preserve_exact_survivors_and_rollback_late_refusal() {
+  new_test_ext().execute_with(|| {
+    let source = WakeupKey::Block(77);
+    let target = WakeupKey::Tick(91);
+    let mut expected = BTreeMap::new();
+    for id in 0..65 {
+      let handle = insert_planned_deadline(actor_ref(20_000 + id, 1), source);
+      expected.insert(handle.actor.actor_id, handle);
+    }
+    let original = expected[&20_000];
+    let destination = Actors::plan_deadline_destination(original.actor, source).unwrap();
+    Actors::move_deadline_member(original.actor, destination).unwrap();
+    expected.insert(original.actor.actor_id, destination);
+    assert_deadline_vacancy_topology(source, &expected);
+
+    let before = storage_root();
+    assert_eq!(
+      Actors::move_deadline_member(
+        original.actor,
+        DeadlineHandle {
+          key: target,
+          page: 9,
+          ..destination
+        }
+      ),
+      Err(DeadlineMutationError::InvalidDestination)
+    );
+    assert_eq!(
+      storage_root(),
+      before,
+      "late insertion refusal restores source and index"
+    );
+
+    let target_handle = Actors::plan_deadline_destination(original.actor, target).unwrap();
+    Actors::move_deadline_member(original.actor, target_handle).unwrap();
+    expected.remove(&original.actor.actor_id);
+    assert_deadline_vacancy_topology(source, &expected);
+    assert_deadline_vacancy_topology(
+      target,
+      &BTreeMap::from([(original.actor.actor_id, target_handle)]),
+    );
+
+    let before = storage_root();
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let back = Actors::plan_deadline_destination(original.actor, source).unwrap();
+      Actors::move_deadline_member(original.actor, back).unwrap();
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(
+      storage_root(),
+      before,
+      "outer refusal restores both memberships"
+    );
+  });
+}
+
+#[test]
+fn deadline_vacancy_neighbor_refusal_rolls_back_earlier_link_writes() {
+  new_test_ext().execute_with(|| {
+    let key = WakeupKey::Block(77);
+    let mut expected = BTreeMap::new();
+    for id in 0..65 {
+      let handle = insert_planned_deadline(actor_ref(25_000 + id, 1), key);
+      expected.insert(handle.actor.actor_id, handle);
+    }
+    let mut holes = Vec::new();
+    for id in [25_015, 25_047] {
+      let handle = expected.remove(&id).unwrap();
+      deadline_mutation(|| Actors::remove_deadline_member(handle.actor)).unwrap();
+      holes.push(handle);
+    }
+    assert_deadline_vacancy_topology(key, &expected);
+    // Filling page 0 first writes its vacancy predecessor (1), then checks successor (2).
+    DeadlinePages::<Test>::mutate(key, 2, |page| {
+      page.as_mut().unwrap().previous_vacant_page = Some(99);
+    });
+    let before = storage_root();
+    assert_eq!(
+      deadline_mutation(|| Actors::insert_deadline_member(holes[0])),
+      Err(DeadlineMutationError::CorruptCarrier)
+    );
+    assert_eq!(storage_root(), before);
+    DeadlinePages::<Test>::mutate(key, 2, |page| {
+      page.as_mut().unwrap().previous_vacant_page = Some(0);
+    });
+    deadline_mutation(|| Actors::insert_deadline_member(holes[0])).unwrap();
+    expected.insert(holes[0].actor.actor_id, holes[0]);
+    assert_deadline_vacancy_topology(key, &expected);
+  });
+}
+
+#[test]
+fn deadline_vacancy_rejects_truncated_pages_without_panicking() {
+  new_test_ext().execute_with(|| {
+    let key = WakeupKey::Block(77);
+    let existing = insert_planned_deadline(actor_ref(30_000, 1), key);
+    let handle = DeadlineHandle {
+      actor: actor_ref(30_001, 1),
+      slot: 7,
+      ..existing
+    };
+    ActorProcesses::<Test>::insert(handle.actor.actor_id, deadline_process(handle));
+    DeadlinePages::<Test>::mutate(key, 0, |page| {
+      page.as_mut().unwrap().entries.truncate(1);
+    });
+    let before = storage_root();
+    assert_eq!(
+      deadline_mutation(|| Actors::insert_deadline_member(handle)),
+      Err(DeadlineMutationError::CorruptCarrier)
+    );
+    assert_eq!(storage_root(), before);
+    assert_eq!(
+      Actors::move_deadline_member(
+        existing.actor,
+        DeadlineHandle {
+          actor: existing.actor,
+          ..handle
+        }
+      ),
+      Err(DeadlineMutationError::CorruptCarrier)
+    );
+    assert_eq!(storage_root(), before);
+  });
+}
+
+#[test]
+fn deadline_vacancy_rejects_a_missing_head_without_stranding_free_slots() {
+  new_test_ext().execute_with(|| {
+    let key = WakeupKey::Block(77);
+    let first = insert_planned_deadline(actor_ref(31_000, 1), key);
+    let next = DeadlineHandle {
+      actor: actor_ref(31_001, 1),
+      slot: 1,
+      ..first
+    };
+    ActorProcesses::<Test>::insert(next.actor.actor_id, deadline_process(next));
+    DeadlineHeaders::<Test>::mutate(key, |header| {
+      header.as_mut().unwrap().first_vacant_page = None;
+    });
+    let before = storage_root();
+    assert_eq!(
+      Actors::plan_deadline_destination(next.actor, key),
+      Err(DeadlineMutationError::CorruptCarrier)
+    );
+    assert_eq!(
+      deadline_mutation(|| Actors::insert_deadline_member(next)),
+      Err(DeadlineMutationError::CorruptCarrier)
+    );
+    assert_eq!(storage_root(), before);
+  });
+}
+
+#[test]
+fn deadline_branch_envelopes_combine_independent_resource_dimensions() {
+  type W = <Test as crate::Config>::WeightInfo;
+  let populated_return = <W as crate::weights::WeightInfo>::return_due_block_deadline_to_service();
+  let deep_return =
+    <W as crate::weights::WeightInfo>::return_due_block_deadline_to_service_deep_index();
+  let returning = Actors::deadline_return_weight_upper();
+  assert_eq!(
+    returning.ref_time(),
+    populated_return.ref_time().max(deep_return.ref_time())
+  );
+  assert_eq!(
+    returning.proof_size(),
+    populated_return.proof_size().max(deep_return.proof_size())
+  );
+  assert!(deep_return.ref_time() > populated_return.ref_time());
+  assert!(populated_return.proof_size() > deep_return.proof_size());
+
+  let retry = <W as crate::weights::WeightInfo>::scheduler_service_retry_to_deadline_new_key();
+  let due = <W as crate::weights::WeightInfo>::scheduler_due_deadline_to_service_deep_index();
+  let outer = Actors::scheduler_complete_outer_weight_upper();
+  assert!(retry.all_lte(outer));
+  assert!(due.all_lte(outer));
+  assert!(retry.ref_time() > due.ref_time());
+  assert!(due.proof_size() > retry.proof_size());
+}
+
+#[test]
+fn deadline_destination_search_is_bounded_by_reachable_active_population() {
+  new_test_ext().execute_with(|| {
+    let page_count = Actors::deadline_destination_page_bound();
+    assert_eq!(page_count, 313);
+    let key = WakeupKey::Block(77);
+    let maximum: u32 = <Test as crate::Config>::MaxActiveActors::get();
+    let mut count = 0u32;
+    for page_index in 0..page_count {
+      let preceding = page_index * 32;
+      let live = if page_index + 1 < page_count {
+        32
+      } else {
+        maximum.saturating_sub(preceding).saturating_sub(1)
+      };
+      let mut entries = vec![None; 32];
+      for slot in 0..live {
+        entries[slot as usize] = Some(actor_ref(u64::from(preceding + slot), 1));
+      }
+      DeadlinePages::<Test>::insert(
+        key,
+        u64::from(page_index),
+        DeadlinePage {
+          previous_page: page_index.checked_sub(1).map(u64::from),
+          next_page: (page_index + 1 < page_count).then(|| u64::from(page_index + 1)),
+          previous_vacant_page: None,
+          next_vacant_page: None,
+          live_entries: live as u8,
+          entries: BoundedVec::try_from(entries).expect("C32 page fits"),
+        },
+      );
+      count += live;
+    }
+    DeadlineHeaders::<Test>::insert(
+      key,
+      DeadlineHeader {
+        first_page: 0,
+        last_page: u64::from(page_count - 1),
+        next_page: u64::from(page_count),
+        first_vacant_page: Some(u64::from(page_count - 1)),
+        page_count,
+        count,
+      },
+    );
+    let actor = actor_ref(u64::from(count), 1);
+    assert_eq!(
+      Actors::plan_deadline_destination(actor, key),
+      Ok(DeadlineHandle {
+        actor,
+        key,
+        page: u64::from(page_count - 1),
+        slot: (count % 32) as u8,
+      })
+    );
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::insert_deadline_index(key).expect("maximum bucket is indexed");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    let append = DeadlineHandle {
+      actor,
+      key,
+      page: u64::from(page_count),
+      slot: 0,
+    };
+    let before = storage_root();
+    assert_eq!(
+      deadline_mutation(|| {
+        ActorProcesses::<Test>::insert(actor.actor_id, deadline_process(append));
+        Actors::insert_deadline_member(append)
+      }),
+      Err(DeadlineMutationError::CapacityExceeded)
+    );
+    assert_eq!(
+      storage_root(),
+      before,
+      "page saturation cannot grow the carrier"
+    );
+
+    insert_planned_deadline(actor, key);
+    assert_eq!(DeadlineHeaders::<Test>::get(key).unwrap().count, maximum);
+    let extra = Actors::plan_deadline_destination(actor_ref(u64::from(maximum), 1), key).unwrap();
+    let before = storage_root();
+    assert_eq!(
+      deadline_mutation(|| {
+        ActorProcesses::<Test>::insert(extra.actor.actor_id, deadline_process(extra));
+        Actors::insert_deadline_member(extra)
+      }),
+      Err(DeadlineMutationError::CapacityExceeded)
+    );
+    assert_eq!(
+      storage_root(),
+      before,
+      "member saturation preserves every existing obligation"
+    );
+
+    DeadlineHeaders::<Test>::mutate(key, |header| {
+      header.as_mut().expect("header exists").page_count = page_count + 1;
+    });
+    assert_eq!(
+      Actors::plan_deadline_destination(actor, key),
+      Err(DeadlineMutationError::CorruptCarrier)
+    );
   });
 }
 
@@ -7527,6 +9554,7 @@ fn semantic_contract_id_uses_fixed_domain_and_authored_field_order() {
       &contract.window,
       &contract.funding,
       contract.completion,
+      &contract.parked_balance_activation,
       contract.auto_close_at_cycle_nonce,
     ),
     &contract.steps,
@@ -7624,7 +9652,7 @@ fn current_step_service_state_does_not_load_unreached_tail_chunks() {
 }
 
 #[test]
-fn run_head_and_immutable_payload_remain_coherent_across_progress() {
+fn run_state_authority_remains_coherent_across_progress() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = inert_contract_steps()[0].clone();
@@ -8021,7 +10049,6 @@ fn unconfigured_resource_weight_ports_fail_closed() {
         steps_in_fragment: 1,
         opening_tail_chunks: 0,
         predicate_evaluation_units: 0,
-        opening_snapshot_entries: 0,
       },
       &step,
     ),
@@ -8034,7 +10061,6 @@ fn unconfigured_resource_weight_ports_fail_closed() {
         steps_in_fragment: 1,
         opening_tail_chunks: 0,
         predicate_evaluation_units: 0,
-        opening_snapshot_entries: 0,
       },
       &step,
       Weight::from_parts(1, 1),
@@ -8070,36 +10096,34 @@ fn unconfigured_resource_weight_ports_fail_closed() {
 #[test]
 fn step_control_weight_context_matches_c6_head_and_tail_geometry() {
   assert_eq!(
-    Actors::step_control_weight_context(1, 0, 7, 8),
+    Actors::step_control_weight_context(1, 0, 7),
     Some(crate::StepControlWeightContext {
       cursor: 0,
       steps_in_fragment: 1,
       opening_tail_chunks: 0,
       predicate_evaluation_units: 7,
-      opening_snapshot_entries: 8,
     })
   );
   assert_eq!(
-    Actors::step_control_weight_context(12, 0, 7, 8)
+    Actors::step_control_weight_context(12, 0, 7)
       .expect("twelve-Step head context exists")
       .opening_tail_chunks,
     3,
   );
   for (cursor, steps_in_fragment) in [(1, 4), (4, 4), (5, 4), (8, 4), (9, 3), (11, 3)] {
     assert_eq!(
-      Actors::step_control_weight_context(12, cursor, 7, 8),
+      Actors::step_control_weight_context(12, cursor, 7),
       Some(crate::StepControlWeightContext {
         cursor,
         steps_in_fragment,
         opening_tail_chunks: 0,
         predicate_evaluation_units: 7,
-        opening_snapshot_entries: 0,
       })
     );
   }
-  assert_eq!(Actors::step_control_weight_context(0, 0, 0, 0), None);
-  assert_eq!(Actors::step_control_weight_context(12, 12, 0, 0), None);
-  assert_eq!(Actors::step_control_weight_context(13, 0, 0, 0), None);
+  assert_eq!(Actors::step_control_weight_context(0, 0, 0), None);
+  assert_eq!(Actors::step_control_weight_context(12, 12, 0), None);
+  assert_eq!(Actors::step_control_weight_context(13, 0, 0), None);
 }
 
 #[test]
@@ -8879,11 +10903,6 @@ fn public_reachability_inventory_is_closed_and_canonical() {
     "FundingUnavailable",
     "Failed",
   ]);
-  assert_variant_names::<OpeningSurface<TestAsset>>(&[
-    "PreservableAsset",
-    "TargetAsset",
-    "StakingShares",
-  ]);
   assert_variant_names::<CloseReason>(&[
     "OwnerInitiated",
     "CycleAdmissionInsufficient",
@@ -8981,8 +11000,7 @@ fn actor_storage_schema_is_explicit() {
       ("ActorContractHead", true, true),
       ("ActorActivationAuthority", true, true),
       ("ActorContractTailChunk", true, true),
-      ("ActorRunHead", true, true),
-      ("ActorRunPayload", true, true),
+      ("ActorRunState", true, true),
       ("ActorIdentities", true, true),
       ("ActorSemanticStates", true, true),
       ("ActorProcesses", true, true),
@@ -8991,6 +11009,8 @@ fn actor_storage_schema_is_explicit() {
       ("DependencySourceAllocatorState", false, false),
       ("ObservationDependencySources", true, true),
       ("DependencySourceObservations", true, true),
+      ("BalanceDependencySources", true, true),
+      ("DependencySourceBalances", true, true),
       ("DependencyRevisions", false, true),
       ("DependencyScanSourceListState", false, false),
       ("DependencyScanSourceNodes", true, true),
@@ -9001,6 +11021,7 @@ fn actor_storage_schema_is_explicit() {
       ("DependencyRegistrationPositions", true, true),
       ("DependencyRegistrations", true, true),
       ("DependencyPlans", false, true),
+      ("ParkedBalanceEpisodes", true, true),
       ("DependencyTimedReviews", true, true),
       ("PendingDependencyEvents", true, true),
       ("PendingDependencyReviews", true, true),
@@ -9148,11 +11169,11 @@ fn actor_storage_schema_is_explicit() {
       "steps",
       "funding",
       "completion",
+      "parked_balance_activation",
       "auto_close_at_cycle_nonce"
     ]
   );
-  assert_map_storage_types::<u64, crate::ActorRunHeadOf<Test>>(entry("ActorRunHead"));
-  assert_map_storage_types::<u64, crate::ActorRunPayloadOf<Test>>(entry("ActorRunPayload"));
+  assert_map_storage_types::<u64, RuntimeActorRunState>(entry("ActorRunState"));
   let run_type = registry.register_type(&scale_info::meta_type::<RuntimeActorRunState>());
   let (_, run_state) = registry
     .types()
@@ -9175,7 +11196,6 @@ fn actor_storage_schema_is_explicit() {
       "last_attempt_block",
       "last_committed_step_block",
       "eligible_at",
-      "opening_snapshot",
       "cumulative_outcomes",
       "last_step_outcome",
       "suspension"
@@ -9185,6 +11205,8 @@ fn actor_storage_schema_is_explicit() {
   assert_plain_storage_type::<DependencySourceAllocator>(entry("DependencySourceAllocatorState"));
   assert_map_storage_types::<u32, u64>(entry("ObservationDependencySources"));
   assert_map_storage_types::<u64, u32>(entry("DependencySourceObservations"));
+  assert_map_storage_types::<TestAsset, u64>(entry("BalanceDependencySources"));
+  assert_map_storage_types::<u64, TestAsset>(entry("DependencySourceBalances"));
   assert_plain_storage_type::<u32>(entry("ActorIdentityCount"));
   assert_plain_storage_type::<u32>(entry("ActiveActorCount"));
   assert_map_storage_types::<u64, SystemSovereignState>(entry("SystemSovereigns"));

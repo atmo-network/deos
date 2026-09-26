@@ -17,8 +17,9 @@ use cumulus_primitives_parachain_inherent::{INHERENT_IDENTIFIER, ParachainInhere
 use cumulus_test_relay_sproof_builder::RelayStateSproofBuilder;
 use pallet_deos_actors::{
   ActorId, AmountResolution, CloseReason, CompletionPolicy, ContractSteps, CrossingDirection,
-  CycleResult, Event, InputLimit, ScheduleWindow, StepErrorPolicy, StepOf, Task, Trigger,
-  TriggerFamily, WeightInfo,
+  CycleResult, CycleState, Event, InputLimit, Precondition, Predicate, ProcessResidence,
+  ScheduleWindow, StepErrorPolicy, StepOf, Task, Trigger, TriggerFamily, WakeupClock, WakeupKey,
+  WeightInfo,
 };
 use polkadot_sdk::frame_support::{
   BoundedVec, assert_ok,
@@ -59,6 +60,19 @@ const W4_STOP_CYCLE_ACTORS: u32 = 100;
 const W5_BLOCK_LIMIT: u32 = 10;
 const W6_BLOCK_LIMIT: u32 = 16;
 const W6_RANDOM_SEED: u64 = 0x0066_c10c_5eed;
+const CURRENT_W6_SUBSCRIBERS: u32 = 1_024;
+const CURRENT_W6_REGISTRATION_PAGES: u32 = 32;
+const CURRENT_W6_UPDATES_PER_BLOCK: u32 = 4;
+const CURRENT_W6_UPDATE_BLOCKS: u32 = 32;
+const CURRENT_W6_DRAIN_BLOCKS: u32 = 32;
+const CURRENT_W7_SLEEPERS: u32 = 1_024;
+const CURRENT_W7_DEADLINE_KEYS: u32 = 32;
+const CURRENT_W7_MEMBERS_PER_KEY: u32 = 32;
+const CURRENT_W7_SETUP_BATCH: u32 = 16;
+const CURRENT_W7_SETUP_BLOCKS: u32 = CURRENT_W7_SLEEPERS / CURRENT_W7_SETUP_BATCH;
+const CURRENT_W7_FIRST_DUE_BLOCK: u32 = CURRENT_W7_SETUP_BLOCKS + 2;
+const CURRENT_W7_ARRIVAL_BLOCKS: u32 = 32;
+const CURRENT_W7_DRAIN_BLOCKS: u32 = 32;
 const W7_DUE_ACTORS: u32 = 100;
 const W7_FUTURE_WORKLOAD_ACTORS: u32 = 4_943;
 const W7_UNSIGNALED_WORKLOAD_ACTORS: u32 = 4_942;
@@ -82,8 +96,8 @@ const P53_CROSSING_REARM: u128 = 800_000_000_000;
 /// fails closed when the caller selects different bytes; update it together with the accepted
 /// production binding.
 const ACCEPTED_PRODUCTION_WASM_SHA256: [u8; 32] = [
-  0x27, 0x23, 0x87, 0x95, 0x21, 0xf0, 0x66, 0x50, 0x64, 0xd5, 0x61, 0x2a, 0xe4, 0x98, 0x4f, 0x51,
-  0x74, 0x47, 0x9a, 0xe2, 0x8b, 0x6f, 0x7f, 0x5b, 0x37, 0x2b, 0xcb, 0x5e, 0x2e, 0xde, 0x89, 0x82,
+  0x26, 0x2f, 0x5a, 0x54, 0x7d, 0xaa, 0xdb, 0xa8, 0x5c, 0x2b, 0x4d, 0x55, 0xfe, 0x2a, 0xed, 0xa0,
+  0xe6, 0x10, 0xdb, 0x80, 0x19, 0xae, 0x75, 0x5b, 0x41, 0x1e, 0xf3, 0x6d, 0x48, 0xdd, 0x36, 0x4d,
 ];
 const REFERENCE_ACTIVE_SYSTEM_ACTORS: u32 = 3;
 const REFERENCE_SYSTEM_ACTOR_IDENTITIES: u32 = 15;
@@ -203,6 +217,16 @@ struct W7CampaignResult {
   execution_compact_proof: Vec<u64>,
   verification_storage_proof: Vec<u64>,
   verification_compact_proof: Vec<u64>,
+}
+
+#[derive(Debug)]
+struct CurrentW7DeadlineSnapshot {
+  handles: BTreeMap<ActorId, u32>,
+  service: BTreeSet<ActorId>,
+  suspended: BTreeSet<ActorId>,
+  closed: BTreeSet<ActorId>,
+  block_headers: BTreeMap<u32, u32>,
+  block_index_len: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -1955,6 +1979,134 @@ fn runtime_proof_storage_info() -> Vec<StorageInfo> {
   info
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct PersistentMutationCounts {
+  inserted: u64,
+  removed: u64,
+  changed: u64,
+}
+
+fn actors_storage_entries(storage: &Storage) -> BTreeMap<Vec<u8>, Vec<u8>> {
+  let prefixes = runtime_proof_storage_info()
+    .into_iter()
+    .filter(|info| info.pallet_name == b"Actors")
+    .map(|info| info.prefix)
+    .collect::<Vec<_>>();
+  storage
+    .top
+    .iter()
+    .filter(|(key, _)| prefixes.iter().any(|prefix| key.starts_with(prefix)))
+    .map(|(key, value)| (key.clone(), value.clone()))
+    .collect()
+}
+
+fn persistent_storage_bytes(entries: &BTreeMap<Vec<u8>, Vec<u8>>) -> u64 {
+  entries
+    .iter()
+    .map(|(key, value)| (key.len() + value.len()) as u64)
+    .sum()
+}
+
+fn persistent_mutations(
+  before: &BTreeMap<Vec<u8>, Vec<u8>>,
+  after: &BTreeMap<Vec<u8>, Vec<u8>>,
+) -> PersistentMutationCounts {
+  let mut counts = PersistentMutationCounts::default();
+  for (key, value) in after {
+    match before.get(key) {
+      None => counts.inserted = counts.inserted.saturating_add(1),
+      Some(previous) if previous != value => counts.changed = counts.changed.saturating_add(1),
+      Some(_) => {}
+    }
+  }
+  counts.removed = before
+    .keys()
+    .filter(|key| !after.contains_key(*key))
+    .count() as u64;
+  counts
+}
+
+fn current_w7_deadline_snapshot(
+  wasm: &[u8],
+  storage: &Storage,
+  actor_ids: &[ActorId],
+) -> CurrentW7DeadlineSnapshot {
+  let mut ext = TestExternalities::new_with_code_and_state(
+    wasm,
+    storage.clone(),
+    crate::VERSION.state_version(),
+  );
+  ext.execute_with(|| {
+    let handles = actor_ids
+      .iter()
+      .filter_map(|actor_id| {
+        let handle = pallet_deos_actors::DeadlineHandles::<Runtime>::get(*actor_id)?;
+        let WakeupKey::Block(block) = handle.key else {
+          panic!("current W7 retries must retain block-clock deadlines");
+        };
+        let process = Actors::actor_processes(*actor_id).expect("sleeping process exists");
+        let run = Actors::actor_run_state(*actor_id).expect("sleeping retry retains its Run");
+        assert_eq!(process.generation, handle.actor.generation);
+        assert_eq!(
+          process.residence,
+          Some(ProcessResidence::Deadline {
+            key: handle.key,
+            page: handle.page,
+            slot: handle.slot,
+          })
+        );
+        assert_eq!(run.eligible_at, block);
+        assert_eq!(run.cursor, 0);
+        assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+        assert_eq!(
+          Actors::deadline_pages(handle.key, handle.page)
+            .expect("sleeping retry owns its C32 page")
+            .entries[usize::from(handle.slot)],
+          Some(handle.actor)
+        );
+        Some((*actor_id, block))
+      })
+      .collect::<BTreeMap<_, _>>();
+    let service = actor_ids
+      .iter()
+      .filter(|actor_id| {
+        matches!(
+          pallet_deos_actors::ActorProcesses::<Runtime>::get(**actor_id)
+            .and_then(|process| process.residence),
+          Some(ProcessResidence::Service(_))
+        )
+      })
+      .copied()
+      .collect::<BTreeSet<_>>();
+    let suspended = actor_ids
+      .iter()
+      .filter(|actor_id| {
+        Actors::actor_hot(**actor_id).is_some_and(|hot| hot.cycle_state == CycleState::Suspended)
+      })
+      .copied()
+      .collect::<BTreeSet<_>>();
+    let closed = actor_ids
+      .iter()
+      .filter(|actor_id| Actors::actor_identity(**actor_id).is_none())
+      .copied()
+      .collect::<BTreeSet<_>>();
+    let block_headers = pallet_deos_actors::DeadlineHeaders::<Runtime>::iter()
+      .filter_map(|(key, header)| match key {
+        WakeupKey::Block(block) => Some((block, header.count)),
+        WakeupKey::Tick(_) => None,
+      })
+      .collect::<BTreeMap<_, _>>();
+    CurrentW7DeadlineSnapshot {
+      handles,
+      service,
+      suspended,
+      closed,
+      block_headers,
+      block_index_len: pallet_deos_actors::DeadlineIndexLen::<Runtime>::get(WakeupClock::Block),
+    }
+  })
+}
+
 #[test]
 fn runtime_proof_storage_info_covers_upstream_idle_probe() {
   let key =
@@ -2283,8 +2435,8 @@ fn assert_successful_transfer_resource_ledger(
       .max(W::service_member_retire_singleton()),
   );
   let effect_per_step = W::task_transfer();
-  let effect_io_per_step = DatabaseIo::new(19, 6);
-  assert_production_weight_component(effect_per_step, 381_340_000, 6_196, effect_io_per_step);
+  let effect_io_per_step = DatabaseIo::new(20, 6);
+  assert_production_weight_component(effect_per_step, 363_533_000, 6_196, effect_io_per_step);
   let pair = |weight: Weight| [weight.ref_time(), weight.proof_size()];
   let reference_events = |authored: &AuthoredBlock| {
     let ids = (0..ActorId::from(REFERENCE_SYSTEM_ACTOR_IDENTITIES)).collect::<Vec<_>>();
@@ -2535,6 +2687,15 @@ impl OneStepServiceTrace {
   }
 
   fn observe(&mut self, metrics: &FullExecutiveBlockMetrics, block: u32) {
+    self.observe_with_trigger_family(metrics, block, TriggerFamily::Cadenced);
+  }
+
+  fn observe_with_trigger_family(
+    &mut self,
+    metrics: &FullExecutiveBlockMetrics,
+    block: u32,
+    trigger_family: TriggerFamily,
+  ) {
     assert_eq!(
       metrics.non_successful_steps, 0,
       "service evidence rejects failed/skipped Steps"
@@ -2572,15 +2733,22 @@ impl OneStepServiceTrace {
     );
     for (actor_id, family) in &metrics.trigger_occurrences {
       assert_eq!(
-        *family,
-        TriggerFamily::Cadenced,
-        "only automatic cadence signals arrive during these campaigns"
+        *family, trigger_family,
+        "only the declared automatic Trigger family arrives during this campaign"
       );
       self.signal(*actor_id, block);
     }
     for (actor_id, _) in &metrics.progressed_steps {
       self.step(*actor_id, block);
     }
+  }
+
+  fn pending_signal_count(&self) -> usize {
+    self
+      .actors
+      .values()
+      .filter(|history| history.pending_signal_block.is_some())
+      .count()
   }
 
   fn assert_terminal_state(&self, wasm: &[u8], storage: Storage) {
@@ -2930,10 +3098,6 @@ fn run_schedule_campaign(
     assert_eq!(
       authored.metrics.actor_steps,
       authored.metrics.distinct_actors
-    );
-    assert!(
-      authored.metrics.queue_head < authored.metrics.queue_tail,
-      "the 10,000-Cycle campaign must remain saturated in block {block_number}"
     );
     assert_successful_transfer_outcomes(&authored.metrics);
     service.observe(&authored.metrics, block_number);
@@ -3491,6 +3655,7 @@ fn run_w4_heterogeneous_effect_campaign(wasm: &[u8], demand: UserDemand) {
   let mut swap_out_steps = 0u32;
   let mut stop_cycle_steps = 0u32;
   let mut user_bound_blocks = 0u32;
+  let mut pending_signals = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
   let mut steps = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
   let mut control_ref_time = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
   let mut control_proof_size = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
@@ -3518,10 +3683,8 @@ fn run_w4_heterogeneous_effect_campaign(wasm: &[u8], demand: UserDemand) {
       authored.metrics.actor_steps, authored.metrics.distinct_actors,
       "W4 preserves Q1 in every full block"
     );
-    assert!(
-      authored.metrics.queue_head < authored.metrics.queue_tail,
-      "W4 retains pending FIFO work in block {block_number}"
-    );
+    service.observe(&authored.metrics, block_number);
+    pending_signals.push(service.pending_signal_count() as u64);
     match demand {
       UserDemand::ActorOnly => {
         assert_eq!(authored.metrics.user_calls, 0);
@@ -3554,7 +3717,6 @@ fn run_w4_heterogeneous_effect_campaign(wasm: &[u8], demand: UserDemand) {
     transfer_steps = transfer_steps.saturating_add(authored.metrics.transfer_steps);
     swap_out_steps = swap_out_steps.saturating_add(authored.metrics.swap_out_steps);
     stop_cycle_steps = stop_cycle_steps.saturating_add(authored.metrics.stop_cycle_steps);
-    service.observe(&authored.metrics, block_number);
     for (actor_id, _) in &authored.metrics.progressed_steps {
       progressed.insert(*actor_id);
     }
@@ -3613,8 +3775,13 @@ fn run_w4_heterogeneous_effect_campaign(wasm: &[u8], demand: UserDemand) {
   );
   let minimum_steps = steps.iter().copied().min().unwrap_or(0);
   let target_met = committed_steps >= W1_TARGET_CYCLES && minimum_steps >= 100;
+  assert!(
+    pending_signals.iter().any(|count| *count > 0),
+    "W4 observes current pending workload authority inside the campaign"
+  );
+  let pending_signal_zero_blocks = pending_signals.iter().filter(|count| **count == 0).count();
   println!(
-    "EXP_0066_W4_V2 {{\"demand\":\"{}\",\"schedule\":\"mixed-manual-cadenced\",\"referenceSystemActorIdentities\":{REFERENCE_SYSTEM_ACTOR_IDENTITIES},\"nominalTransferSlots\":9500,\"retainedReferenceSlots\":15,\"workloadTransferActors\":{W4_TRANSFER_ACTORS},\"swapOutActors\":{W4_SWAP_OUT_ACTORS},\"stopCycleActors\":{W4_STOP_CYCLE_ACTORS},\"eligibleBlocks\":{W1_TARGET_BLOCKS},\"committedSteps\":{committed_steps},\"completedCycles\":{total_cycles},\"transferSteps\":{transfer_steps},\"swapOutSteps\":{swap_out_steps},\"stopCycleSteps\":{stop_cycle_steps},\"distinctProgressedActors\":{},\"workloadActorType\":\"System\",\"meanSteps\":{:.4},\"p50Steps\":{},\"p95Steps\":{},\"p99Steps\":{},\"minSteps\":{minimum_steps},\"maxSteps\":{},\"targetMet\":{target_met},\"userBoundBlocks\":{user_bound_blocks},\"totalUserCalls\":{},\"nextControlMaximumRefTime\":{},\"nextControlMaximumProofSize\":{},\"nextEffectMaximumRefTime\":{},\"nextEffectMaximumProofSize\":{},\"controlRefTimeMin\":{},\"controlRefTimeP50\":{},\"controlRefTimeP95\":{},\"controlRefTimeMax\":{},\"controlProofSizeMin\":{},\"controlProofSizeP50\":{},\"controlProofSizeP95\":{},\"controlProofSizeMax\":{},\"effectRefTimeMin\":{},\"effectRefTimeP50\":{},\"effectRefTimeP95\":{},\"effectRefTimeMax\":{},\"effectProofSizeMin\":{},\"effectProofSizeP50\":{},\"effectProofSizeP95\":{},\"effectProofSizeMax\":{},\"executionStorageProofMin\":{},\"executionStorageProofP50\":{},\"executionStorageProofP95\":{},\"executionStorageProofMax\":{},\"executionCompactProofMin\":{},\"executionCompactProofP50\":{},\"executionCompactProofP95\":{},\"executionCompactProofMax\":{},\"verificationStorageProofMin\":{},\"verificationStorageProofP50\":{},\"verificationStorageProofP95\":{},\"verificationStorageProofMax\":{},\"verificationCompactProofMin\":{},\"verificationCompactProofP50\":{},\"verificationCompactProofP95\":{},\"verificationCompactProofMax\":{}}}",
+    "EXP_0066_W4_V2 {{\"demand\":\"{}\",\"schedule\":\"mixed-manual-cadenced\",\"referenceSystemActorIdentities\":{REFERENCE_SYSTEM_ACTOR_IDENTITIES},\"nominalTransferSlots\":9500,\"retainedReferenceSlots\":15,\"workloadTransferActors\":{W4_TRANSFER_ACTORS},\"swapOutActors\":{W4_SWAP_OUT_ACTORS},\"stopCycleActors\":{W4_STOP_CYCLE_ACTORS},\"eligibleBlocks\":{W1_TARGET_BLOCKS},\"committedSteps\":{committed_steps},\"completedCycles\":{total_cycles},\"transferSteps\":{transfer_steps},\"swapOutSteps\":{swap_out_steps},\"stopCycleSteps\":{stop_cycle_steps},\"distinctProgressedActors\":{},\"workloadActorType\":\"System\",\"meanSteps\":{:.4},\"p50Steps\":{},\"p95Steps\":{},\"p99Steps\":{},\"minSteps\":{minimum_steps},\"maxSteps\":{},\"pendingSignalsMin\":{},\"pendingSignalsMax\":{},\"pendingSignalZeroBlocks\":{pending_signal_zero_blocks},\"targetMet\":{target_met},\"userBoundBlocks\":{user_bound_blocks},\"totalUserCalls\":{},\"nextControlMaximumRefTime\":{},\"nextControlMaximumProofSize\":{},\"nextEffectMaximumRefTime\":{},\"nextEffectMaximumProofSize\":{},\"controlRefTimeMin\":{},\"controlRefTimeP50\":{},\"controlRefTimeP95\":{},\"controlRefTimeMax\":{},\"controlProofSizeMin\":{},\"controlProofSizeP50\":{},\"controlProofSizeP95\":{},\"controlProofSizeMax\":{},\"effectRefTimeMin\":{},\"effectRefTimeP50\":{},\"effectRefTimeP95\":{},\"effectRefTimeMax\":{},\"effectProofSizeMin\":{},\"effectProofSizeP50\":{},\"effectProofSizeP95\":{},\"effectProofSizeMax\":{},\"executionStorageProofMin\":{},\"executionStorageProofP50\":{},\"executionStorageProofP95\":{},\"executionStorageProofMax\":{},\"executionCompactProofMin\":{},\"executionCompactProofP50\":{},\"executionCompactProofP95\":{},\"executionCompactProofMax\":{},\"verificationStorageProofMin\":{},\"verificationStorageProofP50\":{},\"verificationStorageProofP95\":{},\"verificationStorageProofMax\":{},\"verificationCompactProofMin\":{},\"verificationCompactProofP50\":{},\"verificationCompactProofP95\":{},\"verificationCompactProofMax\":{}}}",
     demand.label(),
     progressed.len(),
     f64::from(committed_steps) / f64::from(W1_TARGET_BLOCKS),
@@ -3622,6 +3789,8 @@ fn run_w4_heterogeneous_effect_campaign(wasm: &[u8], demand: UserDemand) {
     nearest_rank_percentile(&steps, 95),
     nearest_rank_percentile(&steps, 99),
     steps.iter().copied().max().unwrap_or(0),
+    pending_signals.iter().copied().min().unwrap_or(0),
+    pending_signals.iter().copied().max().unwrap_or(0),
     user_calls.iter().sum::<u64>(),
     fixture.next_control_maximum.ref_time(),
     fixture.next_control_maximum.proof_size(),
@@ -3675,6 +3844,972 @@ fn run_w4_heterogeneous_effect_campaign(wasm: &[u8], demand: UserDemand) {
       .copied()
       .max()
       .unwrap_or(0),
+  );
+}
+
+fn run_current_w6_wake_storm(wasm: &[u8]) {
+  let mut ext = TestExternalities::new_with_code_and_state(
+    wasm,
+    reference_genesis_storage(wasm),
+    crate::VERSION.state_version(),
+  );
+  let signer = sr25519::Pair::from_seed(&[67u8; 32]);
+  let owner = crate::AccountId::from(signer.public());
+  let (actor_ids, actor_profiles, feed) = ext.execute_with(|| {
+    System::set_block_number(1);
+    assert_ok!(Balances::force_set_balance(
+      RuntimeOrigin::root(),
+      MultiAddress::Id(owner.clone()),
+      u128::MAX / 4,
+    ));
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(
+      primitives::AssetKind::Native,
+      primitives::AssetKind::Local(67),
+    );
+    assert_ok!(Oracle::register_feed(
+      RuntimeOrigin::root(),
+      feed,
+      owner.clone(),
+      feed.meaning(),
+      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
+      feed.scale,
+      pallet_oracle::Aggregation::LastValue,
+      pallet_oracle::ZeroPolicy::Reject,
+      false,
+    ));
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(owner.clone()),
+      feed,
+      1_000_000_000_000,
+    ));
+    let precondition = Precondition {
+      clauses: BoundedVec::try_from(vec![
+        BoundedVec::try_from(vec![Predicate::ObservationAbove {
+          feed,
+          threshold: 2_000_000_000_000,
+          max_age_blocks: 1_000,
+        }])
+        .expect("one W6 observation predicate fits"),
+      ])
+      .expect("one W6 observation clause fits"),
+    };
+    let steps = BoundedVec::try_from(vec![StepOf::<Runtime> {
+      precondition: Some(precondition),
+      task: Task::StopCycle,
+      on_error: StepErrorPolicy::AbortCycle,
+    }])
+    .expect("one W6 Step fits");
+    let mut actor_ids = Vec::with_capacity(CURRENT_W6_SUBSCRIBERS as usize);
+    let mut actor_profiles = BTreeMap::new();
+    for _ in 0..CURRENT_W6_SUBSCRIBERS {
+      let actor_id = actors_integration_tests::create_system(
+        owner.clone(),
+        actors_integration_tests::manual_schedule(),
+        None,
+        steps.clone(),
+      );
+      assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
+      actor_ids.push(actor_id);
+      actor_profiles.insert(
+        actor_id,
+        WorkloadActorProfile {
+          step_count: 1,
+          opening_predicates_per_step: 1,
+          task: Some(WorkloadTask::StopCycle),
+        },
+      );
+    }
+    (actor_ids, actor_profiles, feed)
+  });
+  ext
+    .commit_all()
+    .expect("prepared current W6 fixture commits before block authoring");
+  let mut pre_state = ext.execute_with(current_top_storage);
+  let mut parent = parent_header_for(pre_state.clone(), wasm, 1);
+  let mut next_block = 2u32;
+  let mut setup_blocks = 0u32;
+  let mut setup_control_ref_time = Vec::new();
+  let mut setup_control_proof_size = Vec::new();
+  let mut setup_execution_storage_proof = Vec::new();
+  let mut setup_execution_compact_proof = Vec::new();
+
+  loop {
+    let authored = author_complete_block_after(
+      pre_state,
+      wasm,
+      &parent,
+      next_block,
+      UserDemand::ActorOnly,
+      &signer,
+      0,
+      &actor_profiles,
+    );
+    assert_eq!(authored.metrics.actor_faults, 0);
+    setup_control_ref_time.push(authored.metrics.actor_control.ref_time());
+    setup_control_proof_size.push(authored.metrics.actor_control.proof_size());
+    let proof = replay_complete_block_in_wasm(
+      &authored,
+      wasm,
+      &format!("current-W6-park-setup-{next_block}"),
+    );
+    setup_execution_storage_proof.push(proof.execution_storage_proof_bytes);
+    setup_execution_compact_proof.push(proof.execution_compact_proof_bytes);
+    parent = authored.block.header.clone();
+    pre_state = authored.post_state;
+    setup_blocks = setup_blocks.saturating_add(1);
+    let parked = {
+      let mut state = TestExternalities::new_with_code_and_state(
+        wasm,
+        pre_state.clone(),
+        crate::VERSION.state_version(),
+      );
+      state.execute_with(|| {
+        actor_ids
+          .iter()
+          .filter(|actor_id| {
+            matches!(
+              pallet_deos_actors::ActorProcesses::<Runtime>::get(**actor_id)
+                .and_then(|process| process.residence),
+              Some(ProcessResidence::Parked(_))
+            )
+          })
+          .count() as u32
+      })
+    };
+    next_block = next_block.saturating_add(1);
+    if parked == CURRENT_W6_SUBSCRIBERS {
+      break;
+    }
+    assert!(setup_blocks < 64, "W6 Park preparation must remain bounded");
+  }
+
+  let (source, initial_revision_state) = {
+    let mut state = TestExternalities::new_with_code_and_state(
+      wasm,
+      pre_state.clone(),
+      crate::VERSION.state_version(),
+    );
+    state.execute_with(|| {
+      let source = pallet_deos_actors::ObservationDependencySources::<Runtime>::get(feed)
+        .expect("W6 feed owns one dependency source");
+      let header = pallet_deos_actors::DependencyRegistrationHeaders::<Runtime>::get(source);
+      assert_eq!(header.count, CURRENT_W6_SUBSCRIBERS);
+      assert_eq!(header.next_index, u64::from(CURRENT_W6_SUBSCRIBERS));
+      assert_eq!(header.free_count, 0);
+      for page_id in 0..u64::from(CURRENT_W6_REGISTRATION_PAGES) {
+        let page = pallet_deos_actors::DependencyRegistrationPages::<Runtime>::get(source, page_id)
+          .expect("W6 owns every declared fixed registration page");
+        assert_eq!(page.entries.len(), 32);
+        assert!(page.entries.iter().all(Option::is_some));
+      }
+      (
+        source,
+        pallet_deos_actors::DependencyRevisions::<Runtime>::get(source),
+      )
+    })
+  };
+  let initial_revision = initial_revision_state.revision;
+  assert_eq!(initial_revision_state.scan_target, Some(initial_revision));
+  assert_eq!(initial_revision_state.scan_cursor, 0);
+  assert_eq!(
+    initial_revision_state.scan_end,
+    u64::from(CURRENT_W6_SUBSCRIBERS)
+  );
+  let initial_entries = actors_storage_entries(&pre_state);
+  let initial_storage_bytes = persistent_storage_bytes(&initial_entries);
+  let first_update_block = next_block;
+  let last_update_block = first_update_block + CURRENT_W6_UPDATE_BLOCKS - 1;
+  let final_block = last_update_block + CURRENT_W6_DRAIN_BLOCKS;
+  let mut signer_nonce = 0;
+  let mut progressed = BTreeSet::new();
+  let mut progress_counts = BTreeMap::<ActorId, u32>::new();
+  let mut wake_blocks = BTreeMap::<ActorId, u32>::new();
+  let mut wake_to_step_blocks = Vec::new();
+  let mut total_cycles = 0u32;
+  let mut total_steps = 0u32;
+  let mut trigger_occurrences = 0u32;
+  let mut update_window_steps = 0u32;
+  let mut drain_steps = 0u32;
+  let mut control_ref_time = Vec::new();
+  let mut control_proof_size = Vec::new();
+  let mut effect_ref_time = Vec::new();
+  let mut effect_proof_size = Vec::new();
+  let mut execution_storage_proof = Vec::new();
+  let mut execution_compact_proof = Vec::new();
+  let mut verification_storage_proof = Vec::new();
+  let mut verification_compact_proof = Vec::new();
+  let mut registration_counts = Vec::new();
+  let mut pending_counts = Vec::new();
+  let mut process_counts = Vec::new();
+  let mut scan_cursors = Vec::new();
+  let mut scan_targets = Vec::new();
+  let mut scan_pending_blocks = 0u32;
+  let mut update_end_scan_cursor = None;
+  let mut storage_bytes = vec![initial_storage_bytes];
+  let mut persistent_mutation_samples = Vec::new();
+
+  for block_number in first_update_block..=final_block {
+    let in_update_window = block_number <= last_update_block;
+    let calls = if in_update_window {
+      (0..CURRENT_W6_UPDATES_PER_BLOCK)
+        .map(|offset| {
+          let update_block = block_number.saturating_sub(first_update_block);
+          let sequence = u128::from(update_block)
+            .saturating_mul(u128::from(CURRENT_W6_UPDATES_PER_BLOCK))
+            .saturating_add(u128::from(offset))
+            .saturating_add(1);
+          RuntimeCall::Oracle(pallet_oracle::Call::publish {
+            feed,
+            sample: 3_000_000_000_000u128.saturating_add(sequence),
+          })
+        })
+        .collect::<Vec<_>>()
+    } else {
+      Vec::new()
+    };
+    let before_entries = actors_storage_entries(&pre_state);
+    let authored = author_complete_block_after_with_calls(
+      pre_state,
+      wasm,
+      &parent,
+      block_number,
+      UserDemand::ActorOnly,
+      &signer,
+      signer_nonce,
+      &actor_profiles,
+      &calls,
+    );
+    assert_eq!(authored.metrics.non_successful_steps, 0);
+    assert_eq!(
+      authored.metrics.actor_steps,
+      authored.metrics.distinct_actors
+    );
+    assert_eq!(authored.metrics.actor_faults, 0);
+    for (actor_id, _) in &authored.metrics.progressed_steps {
+      let count = progress_counts.entry(*actor_id).or_default();
+      if *count == 0 {
+        let woke_at = wake_blocks
+          .get(actor_id)
+          .copied()
+          .expect("W6 service follows observed Pending publication");
+        assert!(block_number > woke_at, "W6 wake preserves the B+1 floor");
+        wake_to_step_blocks.push(u64::from(block_number - woke_at));
+        progressed.insert(*actor_id);
+      }
+      *count = count.saturating_add(1);
+    }
+    total_cycles = total_cycles.saturating_add(authored.metrics.completed_cycles);
+    total_steps = total_steps.saturating_add(authored.metrics.actor_steps);
+    trigger_occurrences =
+      trigger_occurrences.saturating_add(authored.metrics.trigger_occurrences.len() as u32);
+    if in_update_window {
+      update_window_steps = update_window_steps.saturating_add(authored.metrics.actor_steps);
+    } else {
+      drain_steps = drain_steps.saturating_add(authored.metrics.actor_steps);
+    }
+    control_ref_time.push(authored.metrics.actor_control.ref_time());
+    control_proof_size.push(authored.metrics.actor_control.proof_size());
+    effect_ref_time.push(authored.metrics.actor_effect.ref_time());
+    effect_proof_size.push(authored.metrics.actor_effect.proof_size());
+    signer_nonce = signer_nonce.saturating_add(calls.len() as crate::Nonce);
+    let after_entries = actors_storage_entries(&authored.post_state);
+    persistent_mutation_samples.push(persistent_mutations(&before_entries, &after_entries));
+    storage_bytes.push(persistent_storage_bytes(&after_entries));
+    let (
+      newly_pending,
+      registration_count,
+      pending_count,
+      process_count,
+      scan_pending,
+      scan_cursor,
+      scan_target,
+    ) = {
+      let mut state = TestExternalities::new_with_code_and_state(
+        wasm,
+        authored.post_state.clone(),
+        crate::VERSION.state_version(),
+      );
+      state.execute_with(|| {
+        let newly_pending = actor_ids
+          .iter()
+          .filter(|actor_id| !wake_blocks.contains_key(actor_id))
+          .filter(|actor_id| {
+            matches!(
+              pallet_deos_actors::ActorProcesses::<Runtime>::get(**actor_id)
+                .and_then(|process| process.residence),
+              Some(ProcessResidence::Service(_))
+            )
+          })
+          .copied()
+          .collect::<Vec<_>>();
+        let registration_count =
+          pallet_deos_actors::DependencyRegistrationHeaders::<Runtime>::get(source).count;
+        let pending_count = actor_ids
+          .iter()
+          .filter(|actor_id| Actors::actor_hot(**actor_id).is_some_and(|hot| hot.pending_signal))
+          .count() as u32;
+        let process_count = actor_ids
+          .iter()
+          .filter(|actor_id| {
+            pallet_deos_actors::ActorProcesses::<Runtime>::contains_key(**actor_id)
+          })
+          .count() as u32;
+        let revision_state = pallet_deos_actors::DependencyRevisions::<Runtime>::get(source);
+        (
+          newly_pending,
+          registration_count,
+          pending_count,
+          process_count,
+          pallet_deos_actors::DependencyScanSourceNodes::<Runtime>::contains_key(source),
+          revision_state.scan_cursor,
+          revision_state.scan_target,
+        )
+      })
+    };
+    for actor_id in newly_pending {
+      wake_blocks.insert(actor_id, block_number);
+    }
+    registration_counts.push(u64::from(registration_count));
+    pending_counts.push(u64::from(pending_count));
+    process_counts.push(u64::from(process_count));
+    scan_cursors.push(scan_cursor);
+    scan_targets.push(scan_target);
+    if block_number == last_update_block {
+      update_end_scan_cursor = Some(scan_cursor);
+    }
+    if scan_pending {
+      scan_pending_blocks = scan_pending_blocks.saturating_add(1);
+    }
+    let proof = replay_complete_block_in_wasm(
+      &authored,
+      wasm,
+      &format!("current-W6-wake-storm-{block_number}"),
+    );
+    execution_storage_proof.push(proof.execution_storage_proof_bytes);
+    execution_compact_proof.push(proof.execution_compact_proof_bytes);
+    verification_storage_proof.push(proof.verification_storage_proof_bytes);
+    verification_compact_proof.push(proof.verification_compact_proof_bytes);
+    parent = authored.block.header.clone();
+    pre_state = authored.post_state;
+  }
+
+  let final_entries = actors_storage_entries(&pre_state);
+  let final_storage_bytes = persistent_storage_bytes(&final_entries);
+  let (
+    final_revision,
+    acknowledged_current_revision,
+    acknowledged_revisions,
+    final_pending,
+    remaining_active,
+    remaining_dormant,
+    remaining_processes,
+    remaining_dependency_plans,
+    remaining_pending_events,
+    remaining_pending_reviews,
+    remaining_timed_reviews,
+    final_revision_state,
+    source_scan_pending,
+    final_header,
+  ) = {
+    let mut final_ext =
+      TestExternalities::new_with_code_and_state(wasm, pre_state, crate::VERSION.state_version());
+    final_ext.execute_with(|| {
+      let final_revision = pallet_deos_actors::DependencyRevisions::<Runtime>::get(source).revision;
+      let acknowledged_revisions = (0..u64::from(CURRENT_W6_REGISTRATION_PAGES))
+        .flat_map(|page_id| {
+          pallet_deos_actors::DependencyRegistrationPages::<Runtime>::get(source, page_id)
+            .expect("W6 registration page survives")
+            .entries
+            .into_iter()
+        })
+        .flatten()
+        .map(|handle| handle.acknowledged_revision)
+        .collect::<Vec<_>>();
+      let acknowledged = acknowledged_revisions
+        .iter()
+        .filter(|revision| **revision == final_revision)
+        .count() as u32;
+      let pending = actor_ids
+        .iter()
+        .filter(|actor_id| Actors::actor_hot(**actor_id).is_some_and(|hot| hot.pending_signal))
+        .count() as u32;
+      let remaining_active = actor_ids
+        .iter()
+        .filter(|actor_id| {
+          matches!(
+            Actors::actor_semantic_states(**actor_id),
+            Some(pallet_deos_actors::ActorSemanticState::Active(_))
+          )
+        })
+        .count() as u32;
+      let remaining_dormant = actor_ids
+        .iter()
+        .filter(|actor_id| {
+          matches!(
+            Actors::actor_semantic_states(**actor_id),
+            Some(pallet_deos_actors::ActorSemanticState::Dormant(_))
+          )
+        })
+        .count() as u32;
+      let remaining_processes = actor_ids
+        .iter()
+        .filter(|actor_id| pallet_deos_actors::ActorProcesses::<Runtime>::contains_key(**actor_id))
+        .count() as u32;
+      let remaining_dependency_plans = actor_ids
+        .iter()
+        .filter(|actor_id| pallet_deos_actors::DependencyPlans::<Runtime>::contains_key(**actor_id))
+        .count() as u32;
+      let remaining_pending_events = actor_ids
+        .iter()
+        .filter(|actor_id| {
+          pallet_deos_actors::PendingDependencyEvents::<Runtime>::contains_key(**actor_id)
+        })
+        .count() as u32;
+      let remaining_pending_reviews = actor_ids
+        .iter()
+        .filter(|actor_id| {
+          pallet_deos_actors::PendingDependencyReviews::<Runtime>::contains_key(**actor_id)
+        })
+        .count() as u32;
+      let remaining_timed_reviews = actor_ids
+        .iter()
+        .filter(|actor_id| {
+          pallet_deos_actors::DependencyTimedReviews::<Runtime>::contains_key(**actor_id)
+        })
+        .count() as u32;
+      (
+        final_revision,
+        acknowledged,
+        acknowledged_revisions,
+        pending,
+        remaining_active,
+        remaining_dormant,
+        remaining_processes,
+        remaining_dependency_plans,
+        remaining_pending_events,
+        remaining_pending_reviews,
+        remaining_timed_reviews,
+        pallet_deos_actors::DependencyRevisions::<Runtime>::get(source),
+        pallet_deos_actors::DependencyScanSourceNodes::<Runtime>::contains_key(source),
+        pallet_deos_actors::DependencyRegistrationHeaders::<Runtime>::get(source),
+      )
+    })
+  };
+  assert_eq!(
+    final_revision,
+    initial_revision.saturating_add(u64::from(
+      CURRENT_W6_UPDATES_PER_BLOCK.saturating_mul(CURRENT_W6_UPDATE_BLOCKS),
+    )),
+    "every feed update advances exact causal revision"
+  );
+  assert_eq!(final_header.count, CURRENT_W6_SUBSCRIBERS);
+  assert_eq!(final_header.next_index, u64::from(CURRENT_W6_SUBSCRIBERS));
+  assert_eq!(final_header.free_count, 0);
+  assert!(wake_blocks.len() <= CURRENT_W6_SUBSCRIBERS as usize);
+  assert!(progressed.len() <= wake_blocks.len());
+  assert_eq!(total_steps, total_cycles);
+  let active_target = final_revision_state
+    .scan_target
+    .expect("W6 bounded horizon retains one fixed scan target");
+  let active_target_covered = acknowledged_revisions
+    .iter()
+    .filter(|revision| **revision >= active_target)
+    .count() as u32;
+  let update_end_scan_cursor =
+    update_end_scan_cursor.expect("W6 records the update-horizon cursor");
+  let drain_cursor_advance = final_revision_state
+    .scan_cursor
+    .saturating_sub(update_end_scan_cursor);
+  let target_met = final_pending == 0
+    && !source_scan_pending
+    && progressed.len() == CURRENT_W6_SUBSCRIBERS as usize;
+  let bounded_maintenance_met = active_target == initial_revision
+    && active_target_covered == CURRENT_W6_SUBSCRIBERS
+    && update_end_scan_cursor == u64::from(CURRENT_W6_UPDATE_BLOCKS)
+    && drain_cursor_advance == u64::from(CURRENT_W6_DRAIN_BLOCKS);
+  assert!(
+    bounded_maintenance_met,
+    "W6 fixed-target traversal must make one covered-position unit of progress per block"
+  );
+
+  let inserted = persistent_mutation_samples
+    .iter()
+    .map(|sample| sample.inserted)
+    .collect::<Vec<_>>();
+  let removed = persistent_mutation_samples
+    .iter()
+    .map(|sample| sample.removed)
+    .collect::<Vec<_>>();
+  let changed = persistent_mutation_samples
+    .iter()
+    .map(|sample| sample.changed)
+    .collect::<Vec<_>>();
+  let wake_from_first_update = wake_blocks
+    .values()
+    .map(|block| u64::from(block.saturating_sub(first_update_block)))
+    .collect::<Vec<_>>();
+  let acknowledgement_lag = acknowledged_revisions
+    .iter()
+    .map(|revision| final_revision.saturating_sub(*revision))
+    .collect::<Vec<_>>();
+  let cycles_per_actor = progress_counts
+    .values()
+    .copied()
+    .map(u64::from)
+    .collect::<Vec<_>>();
+  println!(
+    "CURRENT_W6_WAKE_STORM_V1 {}",
+    serde_json::json!({
+      "subscribers": CURRENT_W6_SUBSCRIBERS,
+      "registrationPages": CURRENT_W6_REGISTRATION_PAGES,
+      "setupBlocks": setup_blocks,
+      "updatesPerBlock": CURRENT_W6_UPDATES_PER_BLOCK,
+      "updateBlocks": CURRENT_W6_UPDATE_BLOCKS,
+      "drainBlocks": CURRENT_W6_DRAIN_BLOCKS,
+      "targetMet": target_met,
+      "boundedMaintenanceMet": bounded_maintenance_met,
+      "initialRevision": initial_revision,
+      "finalRevision": final_revision,
+      "causalRevisionDelta": final_revision.saturating_sub(initial_revision),
+      "activeTargetCoveredRegistrations": active_target_covered,
+      "coalescedRevisionDistance": final_revision.saturating_sub(active_target),
+      "triggerOccurrencesDuringWakeAndDrain": trigger_occurrences,
+      "completedCycles": total_cycles,
+      "distinctProgressedActors": progressed.len(),
+      "updateWindowSteps": update_window_steps,
+      "drainSteps": drain_steps,
+      "finalPendingSignals": final_pending,
+      "finalRegistrations": final_header.count,
+      "finalCurrentRevisionAcknowledgements": acknowledged_current_revision,
+      "finalAcknowledgementLag": observed_distribution(&acknowledgement_lag),
+      "remainingActiveActors": remaining_active,
+      "remainingDormantActors": remaining_dormant,
+      "remainingProcesses": remaining_processes,
+      "remainingDependencyPlans": remaining_dependency_plans,
+      "remainingPendingEvents": remaining_pending_events,
+      "remainingPendingReviews": remaining_pending_reviews,
+      "remainingTimedReviews": remaining_timed_reviews,
+      "sourceScan": {
+        "pending": source_scan_pending,
+        "target": final_revision_state.scan_target,
+        "cursor": final_revision_state.scan_cursor,
+        "updateEndCursor": update_end_scan_cursor,
+        "drainCursorAdvance": drain_cursor_advance,
+        "end": final_revision_state.scan_end,
+        "exhausted": final_revision_state.exhausted,
+        "cursorDistribution": observed_distribution(&scan_cursors),
+        "targetChanges": scan_targets.windows(2).filter(|pair| pair[0] != pair[1]).count(),
+      },
+      "wakeFromFirstUpdateBlocks": observed_distribution(&wake_from_first_update),
+      "wakeToStepBlocks": observed_distribution(&wake_to_step_blocks),
+      "cyclesPerActor": observed_distribution(&cycles_per_actor),
+      "registrationsRemaining": observed_distribution(&registration_counts),
+      "pendingSignals": observed_distribution(&pending_counts),
+      "processes": observed_distribution(&process_counts),
+      "sourceScanPendingBlocks": scan_pending_blocks,
+      "setupControlRefTime": observed_distribution(&setup_control_ref_time),
+      "setupControlProofSize": observed_distribution(&setup_control_proof_size),
+      "setupExecutionStorageProof": observed_distribution(&setup_execution_storage_proof),
+      "setupExecutionCompactProof": observed_distribution(&setup_execution_compact_proof),
+      "controlRefTime": observed_distribution(&control_ref_time),
+      "controlProofSize": observed_distribution(&control_proof_size),
+      "effectRefTime": observed_distribution(&effect_ref_time),
+      "effectProofSize": observed_distribution(&effect_proof_size),
+      "actorsPersistentStorage": {
+        "initialBytes": initial_storage_bytes,
+        "finalBytes": final_storage_bytes,
+        "minBytes": storage_bytes.iter().min(),
+        "maxBytes": storage_bytes.iter().max(),
+      },
+      "actorsPersistentKeyMutationsPerBlock": {
+        "inserted": observed_distribution(&inserted),
+        "removed": observed_distribution(&removed),
+        "changed": observed_distribution(&changed),
+      },
+      "exactWasmProofs": {
+        "executionStorage": observed_distribution(&execution_storage_proof),
+        "executionCompact": observed_distribution(&execution_compact_proof),
+        "verificationStorage": observed_distribution(&verification_storage_proof),
+        "verificationCompact": observed_distribution(&verification_compact_proof),
+      },
+    })
+  );
+}
+
+fn run_current_w7_deadlines(wasm: &[u8], replay_wasm: bool) {
+  let mut ext = TestExternalities::new_with_code_and_state(
+    wasm,
+    reference_genesis_storage(wasm),
+    crate::VERSION.state_version(),
+  );
+  let signers = (0..CURRENT_W7_SETUP_BLOCKS)
+    .map(|batch| {
+      let mut seed = [68u8; 32];
+      seed[..4].copy_from_slice(&batch.to_le_bytes());
+      sr25519::Pair::from_seed(&seed)
+    })
+    .collect::<Vec<_>>();
+  let (actor_ids, actor_profiles, accounts, expected_deadlines) = ext.execute_with(|| {
+    System::set_block_number(1);
+    assert!(
+      CURRENT_W7_SETUP_BATCH
+        <= u32::from(<Runtime as pallet_deos_actors::Config>::MaxOwnerSlots::get())
+    );
+    for signer in &signers {
+      assert_ok!(Balances::force_set_balance(
+        RuntimeOrigin::root(),
+        MultiAddress::Id(crate::AccountId::from(signer.public())),
+        100_000_000 * crate::EXISTENTIAL_DEPOSIT,
+      ));
+    }
+    let steps = BoundedVec::try_from(vec![StepOf::<Runtime> {
+      precondition: None,
+      task: Task::Transfer {
+        to: super::common::BOB,
+        asset: primitives::AssetKind::Native,
+        amount: AmountResolution::Fixed(1_000_000_000 * crate::EXISTENTIAL_DEPOSIT),
+      },
+      on_error: StepErrorPolicy::RetryLater { max_attempts: 2 },
+    }])
+    .expect("one real funding-unavailable retry Step fits");
+    let mut actor_ids = Vec::new();
+    let mut actor_profiles = BTreeMap::new();
+    let mut accounts = BTreeMap::new();
+    let mut expected_deadlines = BTreeMap::new();
+    for index in 0..CURRENT_W7_SLEEPERS {
+      let owner =
+        crate::AccountId::from(signers[(index / CURRENT_W7_SETUP_BATCH) as usize].public());
+      let attempt_block = 2 + index / CURRENT_W7_SETUP_BATCH;
+      let due = CURRENT_W7_FIRST_DUE_BLOCK + index / CURRENT_W7_MEMBERS_PER_KEY;
+      let mut schedule = actors_integration_tests::manual_schedule();
+      schedule.cooldown_blocks = due - attempt_block;
+      assert!(
+        schedule.cooldown_blocks > 1,
+        "every retry must sleep off-ring"
+      );
+      let actor_id =
+        actors_integration_tests::create_user(owner.clone(), schedule, None, steps.clone());
+      actors_integration_tests::fund_native(actor_id, 10_000 * crate::EXISTENTIAL_DEPOSIT);
+      if index < CURRENT_W7_SETUP_BATCH {
+        assert_ok!(Actors::manual_trigger(
+          RuntimeOrigin::signed(owner.clone()),
+          actor_id
+        ));
+      }
+      accounts.insert(
+        actor_id,
+        Actors::actor_identity(actor_id).unwrap().sovereign_account,
+      );
+      expected_deadlines.insert(actor_id, due);
+      actor_ids.push(actor_id);
+      actor_profiles.insert(
+        actor_id,
+        WorkloadActorProfile {
+          step_count: 1,
+          opening_predicates_per_step: 0,
+          task: Some(WorkloadTask::Transfer),
+        },
+      );
+    }
+    (actor_ids, actor_profiles, accounts, expected_deadlines)
+  });
+  ext
+    .commit_all()
+    .expect("current W7 admitted fixture commits");
+  let mut pre_state = ext.execute_with(current_top_storage);
+  let mut parent = parent_header_for(pre_state.clone(), wasm, 1);
+  let mut setup_signed_calls = 0u32;
+  let mut setup_control_ref_time = Vec::new();
+  let mut setup_control_proof_size = Vec::new();
+  let mut setup_suspensions = 0usize;
+  for block in 2..CURRENT_W7_FIRST_DUE_BLOCK {
+    let next_batch = ((block - 1) * CURRENT_W7_SETUP_BATCH) as usize;
+    let calls = actor_ids
+      .iter()
+      .skip(next_batch)
+      .take(CURRENT_W7_SETUP_BATCH as usize)
+      .map(|id| RuntimeCall::Actors(pallet_deos_actors::Call::manual_trigger { actor_id: *id }))
+      .collect::<Vec<_>>();
+    let authored = author_complete_block_after_with_calls(
+      pre_state,
+      wasm,
+      &parent,
+      block,
+      UserDemand::ActorOnly,
+      signers.get((block - 1) as usize).unwrap_or(&signers[0]),
+      0,
+      &actor_profiles,
+      &calls,
+    );
+    let attempted_batch = ((block - 2) * CURRENT_W7_SETUP_BATCH) as usize;
+    assert_eq!(
+      authored.metrics.suspended_steps,
+      actor_ids[attempted_batch..attempted_batch + CURRENT_W7_SETUP_BATCH as usize]
+        .iter()
+        .map(|id| (*id, 0))
+        .collect::<Vec<_>>(),
+      "ordinary first Attempts create the declared sleeper batch"
+    );
+    assert_eq!(
+      authored.metrics.actor_steps, 0,
+      "funding refusal invokes no effect"
+    );
+    assert_eq!(authored.metrics.completed_cycles, 0);
+    assert_eq!(authored.metrics.actor_faults, 0);
+    assert!(authored.metrics.closed_actors.is_empty());
+    setup_suspensions += authored.metrics.suspended_steps.len();
+    setup_control_ref_time.push(authored.metrics.actor_control.ref_time());
+    setup_control_proof_size.push(authored.metrics.actor_control.proof_size());
+    setup_signed_calls += calls.len() as u32;
+    if replay_wasm {
+      replay_complete_block_in_wasm(&authored, wasm, &format!("current-W7-setup-{block}"));
+    }
+    parent = authored.block.header.clone();
+    pre_state = authored.post_state;
+  }
+  assert_eq!(setup_suspensions, CURRENT_W7_SLEEPERS as usize);
+  let mut previous = current_w7_deadline_snapshot(wasm, &pre_state, &actor_ids);
+  assert_eq!(previous.handles, expected_deadlines);
+  assert_eq!(previous.suspended.len(), CURRENT_W7_SLEEPERS as usize);
+  assert!(previous.service.is_empty() && previous.closed.is_empty());
+  assert_eq!(previous.block_index_len, CURRENT_W7_DEADLINE_KEYS);
+  assert_eq!(
+    previous.block_headers.len(),
+    CURRENT_W7_DEADLINE_KEYS as usize
+  );
+  assert!(
+    previous
+      .block_headers
+      .values()
+      .all(|count| *count == CURRENT_W7_MEMBERS_PER_KEY)
+  );
+  let balances_before = {
+    let mut state = TestExternalities::new_with_code_and_state(
+      wasm,
+      pre_state.clone(),
+      crate::VERSION.state_version(),
+    );
+    state.execute_with(|| {
+      for key in previous.block_headers.keys() {
+        let header = Actors::deadline_headers(WakeupKey::Block(*key)).unwrap();
+        assert_eq!(
+          header.page_count, 1,
+          "32 sleepers fill exactly one C32 page per key"
+        );
+      }
+      accounts
+        .iter()
+        .map(|(id, account)| (*id, Balances::free_balance(account)))
+        .collect::<BTreeMap<_, _>>()
+    })
+  };
+  let initial_storage_bytes = persistent_storage_bytes(&actors_storage_entries(&pre_state));
+  let mut storage_bytes = vec![initial_storage_bytes];
+  let mut mutations = Vec::new();
+  let mut return_blocks = BTreeMap::<ActorId, u32>::new();
+  let mut retry_blocks = BTreeMap::<ActorId, u32>::new();
+  let mut due_to_return = Vec::new();
+  let mut return_to_attempt = Vec::new();
+  let mut returned_per_block = Vec::new();
+  let mut overdue_per_block = Vec::new();
+  let mut control_ref_time = Vec::new();
+  let mut control_proof_size = Vec::new();
+  let mut effect_ref_time = Vec::new();
+  let mut effect_proof_size = Vec::new();
+  let mut execution_storage_proof = Vec::new();
+  let mut execution_compact_proof = Vec::new();
+  let mut verification_storage_proof = Vec::new();
+  let mut verification_compact_proof = Vec::new();
+  let arrival_end = CURRENT_W7_FIRST_DUE_BLOCK + CURRENT_W7_ARRIVAL_BLOCKS - 1;
+  let final_block = arrival_end + CURRENT_W7_DRAIN_BLOCKS;
+  let mut timeline = Vec::new();
+  for block in CURRENT_W7_FIRST_DUE_BLOCK..=final_block {
+    let before_entries = actors_storage_entries(&pre_state);
+    let authored = author_complete_block_after(
+      pre_state,
+      wasm,
+      &parent,
+      block,
+      UserDemand::ActorOnly,
+      &signers[0],
+      0,
+      &actor_profiles,
+    );
+    assert_eq!(
+      authored.metrics.actor_steps, 0,
+      "unfunded Attempts cannot fabricate useful effects"
+    );
+    assert_eq!(authored.metrics.completed_cycles, 0);
+    assert_eq!(authored.metrics.actor_faults, 0);
+    assert!(
+      authored.metrics.suspended_steps.is_empty(),
+      "retry exhaustion cannot re-sleep"
+    );
+    let current = current_w7_deadline_snapshot(wasm, &authored.post_state, &actor_ids);
+    let returned = actor_ids
+      .iter()
+      .filter(|id| previous.handles.contains_key(id) && !current.handles.contains_key(id))
+      .copied()
+      .collect::<Vec<_>>();
+    assert_eq!(
+      returned,
+      actor_ids[return_blocks.len()..return_blocks.len() + returned.len()],
+      "deadline extraction preserves the due-key/C32-slot prefix"
+    );
+    for id in &returned {
+      let due = expected_deadlines[id];
+      assert!(block >= due, "no future sleeper is extracted");
+      assert!(current.service.contains(id) && current.suspended.contains(id));
+      assert!(
+        return_blocks.insert(*id, block).is_none(),
+        "one deadline extraction per sleeper"
+      );
+      due_to_return.push(u64::from(block - due));
+    }
+    let continued = authored
+      .metrics
+      .continued_steps
+      .iter()
+      .map(|(id, cursor)| {
+        assert_eq!(*cursor, 0, "retry resumes the original cursor");
+        let returned_at = return_blocks[id];
+        assert_eq!(
+          block,
+          returned_at + 1,
+          "returned workload receives ordinary B+1 Service"
+        );
+        assert!(
+          retry_blocks.insert(*id, block).is_none(),
+          "one terminal retry per sleeper"
+        );
+        return_to_attempt.push(u64::from(block - returned_at));
+        *id
+      })
+      .collect::<Vec<_>>();
+    assert_eq!(authored.metrics.failed_cycle_actors, continued);
+    assert_eq!(
+      authored.metrics.closed_actors,
+      continued
+        .iter()
+        .map(|id| (*id, CloseReason::RetryAttemptsExhausted))
+        .collect::<Vec<_>>()
+    );
+    assert_eq!(current.closed, retry_blocks.keys().copied().collect());
+    assert_eq!(
+      current.suspended.len(),
+      current.handles.len() + current.service.len()
+    );
+    assert_eq!(
+      current.suspended.len() + current.closed.len(),
+      CURRENT_W7_SLEEPERS as usize
+    );
+    assert_eq!(
+      current.block_headers.values().sum::<u32>() as usize,
+      current.handles.len()
+    );
+    assert_eq!(
+      current.block_index_len as usize,
+      current.block_headers.len()
+    );
+    let overdue = current
+      .handles
+      .values()
+      .filter(|due| **due <= block)
+      .count();
+    let after_entries = actors_storage_entries(&authored.post_state);
+    mutations.push(persistent_mutations(&before_entries, &after_entries));
+    storage_bytes.push(persistent_storage_bytes(&after_entries));
+    returned_per_block.push(returned.len() as u64);
+    overdue_per_block.push(overdue as u64);
+    control_ref_time.push(authored.metrics.actor_control.ref_time());
+    control_proof_size.push(authored.metrics.actor_control.proof_size());
+    effect_ref_time.push(authored.metrics.actor_effect.ref_time());
+    effect_proof_size.push(authored.metrics.actor_effect.proof_size());
+    timeline.push(serde_json::json!({
+      "block": block, "newlyDue": if block <= arrival_end { CURRENT_W7_MEMBERS_PER_KEY } else { 0 },
+      "returned": returned.len(), "terminalRetries": continued.len(),
+      "sleeping": current.handles.len(), "overdue": overdue,
+      "service": current.service.len(), "closed": current.closed.len(),
+      "deadlineKeys": current.block_index_len,
+    }));
+    if replay_wasm {
+      let proof =
+        replay_complete_block_in_wasm(&authored, wasm, &format!("current-W7-deadlines-{block}"));
+      execution_storage_proof.push(proof.execution_storage_proof_bytes);
+      execution_compact_proof.push(proof.execution_compact_proof_bytes);
+      verification_storage_proof.push(proof.verification_storage_proof_bytes);
+      verification_compact_proof.push(proof.verification_compact_proof_bytes);
+    }
+    previous = current;
+    parent = authored.block.header.clone();
+    pre_state = authored.post_state;
+  }
+  assert!(
+    !return_blocks.is_empty() && !retry_blocks.is_empty(),
+    "real deadline service is observed"
+  );
+  let mut final_state =
+    TestExternalities::new_with_code_and_state(wasm, pre_state, crate::VERSION.state_version());
+  final_state.execute_with(|| {
+    for (id, account) in &accounts {
+      assert_eq!(
+        Balances::free_balance(account),
+        balances_before[id],
+        "non-invoked retry and close preserve exact sovereign custody"
+      );
+    }
+  });
+  let inserted = mutations.iter().map(|m| m.inserted).collect::<Vec<_>>();
+  let removed = mutations.iter().map(|m| m.removed).collect::<Vec<_>>();
+  let changed = mutations.iter().map(|m| m.changed).collect::<Vec<_>>();
+  let censored_lateness = previous
+    .handles
+    .values()
+    .map(|due| u64::from(final_block - due))
+    .collect::<Vec<_>>();
+  let target_met = previous.handles.is_empty()
+    && previous.service.is_empty()
+    && previous.closed.len() == CURRENT_W7_SLEEPERS as usize;
+  println!(
+    "CURRENT_W7_DEADLINES_V1 {}",
+    serde_json::json!({
+      "productionWasmReplayed": replay_wasm, "actorType": "User",
+      "sleepers": CURRENT_W7_SLEEPERS, "deadlineKeys": CURRENT_W7_DEADLINE_KEYS,
+      "membersPerKey": CURRENT_W7_MEMBERS_PER_KEY, "setupBlocks": CURRENT_W7_SETUP_BLOCKS,
+      "setupSuspensions": setup_suspensions, "setupSignedManualCalls": setup_signed_calls,
+      "owners": signers.len(), "actorsPerOwner": CURRENT_W7_SETUP_BATCH,
+      "arrivalBlocks": CURRENT_W7_ARRIVAL_BLOCKS, "drainBlocks": CURRENT_W7_DRAIN_BLOCKS,
+      "firstDueBlock": CURRENT_W7_FIRST_DUE_BLOCK, "finalBlock": final_block,
+      "successfulEffects": 0, "completedCycles": 0, "returnedSleepers": return_blocks.len(),
+      "failedCycles": retry_blocks.len(), "remainingSleeping": previous.handles.len(),
+      "remainingService": previous.service.len(), "remainingDeadlineKeys": previous.block_index_len,
+      "targetMet": target_met, "dueToReturnBlocks": observed_distribution(&due_to_return),
+      "returnToAttemptBlocks": observed_distribution(&return_to_attempt),
+      "returnedPerBlock": observed_distribution(&returned_per_block),
+      "overdueSleepersPerBlock": observed_distribution(&overdue_per_block),
+      "censoredDeadlineLatenessBlocks": observed_distribution(&censored_lateness),
+      "setupControlRefTime": observed_distribution(&setup_control_ref_time),
+      "setupControlProofSize": observed_distribution(&setup_control_proof_size),
+      "controlRefTime": observed_distribution(&control_ref_time),
+      "controlProofSize": observed_distribution(&control_proof_size),
+      "effectRefTime": observed_distribution(&effect_ref_time),
+      "effectProofSize": observed_distribution(&effect_proof_size),
+      "actorsPersistentStorage": {
+        "initialBytes": initial_storage_bytes, "finalBytes": storage_bytes.last(),
+        "minBytes": storage_bytes.iter().min(), "maxBytes": storage_bytes.iter().max(),
+      },
+      "actorsPersistentKeyMutationsPerBlock": {
+        "inserted": observed_distribution(&inserted), "removed": observed_distribution(&removed),
+        "changed": observed_distribution(&changed),
+      },
+      "exactWasmProofs": {
+        "executionStorage": observed_distribution(&execution_storage_proof),
+        "executionCompact": observed_distribution(&execution_compact_proof),
+        "verificationStorage": observed_distribution(&verification_storage_proof),
+        "verificationCompact": observed_distribution(&verification_compact_proof),
+      },
+      "timeline": timeline,
+    })
   );
 }
 
@@ -4151,19 +5286,19 @@ fn full_executive_user_completion_header_domain_witness() {
           steps: vec![step.clone()].try_into().unwrap(),
           funding,
           completion: CompletionPolicy::Persistent,
+          parked_balance_activation: None,
           auto_close_at_cycle_nonce: None,
         }),
       ));
       let head = pallet_deos_actors::ActorContractHeads::<Runtime>::get(actor_id).unwrap();
       assert_eq!(head.header.step_count, 1);
       assert_eq!(head.first_step, Some(step.clone()));
-      // Source-derived context: the production constructor uses Step/capture geometry, not funding policy.
+      // Source-derived context: the production constructor uses Contract and current-Step geometry, not funding policy.
       let context = StepControlWeightContext {
         cursor: 0,
         steps_in_fragment: 1,
         opening_tail_chunks: 0,
         predicate_evaluation_units: 0,
-        opening_snapshot_entries: 0,
       };
       let resources = head.first_step_resources.unwrap();
       assert_eq!(
@@ -4206,7 +5341,7 @@ fn full_executive_user_completion_header_domain_witness() {
       "funding": if wide { "signed-allowlist-max" } else { "owner-only" },
       "headBytes": head_bytes, "fundingBytes": funding_bytes,
       "context": [context.cursor, context.steps_in_fragment, context.opening_tail_chunks,
-        context.predicate_evaluation_units, context.opening_snapshot_entries],
+        context.predicate_evaluation_units],
       "storedControl": [resources.control.ref_time(), resources.control.proof_size()],
       "blockControl": [authored.metrics.actor_control.ref_time(), authored.metrics.actor_control.proof_size()],
     }));
@@ -5402,7 +6537,7 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     (
       "prepass-admission",
       W::scheduler_on_initialize_cutoff(),
-      9_568_000,
+      9_498_000,
       1_560,
       DatabaseIo::new(2, 2),
       1,
@@ -5410,9 +6545,17 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     (
       "coordinator",
       W::materialization_coordinator_base(),
-      10_895_000,
+      10_755_000,
       1_629,
       DatabaseIo::new(5, 1),
+      1,
+    ),
+    (
+      "dependency-scan-probe",
+      W::dependency_scan_source_probe(),
+      6_635_000,
+      1_498,
+      DatabaseIo::new(1, 0),
       1,
     ),
     (
@@ -5426,7 +6569,7 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     (
       "fanout-base",
       W::observation_fanout_base(),
-      6_076_000,
+      5_867_000,
       1_629,
       DatabaseIo::new(2, 0),
       1,
@@ -5434,24 +6577,40 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     (
       "idle-base",
       W::scheduler_on_idle_base(),
-      19_067_000,
+      19_137_000,
       1_560,
       DatabaseIo::new(7, 2),
       1,
     ),
     (
+      "prepass-service-round-open",
+      W::service_round_begin_populated(),
+      9_429_000,
+      1_511,
+      DatabaseIo::new(1, 1),
+      1,
+    ),
+    (
+      "prepass-service-frontier-probe",
+      W::service_round_probe_eligible(),
+      16_203_000,
+      3_550,
+      DatabaseIo::new(3, 0),
+      1,
+    ),
+    (
       "canonical-deadline-frontier",
-      Weight::from_parts(132_128_000, 85),
-      132_128_000,
-      85,
+      Weight::from_parts(272_301_000, 121),
+      272_301_000,
+      121,
       DatabaseIo::new(0, 0),
       1,
     ),
     (
       "current-binding-deadline-selector-residual",
-      Weight::from_parts(82_759_000, 13_132)
+      Weight::from_parts(78_290_000, 13_132)
         .saturating_add(<Runtime as polkadot_sdk::frame_system::Config>::DbWeight::get().reads(12)),
-      82_759_000,
+      78_290_000,
       13_132,
       DatabaseIo::new(12, 0),
       1,
@@ -5459,7 +6618,7 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     (
       "finalize",
       W::block_resource_finalize(),
-      8_241_000,
+      8_171_000,
       1_560,
       DatabaseIo::new(1, 2),
       1,
@@ -5472,12 +6631,10 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     fixed = fixed.saturating_add(weight.saturating_mul(*frequency));
     fixed_io = fixed_io.saturating_add(io.saturating_mul(*frequency));
   }
-  assert_eq!(fixed_io, DatabaseIo::new(31, 7));
-  // The first block adds one Fee Sink cadence occurrence. Its due-frontier selector carries one
-  // additional proof byte over the no-due canonical baseline.
-  let first_block_extra =
-    W::cadenced_trigger_occurrence().saturating_add(Weight::from_parts(0, 202));
-  let first_extra_io = DatabaseIo::new(28, 14);
+  assert_eq!(fixed_io, DatabaseIo::new(36, 8));
+  // The first block adds one complete Fee Sink cadence occurrence above the stable baseline.
+  let first_block_extra = W::cadenced_trigger_occurrence();
+  let first_extra_io = DatabaseIo::new(41, 18);
   let fixture = prepare_actor_fixture(&[], 0, WorkloadSchedule::ManualOnly);
   let fee_sink = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
   let before = actor_lifecycle_observation(&[], &fixture.storage, &[fee_sink]);
@@ -5522,17 +6679,15 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
   }
   let idle = W::scheduler_on_idle_base()
     .saturating_add(W::block_resource_finalize())
-    // Source-bound canonical empty-Service discovery delta pending accepted V1 Weight generation.
-    .saturating_add(Weight::from_parts(514_887_000, 13_217));
-  assert!(
-    idle.all_lte(
-      first
-        .metrics
-        .actor_control
-        .checked_sub(&first.metrics.prepass_actor_control)
-        .expect("prepass remains a subset of complete Actor Control")
-    ),
-    "the first post-prepass phase additionally owns genesis cadence initialization"
+    // Source-bound canonical empty-Service discovery delta under the accepted generated binding.
+    .saturating_add(Weight::from_parts(225_632_000, 5_061));
+  assert_eq!(
+    first
+      .metrics
+      .actor_control
+      .checked_sub(&first.metrics.prepass_actor_control),
+    Some(idle),
+    "genesis cadence initialization belongs to mandatory Prepass, not Drain"
   );
   assert_eq!(
     second
@@ -5571,25 +6726,25 @@ fn control_temporal_weight_io_ledger_matches_production_selectors() {
   type ProductionWeight = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
 
   let coordinator_io = DatabaseIo::new(5, 1);
-  let at_time_occurrence_io = DatabaseIo::new(28, 14);
-  let cadenced_occurrence_io = DatabaseIo::new(28, 14);
+  let at_time_occurrence_io = DatabaseIo::new(35, 15);
+  let cadenced_occurrence_io = DatabaseIo::new(41, 18);
 
   assert_production_weight_component(
     ProductionWeight::materialization_coordinator_base(),
-    10_895_000,
+    10_755_000,
     1_629,
     coordinator_io,
   );
   assert_production_weight_component(
     ProductionWeight::at_time_trigger_occurrence(),
-    332_869_000,
-    8_900,
+    1_116_081_000,
+    37_633,
     at_time_occurrence_io,
   );
   assert_production_weight_component(
     ProductionWeight::cadenced_trigger_occurrence(),
-    373_797_000,
-    8_698,
+    1_222_312_000,
+    46_501,
     cadenced_occurrence_io,
   );
 
@@ -5602,8 +6757,8 @@ fn control_temporal_weight_io_ledger_matches_production_selectors() {
         .writes
         .saturating_sub(at_time_occurrence_io.writes),
     ),
-    DatabaseIo::new(0, 0),
-    "current temporal occurrence owners retain equal generated database topology"
+    DatabaseIo::new(6, 3),
+    "Cadenced additionally owns populated destination rearm geometry"
   );
 
   let cadenced = ProductionWeight::cadenced_trigger_occurrence();
@@ -5613,7 +6768,7 @@ fn control_temporal_weight_io_ledger_matches_production_selectors() {
     cadenced.proof_size().max(at_time.proof_size()),
   );
   assert_eq!(temporal_admission.ref_time(), cadenced.ref_time());
-  assert_eq!(temporal_admission.proof_size(), at_time.proof_size());
+  assert_eq!(temporal_admission.proof_size(), cadenced.proof_size());
 }
 
 fn assert_control_phase_attribution_campaign(wasm: &[u8], replay_wasm: bool) {
@@ -5637,7 +6792,7 @@ fn assert_control_phase_attribution_campaign(wasm: &[u8], replay_wasm: bool) {
       );
     }
   }
-  assert_eq!(manual.steps, vec![69, 31, 0, 0, 0, 0, 0, 0, 0]);
+  assert_eq!(manual.steps, vec![14, 16, 16, 16, 16, 16, 6, 0, 0]);
   assert_eq!(manual.prepass_steps, manual.steps);
   assert_eq!(manual.trigger_occurrences, vec![0; 9]);
   assert_eq!(cadenced.steps, vec![0, 0, 1, 1, 1, 1, 1, 1, 1]);
@@ -6602,6 +7757,40 @@ fn full_executive_w4_heterogeneous_effect_campaigns_replay_exact_production_wasm
   for demand in [UserDemand::ActorOnly, UserDemand::ContinuousValid] {
     run_w4_heterogeneous_effect_campaign(&wasm, demand);
   }
+}
+
+#[test]
+#[ignore = "128-block deadline profile; run through actors-assurance"]
+fn full_executive_current_w7_deadline_fixture() {
+  run_current_w7_deadlines(&[], false);
+}
+
+#[test]
+#[ignore = "requires exact current production Wasm via DEOS_PRODUCTION_WASM"]
+fn full_executive_current_w7_deadlines_replay_exact_production_wasm() {
+  let path = std::env::var_os("DEOS_PRODUCTION_WASM")
+    .expect("DEOS_PRODUCTION_WASM must select the accepted production artifact");
+  let wasm = std::fs::read(path).expect("selected production Wasm is readable");
+  assert_eq!(
+    polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "current W7 must remain bound to the accepted production Wasm"
+  );
+  run_current_w7_deadlines(&wasm, true);
+}
+
+#[test]
+#[ignore = "requires exact current production Wasm via DEOS_PRODUCTION_WASM"]
+fn full_executive_current_w6_wake_storm_replays_exact_production_wasm() {
+  let path = std::env::var_os("DEOS_PRODUCTION_WASM")
+    .expect("DEOS_PRODUCTION_WASM must explicitly select the accepted production artifact");
+  let wasm = std::fs::read(path).expect("selected production Wasm is readable");
+  assert_eq!(
+    polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "current W6 must remain bound to the accepted production Wasm"
+  );
+  run_current_w6_wake_storm(&wasm);
 }
 
 #[test]

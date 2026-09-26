@@ -640,16 +640,37 @@ test('every Predicate and AmountResolution lowers without changing step topology
       });
     }
   }
-  const amounts = [
-    fixed(),
-    { type: 'Percent', parts: 500_000_000 },
-  ];
+  const amounts = [fixed(), { type: 'Percent', parts: 500_000_000 }];
   for (const amount of amounts) {
     const lowered = lowerActorAuthoringContract(
       contract([authoringStep('only', transferTask(amount))]),
     );
     assert.equal(lowered.steps[0].task.value.amount.type, amount.type);
   }
+});
+
+test('reference SplitTransfer authoring accepts four recipients and rejects five', () => {
+  assert.equal(DEOS_ACTORS_AUTHORING_LIMITS.maxSplitTransferLegs, 4);
+  const legs = (count) =>
+    Array.from({ length: count }, (_, index) => ({
+      to: encodeAddress(new Uint8Array(32).fill(index + 1), 42),
+      shareParts: 200_000_000,
+    }));
+  const draft = (count) =>
+    contract([
+      authoringStep('split', {
+        type: 'SplitTransfer',
+        asset: native,
+        amount: fixed(),
+        legs: legs(count),
+      }),
+    ]);
+  assert.equal(validateActorAuthoringContract(draft(4)).valid, true);
+  const rejected = validateActorAuthoringContract(draft(5));
+  assert.equal(rejected.valid, false);
+  assert.ok(
+    rejected.issues.some((issue) => issue.message.includes('2..4 legs')),
+  );
 });
 
 test('typed validation rejects control-flow-adjacent and runtime-invalid drafts', () => {

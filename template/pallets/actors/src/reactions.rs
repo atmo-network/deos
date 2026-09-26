@@ -618,6 +618,14 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn do_fanout_dirty_observation_page() -> Result<bool, DispatchError> {
+    Self::do_fanout_dirty_observation_quantum(T::ObservationPageSize::get())
+  }
+
+  /// One bounded prefix of a subscriber page; the canonical position persists across turns.
+  pub(crate) fn do_fanout_dirty_observation_quantum(
+    max_positions: u32,
+  ) -> Result<bool, DispatchError> {
+    ensure!(max_positions > 0, Error::<T>::DirtyObservationInvariant);
     let mut list = DirtyObservationListState::<T>::get();
     if list.count == 0 {
       ensure!(
@@ -682,7 +690,9 @@ impl<T: Config> Pallet<T> {
       Error::<T>::DirtyObservationInvariant
     );
     let mut page_complete = true;
-    while state.next_subscriber_position < page_len {
+    let mut positions_inspected = 0u32;
+    while state.next_subscriber_position < page_len && positions_inspected < max_positions {
+      positions_inspected = positions_inspected.saturating_add(1);
       let position = state.next_subscriber_position as usize;
       let maybe_actor_id = page.entries[position];
       let next_position = state
@@ -736,7 +746,7 @@ impl<T: Config> Pallet<T> {
         }
       }
     }
-    if !page_complete {
+    if !page_complete || state.next_subscriber_position < page_len {
       Self::advance_dirty_observation_cursor(&mut list, &state);
       DirtyObservationFeeds::<T>::insert(feed, state);
       DirtyObservationListState::<T>::put(list);
@@ -780,8 +790,28 @@ impl<T: Config> Pallet<T> {
     remaining_weight: polkadot_sdk::frame_support::weights::Weight,
     pages_already_serviced: u32,
   ) -> (polkadot_sdk::frame_support::weights::Weight, u32) {
+    Self::fanout_dirty_observations_with_quanta(
+      remaining_weight,
+      pages_already_serviced,
+      T::ObservationPageSize::get(),
+      Self::observation_fanout_ordinary_weight_upper(),
+    )
+  }
+
+  /// Run the ordinary fanout worker with an explicitly priced positional quantum.
+  /// The production caller supplies the full-page bound until its Weight owner is reissued.
+  pub(crate) fn fanout_dirty_observations_with_quanta(
+    remaining_weight: polkadot_sdk::frame_support::weights::Weight,
+    pages_already_serviced: u32,
+    max_positions: u32,
+    ordinary_weight_upper: polkadot_sdk::frame_support::weights::Weight,
+  ) -> (polkadot_sdk::frame_support::weights::Weight, u32) {
     use polkadot_sdk::frame_support::weights::Weight;
     use polkadot_sdk::sp_weights::WeightMeter;
+
+    if max_positions == 0 || max_positions > T::ObservationPageSize::get() {
+      return (Weight::zero(), pages_already_serviced);
+    }
 
     let mut meter = WeightMeter::with_limit(remaining_weight);
     let mut pages_serviced = pages_already_serviced;
@@ -810,7 +840,7 @@ impl<T: Config> Pallet<T> {
         break;
       };
       let unit_weight = match branch {
-        ObservationFanoutBranch::Ordinary => Self::observation_fanout_ordinary_weight_upper(),
+        ObservationFanoutBranch::Ordinary => ordinary_weight_upper,
         ObservationFanoutBranch::Terminal => T::WeightInfo::observation_fanout_terminal(),
       };
       if !meter.can_consume(unit_weight.saturating_add(fault_weight)) {
@@ -820,7 +850,7 @@ impl<T: Config> Pallet<T> {
       let fault_feed = list.cursor.or(list.head);
       let fault_state = fault_feed.and_then(DirtyObservationFeeds::<T>::get);
       let result = polkadot_sdk::frame_support::storage::with_transaction(|| {
-        match Self::do_fanout_dirty_observation_page() {
+        match Self::do_fanout_dirty_observation_quantum(max_positions) {
           Ok(has_more) => TransactionOutcome::Commit(Ok(has_more)),
           Err(error) => TransactionOutcome::Rollback(Err(error)),
         }
@@ -981,6 +1011,12 @@ impl<T: Config> Pallet<T> {
 impl<T: Config> crate::DependencyEventIngress<T::ObservationFeedId> for Pallet<T> {
   fn note_dependency_event(feed: T::ObservationFeedId) -> DispatchResult {
     Pallet::<T>::publish_observation_dependency_event(feed)
+  }
+}
+
+impl<T: Config> crate::BalanceTransitionIngress<T::AssetId> for Pallet<T> {
+  fn note_balance_transition(asset: T::AssetId) -> DispatchResult {
+    Pallet::<T>::publish_balance_dependency_event(asset)
   }
 }
 

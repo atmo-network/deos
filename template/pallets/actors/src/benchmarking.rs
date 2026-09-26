@@ -8,9 +8,10 @@ use crate::*;
 use alloc::{vec, vec::Vec};
 use frame::prelude::*;
 use polkadot_sdk::frame_benchmarking::{account, v2::*};
-use polkadot_sdk::frame_support::traits::Hooks;
+use polkadot_sdk::frame_support::traits::{Hooks, fungible::InspectHold};
 use polkadot_sdk::frame_system::RawOrigin;
 use polkadot_sdk::sp_runtime::Perbill;
+use polkadot_sdk::sp_weights::WeightToFee;
 
 const BENCHMARK_ADMISSION_CELL_BYTES: usize = 171;
 type BenchmarkAdmissionCell = [u8; BENCHMARK_ADMISSION_CELL_BYTES];
@@ -101,6 +102,155 @@ mod benches {
     Pallet::<T>::transfer_service_member_to_deadline(actor, destination)
       .expect("benchmark Actor enters canonical deadline");
     Ok((actor, now))
+  }
+
+  fn create_canonical_deadline_guard<T: Config>(seed: u32, due: BlockNumberFor<T>) -> ActorId {
+    create_canonical_deadline_guard_at_sovereign::<T>(seed, due, None)
+  }
+
+  fn create_canonical_deadline_guard_at_sovereign<T: Config>(
+    seed: u32,
+    due: BlockNumberFor<T>,
+    sovereign_id: Option<SystemSovereignId>,
+  ) -> ActorId {
+    let owner: T::AccountId = account("deadline-maintenance-guard", seed, 0);
+    let mut contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::Manual,
+        cooldown_blocks: 0,
+      },
+      make_inert_contract_steps::<T>(),
+    )
+    .expect("guard Contract exists");
+    contract.window = Some(ScheduleWindow {
+      start: due,
+      end: due.saturating_add(T::MinWindowLength::get()),
+    });
+    if let Some(sovereign_id) = sovereign_id {
+      Pallet::<T>::create_system_actor_at_sovereign_id(
+        RawOrigin::Root.into(),
+        sovereign_id,
+        owner.clone(),
+        Mutability::Mutable,
+        Some(contract),
+      )
+    } else {
+      Pallet::<T>::create_system_actor(
+        RawOrigin::Root.into(),
+        owner.clone(),
+        Mutability::Mutable,
+        Some(contract),
+      )
+    }
+    .expect("future-window guard is admitted");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
+      .expect("guard readiness is published");
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("guard has generation authority");
+    let destination = Pallet::<T>::plan_deadline_destination(actor, WakeupKey::Block(due))
+      .expect("guard future-window destination exists");
+    Pallet::<T>::transfer_service_member_to_deadline(actor, destination)
+      .expect("canonical residence transfer sleeps the guard until its window");
+    let handle = DeadlineHandles::<T>::get(actor_id).expect("guard owns canonical Deadline");
+    assert_eq!(handle.key, WakeupKey::Block(due));
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    actor_id
+  }
+
+  /// Fills the remaining admitted population with distinct, increasing future Block keys.
+  /// A smaller new key must rise from the heap tail; deleting the minimum sinks the largest key.
+  fn populate_canonical_deadline_index<T: Config>(after: BlockNumberFor<T>) -> u32 {
+    populate_canonical_deadline_index_with_tail::<T>(after, false)
+  }
+
+  fn populate_canonical_deadline_index_with_tail<T: Config>(
+    after: BlockNumberFor<T>,
+    one_entry_tail: bool,
+  ) -> u32 {
+    let available = Pallet::<T>::effective_active_actor_limit()
+      .checked_sub(ActiveActorCount::<T>::get())
+      .expect("active population fits its limit")
+      .min(
+        T::MaxActorIdentities::get()
+          .checked_sub(ActorIdentityCount::<T>::get())
+          .expect("identity population fits its limit"),
+      )
+      .min(
+        T::MaxSystemSovereigns::get()
+          .checked_sub(SystemSovereignCount::<T>::get())
+          .expect("sovereign population fits its limit"),
+      );
+    let before = DeadlineIndexLen::<T>::get(WakeupClock::Block);
+    let guards = if one_entry_tail {
+      available - (before + available - 1) % 32
+    } else {
+      available
+    };
+    assert!(guards > 32, "deep Block index requires multiple pages");
+    for seed in 0..guards {
+      let due = after.saturating_add(1_000u32.saturating_add(seed).into());
+      create_canonical_deadline_guard::<T>(seed, due);
+    }
+    let keys = before + guards;
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Block), keys);
+    assert!(keys <= T::MaxActiveActors::get());
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("deep deadline index has complete canonical authority");
+    keys
+  }
+
+  /// A due head is the sole member of page 0, with distinct vacancy predecessor/successor
+  /// pages (3/4) and physical successor (1). Creation, canonical transfer and close establish links.
+  fn prepare_deadline_removal_neighbors<T: Config>(actor: ActorRef) {
+    let handle = DeadlineHandles::<T>::get(actor.actor_id).expect("source deadline exists");
+    let WakeupKey::Block(due) = handle.key else {
+      panic!("source uses the Block clock")
+    };
+    assert_eq!((handle.page, handle.slot), (0, 0));
+    let guards = (0..128)
+      .map(|seed| create_canonical_deadline_guard::<T>(seed, due))
+      .collect::<alloc::vec::Vec<_>>();
+    let now = frame_system::Pallet::<T>::block_number().saturating_add(1u32.into());
+    assert!(now <= due);
+    frame_system::Pallet::<T>::set_block_number(now);
+    for guard in guards.iter().take(31).chain(core::iter::once(&guards[95])) {
+      Pallet::<T>::close_actor(RawOrigin::Root.into(), *guard)
+        .expect("guard close produces a canonical vacancy");
+    }
+    let header = DeadlineHeaders::<T>::get(handle.key).expect("populated deadline exists");
+    let page = DeadlinePages::<T>::get(handle.key, 0).expect("due head page exists");
+    assert_eq!(
+      (header.page_count, header.count, header.first_vacant_page),
+      (5, 97, Some(3))
+    );
+    assert_eq!((page.live_entries, page.next_page), (1, Some(1)));
+    assert_eq!(
+      (page.previous_vacant_page, page.next_vacant_page),
+      (Some(3), Some(4))
+    );
+    assert_eq!(page.entries[0], Some(actor));
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("populated deadline fixture is canonically reachable");
+  }
+
+  /// Builds a retained destination whose vacancy head has one slot and a linked successor.
+  fn prepare_deadline_destination_vacancy<T: Config>(due: BlockNumberFor<T>) {
+    let guards = (1_000..1_033)
+      .map(|seed| create_canonical_deadline_guard::<T>(seed, due))
+      .collect::<alloc::vec::Vec<_>>();
+    Pallet::<T>::close_actor(RawOrigin::Root.into(), guards[31])
+      .expect("destination first page becomes the vacancy head");
+    let key = WakeupKey::Block(due);
+    let header = DeadlineHeaders::<T>::get(key).expect("destination bucket exists");
+    let page = DeadlinePages::<T>::get(key, 0).expect("destination vacancy head exists");
+    assert_eq!(
+      (header.page_count, header.count, header.first_vacant_page),
+      (2, 32, Some(0))
+    );
+    assert_eq!((page.live_entries, page.next_vacant_page), (31, Some(1)));
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("destination vacancy fixture is canonically reachable");
   }
 
   fn benchmark_service_process<T: Config>(
@@ -255,6 +405,7 @@ mod benches {
       window: None,
       steps: contract_steps,
       completion: CompletionPolicy::Persistent,
+      parked_balance_activation: None,
       funding: FundingSourcePolicy::OwnerOnly,
       auto_close_at_cycle_nonce: None,
     })
@@ -270,9 +421,43 @@ mod benches {
       window: None,
       steps: contract_steps,
       completion: CompletionPolicy::Persistent,
+      parked_balance_activation: None,
       funding: FundingSourcePolicy::RuntimePolicy,
       auto_close_at_cycle_nonce: None,
     })
+  }
+
+  // FRAME exempts the default signer account from DB accounting. Automatic work has no
+  // signer allowance, and distinct economic roles must not collapse its measured key set.
+  fn assert_distinct_measured_accounts<T: Config>(accounts: &[&T::AccountId]) {
+    let signer = whitelisted_caller::<T::AccountId>();
+    let mut seen = alloc::collections::BTreeSet::new();
+    for account in accounts {
+      assert_ne!(
+        *account, &signer,
+        "automatic work must account for the signer key"
+      );
+      assert!(
+        seen.insert(*account),
+        "measured account roles must be distinct"
+      );
+    }
+  }
+
+  fn measured_account<T: Config>(name: &'static str, index: u32) -> T::AccountId {
+    let account = account(name, index, 0);
+    assert_distinct_measured_accounts::<T>(&[&account, &T::FeeSink::get()]);
+    account
+  }
+
+  fn assert_measured_actor_accounts<T: Config>(actors: &[ActorId]) {
+    let mut accounts = vec![T::FeeSink::get()];
+    for actor in actors {
+      let identity = Pallet::<T>::actor_identity(*actor).expect("measured Actor identity exists");
+      accounts.push(identity.owner);
+      accounts.push(identity.sovereign_account);
+    }
+    assert_distinct_measured_accounts::<T>(&accounts.iter().collect::<Vec<_>>());
   }
 
   fn full_attempt_fee<T: Config>(contract_steps: &ContractSteps<T>) -> T::Balance {
@@ -284,6 +469,115 @@ mod benches {
   fn benchmark_predicate_capacity<T: Config>() -> u32 {
     T::MaxPredicatesPerStep::get()
       .min(T::MaxPreconditionClauses::get().saturating_mul(T::MaxPredicatesPerClause::get()))
+  }
+
+  fn prepare_max_manual_observation_park<T: Config>(
+    owner_label: &'static str,
+    review_at: BlockNumberFor<T>,
+  ) -> Result<
+    (
+      ActorRef,
+      ParkEvidence<BlockNumberFor<T>>,
+      Vec<DependencySourceId>,
+    ),
+    BenchmarkError,
+  > {
+    let predicate_count = benchmark_predicate_capacity::<T>();
+    if predicate_count == 0 {
+      return Err(BenchmarkError::Stop(
+        "host cannot represent an observation predicate",
+      ));
+    }
+    let owner: T::AccountId = account(owner_label, 0, 0);
+    let (_, precondition) = prepare_max_encoded_step_precondition::<T>(0, predicate_count, false)?;
+    let feeds = precondition
+      .clauses
+      .iter()
+      .flat_map(|clause| clause.iter())
+      .map(|predicate| match predicate {
+        Predicate::ObservationAbove { feed, .. } => Ok(*feed),
+        _ => Err(BenchmarkError::Stop(
+          "maximum observation profile contains a non-observation predicate",
+        )),
+      })
+      .collect::<Result<Vec<_>, _>>()?;
+    let mut steps = make_inert_contract_steps::<T>();
+    steps[0].precondition = Some(precondition);
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner,
+      Mutability::Mutable,
+      system_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        steps,
+      ),
+    )?;
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let ActorSemanticState::Active(record) = ActorSemanticStates::<T>::get(actor_id)
+      .ok_or(BenchmarkError::Stop("benchmark Actor missing"))?
+    else {
+      return Err(BenchmarkError::Stop("benchmark Actor is not active"));
+    };
+    let actor = ActorRef {
+      actor_id,
+      generation: record.generation,
+    };
+    ActorControlLocators::<T>::remove(actor_id);
+    ActorUnsignaledControlCells::<T>::remove(actor_id);
+    ActorProcesses::<T>::remove(actor_id);
+    Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Live, 1u32.into())
+      .map_err(|_| BenchmarkError::Stop("benchmark Actor failed to enter Service"))?;
+    let mut desired = Vec::with_capacity(feeds.len());
+    let mut sources = Vec::with_capacity(feeds.len());
+    for feed in feeds {
+      let source = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::resolve_observation_dependency_source(feed) {
+          Ok(
+            DependencySourceMutation::Existing(source)
+            | DependencySourceMutation::Allocated(source),
+          ) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(source)),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .map_err(|_| BenchmarkError::Stop("benchmark observation source resolution failed"))?;
+      while let Some(target) = DependencyRevisions::<T>::get(source).scan_target {
+        polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+          match Pallet::<T>::complete_dependency_scan(source, target, 0) {
+            Ok(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+            Err(error) => {
+              polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+            }
+          }
+        })
+        .map_err(|_| BenchmarkError::Stop("initial observation scan did not settle"))?;
+      }
+      desired.push(DependencyPlanSource {
+        source,
+        observed_revision: DependencyRevisions::<T>::get(source).revision,
+      });
+      sources.push(source);
+    }
+    let evidence = ParkEvidence {
+      plan_identity: record.admission.admission_identity,
+      reason: ParkNegativeReason::PredicateFalse,
+      review_at: Some(review_at),
+    };
+    Pallet::<T>::transfer_service_member_to_park(
+      actor,
+      ServiceResidenceKind::Live,
+      record.identity.cycle_nonce,
+      evidence.reason,
+      evidence.review_at,
+      &desired,
+      Some(WakeupKey::Block(review_at)),
+    )
+    .map_err(|_| BenchmarkError::Stop("maximum observation profile failed to enter Park"))?;
+    Ok((actor, evidence, sources))
   }
 
   fn packed_predicate_clauses<T: Config>(
@@ -670,13 +964,6 @@ mod benches {
     ));
   }
 
-  fn benchmark_fixture_schedule_service_waiting<T: Config>(
-    actor_id: ActorId,
-    wakeup_block: BlockNumberFor<T>,
-  ) {
-    benchmark_fixture_prepare_service_waiting::<T>(actor_id, wakeup_block)();
-  }
-
   fn benchmark_fixture_prepare_consumed_service_waiting<T: Config>(
     actor_id: ActorId,
     wakeup_block: BlockNumberFor<T>,
@@ -760,14 +1047,6 @@ mod benches {
       }
     }
     ActorReadyTail::<T>::put(ticket);
-  }
-
-  #[inline(always)]
-  fn benchmark_fixture_ready_drain_tombstones<T: Config>(
-    cutoff: QueueTicket,
-    scan_limit: u32,
-  ) -> Result<QueueDrainStats, EnqueueOutcome> {
-    Pallet::<T>::paged_drain_tombstones(cutoff, scan_limit)
   }
 
   fn benchmark_fixture_ready_head<T: Config>() -> u64 {
@@ -936,7 +1215,7 @@ mod benches {
   // semantic state; no service publication.
   #[benchmark]
   fn create_system_actor() {
-    let owner: T::AccountId = whitelisted_caller();
+    let owner = measured_account::<T>("system-create-owner", 0);
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
@@ -968,7 +1247,7 @@ mod benches {
 
   #[benchmark]
   fn create_system_actor_at_sovereign_id() {
-    let owner: T::AccountId = whitelisted_caller();
+    let owner = measured_account::<T>("system-recreate-owner", 0);
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
@@ -1081,7 +1360,7 @@ mod benches {
   // process/service residence. This remains distinct from an active zero-Step Contract.
   #[benchmark]
   fn create_dormant_system_actor() {
-    let owner: T::AccountId = whitelisted_caller();
+    let owner = measured_account::<T>("system-dormant-owner", 0);
     #[block]
     {
       Pallet::<T>::create_system_actor(RawOrigin::Root.into(), owner, Mutability::Mutable, None)
@@ -1249,18 +1528,113 @@ mod benches {
     assert!(inst.pending_signal);
   }
 
+  /// A paid Manual latch with maximum-Step and signed-funding/watch User header.
+  /// Later Pipeline and Action effects are not part of this extrinsic.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn manual_trigger_full_header() -> Result<(), BenchmarkError> {
+    let caller: T::AccountId = whitelisted_caller();
+    let (_, asset, _, funding) = large_header_fields::<T>();
+    ensure_creation_balance::<T>(&caller);
+    let steps = maximum_temporal_control_steps::<T>(asset)?;
+    prefund_active_user_creation::<T>(&caller, &steps);
+    let mut contract = user_contract::<T>(
+      Schedule {
+        trigger: Trigger::Manual,
+        cooldown_blocks: 0,
+      },
+      steps,
+    )
+    .expect("maximum Manual User Contract exists");
+    contract.funding = funding;
+    contract.parked_balance_activation = Some(maximum_parked_balance_activation::<T>(&caller)?);
+    Pallet::<T>::create_user_actor(
+      RawOrigin::Signed(caller.clone()).into(),
+      Mutability::Mutable,
+      Some(contract),
+    )?;
+    let actor_id = NextActorId::<T>::get() - 1;
+    assert_max_contract_geometry::<T>(actor_id);
+    seed_actor_for_cycle::<T>(actor_id);
+    assert!(
+      !benchmark_fixture_semantic_hot::<T>(actor_id)
+        .unwrap()
+        .pending_signal
+    );
+    #[extrinsic_call]
+    manual_trigger(RawOrigin::Signed(caller), actor_id);
+    assert_canonical_ingress_readiness::<T>(actor_id);
+    Ok(())
+  }
+
+  /// Complete maximum-predicate Manual observation check and atomic negative Park publication.
+  #[benchmark(pov_mode = Measured)]
+  fn manual_observation_park() -> Result<(), BenchmarkError> {
+    let predicate_count = benchmark_predicate_capacity::<T>();
+    if predicate_count == 0 {
+      return Err(BenchmarkError::Stop(
+        "host cannot represent an observation predicate",
+      ));
+    }
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let caller: T::AccountId = whitelisted_caller();
+    let (_, mut precondition) =
+      prepare_max_encoded_step_precondition::<T>(0, predicate_count, false)?;
+    for clause in &mut precondition.clauses {
+      for predicate in clause {
+        let Predicate::ObservationAbove { threshold, .. } = predicate else {
+          return Err(BenchmarkError::Stop(
+            "observation-only benchmark profile is malformed",
+          ));
+        };
+        *threshold = u128::MAX;
+      }
+    }
+    let mut steps = make_inert_contract_steps::<T>();
+    steps[0].precondition = Some(precondition);
+    let actor_id =
+      bench_create_user_with_trigger_and_steps::<T>(caller.clone(), Trigger::manual(), steps);
+    let sovereign = Pallet::<T>::active_actor_view(actor_id)
+      .ok_or(BenchmarkError::Stop("benchmark Actor is missing"))?
+      .sovereign_account;
+    T::AssetOps::mint(
+      &sovereign,
+      T::FeeNativeAssetId::get(),
+      T::MinUserBalance::get().saturating_mul(1_000u32.into()),
+    )
+    .map_err(|_| BenchmarkError::Stop("benchmark Actor funding failed"))?;
+
+    #[extrinsic_call]
+    manual_trigger(RawOrigin::Signed(caller), actor_id);
+
+    assert!(matches!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Parked(ParkEvidence {
+        reason: ParkNegativeReason::PredicateFalse,
+        review_at: Some(_),
+        ..
+      }))
+    ));
+    assert_eq!(
+      DependencyPlans::<T>::get(actor_id).len() as u32,
+      predicate_count
+    );
+    assert!(DependencyTimedReviews::<T>::contains_key(actor_id));
+    Ok(())
+  }
+
   /// Measures one matched User AddressEvent occurrence without source-publication or funding-state
   /// work: filter detection, exact Trigger capacity/collection, readiness materialization, and
   /// canonical placement are the complete disjoint Actor-owned boundary.
   #[benchmark(pov_mode = Measured)]
   fn address_event_trigger_occurrence() {
-    let caller: T::AccountId = whitelisted_caller();
+    let owner = measured_account::<T>("address-event-owner", 0);
+    let source = measured_account::<T>("address-event-source", 0);
     let recipient: T::AccountId = account("address-event-recipient", 0, 0);
     let contract_steps = make_contract_steps::<T>(recipient);
-    ensure_creation_balance::<T>(&caller);
-    prefund_active_user_creation::<T>(&caller, &contract_steps);
+    ensure_creation_balance::<T>(&owner);
+    prefund_active_user_creation::<T>(&owner, &contract_steps);
     Pallet::<T>::create_user_actor(
-      RawOrigin::Signed(caller.clone()).into(),
+      RawOrigin::Signed(owner.clone()).into(),
       Mutability::Mutable,
       user_contract::<T>(
         Schedule {
@@ -1272,10 +1646,12 @@ mod benches {
     )
     .expect("AddressEvent benchmark Actor exists");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    assert_measured_actor_accounts::<T>(&[actor_id]);
+    assert_ne!(owner, source);
     frame_system::Pallet::<T>::set_block_number(1u32.into());
     #[block]
     {
-      Pallet::<T>::notify_address_event(actor_id, T::FeeNativeAssetId::get(), One::one(), &caller)
+      Pallet::<T>::notify_address_event(actor_id, T::FeeNativeAssetId::get(), One::one(), &source)
         .expect("matched AddressEvent occurrence commits");
     }
     let semantic = ActorSemanticStates::<T>::get(actor_id)
@@ -1289,6 +1665,45 @@ mod benches {
       ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
       Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
     );
+  }
+
+  /// One matched maximum-header User AddressEvent Trigger, including full source/asset filters.
+  /// The source publisher and later Pipeline/Action are not measured here.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn address_event_trigger_full_header_occurrence() -> Result<(), BenchmarkError> {
+    let (owner, asset, trigger, funding) = large_header_fields::<T>();
+    let steps = maximum_temporal_control_steps::<T>(asset)?;
+    prefund_active_user_creation::<T>(&owner, &steps);
+    let mut contract = user_contract::<T>(
+      Schedule {
+        trigger,
+        cooldown_blocks: 0,
+      },
+      steps,
+    )
+    .expect("maximum AddressEvent User Contract exists");
+    contract.funding = funding;
+    contract.parked_balance_activation = Some(maximum_parked_balance_activation::<T>(&owner)?);
+    Pallet::<T>::create_user_actor(
+      RawOrigin::Signed(owner.clone()).into(),
+      Mutability::Mutable,
+      Some(contract),
+    )?;
+    let actor_id = NextActorId::<T>::get() - 1;
+    assert_max_contract_geometry::<T>(actor_id);
+    assert_measured_actor_accounts::<T>(&[actor_id]);
+    seed_actor_for_cycle::<T>(actor_id);
+    assert!(
+      !benchmark_fixture_semantic_hot::<T>(actor_id)
+        .unwrap()
+        .pending_signal
+    );
+    #[block]
+    {
+      Pallet::<T>::notify_address_event(actor_id, asset, One::one(), &owner)?;
+    }
+    assert_canonical_ingress_readiness::<T>(actor_id);
+    Ok(())
   }
 
   /// Measures the exact lifecycle-only cleanup selected when an Idle User cannot admit a paid
@@ -1402,8 +1817,7 @@ mod benches {
     .expect("maximum-Step retry Opening partition is ordinarily admitted");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     open_reachable_retry::<T>(actor_id, funding);
-    let run = ActorRunStateStore::<T>::get(actor_id).unwrap();
-    assert!(run.opening_snapshot.is_empty());
+    assert!(ActorRunStateStore::<T>::contains_key(actor_id));
     Ok(actor_id)
   }
 
@@ -1572,39 +1986,96 @@ mod benches {
     Ok(())
   }
 
+  // Preserve these diagnostic benchmark IDs; their fixtures use canonical Deadline storage.
   #[benchmark(extra, pov_mode = Measured)]
   fn close_actor_mixed_waiting_reference()
   -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let fixture = prepare_mixed_waiting_close::<T>(false)?;
+    let fixture = prepare_mixed_deadline_close::<T>(false, MixedDeadlineTarget::System)?;
     #[block]
     {
       Pallet::<T>::close_actor(RawOrigin::Root.into(), fixture.actor_id).unwrap();
     }
-    assert_mixed_waiting_close::<T>(&fixture, false);
+    assert_mixed_deadline_close::<T>(&fixture, false);
     Ok(())
   }
 
   #[benchmark(extra, pov_mode = Measured)]
   fn close_actor_mixed_waiting_unlink()
   -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let fixture = prepare_mixed_waiting_close::<T>(true)?;
+    let fixture = prepare_mixed_deadline_close::<T>(true, MixedDeadlineTarget::System)?;
     #[block]
     {
       Pallet::<T>::close_actor(RawOrigin::Root.into(), fixture.actor_id).unwrap();
     }
-    assert_mixed_waiting_close::<T>(&fixture, true);
+    assert_mixed_deadline_close::<T>(&fixture, true);
     Ok(())
   }
 
   #[benchmark(extra, pov_mode = Measured)]
   fn close_actor_mixed_waiting_deadline()
   -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let (fixture, keys) = prepare_mixed_waiting_deadline_close::<T>()?;
+    let (fixture, keys) = prepare_mixed_deadline_heap_close::<T>(MixedDeadlineTarget::System)?;
     #[block]
     {
       Pallet::<T>::close_actor(RawOrigin::Root.into(), fixture.actor_id).unwrap();
     }
-    assert_mixed_waiting_deadline_close::<T>(&fixture, keys);
+    assert_mixed_deadline_heap_close::<T>(&fixture, keys);
+    Ok(())
+  }
+
+  /// A paid User Opening closes the final Tick bucket at full host population.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_actor_user_deep_deadline() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError>
+  {
+    let (fixture, keys) =
+      prepare_mixed_deadline_heap_close::<T>(MixedDeadlineTarget::UserCombined)?;
+    assert!(ActorStateHolds::<T>::contains_key(fixture.actor_id));
+    #[block]
+    {
+      Pallet::<T>::close_actor(
+        RawOrigin::Signed(account("large-head-owner", 0, 0)).into(),
+        fixture.actor_id,
+      )
+      .unwrap();
+    }
+    assert_mixed_deadline_heap_close::<T>(&fixture, keys);
+    Ok(())
+  }
+
+  /// A maximum Observation predicate head closes from its admitted temporal state.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_actor_user_observation_deep_deadline()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (fixture, keys) =
+      prepare_mixed_deadline_heap_close::<T>(MixedDeadlineTarget::UserObservation)?;
+    assert!(ActorStateHolds::<T>::contains_key(fixture.actor_id));
+    #[block]
+    {
+      Pallet::<T>::close_actor(
+        RawOrigin::Signed(account("large-head-owner", 0, 0)).into(),
+        fixture.actor_id,
+      )
+      .unwrap();
+    }
+    assert_mixed_deadline_heap_close::<T>(&fixture, keys);
+    Ok(())
+  }
+
+  /// The same admitted deep Tick close with maximum parked-balance watch header.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_actor_user_parked_deep_deadline()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (fixture, keys) = prepare_mixed_deadline_heap_close::<T>(MixedDeadlineTarget::UserParked)?;
+    assert!(ActorStateHolds::<T>::contains_key(fixture.actor_id));
+    #[block]
+    {
+      Pallet::<T>::close_actor(
+        RawOrigin::Signed(account("mixed-waiting-user", 32, 0)).into(),
+        fixture.actor_id,
+      )
+      .unwrap();
+    }
+    assert_mixed_deadline_heap_close::<T>(&fixture, keys);
     Ok(())
   }
 
@@ -1890,7 +2361,7 @@ mod benches {
   // Diagnostic counterpart for the System branch; production close pricing uses the heavier User path.
   #[benchmark]
   fn close_actor_system_pure() {
-    let owner: T::AccountId = whitelisted_caller();
+    let owner = measured_account::<T>("system-close-owner", 0);
     let recipient: T::AccountId = account("system-close-recipient", 0, 0);
     let schedule = Schedule {
       trigger: Trigger::manual(),
@@ -2018,9 +2489,308 @@ mod benches {
   }
 
   #[benchmark]
-  fn process_due_observation_availability_review() -> Result<(), BenchmarkError> {
+  fn dependency_scan_source_probe() {
+    DependencyScanSourceListState::<T>::put(DependencyScanSourceList {
+      cursor: Some(1),
+      count: 1,
+    });
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    let found;
+
+    #[block]
+    {
+      found = Pallet::<T>::dependency_scan_source_probe(&mut meter)
+        .expect("well-formed source selector probes");
+    }
+
+    assert!(found);
+  }
+
+  #[benchmark]
+  fn process_dependency_scan_unit() -> Result<(), BenchmarkError> {
     frame_system::Pallet::<T>::set_block_number(1u32.into());
-    let owner_account: T::AccountId = account("due-observation-review", 0, 0);
+    let owner_account: T::AccountId = account("dependency-scan-unit", 0, 0);
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner_account,
+      Mutability::Mutable,
+      system_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        make_inert_contract_steps::<T>(),
+      ),
+    )?;
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<T>::get(actor_id).expect("benchmark Actor owns semantic state")
+    else {
+      panic!("benchmark Actor is active")
+    };
+    let actor = ActorRef {
+      actor_id,
+      generation: record.generation,
+    };
+    ActorControlLocators::<T>::remove(actor_id);
+    ActorUnsignaledControlCells::<T>::remove(actor_id);
+    ActorProcesses::<T>::remove(actor_id);
+    Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Live, 1u32.into())
+      .expect("benchmark Actor enters canonical Service");
+    let feed = T::BenchmarkHelper::setup_max_encoded_observation_feeds(1)?
+      .into_iter()
+      .next()
+      .expect("one maximum-width benchmark feed exists");
+    let source = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      match Pallet::<T>::resolve_observation_dependency_source(feed) {
+        Ok(
+          DependencySourceMutation::Existing(source) | DependencySourceMutation::Allocated(source),
+        ) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(source)),
+        Err(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(())),
+      }
+    })
+    .map_err(|()| BenchmarkError::Stop("benchmark feed dependency source is missing"))?;
+    for _ in 0..2 {
+      let Some(target) = DependencyRevisions::<T>::get(source).scan_target else {
+        break;
+      };
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::complete_dependency_scan(source, target, 0) {
+          Ok(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .map_err(|_| BenchmarkError::Stop("initial empty observation scan did not settle"))?;
+    }
+    let observed_revision = DependencyRevisions::<T>::get(source).revision;
+    let evidence = ParkEvidence {
+      plan_identity: record.admission.admission_identity,
+      reason: ParkNegativeReason::SourceUnavailable,
+      review_at: Some(3u32.into()),
+    };
+    Pallet::<T>::transfer_service_member_to_park(
+      actor,
+      ServiceResidenceKind::Live,
+      1,
+      evidence.reason,
+      evidence.review_at,
+      &[DependencyPlanSource {
+        source,
+        observed_revision,
+      }],
+      Some(WakeupKey::Block(3u32.into())),
+    )
+    .expect("benchmark Actor enters observation Park");
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      match Pallet::<T>::publish_dependency_event_with_source_retention(source) {
+        Ok(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+    .map_err(|_| BenchmarkError::Stop("dependency revision publication failed"))?;
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+
+    #[block]
+    {
+      Pallet::<T>::process_next_dependency_scan_unit(&mut meter)
+        .expect("dependency scan member advances")
+        .expect("one source is active");
+    }
+
+    assert!(PendingDependencyEvents::<T>::contains_key(actor_id));
+    assert_eq!(DependencyRevisions::<T>::get(source).scan_cursor, 1);
+    Ok(())
+  }
+
+  #[benchmark]
+  fn process_dependency_scan_completion_unit() -> Result<(), BenchmarkError> {
+    let source = 1;
+    DependencyRevisions::<T>::insert(
+      source,
+      DependencyRevisionState {
+        revision: 1,
+        scan_target: Some(1),
+        scan_cursor: 0,
+        scan_end: 0,
+        exhausted: false,
+      },
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      match Pallet::<T>::insert_dependency_scan_source(source) {
+        Ok(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+    .map_err(|_| BenchmarkError::Stop("empty scan source did not enter selector"))?;
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+
+    #[block]
+    {
+      Pallet::<T>::process_next_dependency_scan_unit(&mut meter)
+        .expect("empty dependency scan completes")
+        .expect("one source is active");
+    }
+
+    assert_eq!(DependencyScanSourceListState::<T>::get().count, 0);
+    assert!(DependencyRevisions::<T>::get(source).scan_target.is_none());
+    Ok(())
+  }
+
+  #[benchmark]
+  fn process_pending_observation_availability_event() -> Result<(), BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let owner_account: T::AccountId = account("pending-observation-event", 0, 0);
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner_account,
+      Mutability::Mutable,
+      system_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        make_inert_contract_steps::<T>(),
+      ),
+    )?;
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<T>::get(actor_id).expect("benchmark Actor owns semantic state")
+    else {
+      panic!("benchmark Actor is active")
+    };
+    let actor = ActorRef {
+      actor_id,
+      generation: record.generation,
+    };
+    ActorControlLocators::<T>::remove(actor_id);
+    ActorUnsignaledControlCells::<T>::remove(actor_id);
+    ActorProcesses::<T>::remove(actor_id);
+    Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Live, 1u32.into())
+      .expect("benchmark Actor enters canonical Service");
+    let feed = T::BenchmarkHelper::setup_max_encoded_observation_feeds(1)?
+      .into_iter()
+      .next()
+      .expect("one maximum-width benchmark feed exists");
+    let source = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      match Pallet::<T>::resolve_observation_dependency_source(feed) {
+        Ok(
+          DependencySourceMutation::Existing(source) | DependencySourceMutation::Allocated(source),
+        ) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(source)),
+        Err(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(())),
+      }
+    })
+    .map_err(|()| BenchmarkError::Stop("benchmark feed dependency source is missing"))?;
+    if let Some(initial_target) = DependencyRevisions::<T>::get(source).scan_target {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::complete_dependency_scan(source, initial_target, 0) {
+          Ok(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .map_err(|_| BenchmarkError::Stop("initial empty observation scan did not settle"))?;
+    }
+    if let Some(successor_target) = DependencyRevisions::<T>::get(source).scan_target {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::complete_dependency_scan(source, successor_target, 0) {
+          Ok(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .map_err(|_| BenchmarkError::Stop("successor empty observation scan did not settle"))?;
+    }
+    let observed_revision = DependencyRevisions::<T>::get(source).revision;
+    let owner = PendingCheckOwner {
+      actor,
+      plan_revision: 1,
+    };
+    let evidence = ParkEvidence {
+      plan_identity: record.admission.admission_identity,
+      reason: ParkNegativeReason::SourceUnavailable,
+      review_at: Some(3u32.into()),
+    };
+    Pallet::<T>::transfer_service_member_to_park(
+      actor,
+      ServiceResidenceKind::Live,
+      owner.plan_revision,
+      evidence.reason,
+      evidence.review_at,
+      &[DependencyPlanSource {
+        source,
+        observed_revision,
+      }],
+      Some(WakeupKey::Block(3u32.into())),
+    )
+    .expect("benchmark Actor enters observation Park");
+    T::BenchmarkHelper::publish_observation(feed, 2)?;
+    if DependencyRevisions::<T>::get(source).scan_target.is_none() {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::publish_dependency_event_with_source_retention(source) {
+          Ok(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .map_err(|_| BenchmarkError::Stop("observation revision publication failed"))?;
+    }
+    let target = DependencyRevisions::<T>::get(source)
+      .scan_target
+      .ok_or(BenchmarkError::Stop("observation scan target is missing"))?;
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = (|| {
+        Pallet::<T>::process_dependency_scan_member(source, target, 0)?;
+        Pallet::<T>::complete_dependency_scan(source, target, 1)?;
+        if let Some(next_target) = DependencyRevisions::<T>::get(source).scan_target {
+          Pallet::<T>::process_dependency_scan_member(source, next_target, 0)?;
+          Pallet::<T>::complete_dependency_scan(source, next_target, 1)?;
+        }
+        Ok::<(), DependencyScanError>(())
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+    .unwrap_or_else(|error| panic!("observation scan failed to publish Pending: {error:?}"));
+    let expected = PendingDependencyEvents::<T>::get(actor_id)
+      .ok_or(BenchmarkError::Stop("observation Pending event is missing"))?;
+    frame_system::Pallet::<T>::set_block_number(2u32.into());
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+
+    #[block]
+    {
+      Pallet::<T>::process_pending_observation_availability_event(
+        &mut meter,
+        expected,
+        evidence,
+        ServiceResidenceKind::Live,
+        2u32.into(),
+      )
+      .expect("available current observation wakes benchmark Actor");
+    }
+
+    assert!(!PendingDependencyEvents::<T>::contains_key(actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    Ok(())
+  }
+
+  fn prepare_due_observation_availability_review<T: Config>(
+    label: &'static str,
+  ) -> Result<ActorRef, BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let owner_account: T::AccountId = account(label, 0, 0);
     Pallet::<T>::create_system_actor(
       RawOrigin::Root.into(),
       owner_account,
@@ -2059,28 +2829,15 @@ mod benches {
       panic!("benchmark observation feed is available")
     };
     T::BenchmarkHelper::deactivate_observation_feed(feed)?;
-    assert!(matches!(
-      T::ObservationProvider::current(&feed),
-      CanonicalObservationState::Unavailable
-    ));
     ObservationDependencySources::<T>::insert(feed, source);
     DependencySourceObservations::<T>::insert(source, feed);
     DependencyRevisions::<T>::mutate(source, |state| state.revision = revision);
-    let owner = PendingCheckOwner {
-      actor,
-      plan_revision: 1,
-    };
-    let evidence = ParkEvidence {
-      plan_identity: record.admission.admission_identity,
-      reason: ParkNegativeReason::SourceUnavailable,
-      review_at: Some(2u32.into()),
-    };
     Pallet::<T>::transfer_service_member_to_park(
       actor,
       ServiceResidenceKind::Live,
-      owner.plan_revision,
-      evidence.reason,
-      evidence.review_at,
+      1,
+      ParkNegativeReason::SourceUnavailable,
+      Some(2u32.into()),
       &[DependencyPlanSource {
         source,
         observed_revision: revision,
@@ -2092,7 +2849,18 @@ mod benches {
       DeadlineHandles::<T>::get(actor_id).map(|handle| handle.key),
       Some(WakeupKey::Block(2u32.into()))
     );
+    Ok(actor)
+  }
+
+  /// Rearm one unavailable observation while deleting a source page with distinct physical and
+  /// vacancy neighbors and filling a populated destination vacancy head.
+  #[benchmark]
+  fn process_due_observation_availability_review() -> Result<(), BenchmarkError> {
+    let actor = prepare_due_observation_availability_review::<T>("due-observation-review")?;
+    prepare_deadline_removal_neighbors::<T>(actor);
+    prepare_deadline_destination_vacancy::<T>(3u32.into());
     frame_system::Pallet::<T>::set_block_number(2u32.into());
+    let source = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
 
     #[block]
@@ -2106,15 +2874,492 @@ mod benches {
       .expect("unavailable indexed observation re-arms benchmark Actor");
     }
 
+    assert!(!ServiceNodes::<T>::contains_key(actor.actor_id));
+    assert!(!DeadlinePages::<T>::contains_key(source.key, source.page));
+    assert_eq!(DeadlineHeaders::<T>::get(source.key).unwrap().count, 96);
+    let destination = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
+    assert_eq!(
+      (destination.key, destination.page, destination.slot),
+      (WakeupKey::Block(3u32.into()), 0, 31)
+    );
+    assert_eq!(
+      DeadlineHeaders::<T>::get(destination.key).unwrap().count,
+      33
+    );
+    assert_deadline_clock_indices::<T>(WakeupClock::Block);
+    Ok(())
+  }
+
+  /// Rearm the same unavailable observation while deleting the minimum singleton key from the
+  /// fullest reachable Block index and inserting the new minimum destination key.
+  #[benchmark]
+  fn process_due_observation_availability_review_deep_index() -> Result<(), BenchmarkError> {
+    let actor = prepare_due_observation_availability_review::<T>("due-observation-review-index")?;
+    let source = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
+    let keys = populate_canonical_deadline_index::<T>(3u32.into());
+    frame_system::Pallet::<T>::set_block_number(2u32.into());
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+
+    #[block]
+    {
+      Pallet::<T>::process_next_due_block_observation_availability_review(
+        &mut meter,
+        ServiceResidenceKind::Live,
+        2u32.into(),
+        Some(WakeupKey::Block(3u32.into())),
+      )
+      .expect("unavailable observation replaces the deep-index minimum");
+    }
+
+    assert!(!ServiceNodes::<T>::contains_key(actor.actor_id));
+    assert!(!DeadlineHeaders::<T>::contains_key(source.key));
+    let destination = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
+    assert_eq!(destination.key, WakeupKey::Block(3u32.into()));
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Block), keys);
+    assert_eq!(DeadlineIndexPositions::<T>::get(source.key), None);
+    assert_eq!(DeadlineIndexPositions::<T>::get(destination.key), Some(0));
+    assert_deadline_clock_indices::<T>(WakeupClock::Block);
+    Ok(())
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn process_pending_observation_predicate_event() -> Result<(), BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let (actor, evidence, sources) =
+      prepare_max_manual_observation_park::<T>("pending-observation-predicate", 3u32.into())?;
+    for source in sources {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          Pallet::<T>::publish_dependency_event_with_source_retention(source).map_err(|_| ())?;
+          while let Some(target) = DependencyRevisions::<T>::get(source).scan_target {
+            Pallet::<T>::process_dependency_scan_member(source, target, 0).map_err(|_| ())?;
+            Pallet::<T>::complete_dependency_scan(source, target, 1).map_err(|_| ())?;
+          }
+          Ok::<(), ()>(())
+        })();
+        match result {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .map_err(|_| BenchmarkError::Stop("predicate event scan failed"))?;
+    }
+    let expected = PendingDependencyEvents::<T>::get(actor.actor_id)
+      .ok_or(BenchmarkError::Stop("predicate Pending event is missing"))?;
+    frame_system::Pallet::<T>::set_block_number(2u32.into());
+
+    #[block]
+    {
+      Pallet::<T>::interpret_pending_observation_availability_event(
+        expected,
+        evidence,
+        ServiceResidenceKind::Pending,
+        2u32.into(),
+      )
+      .expect("maximum current predicate wakes benchmark Actor");
+    }
+
+    assert!(!PendingDependencyEvents::<T>::contains_key(actor.actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
+    Ok(())
+  }
+
+  /// Complete maximum predicate review while deleting a sole due head page with distinct
+  /// physical and vacancy neighbors in the retained bucket.
+  #[benchmark(pov_mode = Measured)]
+  fn process_due_observation_predicate_review() -> Result<(), BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let (actor, _, _) =
+      prepare_max_manual_observation_park::<T>("due-observation-predicate", 2u32.into())?;
+    prepare_deadline_removal_neighbors::<T>(actor);
+    frame_system::Pallet::<T>::set_block_number(2u32.into());
+    let source = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+
+    #[block]
+    {
+      Pallet::<T>::process_next_due_block_observation_availability_review(
+        &mut meter,
+        ServiceResidenceKind::Pending,
+        2u32.into(),
+        Some(WakeupKey::Block(3u32.into())),
+      )
+      .expect("maximum current due predicate wakes benchmark Actor");
+    }
+
+    assert!(!DependencyTimedReviews::<T>::contains_key(actor.actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
+    assert!(!DeadlinePages::<T>::contains_key(source.key, source.page));
+    let header = DeadlineHeaders::<T>::get(source.key).unwrap();
+    assert_eq!((header.first_page, header.count), (1, 96));
+    assert_deadline_clock_indices::<T>(WakeupClock::Block);
+    Ok(())
+  }
+
+  /// Complete the same maximum predicate review while deleting the minimum singleton key from
+  /// the fullest reachable Block index. Index-extrema deletion is independent of retained-bucket
+  /// physical/vacancy repair, so dispatch admits the component-wise maximum of both owners.
+  #[benchmark(pov_mode = Measured)]
+  fn process_due_observation_predicate_review_deep_index() -> Result<(), BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let (actor, _, _) =
+      prepare_max_manual_observation_park::<T>("due-observation-predicate-index", 2u32.into())?;
+    let source = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
+    let keys = populate_canonical_deadline_index::<T>(2u32.into());
+    frame_system::Pallet::<T>::set_block_number(2u32.into());
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+
+    #[block]
+    {
+      Pallet::<T>::process_next_due_block_observation_availability_review(
+        &mut meter,
+        ServiceResidenceKind::Pending,
+        2u32.into(),
+        Some(WakeupKey::Block(3u32.into())),
+      )
+      .expect("maximum current due predicate removes the deep-index minimum");
+    }
+
+    assert!(!DependencyTimedReviews::<T>::contains_key(actor.actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
+    assert!(!DeadlineHeaders::<T>::contains_key(source.key));
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Block), keys - 1);
+    assert_eq!(DeadlineIndexPositions::<T>::get(source.key), None);
+    assert_deadline_clock_indices::<T>(WakeupClock::Block);
+    Ok(())
+  }
+
+  #[benchmark]
+  fn complete_cycle_to_parked_balance() -> Result<(), BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let owner_account: T::AccountId = account("complete-balance-park", 0, 0);
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner_account,
+      Mutability::Mutable,
+      system_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        make_inert_contract_steps::<T>(),
+      ),
+    )?;
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<T>::get(actor_id).expect("benchmark Actor owns semantic state")
+    else {
+      panic!("benchmark Actor is active")
+    };
+    let actor = ActorRef {
+      actor_id,
+      generation: record.generation,
+    };
+    ActorControlLocators::<T>::remove(actor_id);
+    ActorUnsignaledControlCells::<T>::remove(actor_id);
+    ActorProcesses::<T>::remove(actor_id);
+    Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Live, 1u32.into())
+      .expect("benchmark Actor enters canonical Service");
+    let maximum = T::MaxWhitelistSize::get().min(T::MaxContractSteps::get());
+    let assets = T::BenchmarkHelper::setup_max_encoded_predicate_assets(
+      &record.identity.sovereign_account,
+      maximum,
+    )
+    .map_err(|_| BenchmarkError::Stop("host cannot prepare maximum parked-balance assets"))?;
+    if maximum == 0 || assets.len() != maximum as usize {
+      return Err(BenchmarkError::Stop(
+        "host did not fill the maximum parked-balance watch set",
+      ));
+    }
+    let rules = assets
+      .into_iter()
+      .map(|asset| ParkedBalanceRule {
+        asset,
+        authored_min_delta: T::AssetOps::minimum_balance(asset).max(One::one()),
+      })
+      .collect();
+    let activation = ParkedBalanceActivationOf::<T>::try_from_rules(rules)
+      .map_err(|_| BenchmarkError::Stop("maximum parked-balance plan is invalid"))?;
+
+    #[block]
+    {
+      Pallet::<T>::transfer_service_member_to_parked_balance(
+        actor,
+        ServiceResidenceKind::Live,
+        1,
+        &activation,
+        WakeupKey::Block(2u32.into()),
+      )
+      .expect("completion enters balance Park");
+    }
+
+    assert!(ParkedBalanceEpisodes::<T>::contains_key(actor_id));
     assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    Ok(())
+  }
+
+  #[benchmark]
+  fn process_pending_parked_balance_event() -> Result<(), BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(2u32.into());
+    let owner_account: T::AccountId = account("pending-balance-event", 0, 0);
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner_account,
+      Mutability::Mutable,
+      system_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        make_inert_contract_steps::<T>(),
+      ),
+    )?;
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<T>::get(actor_id).expect("benchmark Actor owns semantic state")
+    else {
+      panic!("benchmark Actor is active")
+    };
+    let actor = ActorRef {
+      actor_id,
+      generation: record.generation,
+    };
+    ActorControlLocators::<T>::remove(actor_id);
+    ActorUnsignaledControlCells::<T>::remove(actor_id);
+    ActorProcesses::<T>::remove(actor_id);
+    Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Live, 1u32.into())
+      .expect("benchmark Actor enters canonical Service");
+    let maximum = T::MaxWhitelistSize::get().min(T::MaxContractSteps::get());
+    let assets = T::BenchmarkHelper::setup_max_encoded_predicate_assets(
+      &record.identity.sovereign_account,
+      maximum,
+    )
+    .map_err(|_| BenchmarkError::Stop("host cannot prepare maximum parked-balance assets"))?;
+    if maximum == 0 || assets.len() != maximum as usize {
+      return Err(BenchmarkError::Stop(
+        "host did not fill the maximum parked-balance watch set",
+      ));
+    }
+    let rules = assets
+      .iter()
+      .copied()
+      .map(|asset| ParkedBalanceRule {
+        asset,
+        authored_min_delta: T::AssetOps::minimum_balance(asset).max(One::one()),
+      })
+      .collect();
+    let activation = ParkedBalanceActivationOf::<T>::try_from_rules(rules)
+      .map_err(|_| BenchmarkError::Stop("maximum parked-balance plan is invalid"))?;
+    Pallet::<T>::transfer_service_member_to_parked_balance(
+      actor,
+      ServiceResidenceKind::Live,
+      1,
+      &activation,
+      WakeupKey::Block(3u32.into()),
+    )
+    .map_err(|_| BenchmarkError::Stop("benchmark Actor failed to enter balance Park"))?;
+    let first = assets[0];
+    let threshold = T::AssetOps::minimum_balance(first)
+      .max(One::one())
+      .saturating_mul(100u32.into());
+    T::AssetOps::mint(&record.identity.sovereign_account, first, threshold)
+      .map_err(|_| BenchmarkError::Stop("host cannot qualify parked-balance asset"))?;
+    let source = BalanceDependencySources::<T>::get(first)
+      .ok_or(BenchmarkError::Stop("balance source is missing"))?;
+    if DependencyRevisions::<T>::get(source).revision == 0 {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Pallet::<T>::publish_balance_dependency_event(first),
+        )
+      })
+      .map_err(|_| BenchmarkError::Stop("balance event publication failed"))?;
+    }
+    let target = DependencyRevisions::<T>::get(source).revision;
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = (|| {
+        Pallet::<T>::process_dependency_scan_member(source, target, 0)?;
+        Pallet::<T>::complete_dependency_scan(source, target, 1)?;
+        Ok::<(), DependencyScanError>(())
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+    .map_err(|_| BenchmarkError::Stop("balance scan failed to publish Pending"))?;
+    let expected = PendingDependencyEvents::<T>::get(actor_id)
+      .ok_or(BenchmarkError::Stop("balance Pending event is missing"))?;
+    let Some(ProcessResidence::Parked(evidence)) =
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence)
+    else {
+      return Err(BenchmarkError::Stop(
+        "benchmark Actor left Park prematurely",
+      ));
+    };
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+
+    #[block]
+    {
+      Pallet::<T>::process_pending_parked_balance_event(
+        &mut meter,
+        expected,
+        ServiceResidenceKind::Live,
+        evidence,
+        2u32.into(),
+      )
+      .expect("qualified current balance wakes benchmark Actor");
+    }
+
+    assert!(!ParkedBalanceEpisodes::<T>::contains_key(actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    Ok(())
+  }
+
+  fn prepare_due_parked_balance_review<T: Config>(
+    label: &'static str,
+  ) -> Result<ActorRef, BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let owner_account: T::AccountId = account(label, 0, 0);
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner_account,
+      Mutability::Mutable,
+      system_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        make_inert_contract_steps::<T>(),
+      ),
+    )?;
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<T>::get(actor_id).expect("benchmark Actor owns semantic state")
+    else {
+      panic!("benchmark Actor is active")
+    };
+    let actor = ActorRef {
+      actor_id,
+      generation: record.generation,
+    };
+    ActorControlLocators::<T>::remove(actor_id);
+    ActorUnsignaledControlCells::<T>::remove(actor_id);
+    ActorProcesses::<T>::remove(actor_id);
+    Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Live, 1u32.into())
+      .expect("benchmark Actor enters canonical Service");
+    let maximum = T::MaxWhitelistSize::get().min(T::MaxContractSteps::get());
+    if maximum == 0 {
+      return Err(BenchmarkError::Stop(
+        "host cannot represent a parked-balance watch",
+      ));
+    }
+    let assets = T::BenchmarkHelper::setup_max_encoded_predicate_assets(
+      &record.identity.sovereign_account,
+      maximum,
+    )
+    .map_err(|_| BenchmarkError::Stop("host cannot prepare maximum parked-balance assets"))?;
+    if assets.len() != maximum as usize {
+      return Err(BenchmarkError::Stop(
+        "host did not fill the maximum parked-balance watch set",
+      ));
+    }
+    let mut rules = Vec::with_capacity(assets.len());
+    for asset in assets
+      .iter(/* deos-bypass: bounded-iter -- MaxWhitelistSize benchmark fixture. */)
+      .copied()
+    {
+      let amount = T::AssetOps::minimum_balance(asset).max(One::one());
+      T::AssetOps::mint(&record.identity.sovereign_account, asset, amount)
+        .map_err(|_| BenchmarkError::Stop("host cannot fund parked-balance asset"))?;
+      rules.push(ParkedBalanceRule {
+        asset,
+        authored_min_delta: amount,
+      });
+    }
+    let activation = ParkedBalanceActivationOf::<T>::try_from_rules(rules)
+      .map_err(|_| BenchmarkError::Stop("maximum parked-balance plan is invalid"))?;
+    Pallet::<T>::transfer_service_member_to_parked_balance(
+      actor,
+      ServiceResidenceKind::Live,
+      1,
+      &activation,
+      WakeupKey::Block(2u32.into()),
+    )
+    .map_err(|_| BenchmarkError::Stop("benchmark Actor failed to enter balance Park"))?;
+    Ok(actor)
+  }
+
+  /// Rearm the unchanged maximum watch plan while deleting a source page with distinct physical
+  /// and vacancy neighbors and filling a populated destination vacancy head.
+  #[benchmark]
+  fn process_due_parked_balance_review() -> Result<(), BenchmarkError> {
+    let actor = prepare_due_parked_balance_review::<T>("due-balance-review")?;
+    prepare_deadline_removal_neighbors::<T>(actor);
+    prepare_deadline_destination_vacancy::<T>(3u32.into());
+    frame_system::Pallet::<T>::set_block_number(2u32.into());
+    let source = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+
+    #[block]
+    {
+      Pallet::<T>::process_next_due_block_observation_availability_review(
+        &mut meter,
+        ServiceResidenceKind::Live,
+        2u32.into(),
+        Some(WakeupKey::Block(3u32.into())),
+      )
+      .expect("unchanged maximum balance plan re-arms benchmark Actor");
+    }
+
+    assert!(ParkedBalanceEpisodes::<T>::contains_key(actor.actor_id));
+    assert!(!DeadlinePages::<T>::contains_key(source.key, source.page));
+    assert_eq!(DeadlineHeaders::<T>::get(source.key).unwrap().count, 96);
+    let destination = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
     assert_eq!(
-      DependencyTimedReviews::<T>::get(actor_id).map(|review| review.deadline),
-      Some(WakeupKey::Block(3u32.into()))
+      (destination.key, destination.page, destination.slot),
+      (WakeupKey::Block(3u32.into()), 0, 31)
     );
     assert_eq!(
-      DeadlineHandles::<T>::get(actor_id).map(|handle| handle.key),
-      Some(WakeupKey::Block(3u32.into()))
+      DeadlineHeaders::<T>::get(destination.key).unwrap().count,
+      33
     );
+    assert_deadline_clock_indices::<T>(WakeupClock::Block);
+    Ok(())
+  }
+
+  /// Rearm the same maximum watch plan while deleting the minimum singleton key from the fullest
+  /// reachable Block index and inserting the new minimum destination key.
+  #[benchmark]
+  fn process_due_parked_balance_review_deep_index() -> Result<(), BenchmarkError> {
+    let actor = prepare_due_parked_balance_review::<T>("due-balance-review-index")?;
+    let source = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
+    let keys = populate_canonical_deadline_index::<T>(3u32.into());
+    frame_system::Pallet::<T>::set_block_number(2u32.into());
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+
+    #[block]
+    {
+      Pallet::<T>::process_next_due_block_observation_availability_review(
+        &mut meter,
+        ServiceResidenceKind::Live,
+        2u32.into(),
+        Some(WakeupKey::Block(3u32.into())),
+      )
+      .expect("maximum balance plan replaces the deep-index minimum");
+    }
+
+    assert!(ParkedBalanceEpisodes::<T>::contains_key(actor.actor_id));
+    assert!(!DeadlineHeaders::<T>::contains_key(source.key));
+    let destination = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
+    assert_eq!(destination.key, WakeupKey::Block(3u32.into()));
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Block), keys);
+    assert_eq!(DeadlineIndexPositions::<T>::get(source.key), None);
+    assert_eq!(DeadlineIndexPositions::<T>::get(destination.key), Some(0));
+    assert_deadline_clock_indices::<T>(WakeupClock::Block);
     Ok(())
   }
 
@@ -2136,35 +3381,123 @@ mod benches {
 
   #[benchmark]
   fn classify_due_tick_deadline() -> Result<(), BenchmarkError> {
-    clear_host_genesis_wakeup_placements::<T>();
-    let retained_trigger_deadlines = TriggerDeadlineHandles::<T>::iter()
-      .map(|(_, handle)| handle.actor)
-      .collect::<alloc::vec::Vec<_>>();
-    for retained in retained_trigger_deadlines {
-      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-        let result = Pallet::<T>::remove_trigger_deadline_member(retained);
-        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
-      })
-      .expect("host genesis canonical Trigger deadline is removable");
-    }
-    let now_tick = 0;
-    let (actor, _) = prepare_due_retry_deadline::<T>(WakeupKey::Tick(now_tick))?;
+    let fixture = prepare_busy_temporal_rearm::<T>(2, true)?;
 
     #[block]
     {
       assert_eq!(
-        Pallet::<T>::classify_next_due_tick_deadline(now_tick),
-        Ok(DueBlockDeadlineBranch::Retry(actor))
+        Pallet::<T>::classify_next_due_tick_deadline(fixture.due),
+        Ok(DueBlockDeadlineBranch::TemporalTriggerBusy(fixture.actor))
       );
     }
-    assert!(DeadlineHandles::<T>::contains_key(actor.actor_id));
+    assert!(TriggerDeadlineHandles::<T>::contains_key(
+      fixture.actor.actor_id
+    ));
+    Ok(())
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn deadline_destination_search(
+    p: Linear<1, { Pallet::<T>::deadline_destination_page_bound().max(1) }>,
+  ) -> Result<(), BenchmarkError> {
+    let key = WakeupKey::Block(100u32.into());
+    let maximum = T::MaxActiveActors::get();
+    if maximum == 0 {
+      return Err(BenchmarkError::Stop(
+        "deadline benchmark requires one active Actor",
+      ));
+    }
+    let page_count = p.min(Pallet::<T>::deadline_destination_page_bound());
+    let mut count = 0u32;
+    for page_index in 0..page_count {
+      let preceding = page_index.saturating_mul(32);
+      let live = if page_index + 1 < page_count {
+        32
+      } else {
+        maximum.saturating_sub(preceding).saturating_sub(1).min(31)
+      };
+      let mut entries = alloc::vec![None; 32];
+      for slot in 0..live {
+        entries[slot as usize] = Some(ActorRef {
+          actor_id: u64::from(preceding.saturating_add(slot)),
+          generation: 1,
+        });
+      }
+      DeadlinePages::<T>::insert(
+        key,
+        u64::from(page_index),
+        DeadlinePage {
+          previous_page: page_index.checked_sub(1).map(u64::from),
+          next_page: (page_index + 1 < page_count).then(|| u64::from(page_index + 1)),
+          previous_vacant_page: None,
+          next_vacant_page: None,
+          live_entries: u8::try_from(live).map_err(|_| BenchmarkError::Stop("live count fits"))?,
+          entries: BoundedVec::try_from(entries)
+            .map_err(|_| BenchmarkError::Stop("deadline page fits"))?,
+        },
+      );
+      count = count.saturating_add(live);
+    }
+    DeadlineHeaders::<T>::insert(
+      key,
+      DeadlineHeader {
+        first_page: 0,
+        last_page: u64::from(page_count.saturating_sub(1)),
+        next_page: u64::from(page_count),
+        first_vacant_page: Some(u64::from(page_count.saturating_sub(1))),
+        page_count,
+        count,
+      },
+    );
+    let actor = ActorRef {
+      actor_id: u64::from(count),
+      generation: 1,
+    };
+
+    #[block]
+    {
+      let destination = Pallet::<T>::plan_deadline_destination(actor, key)
+        .expect("maximum reachable deadline destination is bounded");
+      assert_eq!(destination.page, u64::from(page_count.saturating_sub(1)));
+      assert_eq!(
+        destination.slot,
+        u8::try_from(count % 32).expect("slot fits")
+      );
+    }
+    Ok(())
+  }
+
+  #[benchmark]
+  fn return_due_block_deadline_to_service_deep_index() -> Result<(), BenchmarkError> {
+    let now = 4u32.into();
+    let (actor, _) = prepare_due_retry_deadline::<T>(WakeupKey::Block(now))?;
+    let keys = populate_canonical_deadline_index::<T>(now);
+    frame_system::Pallet::<T>::set_block_number(now);
+
+    #[block]
+    {
+      Pallet::<T>::return_due_deadline_member_to_service(actor, ServiceResidenceKind::Live, now)
+        .expect("minimum-key removal returns the due Actor to Service");
+    }
+    assert!(!DeadlineHeaders::<T>::contains_key(WakeupKey::Block(now)));
+    assert!(!DeadlineHandles::<T>::contains_key(actor.actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Block), keys - 1);
+    assert_eq!(
+      DeadlineIndexPositions::<T>::get(WakeupKey::Block(now.saturating_add(1_000u32.into()))),
+      Some(0),
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("deep-index return preserves complete canonical state");
     Ok(())
   }
 
   #[benchmark]
   fn return_due_block_deadline_to_service() -> Result<(), BenchmarkError> {
-    let now = 2u32.into();
+    let now = 4u32.into();
     let (actor, _) = prepare_due_retry_deadline::<T>(WakeupKey::Block(now))?;
+    prepare_deadline_removal_neighbors::<T>(actor);
+    frame_system::Pallet::<T>::set_block_number(now);
 
     #[block]
     {
@@ -2173,6 +3506,13 @@ mod benches {
     }
     assert!(!DeadlineHandles::<T>::contains_key(actor.actor_id));
     assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
+    assert!(!DeadlinePages::<T>::contains_key(WakeupKey::Block(now), 0));
+    assert_eq!(
+      DeadlineHeaders::<T>::get(WakeupKey::Block(now))
+        .unwrap()
+        .count,
+      96
+    );
     Ok(())
   }
 
@@ -2219,7 +3559,9 @@ mod benches {
   #[benchmark]
   fn permissionless_sweep() {
     let caller: T::AccountId = whitelisted_caller();
-    let actor_id = bench_create_user::<T>(caller.clone());
+    let owner = measured_account::<T>("sweep-owner", 0);
+    let actor_id = bench_create_user::<T>(owner);
+    assert_measured_actor_accounts::<T>(&[actor_id]);
     #[extrinsic_call]
     permissionless_sweep(RawOrigin::Signed(caller), actor_id);
     assert!(Pallet::<T>::active_actor_exists(actor_id));
@@ -2259,6 +3601,7 @@ mod benches {
         .expect("benchmark n must fit MaxSweepBatch");
     }
     let expected_len = actor_ids.len();
+    assert_measured_actor_accounts::<T>(&actor_ids);
     #[extrinsic_call]
     permissionless_sweep_many(RawOrigin::Signed(caller), actor_ids.clone());
     for actor_id in actor_ids {
@@ -2455,9 +3798,20 @@ mod benches {
     assert_eq!(frame_system::Pallet::<T>::event_count(), before + 1);
   }
 
+  fn measured_split_legs<T: Config>(recipients: &[T::AccountId]) -> SplitTransferLegsOf<T> {
+    let share = Perbill::from_rational(1u32, recipients.len() as u32);
+    recipients
+      .iter()
+      .cloned()
+      .map(|to| SplitLeg { to, share })
+      .collect::<Vec<_>>()
+      .try_into()
+      .expect("benchmark SplitTransfer legs fit the configured bound")
+  }
+
   #[benchmark]
-  fn task_split_transfer(l: Linear<2, 8>) {
-    let caller: T::AccountId = whitelisted_caller();
+  fn task_split_transfer(l: Linear<2, 4>) {
+    let caller = measured_account::<T>("split-transfer-actor", 0);
     let bounded_legs = l.min(T::MaxSplitTransferLegs::get());
     let native = T::FeeNativeAssetId::get();
     let amount = T::MinUserBalance::get().saturating_add(One::one());
@@ -2473,17 +3827,176 @@ mod benches {
       .saturating_add(T::MinUserBalance::get());
     T::AssetOps::mint(&caller, native, total)
       .expect("split-transfer benchmark caller must be funded");
+    let distributed = amount.saturating_mul(bounded_legs.into());
+    let legs =
+      measured_split_legs::<T>(&targets.iter().map(|(_, to)| to.clone()).collect::<Vec<_>>());
     T::BenchmarkHelper::enable_asset_ops_ingress();
     #[block]
     {
-      for (_, recipient) in &targets {
-        T::AssetOps::transfer(&caller, recipient, native, amount)
-          .expect("ingress-aware split leg must succeed");
-      }
+      Pallet::<T>::benchmark_prepared_split_transfer(&caller, native, distributed, legs)
+        .expect("complete ingress-aware SplitTransfer effect must succeed");
     }
     for (target_id, _) in targets {
       assert_canonical_ingress_readiness::<T>(target_id);
     }
+  }
+
+  /// Diagnostic comparison for the four-leg Task effect when every recipient is a funded
+  /// maximum-header User Actor. Creation, fee endowment, and Contract setup are outside the
+  /// measured block; each real transfer includes its certified ingress and Trigger collection.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn task_split_transfer_user_recipients() -> Result<(), BenchmarkError> {
+    let legs = T::MaxSplitTransferLegs::get();
+    assert_eq!(legs, 4, "reference four-recipient diagnostic");
+    let (caller, asset, trigger, funding) = large_header_fields::<T>();
+    let steps = maximum_temporal_control_steps::<T>(asset)?;
+    let mut targets = alloc::vec::Vec::new();
+    for index in 0..legs {
+      let owner = if index == 0 {
+        caller.clone()
+      } else {
+        account("split-user-recipient-owner", index, 0)
+      };
+      ensure_creation_balance::<T>(&owner);
+      prefund_active_user_creation::<T>(&owner, &steps);
+      let mut contract = user_contract::<T>(
+        Schedule {
+          trigger: trigger.clone(),
+          cooldown_blocks: 0,
+        },
+        steps.clone(),
+      )
+      .expect("maximum User recipient Contract exists");
+      contract.funding = funding.clone();
+      contract.parked_balance_activation = Some(maximum_parked_balance_activation::<T>(&owner)?);
+      Pallet::<T>::create_user_actor(
+        RawOrigin::Signed(owner).into(),
+        Mutability::Mutable,
+        Some(contract),
+      )
+      .expect("maximum-header User recipient creation is funded and admitted");
+      let actor_id = NextActorId::<T>::get() - 1;
+      assert_max_contract_geometry::<T>(actor_id);
+      seed_actor_for_cycle::<T>(actor_id);
+      let recipient = Pallet::<T>::active_actor_view(actor_id)
+        .expect("User recipient remains active")
+        .sovereign_account;
+      targets.push((actor_id, recipient));
+    }
+    assert_measured_actor_accounts::<T>(&targets.iter().map(|(id, _)| *id).collect::<Vec<_>>());
+    let amount = T::MinUserBalance::get().saturating_add(One::one());
+    let total = amount.saturating_mul(legs.into());
+    T::AssetOps::mint(&caller, asset, total)
+      .expect("source must hold enough of the shared transfer asset");
+    let legs =
+      measured_split_legs::<T>(&targets.iter().map(|(_, to)| to.clone()).collect::<Vec<_>>());
+    T::BenchmarkHelper::enable_asset_ops_ingress();
+    #[block]
+    {
+      Pallet::<T>::benchmark_prepared_split_transfer(&caller, asset, total, legs)
+        .expect("complete four-User SplitTransfer effect must succeed");
+    }
+    for (actor_id, _) in targets {
+      assert_canonical_ingress_readiness::<T>(actor_id);
+    }
+    Ok(())
+  }
+
+  /// Selected four-leg diagnostic: one maximum-header User recipient is expired but still
+  /// active, while three remain healthy. Runtime integration proves this terminal ingress
+  /// branch is reachable inside an admitted Prepass Service Task; this direct adapter
+  /// measurement does not prove a four-close maximum or a production coefficient.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn task_split_transfer_expired_user_recipient() -> Result<(), BenchmarkError> {
+    let legs = T::MaxSplitTransferLegs::get();
+    assert_eq!(legs, 4, "reference four-recipient diagnostic");
+    let (caller, asset, trigger, funding) = large_header_fields::<T>();
+    let steps = maximum_temporal_control_steps::<T>(asset)?;
+    let mut targets = alloc::vec::Vec::new();
+    let start: BlockNumberFor<T> = 1u32.into();
+    let end = start.saturating_add(T::MinWindowLength::get());
+    for index in 0..legs {
+      let owner = if index == 0 {
+        caller.clone()
+      } else {
+        account("split-expired-recipient-owner", index, 0)
+      };
+      ensure_creation_balance::<T>(&owner);
+      prefund_active_user_creation::<T>(&owner, &steps);
+      let mut contract = user_contract::<T>(
+        Schedule {
+          trigger: trigger.clone(),
+          cooldown_blocks: 0,
+        },
+        steps.clone(),
+      )
+      .expect("maximum User recipient Contract exists");
+      contract.funding = funding.clone();
+      contract.parked_balance_activation = Some(maximum_parked_balance_activation::<T>(&owner)?);
+      if index == 0 {
+        contract.window = Some(ScheduleWindow { start, end });
+      }
+      Pallet::<T>::create_user_actor(
+        RawOrigin::Signed(owner).into(),
+        Mutability::Mutable,
+        Some(contract),
+      )
+      .expect("maximum-header User recipient creation is funded and admitted");
+      let actor_id = NextActorId::<T>::get() - 1;
+      assert_max_contract_geometry::<T>(actor_id);
+      seed_actor_for_cycle::<T>(actor_id);
+      let recipient = Pallet::<T>::active_actor_view(actor_id)
+        .expect("User recipient remains active")
+        .sovereign_account;
+      targets.push((actor_id, recipient));
+    }
+    assert_measured_actor_accounts::<T>(&targets.iter().map(|(id, _)| *id).collect::<Vec<_>>());
+    let amount = T::MinUserBalance::get().saturating_add(One::one());
+    let total = amount.saturating_mul(legs.into());
+    T::AssetOps::mint(&caller, asset, total)
+      .expect("source must hold enough of the shared transfer asset");
+    let legs =
+      measured_split_legs::<T>(&targets.iter().map(|(_, to)| to.clone()).collect::<Vec<_>>());
+    T::BenchmarkHelper::enable_asset_ops_ingress();
+    frame_system::Pallet::<T>::set_block_number(end.saturating_add(One::one()));
+    #[block]
+    {
+      Pallet::<T>::benchmark_prepared_split_transfer(&caller, asset, total, legs)
+        .expect("complete expired/healthy SplitTransfer effect must succeed");
+    }
+    assert!(Pallet::<T>::active_actor_view(targets[0].0).is_none());
+    for (actor_id, _) in targets.into_iter().skip(1) {
+      assert_canonical_ingress_readiness::<T>(actor_id);
+    }
+    Ok(())
+  }
+
+  /// Diagnostic for a host-defined native conversion endpoint in one two-leg Task effect.
+  /// The host prepares the pool, converted asset, and active recipient before measurement.
+  /// The measured source is not the Fee Sink: its first pool leg cannot take the separate
+  /// Fee-Sink-to-security-reward route even when the benchmark runtime selects LP backing.
+  /// This isolates a successful Task body, not the Fee Sink Step or a bridge failure.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn task_split_transfer_native_conversion() -> Result<(), BenchmarkError> {
+    let caller = measured_account::<T>("native-conversion-source", 0);
+    let (pool, recipient, converted, recipient_id) =
+      T::BenchmarkHelper::setup_native_conversion_ingress(&caller)
+        .unwrap_or_else(|error| panic!("host native conversion fixture unavailable: {error:?}"));
+    let native = T::FeeNativeAssetId::get();
+    let amount = T::MinUserBalance::get().saturating_add(One::one());
+    let total = amount.saturating_mul(2u32.into());
+    T::AssetOps::mint(&caller, native, total).expect("two-leg source must be funded");
+    let converted_before = T::AssetOps::balance(&recipient, converted);
+    let legs = measured_split_legs::<T>(&[pool, recipient.clone()]);
+    T::BenchmarkHelper::enable_asset_ops_ingress();
+    #[block]
+    {
+      Pallet::<T>::benchmark_prepared_split_transfer(&caller, native, total, legs)
+        .expect("complete pool/conversion SplitTransfer effect must succeed");
+    }
+    assert!(T::AssetOps::balance(&recipient, converted) > converted_before);
+    assert_canonical_ingress_readiness::<T>(recipient_id);
+    Ok(())
   }
 
   #[benchmark]
@@ -2503,7 +4016,7 @@ mod benches {
 
   #[benchmark]
   fn task_add_liquidity() {
-    let caller: T::AccountId = whitelisted_caller();
+    let caller = measured_account::<T>("add-liquidity-actor", 0);
     let (asset_a, asset_b, amount_a, amount_b) = T::BenchmarkHelper::setup_add_liquidity(&caller)
       .expect("benchmark helper must prepare add-liquidity state");
     #[block]
@@ -2515,7 +4028,7 @@ mod benches {
 
   #[benchmark]
   fn task_donate_liquidity() {
-    let caller: T::AccountId = whitelisted_caller();
+    let caller = measured_account::<T>("donate-liquidity-actor", 0);
     let (asset_a, asset_b, amount) = T::BenchmarkHelper::setup_donate_liquidity(&caller)
       .expect("benchmark helper must prepare liquidity-donation state");
     #[block]
@@ -2527,7 +4040,7 @@ mod benches {
 
   #[benchmark]
   fn task_remove_liquidity() {
-    let caller: T::AccountId = whitelisted_caller();
+    let caller = measured_account::<T>("remove-liquidity-actor", 0);
     let (lp_asset, asset_a, asset_b, lp_amount) =
       T::BenchmarkHelper::setup_remove_liquidity(&caller)
         .expect("benchmark helper must prepare indexed remove-liquidity state");
@@ -2548,7 +4061,7 @@ mod benches {
 
   #[benchmark]
   fn task_stake() {
-    let caller: T::AccountId = whitelisted_caller();
+    let caller = measured_account::<T>("stake-actor", 0);
     let (asset, amount) = T::BenchmarkHelper::setup_stake(&caller)
       .expect("benchmark helper must prepare staking state");
     #[block]
@@ -2560,7 +4073,7 @@ mod benches {
 
   #[benchmark]
   fn task_unstake() {
-    let caller: T::AccountId = whitelisted_caller();
+    let caller = measured_account::<T>("unstake-actor", 0);
     let (asset, shares) = T::BenchmarkHelper::setup_unstake(&caller)
       .expect("benchmark helper must prepare unstaking state");
     #[block]
@@ -2572,7 +4085,7 @@ mod benches {
 
   #[benchmark]
   fn task_dex_exact_in() {
-    let caller: T::AccountId = whitelisted_caller();
+    let caller = measured_account::<T>("swap-exact-in-actor", 0);
     let (asset_in, asset_out, amount_in) = T::BenchmarkHelper::setup_swap_exact_in(&caller)
       .expect("benchmark helper must prepare exact-input swap state");
     #[block]
@@ -2592,7 +4105,7 @@ mod benches {
 
   #[benchmark]
   fn task_dex_exact_out() {
-    let caller: T::AccountId = whitelisted_caller();
+    let caller = measured_account::<T>("swap-exact-out-actor", 0);
     let (asset_in, asset_out, amount_out, max_amount_in) =
       T::BenchmarkHelper::setup_swap_exact_out(&caller)
         .expect("benchmark helper must prepare exact-output swap state");
@@ -2614,7 +4127,7 @@ mod benches {
   // Non-dispatch diagnostic benchmark excluded from runtime weight artifact generation
   #[benchmark]
   fn process_remove_liquidity_indexed() {
-    let caller: T::AccountId = whitelisted_caller();
+    let caller = measured_account::<T>("indexed-liquidity-owner", 0);
     ensure_creation_balance::<T>(&caller);
     let (lp_asset, asset_a, asset_b, lp_amount) =
       T::BenchmarkHelper::setup_remove_liquidity(&caller)
@@ -2845,11 +4358,12 @@ mod benches {
       .into_iter()
       .next()
       .expect("one Crossing benchmark feed is required");
-    let owner: T::AccountId = account("crossing-worker", 0, 0);
+    let owner = measured_account::<T>("crossing-worker", 0);
     let actor_id = bench_create_user_with_trigger::<T>(
       owner,
       Trigger::observation_crossing(feed, CrossingDirection::Rising, threshold, 0),
     );
+    assert_measured_actor_accounts::<T>(&[actor_id]);
     Pallet::<T>::note_observation_transition(
       feed,
       ObservationTransition {
@@ -2862,14 +4376,166 @@ mod benches {
     (feed, actor_id)
   }
 
+  struct CrossingFeeSnapshot<T: Config> {
+    members: Vec<(ActorRef, ActorIdentityOf<T>, T::Balance)>,
+    sink_balance: T::Balance,
+  }
+
+  fn crossing_fee_snapshot<T: Config>(actors: &[ActorId]) -> CrossingFeeSnapshot<T> {
+    let native = T::FeeNativeAssetId::get();
+    CrossingFeeSnapshot {
+      members: actors
+        .iter()
+        .map(|actor_id| {
+          let identity = Pallet::<T>::actor_identity(*actor_id).expect("cohort identity exists");
+          let balance = T::AssetOps::balance(&identity.sovereign_account, native);
+          (
+            Pallet::<T>::load_actor_ref(*actor_id).unwrap(),
+            identity,
+            balance,
+          )
+        })
+        .collect(),
+      sink_balance: T::AssetOps::balance(&T::FeeSink::get(), native),
+    }
+  }
+
+  fn assert_crossing_occurrence_fees<T: Config>(before: &CrossingFeeSnapshot<T>, fired: usize) {
+    assert!(fired <= before.members.len());
+    let native = T::FeeNativeAssetId::get();
+    let events = frame_system::Pallet::<T>::events();
+    let mut collected = T::Balance::zero();
+    for (index, (actor, identity, balance)) in before.members.iter().enumerate() {
+      let actor_id = &actor.actor_id;
+      assert_eq!(Pallet::<T>::load_actor_ref(*actor_id), Some(*actor));
+      let locator = CrossingMemberships::<T>::get(actor_id).unwrap();
+      let member = CrossingMemberPages::<T>::get(locator.key, locator.page)
+        .unwrap()
+        .entries[locator.offset as usize];
+      assert_eq!(
+        (member.actor_id, member.generation),
+        (actor.actor_id, actor.generation)
+      );
+      assert_eq!(locator.generation, actor.generation);
+      let fee = Pallet::<T>::trigger_fee_for_weight(
+        identity.actor_class.actor_type(),
+        TriggerFamily::ObservationCrossing,
+        T::WeightInfo::observation_crossing_trigger_occurrence(),
+      )
+      .trigger_fee;
+      let charged = if index < fired {
+        fee
+      } else {
+        T::Balance::zero()
+      };
+      assert_eq!(
+        T::AssetOps::balance(&identity.sovereign_account, native),
+        balance
+          .checked_sub(&charged)
+          .expect("funded occurrence has fee capacity"),
+        "each fired Actor pays once; retained/refill Actors pay nothing",
+      );
+      collected = collected
+        .checked_add(&charged)
+        .expect("cohort fee total fits");
+      let receipt: <T as frame_system::Config>::RuntimeEvent =
+        Event::<T>::TriggerOccurrenceProcessed {
+          actor_id: *actor_id,
+          trigger_family: TriggerFamily::ObservationCrossing,
+          fee,
+        }
+        .into();
+      assert_eq!(
+        events
+          .iter()
+          .filter(|record| record.event == receipt)
+          .count(),
+        usize::from(index < fired)
+      );
+      assert_eq!(
+        Pallet::<T>::actor_identity(*actor_id),
+        Some(identity.clone())
+      );
+      assert!(Pallet::<T>::actor_run_state(*actor_id).is_none());
+      if index < fired {
+        let node = ServiceNodes::<T>::get(actor_id).unwrap();
+        assert_eq!(
+          node.eligible_from,
+          frame_system::Pallet::<T>::block_number().saturating_add(One::one())
+        );
+        if index + 1 < fired {
+          assert_eq!(node.next, before.members[index + 1].0);
+        }
+      } else {
+        let hot = Pallet::<T>::actor_hot(*actor_id).unwrap();
+        assert!(!hot.pending_signal);
+        assert!(matches!(
+          hot.trigger_runtime_state,
+          TriggerRuntimeState::ObservationCrossing {
+            phase: CrossingPhase::Armed,
+            ..
+          }
+        ));
+        assert!(!ServiceNodes::<T>::contains_key(actor_id));
+      }
+    }
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      before
+        .sink_balance
+        .checked_add(&collected)
+        .expect("collector balance fits"),
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("cohort holds and memberships remain coherent");
+  }
+
   fn prepare_non_tail_crossing_batch<T: Config>(tail_members: u32) -> alloc::vec::Vec<ActorId> {
     let (feed, first_actor) = prepare_crossing_work::<T>(2);
-    let total = T::CrossingPageSize::get().saturating_add(tail_members);
+    let page_size = T::CrossingPageSize::get();
+    let count = CROSSING_NON_TAIL_BENCHMARK_MAX;
+    assert!(count <= tail_members && tail_members <= page_size);
+    let total = page_size + tail_members;
+    // Prioritize charged and refilled Users under the host's real per-feed quota. Remaining
+    // untouched members are also Users whenever capacity permits; never reduce measured demand.
+    let mut extra_users = (T::MaxUserCrossingMembersPerFeed::get()
+      - CrossingUserFeedMembershipCount::<T>::get(feed))
+    .checked_sub(2 * count - 1)
+    .expect("host supports the charged and refilled User cohorts");
     let mut actors = alloc::vec![first_actor];
-    for index in 0..total.saturating_sub(1) {
+    for index in 1..total {
       let owner: T::AccountId = account("crossing-non-tail-unit", index, tail_members);
-      actors.push(bench_create_system_crossing::<T>(owner, feed, 2));
+      let required_user = index < count || index >= total - count;
+      let user = required_user || extra_users > 0;
+      if user && !required_user {
+        extra_users -= 1;
+      }
+      actors.push(if user {
+        bench_create_user_with_trigger::<T>(
+          owner,
+          Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+        )
+      } else {
+        bench_create_system_crossing::<T>(owner, feed, 2)
+      });
     }
+    for actor in actors
+      .iter()
+      .take(count as usize)
+      .chain(actors.iter().rev().take(count as usize))
+    {
+      assert_eq!(
+        Pallet::<T>::actor_identity(*actor)
+          .unwrap()
+          .actor_class
+          .actor_type(),
+        ActorType::User
+      );
+    }
+    assert_measured_actor_accounts::<T>(&actors);
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state()
+      .expect("full User source and refill cohorts are ordinarily admitted");
     CrossingRangeCursors::<T>::insert(
       feed,
       CrossingRangeCursor {
@@ -2885,21 +4551,43 @@ mod benches {
     actors
   }
 
-  fn bench_create_system_manual<T: Config>(seed: u32) -> ActorId {
-    let owner: T::AccountId = account("wakeup_owner", seed, 0);
-    let schedule = Schedule {
-      trigger: Trigger::manual(),
-      cooldown_blocks: 0,
-    };
-    let contract_steps = make_inert_contract_steps::<T>();
-    Pallet::<T>::create_system_actor(
-      RawOrigin::Root.into(),
-      owner,
-      Mutability::Mutable,
-      system_contract::<T>(schedule, contract_steps),
-    )
-    .expect("create_system_actor must succeed in wakeup benchmark setup");
-    NextActorId::<T>::get().saturating_sub(1)
+  fn assert_non_tail_crossing_survivors<T: Config>(actors: &[ActorId]) {
+    let count = CROSSING_NON_TAIL_BENCHMARK_MAX as usize;
+    let page_size = T::CrossingPageSize::get() as usize;
+    let key = CrossingMemberships::<T>::get(actors[count]).unwrap().key;
+    let expected_source = actors[count..page_size]
+      .iter()
+      .chain(actors[actors.len() - count..].iter())
+      .copied()
+      .collect::<Vec<_>>();
+    let source = CrossingMemberPages::<T>::get(key, 0).unwrap();
+    assert_eq!(
+      source
+        .entries
+        .iter()
+        .map(|member| member.actor_id)
+        .collect::<Vec<_>>(),
+      expected_source
+    );
+    let expected_tail = &actors[page_size..actors.len() - count];
+    let tail = CrossingMemberPages::<T>::get(key, 1);
+    if expected_tail.is_empty() {
+      assert!(tail.is_none());
+    } else {
+      assert_eq!(
+        tail
+          .unwrap()
+          .entries
+          .iter()
+          .map(|member| member.actor_id)
+          .collect::<Vec<_>>(),
+        expected_tail
+      );
+    }
+    let state = CrossingLeafStates::<T>::get(key).unwrap();
+    assert_eq!(state.member_count as usize, actors.len() - count);
+    assert_eq!(state.page_count, 1 + u32::from(!expected_tail.is_empty()));
+    assert_eq!(state.tail_page, u32::from(!expected_tail.is_empty()));
   }
 
   fn fund_reachable_update_assets<T: Config>(actor_id: ActorId, amount: T::Balance) {
@@ -3010,10 +4698,6 @@ mod benches {
       "suspended update Actor has rearmed indexed detection"
     );
     let run = state.run_state.as_ref().expect("real update Run exists");
-    assert_eq!(
-      run.opening_snapshot.len(),
-      Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
     let retained_run = run.encode();
     // Indexed occurrences during a live Run are ignored; the removed funding accumulator must not
     // manufacture a deferred latch for this update fixture.
@@ -3050,6 +4734,7 @@ mod benches {
       steps: make_max_contract_steps::<T>(account("update-recipient", 0, 0)),
       funding: FundingSourcePolicy::SignedAllowlist(allowed),
       completion: CompletionPolicy::Persistent,
+      parked_balance_activation: None,
       auto_close_at_cycle_nonce: None,
     };
     assert_max_contract_geometry::<T>(actor_id);
@@ -3652,9 +5337,20 @@ mod benches {
     Pallet::<T>::do_try_state().expect("exact close preserves the complete Waiting heap");
   }
 
-  struct MixedWaitingClose<T: Config> {
+  #[derive(Clone, Copy, PartialEq, Eq)]
+  enum MixedDeadlineTarget {
+    System,
+    UserCombined,
+    UserObservation,
+    UserParked,
+  }
+
+  struct MixedDeadlineClose<T: Config> {
     actor_id: ActorId,
     tick: SchedulerTick,
+    head_page: u64,
+    middle_page: u64,
+    tail_page: u64,
     sovereign: T::AccountId,
     custody: T::Balance,
     active_count: u32,
@@ -3663,15 +5359,63 @@ mod benches {
     retired_sovereigns: Vec<SystemSovereignId>,
   }
 
-  fn prepare_mixed_waiting_close<T: Config>(
+  fn prepare_mixed_deadline_close<T: Config>(
     unlink: bool,
-  ) -> Result<MixedWaitingClose<T>, polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    target: MixedDeadlineTarget,
+  ) -> Result<MixedDeadlineClose<T>, polkadot_sdk::frame_benchmarking::BenchmarkError> {
     if T::MaxContractSteps::get() < 2 {
       return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "mixed Waiting reference requires a two-Step Contract",
+        "mixed idle/Running deadline fixture requires a two-Step Contract",
       ));
     }
     frame_system::Pallet::<T>::set_block_number(1u32.into());
+    // Asset setup may reset the host clock; finish it before adding Cadenced guards.
+    let user_owner = account("mixed-waiting-user", 32, 0);
+    let user_header = matches!(
+      target,
+      MixedDeadlineTarget::UserCombined | MixedDeadlineTarget::UserObservation
+    )
+    .then(large_header_fields::<T>);
+    let user_parked = if target != MixedDeadlineTarget::System {
+      let owner = user_header
+        .as_ref()
+        .map_or(&user_owner, |(owner, _, _, _)| owner);
+      if user_header.is_none() {
+        ensure_creation_balance::<T>(owner);
+      }
+      Some(maximum_parked_balance_activation::<T>(owner)?)
+    } else {
+      None
+    };
+    let combined_predicate = match target {
+      MixedDeadlineTarget::UserCombined => {
+        let (_, predicate) = prepare_max_encoded_step_precondition::<T>(
+          benchmark_predicate_capacity::<T>(),
+          0,
+          false,
+        )?;
+        Some(predicate)
+      }
+      MixedDeadlineTarget::UserObservation => {
+        let (_, mut predicate) = prepare_max_encoded_step_precondition::<T>(
+          0,
+          benchmark_predicate_capacity::<T>(),
+          false,
+        )?;
+        for clause in &mut predicate.clauses {
+          for source in clause {
+            let Predicate::ObservationAbove { threshold, .. } = source else {
+              return Err(BenchmarkError::Stop(
+                "maximum observation predicate is malformed",
+              ));
+            };
+            *threshold = u128::MAX;
+          }
+        }
+        Some(predicate)
+      }
+      _ => None,
+    };
     T::BenchmarkHelper::advance_to_scheduler_tick(2)?;
     let create = |seed: u32, every_ticks: u64, steps: ContractSteps<T>| {
       Pallet::<T>::create_system_actor(
@@ -3700,12 +5444,115 @@ mod benches {
       }
       assert_eq!(pointer.tick, tick);
     }
-    let mut steps = inert_contract_steps_of_len::<T>(2);
-    steps[0].precondition = Some(packed_predicate_clauses::<T>(
-      vec![Predicate::BlockNumberBelow { threshold: 0 }],
-      1,
-    ));
-    let actor_id = create(32, 100, steps);
+    let mut steps = inert_contract_steps_of_len::<T>(
+      if matches!(
+        target,
+        MixedDeadlineTarget::UserCombined | MixedDeadlineTarget::UserObservation
+      ) {
+        T::MaxContractSteps::get()
+      } else {
+        2
+      },
+    );
+    steps[0].precondition = Some(combined_predicate.unwrap_or_else(|| {
+      packed_predicate_clauses::<T>(vec![Predicate::BlockNumberBelow { threshold: 0 }], 1)
+    }));
+    if matches!(
+      target,
+      MixedDeadlineTarget::UserCombined | MixedDeadlineTarget::UserObservation
+    ) {
+      let asset = user_header.as_ref().expect("wide User header exists").1;
+      let legs = T::MaxSplitTransferLegs::get();
+      steps[0].task = ActorTask::SplitTransfer {
+        asset,
+        amount: AmountResolution::Fixed(1u32.into()),
+        legs: (0..legs)
+          .map(|index| SplitLeg {
+            to: account("mixed-waiting-recipient", index, 0),
+            share: Perbill::from_parts(Perbill::ACCURACY / legs),
+          })
+          .collect::<Vec<_>>()
+          .try_into()
+          .expect("bounded maximum SplitTransfer legs fit"),
+      };
+      assert_eq!(steps[0].task.encoded_size(), TaskOf::<T>::max_encoded_len());
+    }
+    let actor_id = if target != MixedDeadlineTarget::System {
+      let (owner, funding) = if let Some((owner, _, _, funding)) = user_header {
+        (owner, Some(funding))
+      } else {
+        (user_owner, None)
+      };
+      prefund_active_user_creation::<T>(&owner, &steps);
+      let mut contract = user_contract::<T>(
+        Schedule {
+          trigger: Trigger::cadenced(100),
+          cooldown_blocks: 0,
+        },
+        steps,
+      )
+      .expect("User Contract exists");
+      if let Some(funding) = funding {
+        contract.funding = funding;
+      }
+      contract.parked_balance_activation = user_parked;
+      Pallet::<T>::create_user_actor(
+        RawOrigin::Signed(owner).into(),
+        Mutability::Mutable,
+        Some(contract),
+      )
+      .expect("ordinary funded User cadence is admitted");
+      let actor_id = NextActorId::<T>::get().saturating_sub(1);
+      let head = ActorContractHeads::<T>::get(actor_id).expect("funded User head is stored");
+      if matches!(
+        target,
+        MixedDeadlineTarget::UserCombined | MixedDeadlineTarget::UserObservation
+      ) {
+        assert_max_contract_geometry::<T>(actor_id);
+        assert_eq!(head.header.step_count, T::MaxContractSteps::get());
+        assert_eq!(
+          head
+            .first_step
+            .as_ref()
+            .expect("maximum Task is stored")
+            .task
+            .encoded_size(),
+          TaskOf::<T>::max_encoded_len()
+        );
+        assert_eq!(
+          head
+            .first_step
+            .as_ref()
+            .and_then(|step| step.precondition.as_ref())
+            .expect("maximum current Step predicate is stored")
+            .predicate_count(),
+          benchmark_predicate_capacity::<T>()
+        );
+        assert_eq!(
+          head.header.funding.encoded_size(),
+          FundingSourcePolicyOf::<T>::max_encoded_len()
+        );
+      }
+      assert_eq!(
+        head.header.parked_balance_activation.unwrap().watches.len(),
+        T::MaxWhitelistSize::get().min(T::MaxContractSteps::get()) as usize
+      );
+      seed_actor_for_cycle::<T>(actor_id);
+      let sovereign = Pallet::<T>::actor_identity(actor_id)
+        .unwrap()
+        .sovereign_account;
+      let trigger_fee = Pallet::<T>::trigger_fee_for_weight(
+        ActorType::User,
+        TriggerFamily::Cadenced,
+        T::WeightInfo::cadenced_trigger_occurrence(),
+      )
+      .trigger_fee;
+      T::AssetOps::mint(&sovereign, T::FeeNativeAssetId::get(), trigger_fee)
+        .expect("User cadence fee has real sovereign custody");
+      actor_id
+    } else {
+      create(32, 100, steps)
+    };
     let first = Pallet::<T>::actor_hot(actor_id)
       .and_then(|hot| hot.trigger_wakeup_pointer)
       .expect("target owns its first cadence")
@@ -3715,29 +5562,59 @@ mod benches {
     let now = frame_system::Pallet::<T>::block_number();
     let now_tick = Pallet::<T>::current_scheduler_tick().expect("ordinary due host clock");
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    Pallet::<T>::service_due_deadline_frontiers(
-      &mut meter,
-      ServiceResidenceKind::Live,
-      now,
-      now_tick,
-      None,
-      None,
-    )
-    .expect("complete canonical temporal envelope remains admitted");
+    // A host may retain genesis bootstrap deadlines before this ordinary Cadenced occurrence.
+    for _ in 0..=ActiveActorCount::<T>::get() {
+      if Pallet::<T>::actor_hot(actor_id).is_some_and(|hot| hot.pending_signal) {
+        break;
+      }
+      Pallet::<T>::service_due_deadline_frontiers(
+        &mut meter,
+        ServiceResidenceKind::Live,
+        now,
+        now_tick,
+        None,
+        None,
+      )
+      .expect("complete canonical temporal envelope remains admitted");
+    }
     let ready = Pallet::<T>::actor_hot(actor_id).expect("due target remains active");
     assert!(ready.pending_signal && ready.trigger_wakeup_pointer.is_none());
     let service = ServiceNodes::<T>::get(actor_id).expect("due target owns canonical Service");
     assert!(!ActorControlLocators::<T>::contains_key(actor_id));
     frame_system::Pallet::<T>::set_block_number(now.max(service.eligible_from));
     Pallet::<T>::execute_cycle(Weight::MAX);
-    let run = Pallet::<T>::actor_run_state(actor_id).expect("real Opening retains its suffix");
-    assert_eq!(run.cursor, 1);
-    let retained_run = run.encode();
-    let hot = Pallet::<T>::actor_hot(actor_id).expect("Running target exists");
-    assert_eq!(hot.cycle_state, CycleState::Running);
-    let pointer = hot.trigger_wakeup_pointer.expect("Opening rearms cadence");
-    assert_eq!((pointer.tick, pointer.page_id, pointer.slot), (tick, 1, 0));
+    let retained_run = Pallet::<T>::actor_run_state(actor_id).map(|run| {
+      assert_eq!(run.cursor, 1);
+      run.encode()
+    });
+    let hot = Pallet::<T>::actor_hot(actor_id).expect("target survives due processing");
+    if retained_run.is_none() && target == MixedDeadlineTarget::UserObservation {
+      assert_eq!(hot.cycle_state, CycleState::Idle);
+      assert!(!hot.pending_signal);
+      assert!(matches!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      ));
+    } else {
+      assert_eq!(hot.cycle_state, CycleState::Running);
+      assert!(retained_run.is_some());
+    }
+    let pointer = hot
+      .trigger_wakeup_pointer
+      .expect("temporal target retains cadence");
+    assert_eq!((pointer.tick, pointer.slot), (tick, 0));
     let key = WakeupKey::Tick(tick);
+    let target = TriggerDeadlineHandles::<T>::get(actor_id).expect("Running Trigger is indexed");
+    assert_eq!(
+      (target.key, target.page, u32::from(target.slot)),
+      (key, pointer.page_id, pointer.slot)
+    );
+    let header = DeadlineHeaders::<T>::get(key).expect("shared deadline bucket exists");
+    assert_eq!((header.count, header.page_count), (33, 2));
+    let head_page = header.first_page;
+    let middle_page = target.page;
+    assert_ne!(head_page, middle_page);
+    // Latching can remove a provisional page before Opening; page IDs need not be contiguous.
     let period = tick
       .checked_sub(Pallet::<T>::current_scheduler_tick().unwrap())
       .expect("shared deadline remains in the future");
@@ -3745,31 +5622,39 @@ mod benches {
     for seed in 33..96 {
       later.push(create(seed, period, make_inert_contract_steps::<T>()));
     }
-    let middle = ActorWaitingFrameChunks::<T>::get((key, 1)).expect("mixed middle page exists");
+    let middle = DeadlinePages::<T>::get(key, middle_page).expect("mixed middle page exists");
     assert_eq!(middle.live_entries, 32);
-    assert!(matches!(&middle.entries[0],
-      Some(ActorWaitingEntry::Reference(reference)) if reference.actor_id == actor_id));
-    for (entry, actor) in middle.entries.iter().skip(1).zip(&later[..31]) {
-      assert!(matches!(entry,
-        Some(ActorWaitingEntry::Primary(cell)) if cell.actor_id == *actor));
+    assert_eq!(middle.entries[0], Some(target.actor));
+    for (entry, actor_id) in middle.entries.iter().skip(1).zip(&later[..31]) {
+      let actor = Pallet::<T>::load_actor_ref(*actor_id).expect("idle guard generation exists");
+      assert_eq!(*entry, Some(actor));
+      assert_eq!(
+        Pallet::<T>::actor_hot(*actor_id).unwrap().cycle_state,
+        CycleState::Idle
+      );
     }
     if unlink {
       for actor in &later[..31] {
         Pallet::<T>::close_actor(RawOrigin::Root.into(), *actor)
-          .expect("ordinary close leaves the reference as the last middle entry");
+          .expect("ordinary close leaves the Running Actor as the last middle entry");
       }
     }
+    let header = DeadlineHeaders::<T>::get(key).unwrap();
     assert_eq!(
-      ActorWaitingOccupancies::<T>::get(key),
-      if unlink { 65 } else { 96 }
+      (header.count, header.page_count),
+      (if unlink { 65 } else { 96 }, 3)
     );
     assert_eq!(
-      Pallet::<T>::actor_run_state(actor_id).unwrap().encode(),
+      Pallet::<T>::actor_run_state(actor_id).map(|run| run.encode()),
       retained_run
     );
-    let head = ActorWaitingFrameChunks::<T>::get((key, 0)).unwrap();
-    let tail = ActorWaitingFrameChunks::<T>::get((key, 2)).unwrap();
+    let tail_page = header.last_page;
+    let head = DeadlinePages::<T>::get(key, head_page).unwrap();
+    let tail = DeadlinePages::<T>::get(key, tail_page).unwrap();
     assert_eq!((head.live_entries, tail.live_entries), (32, 32));
+    assert_eq!(head.next_page, Some(middle_page));
+    assert_eq!(tail.previous_page, Some(middle_page));
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
     let sovereign = Pallet::<T>::actor_identity(actor_id)
       .unwrap()
       .sovereign_account;
@@ -3779,10 +5664,13 @@ mod benches {
       .saturating_mul(10u32.into());
     T::AssetOps::mint(&sovereign, native, amount).expect("surviving custody is funded");
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("real mixed Waiting and Running authority agree");
-    Ok(MixedWaitingClose {
+    Pallet::<T>::do_try_state().expect("real idle/Running deadline authority agrees");
+    Ok(MixedDeadlineClose {
       actor_id,
       tick,
+      head_page,
+      middle_page,
+      tail_page,
       custody: T::AssetOps::balance(&sovereign, native),
       sovereign,
       active_count: ActiveActorCount::<T>::get(),
@@ -3796,37 +5684,59 @@ mod benches {
     })
   }
 
-  fn assert_mixed_waiting_close<T: Config>(fixture: &MixedWaitingClose<T>, unlink: bool) {
+  fn assert_mixed_deadline_close<T: Config>(fixture: &MixedDeadlineClose<T>, unlink: bool) {
     let key = WakeupKey::Tick(fixture.tick);
-    assert_mixed_waiting_target_closed::<T>(fixture);
-    assert_eq!(
-      ActorWaitingOccupancies::<T>::get(key),
-      if unlink { 64 } else { 95 }
-    );
-    let head = ActorWaitingFrameChunks::<T>::get((key, 0)).unwrap();
-    let tail = ActorWaitingFrameChunks::<T>::get((key, 2)).unwrap();
+    assert_mixed_deadline_target_closed::<T>(fixture);
+    let header = DeadlineHeaders::<T>::get(key).unwrap();
+    assert_eq!(header.count, if unlink { 64 } else { 95 });
+    assert_eq!(header.page_count, if unlink { 2 } else { 3 });
+    let head = DeadlinePages::<T>::get(key, fixture.head_page).unwrap();
+    let tail = DeadlinePages::<T>::get(key, fixture.tail_page).unwrap();
     assert_eq!(head.entries.encode(), fixture.head_entries);
     assert_eq!(tail.entries.encode(), fixture.tail_entries);
-    assert_eq!(head.next_page, Some(if unlink { 2 } else { 1 }));
-    assert_eq!(tail.previous_page, Some(if unlink { 0 } else { 1 }));
+    assert_eq!(
+      head.next_page,
+      Some(if unlink {
+        fixture.tail_page
+      } else {
+        fixture.middle_page
+      })
+    );
+    assert_eq!(
+      tail.previous_page,
+      Some(if unlink {
+        fixture.head_page
+      } else {
+        fixture.middle_page
+      })
+    );
     if unlink {
-      assert!(!ActorWaitingFrameChunks::<T>::contains_key((key, 1)));
+      assert!(!DeadlinePages::<T>::contains_key(key, fixture.middle_page));
+      assert_eq!(header.first_vacant_page, None);
     } else {
-      let middle = ActorWaitingFrameChunks::<T>::get((key, 1)).unwrap();
+      let middle = DeadlinePages::<T>::get(key, fixture.middle_page).unwrap();
       assert_eq!(middle.live_entries, 31);
       assert!(middle.entries[0].is_none());
+      assert_eq!(header.first_vacant_page, Some(fixture.middle_page));
+      assert_eq!(
+        (middle.previous_vacant_page, middle.next_vacant_page),
+        (None, None)
+      );
     }
-    assert!(ActorWaitingCursorIndices::<T>::contains_key(key));
-    assert_wakeup_clock_page_indices::<T>(WakeupClock::Tick);
+    assert!(DeadlineIndexPositions::<T>::contains_key(key));
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("public close preserves mixed Waiting ownership");
+    Pallet::<T>::do_try_state().expect("public close preserves mixed deadline ownership");
   }
 
-  fn assert_mixed_waiting_target_closed<T: Config>(fixture: &MixedWaitingClose<T>) {
+  fn assert_mixed_deadline_target_closed<T: Config>(fixture: &MixedDeadlineClose<T>) {
     assert!(Pallet::<T>::actor_identity(fixture.actor_id).is_none());
+    assert!(!ActorProcesses::<T>::contains_key(fixture.actor_id));
+    assert!(!ServiceNodes::<T>::contains_key(fixture.actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(fixture.actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(fixture.actor_id));
     assert!(!ActorControlLocators::<T>::contains_key(fixture.actor_id));
-    assert!(!ActorRunHeads::<T>::contains_key(fixture.actor_id));
-    assert!(!ActorRunPayloads::<T>::contains_key(fixture.actor_id));
+    assert!(!ActorRunStateStore::<T>::contains_key(fixture.actor_id));
     assert!(!ActorContractHeads::<T>::contains_key(fixture.actor_id));
     assert!(!ActorStateHolds::<T>::contains_key(fixture.actor_id));
     assert!(
@@ -3841,31 +5751,31 @@ mod benches {
     );
   }
 
-  fn prepare_mixed_waiting_deadline_close<T: Config>()
-  -> Result<(MixedWaitingClose<T>, u32), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let mut fixture = prepare_mixed_waiting_close::<T>(true)?;
+  fn prepare_mixed_deadline_heap_close<T: Config>(
+    target: MixedDeadlineTarget,
+  ) -> Result<(MixedDeadlineClose<T>, u32), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let mut fixture = prepare_mixed_deadline_close::<T>(true, target)?;
     let key = WakeupKey::Tick(fixture.tick);
-    let run = Pallet::<T>::actor_run_state(fixture.actor_id)
-      .unwrap()
-      .encode();
-    for page in [0, 2] {
-      let chunk = ActorWaitingFrameChunks::<T>::get((key, page)).unwrap();
-      for entry in chunk.entries.into_iter().flatten() {
-        let ActorWaitingEntry::Primary(cell) = entry else {
-          panic!("neighbor guards own primary cells");
-        };
-        Pallet::<T>::close_actor(RawOrigin::Root.into(), cell.actor_id).unwrap();
-        fixture.retired_sovereigns.push(cell.actor_id);
+    let run = Pallet::<T>::actor_run_state(fixture.actor_id).map(|run| run.encode());
+    for page in [fixture.head_page, fixture.tail_page] {
+      let chunk = DeadlinePages::<T>::get(key, page).unwrap();
+      for actor in chunk.entries.into_iter().flatten() {
+        assert_eq!(
+          Pallet::<T>::actor_hot(actor.actor_id).unwrap().cycle_state,
+          CycleState::Idle
+        );
+        Pallet::<T>::close_actor(RawOrigin::Root.into(), actor.actor_id).unwrap();
+        fixture.retired_sovereigns.push(actor.actor_id);
       }
     }
     assert_eq!(fixture.retired_sovereigns.len(), 95);
-    assert_eq!(ActorWaitingOccupancies::<T>::get(key), 1);
+    assert_eq!(DeadlineHeaders::<T>::get(key).unwrap().count, 1);
     let active_room = Pallet::<T>::effective_active_actor_limit() - ActiveActorCount::<T>::get();
     let identity_room = T::MaxActorIdentities::get() - ActorIdentityCount::<T>::get();
     let fresh_room = T::MaxSystemSovereigns::get() - SystemSovereignCount::<T>::get();
     let guards = active_room.min(identity_room).min(fresh_room + 95);
-    let size = T::WakeupPageSize::get();
-    let maximum_keys = WakeupCursorLen::<T>::get(WakeupClock::Tick) + guards;
+    let size = 32;
+    let maximum_keys = DeadlineIndexLen::<T>::get(WakeupClock::Tick) + guards;
     let shared = (maximum_keys - 1) % size;
     assert!(guards > 95 && guards > shared && guards > size);
     frame::log::info!(
@@ -3915,48 +5825,82 @@ mod benches {
     }
     fixture.active_count = ActiveActorCount::<T>::get();
     assert_waiting_population_capacity::<T>();
-    let keys = WakeupCursorLen::<T>::get(WakeupClock::Tick);
+    let keys = DeadlineIndexLen::<T>::get(WakeupClock::Tick);
     assert_eq!(keys, maximum_keys - shared);
     assert_eq!(keys % size, 1);
-    assert_eq!(ActorWaitingCursorIndices::<T>::get(key), Some(0));
+    assert_eq!(DeadlineIndexPositions::<T>::get(key), Some(0));
     assert_eq!(
-      WakeupCursorPages::<T>::get((WakeupClock::Tick, 0)).unwrap()[0],
+      DeadlineIndexPages::<T>::get(WakeupClock::Tick, 0).unwrap()[0],
       key
     );
     assert_eq!(
-      Pallet::<T>::actor_run_state(fixture.actor_id)
-        .unwrap()
-        .encode(),
+      Pallet::<T>::actor_run_state(fixture.actor_id).map(|run| run.encode()),
       run
     );
     assert_eq!(
-      WakeupCursorPages::<T>::get((WakeupClock::Tick, u64::from(keys / size)))
+      DeadlineIndexPages::<T>::get(WakeupClock::Tick, u64::from(keys / size))
         .unwrap()
         .len(),
       1
     );
-    assert_wakeup_clock_page_indices::<T>(WakeupClock::Tick);
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("complete Tick heap follows ordinary lifecycle history");
     Ok((fixture, keys))
   }
 
-  fn assert_mixed_waiting_deadline_close<T: Config>(fixture: &MixedWaitingClose<T>, keys: u32) {
-    assert_mixed_waiting_target_closed::<T>(fixture);
+  fn assert_mixed_deadline_heap_close<T: Config>(fixture: &MixedDeadlineClose<T>, keys: u32) {
+    assert_mixed_deadline_target_closed::<T>(fixture);
     let key = WakeupKey::Tick(fixture.tick);
-    assert!(!ActorWaitingOccupancies::<T>::contains_key(key));
-    assert!(!ActorWaitingHeads::<T>::contains_key(key));
-    assert!(!ActorWaitingTails::<T>::contains_key(key));
-    assert!(!ActorWaitingCursorIndices::<T>::contains_key(key));
-    assert!(!ActorWaitingFrameChunks::<T>::iter_keys().any(|(stored_key, _)| stored_key == key));
-    assert_eq!(WakeupCursorLen::<T>::get(WakeupClock::Tick), keys - 1);
-    assert!(!WakeupCursorPages::<T>::contains_key((
+    assert!(!DeadlineHeaders::<T>::contains_key(key));
+    assert!(!DeadlineIndexPositions::<T>::contains_key(key));
+    assert!(DeadlinePages::<T>::iter_prefix(key).next().is_none());
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Tick), keys - 1);
+    assert!(!DeadlineIndexPages::<T>::contains_key(
       WakeupClock::Tick,
-      u64::from(keys / T::WakeupPageSize::get())
-    )));
-    assert_wakeup_clock_page_indices::<T>(WakeupClock::Tick);
+      u64::from(keys / 32)
+    ));
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("last-reference close repairs the complete Tick heap");
+    Pallet::<T>::do_try_state().expect("last-member close repairs the complete Tick heap");
+  }
+
+  fn assert_deadline_clock_indices<T: Config>(clock: WakeupClock) {
+    let len = DeadlineIndexLen::<T>::get(clock);
+    assert!(len <= T::MaxActiveActors::get());
+    let mut pages = 0;
+    for (page_id, page) in DeadlineIndexPages::<T>::iter_prefix(clock) {
+      pages += 1;
+      let first = u32::try_from(page_id).expect("bounded index page") * 32;
+      assert!(first < len, "empty heap tails must be reclaimed");
+      assert_eq!(page.len() as u32, (len - first).min(32));
+      for (slot, key) in page.iter().enumerate() {
+        let index = first + slot as u32;
+        assert_eq!(key.clock(), clock);
+        assert_eq!(DeadlineIndexPositions::<T>::get(key), Some(index));
+        assert!(DeadlineHeaders::<T>::get(key).is_some_and(|header| header.count > 0));
+        if index > 0 {
+          let parent = (index - 1) / 2;
+          let parent_page = DeadlineIndexPages::<T>::get(clock, u64::from(parent / 32)).unwrap();
+          assert!(parent_page[(parent % 32) as usize] <= *key);
+        }
+      }
+    }
+    assert_eq!(pages, len.div_ceil(32));
+    let mut positions = 0;
+    for (key, index) in DeadlineIndexPositions::<T>::iter().filter(|(key, _)| key.clock() == clock)
+    {
+      positions += 1;
+      assert!(index < len);
+      let page = DeadlineIndexPages::<T>::get(clock, u64::from(index / 32)).unwrap();
+      assert_eq!(page[(index % 32) as usize], key);
+    }
+    assert_eq!(positions, len);
+    assert_eq!(
+      WakeupCursorLen::<T>::get(clock),
+      0,
+      "no legacy heap authority is fabricated"
+    );
   }
 
   fn open_reachable_retry<T: Config>(
@@ -4146,12 +6090,6 @@ mod benches {
 
   fn assert_reachable_retry<T: Config>(actor_id: ActorId) {
     assert_contract_derived_retry::<T>(actor_id);
-    let state = Pallet::<T>::active_actor_state(actor_id).expect("retry Actor remains active");
-    let run = state.run_state.as_ref().expect("retry Run exists");
-    assert_eq!(
-      run.opening_snapshot.len(),
-      Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
   }
 
   fn assert_contract_derived_retry<T: Config>(actor_id: ActorId) {
@@ -4161,7 +6099,6 @@ mod benches {
     assert!(!ServiceNodes::<T>::contains_key(actor_id));
     let contract =
       Pallet::<T>::load_actor_contract(actor_id).expect("retry Contract remains admitted");
-    let surfaces = Pallet::<T>::opening_surfaces(&contract.steps, 0);
     let run = state.run_state.as_ref().expect("Opening published the Run");
     let handle = DeadlineHandles::<T>::get(actor_id)
       .expect("suspended retry owns one canonical deadline residence");
@@ -4175,12 +6112,7 @@ mod benches {
           ..
         }))
     ));
-    assert_eq!(run.opening_snapshot.len(), surfaces.len());
-    assert!(
-      surfaces
-        .iter()
-        .all(|surface| run.opening_snapshot.contains_key(surface))
-    );
+    assert_eq!(contract.steps.len() as u32, T::MaxContractSteps::get());
     assert_max_contract_geometry::<T>(actor_id);
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("reachable retry fixture passes full state audit");
@@ -4271,8 +6203,6 @@ mod benches {
         .expect("Crossing retry Contract fits");
     }
     // The funded first attempt rejects its output bound transactionally and enters service Waiting.
-    // Only Opening predicates retain immutable cycle captures.
-    assert!(Pallet::<T>::opening_surfaces(&contract_steps, 0).is_empty());
     Ok((contract_steps, (asset_a, asset_b, amount_a, amount_b)))
   }
 
@@ -4324,24 +6254,6 @@ mod benches {
     );
   }
 
-  fn install_wakeup_cursor_page<T: Config>(page_id: WakeupPageId, len: u32) {
-    let page_size = T::WakeupPageSize::get();
-    let page_start = u32::try_from(page_id)
-      .expect("benchmark cursor page id fits u32")
-      .saturating_mul(page_size);
-    let mut page = WakeupCursorPageOf::<T>::default();
-    for slot in 0..len {
-      let index = page_start.saturating_add(slot);
-      let block: BlockNumberFor<T> = 1_000_000u32.saturating_add(index).into();
-      page
-        .try_push(WakeupKey::Block(block))
-        .expect("benchmark cursor page must fit configured bound");
-      // Consumed buckets retain their cursor inverse until atomic heap repair.
-      ActorWaitingCursorIndices::<T>::insert(WakeupKey::Block(block), index);
-    }
-    WakeupCursorPages::<T>::insert((WakeupClock::Block, page_id), page);
-  }
-
   fn clear_host_genesis_wakeup_placements<T: Config>() {
     let block_actor_ids = benchmark_fixture_hot_actor_ids::<T>(|hot| hot.wakeup_pointer.is_some());
     for actor_id in block_actor_ids {
@@ -4364,47 +6276,6 @@ mod benches {
     if !page_ids.contains(&page_id) {
       page_ids.push(page_id);
     }
-  }
-
-  fn prepare_wakeup_cursor_repair<T: Config>(start_index: u32) -> BlockNumberFor<T> {
-    let page_size = T::WakeupPageSize::get();
-    let cursor_len = T::MaxActiveActors::get();
-    assert!(
-      page_size > 0 && cursor_len > start_index.saturating_add(1),
-      "benchmark requires bounded cursor depth"
-    );
-    let last_index = cursor_len.saturating_sub(1);
-    let tail_page = u64::from(last_index / page_size);
-    let tail_len = (last_index % page_size).saturating_add(1);
-    let mut page_ids = alloc::vec::Vec::new();
-    add_wakeup_cursor_page(&mut page_ids, last_index, page_size);
-    if start_index > 0 {
-      add_wakeup_cursor_page(&mut page_ids, (start_index - 1) / 2, page_size);
-    }
-    let mut current = start_index;
-    loop {
-      add_wakeup_cursor_page(&mut page_ids, current, page_size);
-      let left = current.saturating_mul(2).saturating_add(1);
-      if left >= cursor_len {
-        break;
-      }
-      add_wakeup_cursor_page(&mut page_ids, left, page_size);
-      let right = left.saturating_add(1);
-      if right < cursor_len {
-        add_wakeup_cursor_page(&mut page_ids, right, page_size);
-      }
-      current = left;
-    }
-    for page_id in page_ids {
-      let len = if page_id == tail_page {
-        tail_len
-      } else {
-        page_size
-      };
-      install_wakeup_cursor_page::<T>(page_id, len);
-    }
-    WakeupCursorLen::<T>::insert(WakeupClock::Block, cursor_len);
-    1_000_000u32.saturating_add(start_index).into()
   }
 
   // Leaf fixtures install only accessed heap pages, not complete Actor/Waiting state.
@@ -4709,11 +6580,12 @@ mod benches {
     benchmark_insert_service_member::<T>(actor, ServiceResidenceKind::Live, now);
     #[block]
     {
-      Pallet::<T>::retire_service_member(actor, CloseReason::OwnerInitiated)
+      Pallet::<T>::retire_service_member(actor)
         .expect("singleton service member retirement succeeds");
     }
     assert_eq!(ServiceHeader::<T>::get().count, 0);
     assert!(!ServiceNodes::<T>::contains_key(actor.actor_id));
+    assert!(!ActorProcesses::<T>::contains_key(actor.actor_id));
   }
 
   #[benchmark]
@@ -4731,11 +6603,13 @@ mod benches {
     benchmark_insert_service_member::<T>(retained, ServiceResidenceKind::Pending, now);
     #[block]
     {
-      Pallet::<T>::retire_service_member(actor, CloseReason::OwnerInitiated)
+      Pallet::<T>::retire_service_member(actor)
         .expect("pair cursor service member retirement succeeds");
     }
     assert_eq!(ServiceHeader::<T>::get().cursor, Some(retained));
     assert_eq!(ServiceHeader::<T>::get().count, 1);
+    assert!(!ServiceNodes::<T>::contains_key(actor.actor_id));
+    assert!(!ActorProcesses::<T>::contains_key(actor.actor_id));
   }
 
   #[benchmark]
@@ -4758,11 +6632,13 @@ mod benches {
     benchmark_insert_service_member::<T>(last, ServiceResidenceKind::Pending, now);
     #[block]
     {
-      Pallet::<T>::retire_service_member(actor, CloseReason::OwnerInitiated)
+      Pallet::<T>::retire_service_member(actor)
         .expect("interior service member retirement succeeds");
     }
     assert_eq!(ServiceHeader::<T>::get().cursor, Some(first));
     assert_eq!(ServiceHeader::<T>::get().count, 2);
+    assert!(!ServiceNodes::<T>::contains_key(actor.actor_id));
+    assert!(!ActorProcesses::<T>::contains_key(actor.actor_id));
     assert_eq!(
       ServiceNodes::<T>::get(first.actor_id).expect("first").next,
       last
@@ -4798,6 +6674,50 @@ mod benches {
     }
     assert_eq!(ServiceHeader::<T>::get().count, 2);
     assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
+  }
+
+  /// Complete canonical Service-to-Deadline placement at a new minimum key, including destination
+  /// selection and the deepest admitted Block-clock index insertion.
+  #[benchmark(pov_mode = Measured)]
+  fn service_member_to_deadline_new_key() -> Result<(), BenchmarkError> {
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let owner: T::AccountId = account("service-to-deadline", 0, 0);
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner.clone(),
+      Mutability::Mutable,
+      system_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        make_inert_contract_steps::<T>(),
+      ),
+    )?;
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)?;
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("benchmark Actor is active");
+    let due = now.saturating_add(2u32.into());
+    let keys = populate_canonical_deadline_index::<T>(due);
+    let key = WakeupKey::Block(due);
+    assert!(!DeadlineHeaders::<T>::contains_key(key));
+
+    #[block]
+    {
+      let destination = Pallet::<T>::plan_deadline_destination(actor, key)
+        .expect("new minimum deadline destination exists");
+      Pallet::<T>::transfer_service_member_to_deadline(actor, destination)
+        .expect("canonical Service-to-Deadline placement succeeds");
+    }
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    let handle = DeadlineHandles::<T>::get(actor_id).expect("Actor owns its Deadline residence");
+    assert_eq!((handle.key, handle.page, handle.slot), (key, 0, 0));
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Block), keys + 1);
+    assert_eq!(DeadlineIndexPositions::<T>::get(key), Some(0));
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("canonical placement preserves complete state");
+    Ok(())
   }
 
   #[benchmark]
@@ -5347,481 +7267,6 @@ mod benches {
     Ok(())
   }
 
-  #[benchmark(pov_mode = Measured)]
-  fn opening_snapshot_traversal() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let actor: T::AccountId = account("opening_snapshot_actor", 0, 0);
-    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, 2).map_err(|_| {
-      polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot prepare two distinct Opening assets",
-      )
-    })?;
-    if assets.len() != 2 || assets[0] == assets[1] {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "Opening traversal requires two distinct assets",
-      ));
-    }
-    let steps: ContractSteps<T> = vec![
-      Step {
-        precondition: None,
-        task: ActorTask::AddLiquidity {
-          asset_a: assets[0],
-          asset_b: assets[1],
-          amount_a: AmountResolution::Fixed(One::one()),
-          amount_b: AmountResolution::Fixed(One::one()),
-          min_lp_out: One::one(),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      };
-      T::MaxContractSteps::get() as usize
-    ]
-    .try_into()
-    .expect("full Contract Step count fits");
-    let snapshot;
-    #[block]
-    {
-      snapshot =
-        Pallet::<T>::capture_opening_snapshot(ActorType::System, &actor, &steps, Zero::zero());
-      core::hint::black_box(&snapshot);
-    }
-    assert!(snapshot.is_empty());
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_staking_snapshot_capture(
-    e: Linear<1, { T::MaxOpeningSnapshotEntries::get().min(T::MaxContractSteps::get()) }>,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let actor: T::AccountId = account("opening_snapshot_actor", 0, 0);
-    let positions = T::BenchmarkHelper::setup_max_encoded_staking_positions(&actor, e)?;
-    assert_eq!(positions.len() as u32, e);
-    assert_eq!(
-      positions
-        .iter()
-        .map(|(asset, _)| asset)
-        .collect::<alloc::collections::BTreeSet<_>>()
-        .len(),
-      positions.len()
-    );
-    let steps: ContractSteps<T> = (0..T::MaxContractSteps::get())
-      .map(|index| Step {
-        precondition: None,
-        task: ActorTask::Unstake {
-          asset: positions[index.min(e - 1) as usize].0,
-          shares: AmountResolution::Percent(Perbill::one()),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      })
-      .collect::<Vec<_>>()
-      .try_into()
-      .expect("full staking-surface Contract fits");
-    let snapshot;
-    #[block]
-    {
-      snapshot =
-        Pallet::<T>::capture_opening_snapshot(ActorType::System, &actor, &steps, Zero::zero());
-      core::hint::black_box(&snapshot);
-    }
-    assert_eq!(snapshot.len() as u32, e);
-    for (asset, shares) in positions {
-      assert!(!shares.is_zero());
-      assert_eq!(
-        snapshot.get(&OpeningSurface::StakingShares(asset)),
-        Some(&shares)
-      );
-    }
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_native_snapshot_capture(
-    c: Linear<0, 17>,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    if T::MaxContractSteps::get() < 2 || T::MaxOpeningSnapshotEntries::get() < 2 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent two typed Native Opening surfaces",
-      ));
-    }
-    let actor: T::AccountId = account("opening_native_snapshot_actor", 0, 0);
-    let native = T::FeeNativeAssetId::get();
-    let other = T::BenchmarkHelper::setup_predicate_assets(&actor, 2)?
-      .into_iter()
-      .find(|asset| *asset != native)
-      .expect("distinct fixed auxiliary asset exists");
-    let amount = T::MinUserBalance::get()
-      .checked_add(&T::AssetOps::minimum_balance(native))
-      .and_then(|amount| amount.checked_add(&100u32.into()))
-      .expect("benchmark Native funding fits");
-    T::AssetOps::mint(&actor, native, amount).expect("Native snapshot custody is funded");
-    let raw = T::AssetOps::balance(&actor, native);
-    assert!(!raw.is_zero());
-    let actor_type = if c / 9 == 0 {
-      ActorType::System
-    } else {
-      ActorType::User
-    };
-    let family = (c % 9) / 3;
-    let reserved = match c % 3 {
-      0 => Zero::zero(),
-      1 => raw / 2u32.into(),
-      _ => raw,
-    };
-    let steps: ContractSteps<T> = (0..T::MaxContractSteps::get())
-      .map(|index| Step {
-        precondition: None,
-        task: if family == 0 || (family == 2 && index % 2 == 0) {
-          ActorTask::AddLiquidity {
-            asset_a: native,
-            asset_b: other,
-            amount_a: AmountResolution::Percent(Perbill::one()),
-            amount_b: AmountResolution::Fixed(One::one()),
-            min_lp_out: One::one(),
-          }
-        } else {
-          ActorTask::SwapOut {
-            asset_out: native,
-            amount_out: AmountResolution::Percent(Perbill::one()),
-            asset_in: other,
-            input_limit: InputLimit::Absolute(One::one()),
-            slippage_tolerance: Perbill::zero(),
-          }
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      })
-      .collect::<Vec<_>>()
-      .try_into()
-      .expect("full Native snapshot Contract fits");
-    let snapshot;
-    #[block]
-    {
-      snapshot = Pallet::<T>::capture_opening_snapshot(actor_type, &actor, &steps, reserved);
-      core::hint::black_box(&snapshot);
-    }
-    assert_eq!(snapshot.len(), if family == 2 { 2 } else { 1 });
-    let spendable = raw.saturating_sub(reserved);
-    if family != 1 {
-      let minimum = if actor_type == ActorType::User {
-        T::MinUserBalance::get()
-      } else {
-        T::AssetOps::minimum_balance(native)
-      };
-      assert_eq!(
-        snapshot.get(&OpeningSurface::PreservableAsset(native)),
-        Some(&spendable.saturating_sub(minimum)),
-      );
-    }
-    if family != 0 {
-      assert_eq!(
-        snapshot.get(&OpeningSurface::TargetAsset(native)),
-        Some(&spendable)
-      );
-    }
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_unfunded_snapshot_capture(
-    c: Linear<
-      0,
-      {
-        T::MaxOpeningSnapshotEntries::get().min(T::MaxContractSteps::get().saturating_mul(2))
-          + 2 * T::MaxOpeningSnapshotEntries::get().min(T::MaxContractSteps::get())
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let paired =
-      T::MaxOpeningSnapshotEntries::get().min(T::MaxContractSteps::get().saturating_mul(2));
-    let single = T::MaxOpeningSnapshotEntries::get().min(T::MaxContractSteps::get());
-    if single == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent an Opening surface",
-      ));
-    }
-    let (family, count) = if c < paired {
-      (0, c + 1)
-    } else if c < paired + single {
-      (1, c - paired + 1)
-    } else if c < paired + 2 * single {
-      (2, c - paired - single + 1)
-    } else {
-      (3, 1)
-    };
-    let owner: T::AccountId = account("opening_snapshot_reference_owner", 0, 0);
-    let actor: T::AccountId = account("opening_unfunded_snapshot_actor", 0, 0);
-    assert_ne!(owner, actor);
-    let assets: Vec<_> = match family {
-      0 | 1 => T::BenchmarkHelper::setup_max_encoded_predicate_assets(&owner, count.max(2) + 1)?
-        .into_iter()
-        .filter(|asset| *asset != T::FeeNativeAssetId::get())
-        .take(count.max(2) as usize)
-        .collect(),
-      2 => T::BenchmarkHelper::setup_max_encoded_staking_positions(&owner, count)?
-        .into_iter()
-        .map(|(asset, _)| asset)
-        .collect(),
-      _ => {
-        let (asset, _) = T::BenchmarkHelper::setup_stake(&owner)?;
-        assert!(T::StakingOps::share_asset(asset).is_some());
-        T::BenchmarkHelper::remove_empty_staking_receipt(&owner, asset)?;
-        assert!(T::StakingOps::share_asset(asset).is_none());
-        vec![asset]
-      }
-    };
-    assert_eq!(
-      assets.len() as u32,
-      if family < 2 { count.max(2) } else { count }
-    );
-    assert_eq!(
-      assets
-        .iter()
-        .collect::<alloc::collections::BTreeSet<_>>()
-        .len(),
-      assets.len()
-    );
-    let steps: ContractSteps<T> = (0..T::MaxContractSteps::get())
-      .map(|index| Step {
-        precondition: None,
-        task: match family {
-          0 => ActorTask::AddLiquidity {
-            asset_a: assets[(index * 2).min(count - 1) as usize],
-            asset_b: assets[if count == 1 {
-              1
-            } else if index * 2 + 1 < count {
-              index * 2 + 1
-            } else {
-              count - 2
-            } as usize],
-            amount_a: AmountResolution::Percent(Perbill::one()),
-            amount_b: if count == 1 {
-              AmountResolution::Fixed(One::one())
-            } else {
-              AmountResolution::Percent(Perbill::one())
-            },
-            min_lp_out: One::one(),
-          },
-          1 => ActorTask::Mint {
-            asset: assets[index.min(count - 1) as usize],
-            amount: AmountResolution::Percent(Perbill::one()),
-          },
-          _ => ActorTask::Unstake {
-            asset: assets[index.min(count - 1) as usize],
-            shares: AmountResolution::Percent(Perbill::one()),
-          },
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      })
-      .collect::<Vec<_>>()
-      .try_into()
-      .expect("full unfunded snapshot Contract fits");
-    let snapshot;
-    #[block]
-    {
-      snapshot =
-        Pallet::<T>::capture_opening_snapshot(ActorType::System, &actor, &steps, Zero::zero());
-      core::hint::black_box(&snapshot);
-    }
-    assert_eq!(snapshot.len() as u32, count);
-    for asset in assets.into_iter().take(count as usize) {
-      let surface = match family {
-        0 => OpeningSurface::PreservableAsset(asset),
-        1 => OpeningSurface::TargetAsset(asset),
-        _ => OpeningSurface::StakingShares(asset),
-      };
-      assert_eq!(snapshot.get(&surface), Some(&Zero::zero()));
-    }
-    Ok(())
-  }
-
-  fn opening_mixed_allocations(step_limit: u32, entry_limit: u32) -> Vec<(u32, u32, u32)> {
-    let mut allocations = Vec::new();
-    for total in 2..=entry_limit.min(step_limit.saturating_mul(2)) {
-      for preservable in 0..=total {
-        for target in 0..=total.saturating_sub(preservable).min(step_limit) {
-          let shares = total - preservable - target;
-          if preservable.div_ceil(2) + target + shares <= step_limit
-            && u32::from(preservable > 0) + u32::from(target > 0) + u32::from(shares > 0) >= 2
-          {
-            allocations.push((preservable, target, shares));
-          }
-        }
-      }
-    }
-    allocations
-  }
-
-  fn prepare_mixed_opening_snapshot<T: Config>(
-    preservable: u32,
-    target: u32,
-    share_count: u32,
-    reverse: bool,
-  ) -> Result<
-    (T::AccountId, ContractSteps<T>, RunOpeningSnapshotOf<T>),
-    polkadot_sdk::frame_benchmarking::BenchmarkError,
-  > {
-    let total = preservable + target + share_count;
-    let actor: T::AccountId = account("opening_snapshot_actor", 0, 0);
-    let available =
-      T::BenchmarkHelper::setup_max_encoded_predicate_assets(&actor, total + share_count + 1)?;
-    let positions = if share_count == 0 {
-      Vec::new()
-    } else {
-      T::BenchmarkHelper::setup_max_encoded_staking_positions(&actor, share_count)?
-    };
-    assert_eq!(positions.len() as u32, share_count);
-    let mut position_assets = alloc::collections::BTreeSet::new();
-    for (asset, shares) in &positions {
-      assert!(!shares.is_zero());
-      assert!(position_assets.insert(*asset));
-    }
-    let receipts: alloc::collections::BTreeSet<_> = positions
-      .iter()
-      .map(|(asset, _)| T::StakingOps::share_asset(*asset).expect("funded position has a receipt"))
-      .collect();
-    assert_eq!(receipts.len(), positions.len());
-    let assets: Vec<_> = available
-      .into_iter()
-      .filter(|asset| {
-        *asset != T::FeeNativeAssetId::get()
-          && !position_assets.contains(asset)
-          && !receipts.contains(asset)
-      })
-      .take((preservable + target).max(2) as usize)
-      .collect();
-    assert!(assets.len() as u32 >= preservable + target);
-    assert_eq!(
-      assets
-        .iter()
-        .collect::<alloc::collections::BTreeSet<_>>()
-        .len(),
-      assets.len()
-    );
-    let mut expected = RunOpeningSnapshotOf::<T>::default();
-    for (index, asset) in assets
-      .iter()
-      .take((preservable + target) as usize)
-      .enumerate()
-    {
-      let minimum = T::AssetOps::minimum_balance(*asset);
-      let amount = minimum
-        .checked_add(&One::one())
-        .expect("mixed capture funding fits");
-      T::AssetOps::mint(&actor, *asset, amount).expect("mixed capture asset is funded");
-      let balance = T::AssetOps::balance(&actor, *asset);
-      let (surface, value) = if (index as u32) < preservable {
-        (
-          OpeningSurface::PreservableAsset(*asset),
-          balance.saturating_sub(minimum),
-        )
-      } else {
-        (OpeningSurface::TargetAsset(*asset), balance)
-      };
-      assert!(!value.is_zero());
-      expected
-        .try_insert(surface, value)
-        .expect("mixed expected snapshot fits");
-    }
-    let mut steps = Vec::new();
-    for pair in assets[..preservable as usize].chunks(2) {
-      let other = pair.get(1).copied().unwrap_or_else(|| {
-        assets
-          .iter()
-          .copied()
-          .chain(position_assets.iter().copied())
-          .find(|asset| *asset != pair[0])
-          .expect("fixed auxiliary asset is distinct")
-      });
-      steps.push(Step {
-        precondition: None,
-        task: ActorTask::AddLiquidity {
-          asset_a: pair[0],
-          asset_b: other,
-          amount_a: AmountResolution::Percent(Perbill::one()),
-          amount_b: if pair.len() == 2 {
-            AmountResolution::Percent(Perbill::one())
-          } else {
-            AmountResolution::Fixed(One::one())
-          },
-          min_lp_out: One::one(),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      });
-    }
-    let repeated = steps.last().cloned();
-    for asset in assets
-      .iter()
-      .skip(preservable as usize)
-      .take(target as usize)
-    {
-      steps.push(Step {
-        precondition: None,
-        task: ActorTask::Mint {
-          asset: *asset,
-          amount: AmountResolution::Percent(Perbill::one()),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      });
-    }
-    for (asset, shares) in positions {
-      expected
-        .try_insert(OpeningSurface::StakingShares(asset), shares)
-        .expect("mixed share snapshot fits");
-      steps.push(Step {
-        precondition: None,
-        task: ActorTask::Unstake {
-          asset,
-          shares: AmountResolution::Percent(Perbill::one()),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      });
-    }
-    let repeated = repeated.unwrap_or_else(|| steps.last().expect("mixed Steps exist").clone());
-    assert!(steps.len() as u32 <= T::MaxContractSteps::get());
-    steps.resize(T::MaxContractSteps::get() as usize, repeated);
-    if reverse {
-      steps.reverse();
-    }
-    let steps: ContractSteps<T> = steps.try_into().expect("full mixed Contract fits");
-    assert_eq!(expected.len() as u32, total);
-    Ok((actor, steps, expected))
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_mixed_snapshot_capture(
-    c: Linear<
-      0,
-      {
-        (opening_mixed_allocations(
-          T::MaxContractSteps::get(),
-          T::MaxOpeningSnapshotEntries::get(),
-        )
-        .len() as u32)
-          .saturating_mul(2)
-          .saturating_sub(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let allocations = opening_mixed_allocations(
-      T::MaxContractSteps::get(),
-      T::MaxOpeningSnapshotEntries::get(),
-    );
-    let &(preservable, target, share_count) = allocations.get((c / 2) as usize).ok_or(
-      polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent this mixed Opening allocation",
-      ),
-    )?;
-    let (actor, steps, expected) =
-      prepare_mixed_opening_snapshot::<T>(preservable, target, share_count, c % 2 == 1)?;
-    let snapshot;
-    #[block]
-    {
-      snapshot =
-        Pallet::<T>::capture_opening_snapshot(ActorType::System, &actor, &steps, Zero::zero());
-      core::hint::black_box(&snapshot);
-    }
-    assert_eq!(snapshot.len() as u32, preservable + target + share_count);
-    assert_eq!(snapshot, expected);
-    Ok(())
-  }
-
   fn predicate_steps<T: Config>(
     predicates: Vec<Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>>,
   ) -> ContractSteps<T> {
@@ -6183,18 +7628,14 @@ mod benches {
       .expect("real Running payload exists");
     assert_eq!(state.hot.cycle_state, CycleState::Running);
     assert_eq!(run.cursor, cursor);
-    assert_eq!(
-      run.opening_snapshot.len(),
-      Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
     // A canonically published Actor owns no legacy Ready primary, so its current-Step ticket is the
     // generation-bound canonical successor derived from the persisted Run and admission.
     assert!(!ActorControlLocators::<T>::contains_key(actor_id));
     let admission =
       benchmark_fixture_admission::<T>(actor_id).expect("real canonical admission exists");
-    let context = Pallet::<T>::step_control_weight_context(step_count, cursor, 0, 0)
-      .expect("tail context exists");
+    let context =
+      Pallet::<T>::step_control_weight_context(step_count, cursor, 0).expect("tail context exists");
     assert_eq!(context.steps_in_fragment, s);
     let ticket = ActorStepTicket {
       actor_id,
@@ -6325,10 +7766,6 @@ mod benches {
       .expect("real Running payload exists");
     assert_eq!(state.hot.cycle_state, CycleState::Running);
     assert_eq!(run.cursor, cursor);
-    assert_eq!(
-      run.opening_snapshot.len(),
-      Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
     let node = ServiceNodes::<T>::get(actor_id)
       .expect("reachable Running actor retains canonical Service residence");
     let service_at = run
@@ -6338,9 +7775,10 @@ mod benches {
       .max(frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()));
     frame_system::Pallet::<T>::set_block_number(service_at);
     assert!(!ActorControlLocators::<T>::contains_key(actor_id));
-    let context = Pallet::<T>::step_control_weight_context(step_count, cursor, p, 0)
+    let context = Pallet::<T>::step_control_weight_context(step_count, cursor, p)
       .expect("real tail context exists");
     assert_eq!(context.steps_in_fragment, s);
+    assert_eq!(ServiceHeader::<T>::get().count, 1);
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state()
       .expect("real Running inner source passes full audit before consumption");
@@ -6424,11 +7862,43 @@ mod benches {
           ))
         }
         Err(error) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error.cause))
         }
       }
     })
     .expect("real carried Step inner atom commits")
+  }
+
+  fn assert_retained_service_turn<T: Config>(actor_id: ActorId, now: BlockNumberFor<T>) {
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("retained turn keeps its generation");
+    let node = ServiceNodes::<T>::get(actor_id).expect("retained turn keeps Service membership");
+    let process =
+      ActorProcesses::<T>::get(actor_id).expect("retained turn keeps process authority");
+    let header = ServiceHeader::<T>::get();
+    assert_eq!(node.generation, actor.generation);
+    assert_eq!(process.generation, actor.generation);
+    assert_eq!(process.status, ProcessStatus::Serving);
+    assert_eq!(
+      process.residence,
+      Some(ProcessResidence::Service(node.kind))
+    );
+    assert_eq!(
+      node.last_considered, now,
+      "retained turn must record consideration"
+    );
+    assert_eq!(
+      process.last_attempted,
+      Some(now),
+      "retained turn must record attempt"
+    );
+    assert_eq!(header.round_block, Some(now));
+    assert!(header.count > 0);
+    assert_eq!(
+      header.cursor,
+      Some(node.next),
+      "retained turn must advance Service cursor"
+    );
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
   }
 
   fn assert_reachable_running_inner<T: Config>(
@@ -6439,6 +7909,7 @@ mod benches {
   ) {
     let now = frame_system::Pallet::<T>::block_number();
     let state = Pallet::<T>::active_actor_state(actor_id).expect("real successor authority exists");
+    assert_retained_service_turn::<T>(actor_id, now);
     assert_eq!(state.identity.actor_class.actor_type(), ActorType::User);
     let hold = ActorStateHolds::<T>::get(actor_id).expect("User state hold remains owned");
     assert_eq!(hold.owner, state.identity.owner);
@@ -6470,8 +7941,6 @@ mod benches {
         };
         assert!(T::AssetOps::balance(&state.identity.sovereign_account, asset).is_zero());
         assert!(T::AssetOps::balance(to, asset).is_zero());
-        assert_eq!(ServiceHeader::<T>::get().count, 1);
-        assert!(ServiceNodes::<T>::contains_key(actor_id));
         assert!(state.hot.queue_ticket.is_none());
       }
     }
@@ -6491,7 +7960,6 @@ mod benches {
     let predicates_per_step = benchmark_predicate_capacity::<T>();
     if step_count == 0
       || step_count > T::MaxContractSteps::get()
-      || step_count.saturating_mul(2) > T::MaxOpeningSnapshotEntries::get()
       || predicates_per_step == 0
       || predicates_per_step != T::MaxPredicatesPerStep::get()
     {
@@ -6547,6 +8015,17 @@ mod benches {
     UserPaged,
     UserCompleteMin,
     UserCompleteHeaderMax,
+    UserTransferHeaderMax,
+    UserTransferTerminalHeaderMax,
+    SystemTransferHeaderMax,
+    SystemBurnHeaderMax,
+    UserTransferPredicateHeaderMax,
+    UserTransferObservationHeaderMax,
+    UserTransferMixedHeaderMax,
+    UserBurnHeaderMax,
+    UserSplitHeaderMax,
+    UserTransferProgressTwo,
+    UserTransferBurnTwo,
     Minimal,
     Predicated,
     RetryMin,
@@ -6577,12 +8056,26 @@ mod benches {
         | ReachableOpeningProfile::CompleteMax
         | ReachableOpeningProfile::UserCompleteMin
         | ReachableOpeningProfile::UserCompleteHeaderMax
+        | ReachableOpeningProfile::UserTransferHeaderMax
+        | ReachableOpeningProfile::UserTransferTerminalHeaderMax
+        | ReachableOpeningProfile::SystemTransferHeaderMax
+        | ReachableOpeningProfile::SystemBurnHeaderMax
+        | ReachableOpeningProfile::UserTransferPredicateHeaderMax
+        | ReachableOpeningProfile::UserTransferObservationHeaderMax
+        | ReachableOpeningProfile::UserTransferMixedHeaderMax
+        | ReachableOpeningProfile::UserBurnHeaderMax
+        | ReachableOpeningProfile::UserSplitHeaderMax
+        | ReachableOpeningProfile::UserTransferProgressTwo
+        | ReachableOpeningProfile::UserTransferBurnTwo
     );
     let terminal_predicates = matches!(
       profile,
       ReachableOpeningProfile::RetryMax
         | ReachableOpeningProfile::CompleteMax
         | ReachableOpeningProfile::FailedMax
+        | ReachableOpeningProfile::UserTransferPredicateHeaderMax
+        | ReachableOpeningProfile::UserTransferObservationHeaderMax
+        | ReachableOpeningProfile::UserTransferMixedHeaderMax
     );
     if (tail_chunks == 0 && !retry && !complete && !failed)
       || tail_chunks > max_tails
@@ -6593,7 +8086,22 @@ mod benches {
         "host cannot represent the Opening progress tail profile",
       ));
     }
-    let count = (1 + tail_chunks * MAX_STEPS_PER_TAIL_CHUNK).min(maximum);
+    let burn_two = matches!(profile, ReachableOpeningProfile::UserTransferBurnTwo);
+    let progress_two = matches!(
+      profile,
+      ReachableOpeningProfile::UserTransferProgressTwo
+        | ReachableOpeningProfile::UserTransferBurnTwo
+    );
+    if progress_two && (tail_chunks != 1 || maximum < 2) {
+      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
+        "host cannot admit a two-Step positive User progression",
+      ));
+    }
+    let count = if progress_two {
+      2
+    } else {
+      (1 + tail_chunks * MAX_STEPS_PER_TAIL_CHUNK).min(maximum)
+    };
     let mut steps = make_reachable_opening_steps::<T>(count)?;
     let owner: T::AccountId = account("reachable-opening-owner", 0, 0);
     ensure_creation_balance::<T>(&owner);
@@ -6625,6 +8133,42 @@ mod benches {
     } else {
       None
     };
+    let observation_predicates = matches!(
+      profile,
+      ReachableOpeningProfile::UserTransferObservationHeaderMax
+    );
+    let mixed_predicates = matches!(profile, ReachableOpeningProfile::UserTransferMixedHeaderMax);
+    let observation_feeds = if observation_predicates || mixed_predicates {
+      let capacity = benchmark_predicate_capacity::<T>();
+      if mixed_predicates && capacity < 3 {
+        return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
+          "host cannot represent three mixed current-Step predicate sources",
+        ));
+      }
+      assert!(capacity > 0);
+      let feed_count = if mixed_predicates {
+        (capacity + 1) / 3
+      } else {
+        capacity
+      };
+      let feeds = T::BenchmarkHelper::setup_max_encoded_observation_feeds(feed_count)?;
+      assert_eq!(feeds.len() as u32, feed_count);
+      assert_eq!(
+        feeds
+          .iter()
+          .collect::<alloc::collections::BTreeSet<_>>()
+          .len(),
+        feeds.len()
+      );
+      for feed in &feeds {
+        assert_eq!(feed.encoded_size(), T::ObservationFeedId::max_encoded_len());
+        assert!(matches!(T::ObservationProvider::current(feed),
+          CanonicalObservationState::Available { value, .. } if value > 0));
+      }
+      Some(feeds)
+    } else {
+      None
+    };
     if terminal_predicates {
       for step in steps.iter_mut() {
         let ActorTask::AddLiquidity {
@@ -6633,14 +8177,39 @@ mod benches {
         else {
           unreachable!()
         };
+        let predicates = (0..benchmark_predicate_capacity::<T>())
+          .map(|index| {
+            if mixed_predicates && index % 3 == 2 {
+              Predicate::BlockNumberAbove { threshold: 0 }
+            } else if let Some(feeds) = &observation_feeds {
+              if !mixed_predicates || index % 3 == 1 {
+                Predicate::ObservationAbove {
+                  feed: feeds[if mixed_predicates {
+                    (index / 3) as usize
+                  } else {
+                    index as usize
+                  }],
+                  threshold: 0,
+                  max_age_blocks: 100,
+                }
+              } else {
+                Predicate::BalanceBelow {
+                  asset: asset_a,
+                  threshold: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
+                    .saturating_sub(index.saturated_into()),
+                }
+              }
+            } else {
+              Predicate::BalanceBelow {
+                asset: if index % 2 == 0 { asset_a } else { asset_b },
+                threshold: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
+                  .saturating_sub(index.saturated_into()),
+              }
+            }
+          })
+          .collect();
         step.precondition = Some(packed_predicate_clauses::<T>(
-          (0..benchmark_predicate_capacity::<T>())
-            .map(|index| Predicate::BalanceBelow {
-              asset: if index % 2 == 0 { asset_a } else { asset_b },
-              threshold: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
-                .saturating_sub(index.saturated_into()),
-            })
-            .collect(),
+          predicates,
           T::MaxPredicatesPerClause::get(),
         ));
       }
@@ -6673,8 +8242,52 @@ mod benches {
             asset: position,
             shares: AmountResolution::Percent(Perbill::from_percent(50)),
           }
-        } else if complete {
+        } else if complete
+          && !matches!(
+            profile,
+            ReachableOpeningProfile::UserTransferHeaderMax
+              | ReachableOpeningProfile::UserTransferTerminalHeaderMax
+              | ReachableOpeningProfile::SystemTransferHeaderMax
+              | ReachableOpeningProfile::SystemBurnHeaderMax
+              | ReachableOpeningProfile::UserTransferPredicateHeaderMax
+              | ReachableOpeningProfile::UserTransferObservationHeaderMax
+              | ReachableOpeningProfile::UserTransferMixedHeaderMax
+              | ReachableOpeningProfile::UserBurnHeaderMax
+              | ReachableOpeningProfile::UserSplitHeaderMax
+              | ReachableOpeningProfile::UserTransferProgressTwo
+              | ReachableOpeningProfile::UserTransferBurnTwo
+          )
+        {
           ActorTask::StopCycle
+        } else if matches!(
+          profile,
+          ReachableOpeningProfile::UserBurnHeaderMax | ReachableOpeningProfile::SystemBurnHeaderMax
+        ) {
+          ActorTask::Burn {
+            asset: zero_asset,
+            amount: AmountResolution::Percent(Perbill::from_percent(50)),
+          }
+        } else if matches!(profile, ReachableOpeningProfile::UserSplitHeaderMax) {
+          let maximum = T::MaxSplitTransferLegs::get();
+          if maximum < 2 {
+            return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
+              "host cannot represent a two-recipient SplitTransfer",
+            ));
+          }
+          let share = Perbill::from_rational(1u32, maximum);
+          let legs = (0..maximum)
+            .map(|index| SplitLeg {
+              to: account("opening-split-recipient", index, 0),
+              share,
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("maximum SplitTransfer legs obey the configured bound");
+          ActorTask::SplitTransfer {
+            asset: zero_asset,
+            amount: AmountResolution::Percent(Perbill::from_percent(50)),
+            legs,
+          }
         } else {
           ActorTask::Transfer {
             to: account("opening-zero-recipient", 0, 0),
@@ -6700,6 +8313,35 @@ mod benches {
         if terminal_predicates {
           continue;
         }
+        if progress_two {
+          let task = if burn_two {
+            let ActorTask::AddLiquidity {
+              asset_a, asset_b, ..
+            } = step.task
+            else {
+              unreachable!("positive second Step is backed by distinct prepared assets")
+            };
+            let asset = if asset_a != T::FeeNativeAssetId::get() {
+              asset_a
+            } else {
+              asset_b
+            };
+            assert_ne!(asset, T::FeeNativeAssetId::get());
+            assert_ne!(asset, zero_asset);
+            ActorTask::Burn {
+              asset,
+              amount: AmountResolution::Percent(Perbill::from_percent(50)),
+            }
+          } else {
+            ActorTask::StopCycle
+          };
+          *step = Step {
+            precondition: None,
+            task,
+            on_error: StepErrorPolicy::AbortCycle,
+          };
+          continue;
+        }
         step.precondition = None;
         let ActorTask::AddLiquidity {
           amount_a, amount_b, ..
@@ -6716,14 +8358,41 @@ mod benches {
       ReachableOpeningProfile::UserPaged
         | ReachableOpeningProfile::UserCompleteMin
         | ReachableOpeningProfile::UserCompleteHeaderMax
+        | ReachableOpeningProfile::UserTransferHeaderMax
+        | ReachableOpeningProfile::UserTransferTerminalHeaderMax
+        | ReachableOpeningProfile::UserTransferPredicateHeaderMax
+        | ReachableOpeningProfile::UserTransferObservationHeaderMax
+        | ReachableOpeningProfile::UserTransferMixedHeaderMax
+        | ReachableOpeningProfile::UserBurnHeaderMax
+        | ReachableOpeningProfile::UserSplitHeaderMax
+        | ReachableOpeningProfile::UserTransferProgressTwo
+        | ReachableOpeningProfile::UserTransferBurnTwo
     ) {
       ActorType::User
     } else {
       ActorType::System
     };
-    retain_admitted_contract_geometry::<T>(actor_type, &mut steps, &[0])?;
+    retain_admitted_contract_geometry::<T>(
+      actor_type,
+      &mut steps,
+      if progress_two { &[0, 1] } else { &[0] },
+    )?;
     let excluded_asset = match steps[0].task {
-      ActorTask::Transfer { asset, .. } => Some(asset),
+      ActorTask::Transfer { asset, .. }
+        if !matches!(
+          profile,
+          ReachableOpeningProfile::UserTransferHeaderMax
+            | ReachableOpeningProfile::UserTransferTerminalHeaderMax
+            | ReachableOpeningProfile::SystemTransferHeaderMax
+            | ReachableOpeningProfile::UserTransferPredicateHeaderMax
+            | ReachableOpeningProfile::UserTransferObservationHeaderMax
+            | ReachableOpeningProfile::UserTransferMixedHeaderMax
+            | ReachableOpeningProfile::UserTransferProgressTwo
+            | ReachableOpeningProfile::UserTransferBurnTwo
+        ) =>
+      {
+        Some(asset)
+      }
       _ => None,
     };
     let mut contract = user_contract::<T>(
@@ -6734,7 +8403,21 @@ mod benches {
       steps,
     )
     .expect("Opening Contract exists");
-    if matches!(profile, ReachableOpeningProfile::UserCompleteHeaderMax) {
+    if matches!(
+      profile,
+      ReachableOpeningProfile::UserCompleteHeaderMax
+        | ReachableOpeningProfile::UserTransferHeaderMax
+        | ReachableOpeningProfile::UserTransferTerminalHeaderMax
+        | ReachableOpeningProfile::SystemTransferHeaderMax
+        | ReachableOpeningProfile::SystemBurnHeaderMax
+        | ReachableOpeningProfile::UserTransferPredicateHeaderMax
+        | ReachableOpeningProfile::UserTransferObservationHeaderMax
+        | ReachableOpeningProfile::UserTransferMixedHeaderMax
+        | ReachableOpeningProfile::UserBurnHeaderMax
+        | ReachableOpeningProfile::UserSplitHeaderMax
+        | ReachableOpeningProfile::UserTransferProgressTwo
+        | ReachableOpeningProfile::UserTransferBurnTwo
+    ) {
       let maximum = T::MaxWhitelistSize::get();
       if maximum == 0 {
         return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
@@ -6755,6 +8438,12 @@ mod benches {
           .try_into()
           .expect("maximum funding allowlist obeys its configured bound"),
       );
+    }
+    if matches!(
+      profile,
+      ReachableOpeningProfile::UserTransferTerminalHeaderMax
+    ) {
+      contract.auto_close_at_cycle_nonce = Some(1);
     }
     let fee_reserve = full_attempt_fee::<T>(&contract.steps)
       .checked_add(
@@ -6798,20 +8487,98 @@ mod benches {
       "reachable funding uses one mint per distinct spend asset"
     );
     if actor_type == ActorType::User {
-      T::AssetOps::mint(
-        &identity.sovereign_account,
-        T::FeeNativeAssetId::get(),
-        fee_reserve,
-      )
-      .expect("User Trigger and Pipeline have independent funding");
+      let native = T::FeeNativeAssetId::get();
+      T::AssetOps::mint(&identity.sovereign_account, native, fee_reserve)
+        .expect("User Trigger and Action have independent funding");
     }
     frame_system::Pallet::<T>::set_block_number(1u32.into());
     GlobalCircuitBreaker::<T>::put(false);
     Pallet::<T>::manual_trigger(RawOrigin::Signed(owner.clone()).into(), actor_id)
       .expect("real Manual occurrence publishes Opening readiness");
     let state = Pallet::<T>::active_actor_state(actor_id).expect("real Idle authority exists");
+    if observation_predicates
+      || mixed_predicates
+      || matches!(
+        profile,
+        ReachableOpeningProfile::UserBurnHeaderMax
+          | ReachableOpeningProfile::UserSplitHeaderMax
+          | ReachableOpeningProfile::UserTransferTerminalHeaderMax
+          | ReachableOpeningProfile::UserTransferProgressTwo
+          | ReachableOpeningProfile::UserTransferBurnTwo
+      )
+    {
+      // Fund the admitted current-Step capacity after the real Manual occurrence has charged
+      // its Trigger owner; no synthetic collection substitutes for measured Opening.
+      let native = T::FeeNativeAssetId::get();
+      let pipeline = Pallet::<T>::pipeline_fee_for_actor(actor_id, ActorType::User)
+        .expect("admitted User Pipeline quote exists")
+        .total_fee;
+      let resources = Pallet::<T>::derive_step_resource_envelopes(&state.contract)
+        .expect("admitted Step resource envelope exists");
+      let action = Pallet::<T>::maximum_current_action_fee(
+        ActorType::User,
+        &state.contract.steps[0],
+        resources[0],
+      )
+      .expect("admitted current Action fee exists")
+      .total_fee;
+      let second_action = if burn_two {
+        Pallet::<T>::maximum_current_action_fee(
+          ActorType::User,
+          &state.contract.steps[1],
+          resources[1],
+        )
+        .expect("admitted successor Action fee exists")
+        .total_fee
+      } else {
+        Zero::zero()
+      };
+      let required = T::MinUserBalance::get()
+        .max(T::AssetOps::minimum_balance(native))
+        .checked_add(&pipeline)
+        .and_then(|value| value.checked_add(&action))
+        .and_then(|value| value.checked_add(&second_action))
+        .expect("real Pipeline and both Action capacities fit");
+      let current = T::AssetOps::balance(&state.identity.sovereign_account, native);
+      if current < required {
+        T::AssetOps::mint(
+          &state.identity.sovereign_account,
+          native,
+          required - current,
+        )
+        .expect("positive User fixture tops up only certified current capacity");
+      }
+      assert!(T::AssetOps::balance(&state.identity.sovereign_account, native) >= required);
+    }
     if let ActorTask::Transfer { asset, .. } = state.contract.steps[0].task {
-      assert!(T::AssetOps::balance(&state.identity.sovereign_account, asset).is_zero());
+      let balance = T::AssetOps::balance(&state.identity.sovereign_account, asset);
+      if matches!(
+        profile,
+        ReachableOpeningProfile::UserTransferHeaderMax
+          | ReachableOpeningProfile::UserTransferTerminalHeaderMax
+          | ReachableOpeningProfile::SystemTransferHeaderMax
+          | ReachableOpeningProfile::UserTransferPredicateHeaderMax
+          | ReachableOpeningProfile::UserTransferObservationHeaderMax
+          | ReachableOpeningProfile::UserTransferMixedHeaderMax
+          | ReachableOpeningProfile::UserTransferProgressTwo
+          | ReachableOpeningProfile::UserTransferBurnTwo
+      ) {
+        assert!(
+          balance >= funding_amount && !balance.is_zero(),
+          "real Transfer Task requires pre-measurement sovereign custody"
+        );
+      } else {
+        assert!(balance.is_zero());
+      }
+    }
+    if let ActorTask::Burn { asset, .. } | ActorTask::SplitTransfer { asset, .. } =
+      state.contract.steps[0].task
+    {
+      assert_ne!(asset, T::FeeNativeAssetId::get());
+      assert!(
+        T::AssetOps::balance(&state.identity.sovereign_account, asset) >= funding_amount,
+        "real Burn or SplitTransfer requires pre-measurement non-native custody"
+      );
     }
     assert_eq!(state.hot.cycle_state, CycleState::Idle);
     assert!(state.hot.pending_signal && state.run_state.is_none());
@@ -6822,8 +8589,6 @@ mod benches {
     frame_system::Pallet::<T>::set_block_number(
       frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()),
     );
-    let surfaces = Pallet::<T>::opening_surfaces(&state.contract.steps, 0);
-    assert!(surfaces.len() as u32 <= T::MaxOpeningSnapshotEntries::get());
     assert_eq!(state.contract.steps.len() as u32, count);
     assert_eq!(
       count.saturating_sub(1).div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
@@ -6863,6 +8628,48 @@ mod benches {
     count: u32,
     profile: ReachableOpeningProfile,
   ) {
+    let state = Pallet::<T>::active_actor_state(actor_id)
+      .expect("Opening profiles retain active Actor authority, not destruction");
+    assert_eq!(state.contract.trigger, Trigger::Manual);
+    assert_eq!(state.contract.completion, CompletionPolicy::Persistent);
+    assert!(state.contract.window.is_none());
+    assert!(state.contract.auto_close_at_cycle_nonce.is_none());
+    assert!(state.contract.parked_balance_activation.is_none());
+    assert_eq!(state.contract.steps.len() as u32, count);
+    let expected_type = if matches!(
+      profile,
+      ReachableOpeningProfile::UserPaged
+        | ReachableOpeningProfile::UserCompleteMin
+        | ReachableOpeningProfile::UserCompleteHeaderMax
+    ) {
+      ActorType::User
+    } else {
+      ActorType::System
+    };
+    assert_eq!(state.identity.actor_class.actor_type(), expected_type);
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("profile retains its generation");
+    let process = ActorProcesses::<T>::get(actor_id).expect("profile retains process authority");
+    assert_eq!(process.generation, actor.generation);
+    assert_eq!(process.status, ProcessStatus::Serving);
+    let now = frame_system::Pallet::<T>::block_number();
+    if matches!(
+      profile,
+      ReachableOpeningProfile::RetryMin | ReachableOpeningProfile::RetryMax
+    ) {
+      let handle = DeadlineHandles::<T>::get(actor_id).expect("retry owns a Block deadline");
+      assert_eq!(handle.actor, actor);
+      assert_eq!(
+        process.residence,
+        Some(ProcessResidence::Deadline {
+          key: handle.key,
+          page: handle.page,
+          slot: handle.slot,
+        })
+      );
+      assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    } else {
+      assert_retained_service_turn::<T>(actor_id, now);
+    }
     if matches!(
       profile,
       ReachableOpeningProfile::RetryMin
@@ -6877,8 +8684,6 @@ mod benches {
       assert_reachable_terminal_opening::<T>(actor_id, count, profile);
       return;
     }
-    let state =
-      Pallet::<T>::active_actor_state(actor_id).expect("Opening publishes real Running state");
     assert_eq!(state.hot.cycle_state, CycleState::Running);
     let run = state.run_state.as_ref().expect("real Opening Run exists");
     assert_eq!(run.cursor, 1);
@@ -6886,7 +8691,6 @@ mod benches {
       run.last_committed_step_block,
       Some(frame_system::Pallet::<T>::block_number())
     );
-    let opening = Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len() as u32;
     let skip = match profile {
       ReachableOpeningProfile::Predicated => StepSkippedReason::PreconditionFalse,
       ReachableOpeningProfile::Minimal
@@ -6895,13 +8699,6 @@ mod benches {
       | ReachableOpeningProfile::FailedMax => StepSkippedReason::ResolutionSkipped,
       _ => unreachable!("terminal Opening profiles are checked separately"),
     };
-    assert_eq!(run.opening_snapshot.len() as u32, opening);
-    let surfaces = Pallet::<T>::opening_surfaces(&state.contract.steps, 0);
-    assert!(
-      surfaces
-        .iter()
-        .all(|surface| run.opening_snapshot.contains_key(surface))
-    );
     assert_eq!(run.last_step_outcome, Some(StepOutcome::Skipped(skip)));
     assert_eq!(ServiceHeader::<T>::get().count, 1);
     assert!(ServiceNodes::<T>::contains_key(actor_id));
@@ -6978,10 +8775,6 @@ mod benches {
       let handle = DeadlineHandles::<T>::get(actor_id)
         .expect("retry suspends into a canonical deadline residence");
       assert_eq!(handle.key, WakeupKey::Block(due));
-      assert_eq!(
-        run.opening_snapshot.len(),
-        Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-      );
       let ActorTask::Transfer { asset, ref to, .. } = state.contract.steps[0].task else {
         unreachable!()
       };
@@ -7176,10 +8969,6 @@ mod benches {
     assert_eq!(run.cursor, 0);
     assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
     assert_eq!(run.last_committed_step_block, None);
-    assert_eq!(
-      run.opening_snapshot.len(),
-      Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
     if let Some(fixture) = &skip {
       assert_eq!(run.suspension, Some(SuspensionReason::Temporary));
       T::BenchmarkHelper::set_asset_account_frozen(
@@ -7224,7 +9013,6 @@ mod benches {
       after.last_step_outcome,
       Some(StepOutcome::FundingUnavailable)
     );
-    assert_eq!(after.opening_snapshot, before.opening_snapshot);
     assert!(!ServiceNodes::<T>::contains_key(actor_id));
     let handle = DeadlineHandles::<T>::get(actor_id)
       .expect("head retry suspends into a canonical deadline residence");
@@ -7383,15 +9171,11 @@ mod benches {
     let handle = DeadlineHandles::<T>::get(actor_id)
       .expect("skip source suspends into a canonical deadline residence");
     assert_eq!(handle.key, WakeupKey::Block(run.eligible_at));
-    assert_eq!(
-      run.opening_snapshot.len(),
-      Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
     for (asset, balance) in balances {
       assert_eq!(T::AssetOps::balance(&sovereign, asset), balance);
     }
     let context =
-      Pallet::<T>::step_control_weight_context(count, cursor, p, 0).expect("tail context exists");
+      Pallet::<T>::step_control_weight_context(count, cursor, p).expect("tail context exists");
     assert_eq!(context.steps_in_fragment, s);
     assert_eq!(context.predicate_evaluation_units, p);
     let retained = run.encode();
@@ -7548,6 +9332,7 @@ mod benches {
     let now = frame_system::Pallet::<T>::block_number();
     let state = Pallet::<T>::active_actor_state(fixture.actor_id)
       .expect("successful retry retains active authority");
+    assert_retained_service_turn::<T>(fixture.actor_id, now);
     assert_eq!(
       T::AssetOps::balance(&fixture.recipient, fixture.asset),
       fixture.amount
@@ -7751,7 +9536,7 @@ mod benches {
       p
     );
     let context =
-      Pallet::<T>::step_control_weight_context(count, cursor, p, 0).expect("tail context exists");
+      Pallet::<T>::step_control_weight_context(count, cursor, p).expect("tail context exists");
     assert_eq!(context.steps_in_fragment, s);
     assert_eq!(context.predicate_evaluation_units, p);
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
@@ -7796,10 +9581,6 @@ mod benches {
     let handle = DeadlineHandles::<T>::get(actor_id)
       .expect("retry suspends into a canonical deadline residence");
     assert_eq!(handle.key, WakeupKey::Block(due));
-    assert_eq!(
-      run.opening_snapshot.len(),
-      Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
     let ActorTask::Transfer { asset, ref to, .. } = state.contract.steps[cursor as usize].task
     else {
       unreachable!()
@@ -7865,7 +9646,6 @@ mod benches {
       protected.push(cursor);
     }
     retain_admitted_contract_geometry::<T>(actor_type, &mut steps, &protected)?;
-    let surfaces = Pallet::<T>::opening_surfaces(&steps, 0);
     assert!(steps.iter().all(|step| matches!(
       &step.task,
       ActorTask::AddLiquidity {
@@ -7882,7 +9662,6 @@ mod benches {
           ..
         }
     )));
-    assert!(surfaces.len() as u32 <= T::MaxOpeningSnapshotEntries::get());
     let schedule = Schedule {
       trigger: Trigger::manual(),
       cooldown_blocks,
@@ -7935,12 +9714,6 @@ mod benches {
     assert_eq!(run.cursor, 1);
     assert_eq!(run.last_committed_step_block, Some(admitted));
     assert_eq!(run.cycle_nonce, state.identity.cycle_nonce + 1);
-    assert_eq!(run.opening_snapshot.len(), surfaces.len());
-    assert!(
-      surfaces
-        .iter()
-        .all(|surface| run.opening_snapshot.contains_key(surface))
-    );
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("reachable probe fixture passes full state audit");
     Ok(actor_id)
@@ -7950,11 +9723,7 @@ mod benches {
   fn scheduler_actor_state_probe() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     let actor_id = prepare_reachable_running::<T>(T::MaxContractSteps::get())?;
     let state = Pallet::<T>::active_actor_state(actor_id).expect("real probe state exists");
-    let run = state.run_state.as_ref().expect("real probe Run exists");
-    assert_eq!(
-      run.opening_snapshot.len(),
-      Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
+    assert!(state.run_state.is_some());
     #[block]
     {
       core::hint::black_box(
@@ -7968,118 +9737,6 @@ mod benches {
     ));
     Ok(())
   }
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_append_new_page() {
-    let page_size = 32u32;
-    let wakeup_block = 100u32.into();
-    for i in 0..page_size {
-      let actor_id = bench_create_system_manual::<T>(43_000_000u32.saturating_add(i));
-      benchmark_fixture_schedule_service_waiting::<T>(actor_id, wakeup_block);
-    }
-    let actor_id = bench_create_system_manual::<T>(44_000_000);
-    let append = benchmark_fixture_prepare_service_waiting::<T>(actor_id, wakeup_block);
-    #[block]
-    {
-      append();
-    }
-    let pointer = benchmark_fixture_scalar_hot::<T>(actor_id)
-      .and_then(|hot| hot.wakeup_pointer)
-      .expect("benchmark wakeup pointer must exist");
-    assert_eq!((pointer.page_id, pointer.slot), (1, 0));
-    let key = WakeupKey::Block(wakeup_block);
-    let previous =
-      ActorWaitingFrameChunks::<T>::get((key, 0)).expect("full preceding Waiting page remains");
-    let page = ActorWaitingFrameChunks::<T>::get((key, 1)).expect("new linked Waiting page exists");
-    assert_eq!(
-      (previous.previous_page, previous.next_page),
-      (None, Some(1))
-    );
-    assert_eq!(previous.live_entries, page_size);
-    assert_eq!((page.previous_page, page.next_page), (Some(0), None));
-    assert_eq!(page.live_entries, 1);
-    assert_eq!(page.entries.len(), page_size as usize);
-    assert_eq!(
-      page.entries[0]
-        .as_ref()
-        .and_then(ActorWaitingEntry::primary)
-        .map(|cell| cell.actor_id),
-      Some(actor_id)
-    );
-    assert!(page.entries[1..].iter().all(Option::is_none));
-    assert_eq!(ActorWaitingOccupancies::<T>::get(key), page_size + 1);
-    assert!(Pallet::<T>::wakeup_page_entry_matches(pointer, actor_id));
-    #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state()
-      .expect("new Waiting page reconciles primary and directory ownership");
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_cursor_insert() {
-    clear_host_genesis_wakeup_placements::<T>();
-    let inserted_block: BlockNumberFor<T> = 1u32.into();
-    let actor_id = bench_create_system_manual::<T>(50_100_000);
-    benchmark_fixture_schedule_service_waiting::<T>(actor_id, inserted_block);
-    // Preserve the live Waiting owner at the boundary before its cursor is installed.
-    ActorWaitingCursorIndices::<T>::remove(WakeupKey::Block(inserted_block));
-    let page_size = T::WakeupPageSize::get();
-    let max_active = T::MaxActiveActors::get();
-    assert!(
-      page_size > 0 && max_active > 1,
-      "benchmark requires bounded cursor depth"
-    );
-    let insert_index = max_active.saturating_sub(1);
-    let tail_page = u64::from(insert_index / page_size);
-    let tail_len = insert_index % page_size;
-    let mut page_ids = alloc::vec::Vec::new();
-    let mut current = insert_index;
-    loop {
-      add_wakeup_cursor_page(&mut page_ids, current, page_size);
-      if current == 0 {
-        break;
-      }
-      current = current.saturating_sub(1) / 2;
-    }
-    for page_id in page_ids {
-      let len = if page_id == tail_page {
-        tail_len
-      } else {
-        page_size
-      };
-      if len > 0 {
-        install_wakeup_cursor_page::<T>(page_id, len);
-      }
-    }
-    WakeupCursorLen::<T>::insert(WakeupClock::Block, insert_index);
-    #[block]
-    {
-      assert!(Pallet::<T>::wakeup_cursor_insert(inserted_block));
-    }
-    assert_eq!(WakeupCursorLen::<T>::get(WakeupClock::Block), max_active);
-    assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(inserted_block));
-    assert_wakeup_cursor_page_indices::<T>();
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_cursor_remove_exact() {
-    clear_host_genesis_wakeup_placements::<T>();
-    let cursor_len = T::MaxActiveActors::get();
-    let removed_block = prepare_wakeup_cursor_repair::<T>(1);
-    #[block]
-    {
-      assert!(Pallet::<T>::wakeup_cursor_remove(removed_block));
-    }
-    assert_eq!(
-      WakeupCursorLen::<T>::get(WakeupClock::Block),
-      cursor_len.saturating_sub(1)
-    );
-    assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(1_000_000u32.into()));
-    assert_eq!(
-      ActorWaitingCursorIndices::<T>::get(WakeupKey::Block(removed_block)),
-      None
-    );
-    assert_wakeup_cursor_page_indices::<T>();
-  }
-
   #[benchmark(extra, pov_mode = Measured)]
   fn scheduler_wakeup_cursor_remove_upward_depth()
   -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
@@ -8122,152 +9779,1835 @@ mod benches {
     Ok(())
   }
 
-  /// Measures one due User AtTime occurrence independently from timestamp inherent work:
-  /// one-shot consumption, exact Trigger collection, and canonical readiness placement.
+  /// Complete selected AtTime occurrence over the maximum legal Contract header and populated
+  /// source-vacancy geometry. Classification is a separate generated owner.
   #[benchmark(pov_mode = Measured)]
-  fn at_time_trigger_occurrence() {
-    clear_host_genesis_wakeup_placements::<T>();
-    let owner: T::AccountId = whitelisted_caller();
-    let recipient: T::AccountId = account("at-time-occurrence-recipient", 0, 0);
-    let contract_steps = make_contract_steps::<T>(recipient);
-    ensure_creation_balance::<T>(&owner);
-    prefund_active_user_creation::<T>(&owner, &contract_steps);
-    Pallet::<T>::create_user_actor(
-      RawOrigin::Signed(owner).into(),
-      Mutability::Mutable,
-      user_contract::<T>(
-        Schedule {
-          trigger: Trigger::at_time(1),
-          cooldown_blocks: 0,
-        },
-        contract_steps,
-      ),
-    )
-    .expect("AtTime benchmark Actor exists");
-    let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    seed_actor_for_cycle::<T>(actor_id);
-    ActorSemanticStates::<T>::mutate(actor_id, |stored| {
-      let Some(ActorSemanticState::Active(record)) = stored else {
-        panic!("AtTime semantic authority exists");
-      };
-      record.hot.trigger_runtime_state = TriggerRuntimeState::AtTime {
-        anchor_tick: Some(0),
-        consumed: false,
-      };
-    });
-    let (state, admission, loaded_step) = Pallet::<T>::load_frame_actor_service_state(actor_id)
-      .expect("due AtTime semantic authority is loaded");
+  fn at_time_trigger_occurrence() -> Result<(), BenchmarkError> {
+    let fixture = prepare_temporal_deadline_occurrence::<T>(
+      Trigger::at_time(100),
+      TemporalDeadlineGeometry::PopulatedSource,
+      true,
+    )?;
+    let head = ActorContractHeads::<T>::get(fixture.actor.actor_id).encode();
     #[block]
     {
       assert_eq!(
-        Pallet::<T>::process_due_temporal_occurrence_loaded(
-          actor_id,
-          state,
-          admission,
-          loaded_step,
-          1,
-        ),
-        Ok(false)
+        Pallet::<T>::process_due_temporal_deadline(fixture.actor, fixture.due),
+        Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(
+          fixture.actor
+        ))
       );
     }
-    assert!(
-      benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
-        hot.pending_signal
-          && hot.trigger_wakeup_pointer.is_none()
-          && matches!(
-            hot.trigger_runtime_state,
-            TriggerRuntimeState::AtTime { consumed: true, .. }
-          )
+    assert_eq!(
+      ActorContractHeads::<T>::get(fixture.actor.actor_id).encode(),
+      head
+    );
+    assert!(!ParkedBalanceEpisodes::<T>::contains_key(
+      fixture.actor.actor_id
+    ));
+    assert_temporal_deadline_occurrence::<T>(&fixture);
+    Ok(())
+  }
+
+  /// Complete selected Cadenced occurrence over the maximum legal Contract header, populated
+  /// source removal and populated destination vacancy fill/removal. Classification is separate.
+  #[benchmark(pov_mode = Measured)]
+  fn cadenced_trigger_occurrence() -> Result<(), BenchmarkError> {
+    let fixture = prepare_temporal_deadline_occurrence::<T>(
+      Trigger::cadenced(100),
+      TemporalDeadlineGeometry::PopulatedSourceAndDestination,
+      true,
+    )?;
+    let head = ActorContractHeads::<T>::get(fixture.actor.actor_id).encode();
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::process_due_temporal_deadline(fixture.actor, fixture.due),
+        Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(
+          fixture.actor
+        ))
+      );
+    }
+    assert_eq!(
+      ActorContractHeads::<T>::get(fixture.actor.actor_id).encode(),
+      head
+    );
+    assert!(!ParkedBalanceEpisodes::<T>::contains_key(
+      fixture.actor.actor_id
+    ));
+    assert_temporal_deadline_occurrence::<T>(&fixture);
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn cadenced_underfunded_rearm_populated() -> Result<(), BenchmarkError> {
+    let mut fixture = prepare_temporal_deadline_occurrence::<T>(
+      Trigger::cadenced(100),
+      TemporalDeadlineGeometry::PopulatedSourceAndDestination,
+      true,
+    )?;
+    let actor_id = fixture.actor.actor_id;
+    let native = T::FeeNativeAssetId::get();
+    let retained = T::MinUserBalance::get();
+    let current = T::AssetOps::balance(&fixture.identity.sovereign_account, native);
+    if current <= retained || fixture.trigger_fee.is_zero() {
+      return Err(BenchmarkError::Stop(
+        "host cannot represent underfunded cadence custody",
+      ));
+    }
+    T::AssetOps::burn(
+      &fixture.identity.sovereign_account,
+      native,
+      current - retained,
+    )
+    .map_err(|_| BenchmarkError::Stop("host cannot deplete cadence custody"))?;
+    fixture.balance = retained;
+    let preserved = (
+      Pallet::<T>::actor_identity(actor_id),
+      ActorProcesses::<T>::get(actor_id),
+      ServiceNodes::<T>::get(actor_id),
+      ServiceHeader::<T>::get(),
+      ActorStateHolds::<T>::get(actor_id),
+      ActorContractHeads::<T>::get(actor_id),
+      ActorRunStateStore::<T>::get(actor_id),
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+    )
+      .encode();
+    frame_system::Pallet::<T>::reset_events();
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::process_due_temporal_deadline(fixture.actor, fixture.due),
+        Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(
+          fixture.actor
+        ))
+      );
+    }
+    let next_due = fixture.next_due.expect("Cadenced target has a destination");
+    let handle = TriggerDeadlineHandles::<T>::get(actor_id)
+      .expect("underfunded cadence retains its future detector");
+    assert_eq!(
+      (handle.actor, handle.key),
+      (fixture.actor, WakeupKey::Tick(next_due))
+    );
+    let hot = Pallet::<T>::actor_hot(actor_id).unwrap();
+    assert!(!hot.pending_signal);
+    assert_eq!(
+      hot.trigger_wakeup_pointer,
+      Some(TriggerWakeupPointer {
+        tick: next_due,
+        page_id: handle.page,
+        slot: u32::from(handle.slot),
       })
     );
     assert_eq!(
-      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
-      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      T::AssetOps::balance(&fixture.identity.sovereign_account, native),
+      retained
     );
-    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
-    assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
+    assert_eq!(
+      (
+        Pallet::<T>::actor_identity(actor_id),
+        ActorProcesses::<T>::get(actor_id),
+        ServiceNodes::<T>::get(actor_id),
+        ServiceHeader::<T>::get(),
+        ActorStateHolds::<T>::get(actor_id),
+        ActorContractHeads::<T>::get(actor_id),
+        ActorRunStateStore::<T>::get(actor_id),
+        T::AssetOps::balance(&T::FeeSink::get(), native),
+      )
+        .encode(),
+      preserved,
+    );
+    assert!(frame_system::Pallet::<T>::events().is_empty());
+    assert!(!DeadlinePages::<T>::contains_key(
+      fixture.source.key,
+      fixture.source.page
+    ));
+    assert_eq!(
+      DeadlineHeaders::<T>::get(fixture.source.key).unwrap().count,
+      fixture.neighbors.source.len() as u32
+    );
+    for peer in &fixture.neighbors.source {
+      assert_eq!(
+        TriggerDeadlineHandles::<T>::get(peer.actor.actor_id),
+        Some(*peer)
+      );
+    }
+    let destination = DeadlineHeaders::<T>::get(WakeupKey::Tick(next_due)).unwrap();
+    assert_eq!(
+      destination.count,
+      fixture.neighbors.destination.len() as u32 + 1
+    );
+    let destination_page = DeadlinePages::<T>::get(handle.key, handle.page).unwrap();
+    assert_eq!(
+      destination_page.entries[usize::from(handle.slot)],
+      Some(fixture.actor)
+    );
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Tick), fixture.keys);
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("underfunded cadence retains canonical detector authority");
+    Ok(())
   }
 
-  /// Measures one due User Cadenced occurrence independently from timestamp inherent work:
-  /// trigger-deadline advancement, exact Trigger collection, and canonical readiness placement.
-  #[benchmark(pov_mode = Measured)]
-  fn cadenced_trigger_occurrence() {
-    clear_host_genesis_wakeup_placements::<T>();
-    let owner: T::AccountId = whitelisted_caller();
-    let recipient: T::AccountId = account("cadenced-occurrence-recipient", 0, 0);
-    let contract_steps = make_contract_steps::<T>(recipient);
-    ensure_creation_balance::<T>(&owner);
-    prefund_active_user_creation::<T>(&owner, &contract_steps);
+  #[benchmark(extra, pov_mode = Measured)]
+  fn cadenced_terminal_cleanup_populated() -> Result<(), BenchmarkError> {
+    let fixture = prepare_temporal_deadline_occurrence::<T>(
+      Trigger::cadenced(100),
+      TemporalDeadlineGeometry::PopulatedSourceAndDestination,
+      true,
+    )?;
+    let actor_id = fixture.actor.actor_id;
+    Pallet::<T>::try_mutate_control_identity(actor_id, Error::<T>::ActorNotFound, |identity| {
+      identity.cycle_nonce = u64::MAX;
+      Ok(())
+    })
+    .expect("terminal temporal fixture mutates canonical identity coherently");
+    let native = T::FeeNativeAssetId::get();
+    let custody = T::AssetOps::balance(&fixture.identity.sovereign_account, native);
+    let collector = T::AssetOps::balance(&T::FeeSink::get(), native);
+    frame_system::Pallet::<T>::reset_events();
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::process_due_temporal_deadline(fixture.actor, fixture.due),
+        Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(
+          fixture.actor
+        ))
+      );
+    }
+    assert!(!Pallet::<T>::active_actor_exists(actor_id));
+    assert!(!ActorIdentities::<T>::contains_key(actor_id));
+    assert!(!ActorSemanticStates::<T>::contains_key(actor_id));
+    assert!(!ActorProcesses::<T>::contains_key(actor_id));
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorRunStateStore::<T>::contains_key(actor_id));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert!(!ActorContractHeads::<T>::contains_key(actor_id));
+    assert!(!ParkedBalanceEpisodes::<T>::contains_key(actor_id));
+    assert!(!PendingCheckOwners::<T>::contains_key(actor_id));
+    assert_eq!(
+      T::AssetOps::balance(&fixture.identity.sovereign_account, native),
+      custody
+    );
+    assert_eq!(T::AssetOps::balance(&T::FeeSink::get(), native), collector);
+    for (key, peers) in [
+      (fixture.source.key, &fixture.neighbors.source),
+      (
+        WakeupKey::Tick(fixture.next_due.unwrap()),
+        &fixture.neighbors.destination,
+      ),
+    ] {
+      assert_eq!(
+        DeadlineHeaders::<T>::get(key).unwrap().count,
+        peers.len() as u32
+      );
+      for peer in peers {
+        assert_eq!(
+          TriggerDeadlineHandles::<T>::get(peer.actor.actor_id),
+          Some(*peer)
+        );
+        assert_eq!(
+          DeadlinePages::<T>::get(key, peer.page).unwrap().entries[usize::from(peer.slot)],
+          Some(peer.actor)
+        );
+      }
+    }
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Tick), fixture.keys);
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("temporal terminal cleanup leaves no canonical orphan");
+    Ok(())
+  }
+
+  struct ParkedTemporalOccurrence<T: Config> {
+    actor: ActorRef,
+    due: SchedulerTick,
+    identity: ActorIdentityOf<T>,
+    fee: T::Balance,
+    balance: T::Balance,
+    contract_head: Vec<u8>,
+  }
+
+  fn prepare_cadenced_parked_balance_occurrence<T: Config>()
+  -> Result<ParkedTemporalOccurrence<T>, BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    T::BenchmarkHelper::advance_to_scheduler_tick(2)?;
+    let (owner, _, _, funding) = large_header_fields::<T>();
+    let mut steps = make_max_contract_steps::<T>(owner.clone());
+    steps[0] = Step {
+      precondition: None,
+      task: ActorTask::StopCycle,
+      on_error: StepErrorPolicy::AbortCycle,
+    };
+    retain_admitted_contract_geometry::<T>(ActorType::User, &mut steps, &[0])?;
+    prefund_active_user_creation::<T>(&owner, &steps);
+    let period = 12;
+    let mut contract = user_contract::<T>(
+      Schedule {
+        trigger: Trigger::cadenced(period),
+        cooldown_blocks: 0,
+      },
+      steps,
+    )
+    .unwrap();
+    contract.funding = funding;
+    contract.parked_balance_activation = Some(maximum_parked_balance_activation::<T>(&owner)?);
     Pallet::<T>::create_user_actor(
       RawOrigin::Signed(owner).into(),
       Mutability::Mutable,
-      user_contract::<T>(
-        Schedule {
-          trigger: Trigger::cadenced(1),
-          cooldown_blocks: 0,
-        },
-        contract_steps,
-      ),
-    )
-    .expect("Cadenced benchmark Actor exists");
-    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+      Some(contract),
+    )?;
+    let actor_id = NextActorId::<T>::get() - 1;
+    assert_max_contract_geometry::<T>(actor_id);
     seed_actor_for_cycle::<T>(actor_id);
-    let due = benchmark_fixture_semantic_hot::<T>(actor_id)
-      .and_then(|hot| hot.trigger_wakeup_pointer)
-      .expect("Cadenced source owns its canonical trigger deadline")
-      .tick;
-    T::BenchmarkHelper::advance_to_scheduler_tick(due)
-      .expect("host reaches the canonical Cadenced due tick");
-    let Some(ActorSemanticState::Active(mut semantic)) = ActorSemanticStates::<T>::get(actor_id)
-    else {
-      panic!("Cadenced semantic authority exists");
+    assert_measured_actor_accounts::<T>(&[actor_id]);
+    let actor = Pallet::<T>::load_actor_ref(actor_id).unwrap();
+    let identity = Pallet::<T>::actor_identity(actor_id).unwrap();
+    let fee = Pallet::<T>::trigger_fee_for_weight(
+      ActorType::User,
+      TriggerFamily::Cadenced,
+      T::WeightInfo::cadenced_trigger_occurrence(),
+    )
+    .trigger_fee;
+    T::AssetOps::mint(
+      &identity.sovereign_account,
+      T::FeeNativeAssetId::get(),
+      fee.saturating_mul(3u32.into()),
+    )
+    .map_err(|_| BenchmarkError::Stop("host cannot fund two cadence occurrences"))?;
+    let WakeupKey::Tick(first_due) = TriggerDeadlineHandles::<T>::get(actor_id).unwrap().key else {
+      panic!("Cadenced source uses Tick clock")
     };
-    let actor = ActorRef {
-      actor_id,
-      generation: semantic.generation,
+    T::BenchmarkHelper::finalize_scheduler_clock()?;
+    T::BenchmarkHelper::advance_to_scheduler_tick(first_due)?;
+    prepare_temporal_deadline_frontier::<T>(actor, first_due);
+    Pallet::<T>::process_due_temporal_deadline(actor, first_due)
+      .expect("first cadence occurrence admits readiness");
+    let eligible = ServiceNodes::<T>::get(actor_id).unwrap().eligible_from;
+    frame_system::Pallet::<T>::set_block_number(eligible);
+    Pallet::<T>::execute_cycle(Weight::MAX);
+    assert!(Pallet::<T>::actor_run_state(actor_id).is_none());
+    let process = ActorProcesses::<T>::get(actor_id).unwrap();
+    let Some(ProcessResidence::Parked(evidence)) = process.residence else {
+      panic!("completed cadence enters Parked Balance residence")
     };
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      let result = Pallet::<T>::remove_trigger_deadline_member(actor).map(|_| {
-        semantic.hot.trigger_wakeup_pointer = None;
-        ActorSemanticStates::<T>::insert(actor_id, ActorSemanticState::Active(semantic));
-      });
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    let episode = ParkedBalanceEpisodes::<T>::get(actor_id)
+      .expect("completed cadence owns a Parked Balance episode");
+    assert_eq!(episode.owner.actor, actor);
+    let review_at = evidence
+      .review_at
+      .expect("Parked Balance owns a Block review");
+    frame_system::Pallet::<T>::set_block_number(review_at);
+    let next_review = review_at.checked_add(&100u32.into()).unwrap();
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    assert!(matches!(
+      Pallet::<T>::process_next_due_block_deadline(
+        &mut meter,
+        ServiceResidenceKind::Pending,
+        review_at,
+        Some(WakeupKey::Block(next_review)),
+      ),
+      Ok(DueBlockDeadlineMutation::ReviewProcessed(
+        processed, DependencyReviewMutation::Rearmed(_),
+      )) if processed == actor
+    ));
+    assert!(matches!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Parked(_))
+    ));
+    assert_eq!(
+      ParkedBalanceEpisodes::<T>::get(actor_id).map(|current| current.encode()),
+      Some(episode.encode())
+    );
+    let source = TriggerDeadlineHandles::<T>::get(actor_id)
+      .expect("Park retains independent cadence authority");
+    let WakeupKey::Tick(due) = source.key else {
+      panic!("cadence remains on Tick clock")
+    };
+    assert_eq!(due, first_due.checked_add(period).unwrap());
+    T::BenchmarkHelper::finalize_scheduler_clock()?;
+    T::BenchmarkHelper::advance_to_scheduler_tick(due)?;
+    prepare_temporal_deadline_frontier::<T>(actor, due);
+    let balance = T::AssetOps::balance(&identity.sovereign_account, T::FeeNativeAssetId::get());
+    Ok(ParkedTemporalOccurrence {
+      actor,
+      due,
+      identity,
+      fee,
+      balance,
+      contract_head: ActorContractHeads::<T>::get(actor_id).encode(),
     })
-    .expect("due Cadenced trigger deadline is consumed");
-    let (state, admission, loaded_step) = Pallet::<T>::load_frame_actor_service_state(actor_id)
-      .expect("due Cadenced semantic authority is loaded");
+  }
+
+  /// Ordinary signed close releases a maximum-watch Parked residence, its Block review, and
+  /// independent Cadenced Tick Trigger; this does not saturate either clock index.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_actor_user_parked_two_clock() -> Result<(), BenchmarkError> {
+    let fixture = prepare_cadenced_parked_balance_occurrence::<T>()?;
+    let actor_id = fixture.actor.actor_id;
+    assert!(matches!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Parked(_))
+    ));
+    assert_eq!(
+      DependencyPlans::<T>::get(actor_id).len(),
+      T::MaxWhitelistSize::get().min(T::MaxContractSteps::get()) as usize
+    );
+    assert!(matches!(
+      TriggerDeadlineHandles::<T>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Tick(_))
+    ));
+    assert!(matches!(
+      DeadlineHandles::<T>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(_))
+    ));
+    assert!(ActorStateHolds::<T>::contains_key(actor_id));
     #[block]
     {
-      let result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-        let result = Pallet::<T>::process_due_temporal_occurrence_loaded(
-          actor_id,
-          state,
-          admission,
-          loaded_step,
-          due,
-        );
-        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
-      });
-      assert_eq!(result, Ok(false));
+      Pallet::<T>::close_actor(
+        RawOrigin::Signed(fixture.identity.owner.clone()).into(),
+        actor_id,
+      )
+      .unwrap();
     }
-    assert!(
-      benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
-        hot.pending_signal
-          && hot.trigger_wakeup_pointer.is_none()
-          && matches!(
-            hot.trigger_runtime_state,
-            TriggerRuntimeState::Cadenced {
-              anchor_tick: Some(_)
-            }
-          )
+    assert!(!ActorProcesses::<T>::contains_key(actor_id));
+    assert!(!DependencyPlans::<T>::contains_key(actor_id));
+    assert!(!PendingCheckOwners::<T>::contains_key(actor_id));
+    assert!(!ParkedBalanceEpisodes::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert_eq!(
+      T::AssetOps::balance(
+        &fixture.identity.sovereign_account,
+        T::FeeNativeAssetId::get()
+      ),
+      fixture.balance
+    );
+    Ok(())
+  }
+
+  /// Signed Parked close repairs a saturated, near-capacity Tick index while independently
+  /// releasing its Block review and maximum-watch dependency plan.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_actor_user_parked_two_clock_deep_index() -> Result<(), BenchmarkError> {
+    let fixture = prepare_cadenced_parked_balance_occurrence::<T>()?;
+    let actor_id = fixture.actor.actor_id;
+    let key = TriggerDeadlineHandles::<T>::get(actor_id)
+      .expect("Parked cadence retains its Tick Trigger")
+      .key;
+    assert_eq!(key, WakeupKey::Tick(fixture.due));
+    assert_eq!(DeadlineIndexPositions::<T>::get(key), Some(0));
+    assert!(matches!(
+      DeadlineHandles::<T>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(_))
+    ));
+    assert_eq!(
+      DependencyPlans::<T>::get(actor_id).len(),
+      T::MaxWhitelistSize::get().min(T::MaxContractSteps::get()) as usize
+    );
+    let room = (Pallet::<T>::effective_active_actor_limit() - ActiveActorCount::<T>::get())
+      .min(T::MaxActorIdentities::get() - ActorIdentityCount::<T>::get())
+      .min(T::MaxSystemSovereigns::get() - SystemSovereignCount::<T>::get());
+    let initial_keys = DeadlineIndexLen::<T>::get(WakeupClock::Tick);
+    let skipped = (initial_keys + room - 1) % 32;
+    let guards = room - skipped;
+    assert!(guards > 64, "deep Tick repair needs multiple index pages");
+    for index in 0..guards {
+      Pallet::<T>::create_system_actor(
+        RawOrigin::Root.into(),
+        account("parked-deep-tick-guard", index, 0),
+        Mutability::Mutable,
+        system_contract::<T>(
+          Schedule {
+            trigger: Trigger::cadenced(1_000 + u64::from(index)),
+            cooldown_blocks: 0,
+          },
+          make_inert_contract_steps::<T>(),
+        ),
+      )?;
+    }
+    let keys = DeadlineIndexLen::<T>::get(WakeupClock::Tick);
+    assert_eq!(keys, initial_keys + guards);
+    assert_eq!(keys % 32, 1);
+    assert_eq!(DeadlineIndexPositions::<T>::get(key), Some(0));
+    assert_eq!(
+      DeadlineIndexPages::<T>::get(WakeupClock::Tick, u64::from(keys / 32))
+        .expect("populated final Tick page")
+        .len(),
+      1
+    );
+    assert!(matches!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Parked(_))
+    ));
+    assert!(ActorStateHolds::<T>::contains_key(actor_id));
+    #[block]
+    {
+      Pallet::<T>::close_actor(
+        RawOrigin::Signed(fixture.identity.owner.clone()).into(),
+        actor_id,
+      )
+      .unwrap();
+    }
+    assert!(!ActorProcesses::<T>::contains_key(actor_id));
+    assert!(!DependencyPlans::<T>::contains_key(actor_id));
+    assert!(!ParkedBalanceEpisodes::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Tick), keys - 1);
+    assert!(!DeadlineIndexPages::<T>::contains_key(
+      WakeupClock::Tick,
+      u64::from(keys / 32)
+    ));
+    assert_eq!(
+      T::AssetOps::balance(
+        &fixture.identity.sovereign_account,
+        T::FeeNativeAssetId::get()
+      ),
+      fixture.balance
+    );
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
+    Ok(())
+  }
+
+  /// The admitted Parked review removes the minimum key of a populated Block index while its
+  /// independent Cadenced Tick Trigger and maximum balance watches remain live.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_actor_user_parked_two_clock_deep_block() -> Result<(), BenchmarkError> {
+    let fixture = prepare_cadenced_parked_balance_occurrence::<T>()?;
+    let actor_id = fixture.actor.actor_id;
+    let review = DeadlineHandles::<T>::get(actor_id).expect("Parked review owns a Deadline");
+    let WakeupKey::Block(review_due) = review.key else {
+      panic!("Parked review uses the Block clock")
+    };
+    let tick = TriggerDeadlineHandles::<T>::get(actor_id)
+      .expect("Cadenced Trigger retains independent Tick authority")
+      .key;
+    assert_eq!(tick, WakeupKey::Tick(fixture.due));
+    let keys = populate_canonical_deadline_index::<T>(review_due);
+    assert!(keys > 32);
+    assert_eq!(DeadlineIndexPositions::<T>::get(review.key), Some(0));
+    assert!(matches!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Parked(_))
+    ));
+    assert_eq!(
+      DependencyPlans::<T>::get(actor_id).len(),
+      T::MaxWhitelistSize::get().min(T::MaxContractSteps::get()) as usize
+    );
+    assert!(ActorStateHolds::<T>::contains_key(actor_id));
+    #[block]
+    {
+      Pallet::<T>::close_actor(
+        RawOrigin::Signed(fixture.identity.owner.clone()).into(),
+        actor_id,
+      )
+      .unwrap();
+    }
+    assert!(!ActorProcesses::<T>::contains_key(actor_id));
+    assert!(!DependencyPlans::<T>::contains_key(actor_id));
+    assert!(!ParkedBalanceEpisodes::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert!(!DeadlineIndexPositions::<T>::contains_key(review.key));
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Block), keys - 1);
+    assert_eq!(
+      T::AssetOps::balance(
+        &fixture.identity.sovereign_account,
+        T::FeeNativeAssetId::get()
+      ),
+      fixture.balance
+    );
+    assert_deadline_clock_indices::<T>(WakeupClock::Block);
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
+    Ok(())
+  }
+
+  /// The same Parked two-clock close, with the near-capacity Block heap ending in one entry.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_actor_user_parked_two_clock_deep_block_tail() -> Result<(), BenchmarkError> {
+    let fixture = prepare_cadenced_parked_balance_occurrence::<T>()?;
+    let actor_id = fixture.actor.actor_id;
+    let review = DeadlineHandles::<T>::get(actor_id).expect("Parked review owns a Deadline");
+    let WakeupKey::Block(review_due) = review.key else {
+      panic!("Parked review uses the Block clock")
+    };
+    let tick = TriggerDeadlineHandles::<T>::get(actor_id)
+      .expect("Cadenced Trigger retains independent Tick authority")
+      .key;
+    assert_eq!(tick, WakeupKey::Tick(fixture.due));
+    let keys = populate_canonical_deadline_index_with_tail::<T>(review_due, true);
+    assert!(keys > 32);
+    assert_eq!(keys % 32, 1);
+    assert_eq!(DeadlineIndexPositions::<T>::get(review.key), Some(0));
+    assert_eq!(
+      DeadlineIndexPages::<T>::get(WakeupClock::Block, u64::from(keys / 32))
+        .expect("one-entry final Block index page")
+        .len(),
+      1
+    );
+    assert!(matches!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Parked(_))
+    ));
+    assert_eq!(
+      DependencyPlans::<T>::get(actor_id).len(),
+      T::MaxWhitelistSize::get().min(T::MaxContractSteps::get()) as usize
+    );
+    assert!(ActorStateHolds::<T>::contains_key(actor_id));
+    #[block]
+    {
+      Pallet::<T>::close_actor(
+        RawOrigin::Signed(fixture.identity.owner.clone()).into(),
+        actor_id,
+      )
+      .unwrap();
+    }
+    assert!(!ActorProcesses::<T>::contains_key(actor_id));
+    assert!(!DependencyPlans::<T>::contains_key(actor_id));
+    assert!(!ParkedBalanceEpisodes::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert!(!DeadlineIndexPositions::<T>::contains_key(review.key));
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Block), keys - 1);
+    assert!(!DeadlineIndexPages::<T>::contains_key(
+      WakeupClock::Block,
+      u64::from(keys / 32)
+    ));
+    assert_eq!(
+      T::AssetOps::balance(
+        &fixture.identity.sovereign_account,
+        T::FeeNativeAssetId::get()
+      ),
+      fixture.balance
+    );
+    assert_deadline_clock_indices::<T>(WakeupClock::Block);
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
+    Ok(())
+  }
+
+  /// Parked close repairs both independent deep clock indices in one shared finalizer.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_actor_user_parked_two_clock_both_deep() -> Result<(), BenchmarkError> {
+    let fixture = prepare_cadenced_parked_balance_occurrence::<T>()?;
+    let actor_id = fixture.actor.actor_id;
+    let review = DeadlineHandles::<T>::get(actor_id).expect("Parked review owns a Deadline");
+    let WakeupKey::Block(review_due) = review.key else {
+      panic!("Parked review uses the Block clock")
+    };
+    let tick = TriggerDeadlineHandles::<T>::get(actor_id)
+      .expect("Parked cadence owns a Tick Trigger")
+      .key;
+    assert_eq!(tick, WakeupKey::Tick(fixture.due));
+    let room = (Pallet::<T>::effective_active_actor_limit() - ActiveActorCount::<T>::get())
+      .min(T::MaxActorIdentities::get() - ActorIdentityCount::<T>::get())
+      .min(T::MaxSystemSovereigns::get() - SystemSovereignCount::<T>::get());
+    let tick_before = DeadlineIndexLen::<T>::get(WakeupClock::Tick);
+    let half = room / 2;
+    let tick_guards = half - (tick_before + half - 1) % 32;
+    assert!(tick_guards > 64 && room - tick_guards > 64);
+    for index in 0..tick_guards {
+      Pallet::<T>::create_system_actor(
+        RawOrigin::Root.into(),
+        account("parked-two-deep-tick-guard", index, 0),
+        Mutability::Mutable,
+        system_contract::<T>(
+          Schedule {
+            trigger: Trigger::cadenced(1_000 + u64::from(index)),
+            cooldown_blocks: 0,
+          },
+          make_inert_contract_steps::<T>(),
+        ),
+      )?;
+    }
+    let tick_keys = DeadlineIndexLen::<T>::get(WakeupClock::Tick);
+    assert_eq!(tick_keys, tick_before + tick_guards);
+    assert_eq!(tick_keys % 32, 1);
+    assert_eq!(DeadlineIndexPositions::<T>::get(tick), Some(0));
+    let block_keys = populate_canonical_deadline_index_with_tail::<T>(review_due, true);
+    assert!(block_keys > 64);
+    assert_eq!(block_keys % 32, 1);
+    assert_eq!(DeadlineIndexPositions::<T>::get(review.key), Some(0));
+    for clock in [WakeupClock::Tick, WakeupClock::Block] {
+      let keys = DeadlineIndexLen::<T>::get(clock);
+      assert_eq!(
+        DeadlineIndexPages::<T>::get(clock, u64::from(keys / 32))
+          .expect("one-entry final clock index page")
+          .len(),
+        1
+      );
+    }
+    assert!(matches!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Parked(_))
+    ));
+    assert_eq!(
+      DependencyPlans::<T>::get(actor_id).len(),
+      T::MaxWhitelistSize::get().min(T::MaxContractSteps::get()) as usize
+    );
+    assert!(ActorStateHolds::<T>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("both deep clock indices have canonical authority");
+    #[block]
+    {
+      Pallet::<T>::close_actor(
+        RawOrigin::Signed(fixture.identity.owner.clone()).into(),
+        actor_id,
+      )
+      .unwrap();
+    }
+    assert!(!ActorProcesses::<T>::contains_key(actor_id));
+    assert!(!DependencyPlans::<T>::contains_key(actor_id));
+    assert!(!ParkedBalanceEpisodes::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert!(!DeadlineIndexPositions::<T>::contains_key(review.key));
+    assert!(!DeadlineIndexPositions::<T>::contains_key(tick));
+    assert_eq!(
+      DeadlineIndexLen::<T>::get(WakeupClock::Block),
+      block_keys - 1
+    );
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Tick), tick_keys - 1);
+    for clock in [WakeupClock::Tick, WakeupClock::Block] {
+      let keys = if clock == WakeupClock::Tick {
+        tick_keys
+      } else {
+        block_keys
+      };
+      assert!(!DeadlineIndexPages::<T>::contains_key(
+        clock,
+        u64::from(keys / 32)
+      ));
+      assert_deadline_clock_indices::<T>(clock);
+    }
+    assert_eq!(
+      T::AssetOps::balance(
+        &fixture.identity.sovereign_account,
+        T::FeeNativeAssetId::get()
+      ),
+      fixture.balance
+    );
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn cadenced_parked_balance_occurrence() -> Result<(), BenchmarkError> {
+    let fixture = prepare_cadenced_parked_balance_occurrence::<T>()?;
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::process_due_temporal_deadline(fixture.actor, fixture.due),
+        Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(
+          fixture.actor
+        ))
+      );
+    }
+    let actor_id = fixture.actor.actor_id;
+    assert_eq!(
+      ActorContractHeads::<T>::get(actor_id).encode(),
+      fixture.contract_head
+    );
+    assert!(ParkedBalanceEpisodes::<T>::get(actor_id).is_none());
+    assert!(PendingCheckOwners::<T>::get(actor_id).is_none());
+    assert!(Pallet::<T>::actor_run_state(actor_id).is_none());
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    let hot = Pallet::<T>::actor_hot(actor_id).unwrap();
+    assert!(hot.pending_signal && hot.trigger_wakeup_pointer.is_none());
+    assert_eq!(
+      T::AssetOps::balance(
+        &fixture.identity.sovereign_account,
+        T::FeeNativeAssetId::get(),
+      ),
+      fixture.balance.saturating_sub(fixture.fee)
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("cadence wake from Park preserves canonical authority");
+    Ok(())
+  }
+
+  #[derive(Clone, Copy, PartialEq, Eq)]
+  enum TemporalDeadlineGeometry {
+    Singleton,
+    PopulatedSource,
+    PopulatedSourceAndDestination,
+  }
+
+  struct TemporalDeadlineNeighbors<T: Config> {
+    source: Vec<DeadlineHandleOf<T>>,
+    destination: Vec<DeadlineHandleOf<T>>,
+    vacant_sovereigns: Vec<SystemSovereignId>,
+  }
+
+  fn prepare_temporal_deadline_neighbors<T: Config>(
+    source: DeadlineHandleOf<T>,
+    next_due: Option<SchedulerTick>,
+    geometry: TemporalDeadlineGeometry,
+  ) -> Result<TemporalDeadlineNeighbors<T>, BenchmarkError> {
+    let mut neighbors = TemporalDeadlineNeighbors {
+      source: Vec::new(),
+      destination: Vec::new(),
+      vacant_sovereigns: Vec::new(),
+    };
+    if geometry == TemporalDeadlineGeometry::Singleton {
+      return Ok(neighbors);
+    }
+    let WakeupKey::Tick(due) = source.key else {
+      panic!("temporal source uses Tick")
+    };
+    let anchor = Pallet::<T>::current_scheduler_tick().unwrap();
+    let create = |seed: u32, tick: SchedulerTick| -> Result<ActorId, BenchmarkError> {
+      Pallet::<T>::create_system_actor(
+        RawOrigin::Root.into(),
+        account("temporal-vacancy-guard", seed, 0),
+        Mutability::Mutable,
+        system_contract::<T>(
+          Schedule {
+            trigger: Trigger::at_time(tick - anchor),
+            cooldown_blocks: 0,
+          },
+          make_inert_contract_steps::<T>(),
+        ),
+      )?;
+      Ok(NextActorId::<T>::get() - 1)
+    };
+    assert_eq!((source.page, source.slot), (0, 0));
+    let source_guards = (0..128)
+      .map(|seed| create(seed, due))
+      .collect::<Result<Vec<_>, _>>()?;
+    let destination_guards = if geometry == TemporalDeadlineGeometry::PopulatedSourceAndDestination
+    {
+      let next = next_due.expect("only Cadenced has a destination");
+      (128..161)
+        .map(|seed| create(seed, next))
+        .collect::<Result<Vec<_>, _>>()?
+    } else {
+      Vec::new()
+    };
+    T::BenchmarkHelper::finalize_scheduler_clock()?;
+    T::BenchmarkHelper::advance_to_scheduler_tick(anchor + 1)?;
+    for guard in source_guards
+      .iter()
+      .take(31)
+      .chain(core::iter::once(&source_guards[95]))
+      .chain(destination_guards.get(31))
+    {
+      let ActorClass::System { sovereign_id } =
+        Pallet::<T>::actor_identity(*guard).unwrap().actor_class
+      else {
+        panic!("temporal guard is System")
+      };
+      Pallet::<T>::close_actor(RawOrigin::Root.into(), *guard)?;
+      neighbors.vacant_sovereigns.push(sovereign_id);
+    }
+    neighbors.source = source_guards
+      .into_iter()
+      .filter_map(TriggerDeadlineHandles::<T>::get)
+      .collect();
+    neighbors.destination = destination_guards
+      .into_iter()
+      .filter_map(TriggerDeadlineHandles::<T>::get)
+      .collect();
+    let header = DeadlineHeaders::<T>::get(source.key).unwrap();
+    let page = DeadlinePages::<T>::get(source.key, source.page).unwrap();
+    assert_eq!(
+      (header.count, header.page_count, header.first_vacant_page),
+      (97, 5, Some(3))
+    );
+    assert_eq!((page.live_entries, page.next_page), (1, Some(1)));
+    assert_eq!(
+      (page.previous_vacant_page, page.next_vacant_page),
+      (Some(3), Some(4))
+    );
+    assert_eq!(neighbors.source.len(), 96);
+    if !neighbors.destination.is_empty() {
+      let key = WakeupKey::Tick(next_due.unwrap());
+      let header = DeadlineHeaders::<T>::get(key).unwrap();
+      let page = DeadlinePages::<T>::get(key, header.first_page).unwrap();
+      assert_eq!(
+        (header.count, header.page_count, header.first_vacant_page),
+        (32, 2, Some(0))
+      );
+      assert_eq!((page.live_entries, page.next_vacant_page), (31, Some(1)));
+      assert_eq!(neighbors.destination.len(), 32);
+    }
+    Ok(neighbors)
+  }
+
+  fn maximum_temporal_control_steps<T: Config>(
+    asset: T::AssetId,
+  ) -> Result<ContractSteps<T>, BenchmarkError> {
+    let (_, precondition) =
+      prepare_max_encoded_step_precondition::<T>(0, benchmark_predicate_capacity::<T>(), false)?;
+    let legs = T::MaxSplitTransferLegs::get();
+    assert!(legs >= 2 && legs <= Perbill::ACCURACY);
+    let step = Step {
+      precondition: Some(precondition),
+      task: ActorTask::SplitTransfer {
+        asset,
+        amount: AmountResolution::Fixed(1u32.into()),
+        legs: (0..legs)
+          .map(|index| SplitLeg {
+            to: account("temporal-control-recipient", index, 0),
+            share: Perbill::from_parts(Perbill::ACCURACY / legs),
+          })
+          .collect::<Vec<_>>()
+          .try_into()
+          .unwrap(),
+      },
+      on_error: StepErrorPolicy::RetryLater { max_attempts: 2 },
+    };
+    assert_eq!(step.task.encoded_size(), TaskOf::<T>::max_encoded_len());
+    let mut steps: ContractSteps<T> = vec![step; T::MaxContractSteps::get() as usize]
+      .try_into()
+      .unwrap();
+    retain_admitted_contract_geometry::<T>(ActorType::User, &mut steps, &[0])?;
+    Ok(steps)
+  }
+
+  struct TemporalDeadlineOccurrence<T: Config> {
+    actor: ActorRef,
+    due: SchedulerTick,
+    keys: u32,
+    identity: ActorIdentityOf<T>,
+    balance: T::Balance,
+    trigger_fee: T::Balance,
+    source: DeadlineHandleOf<T>,
+    next_due: Option<SchedulerTick>,
+    neighbors: TemporalDeadlineNeighbors<T>,
+  }
+
+  fn prepare_temporal_deadline_frontier<T: Config>(actor: ActorRef, now_tick: SchedulerTick) {
+    let now = frame_system::Pallet::<T>::block_number();
+    // Preserve host authority and production selection order; never measure a non-head source.
+    for _ in 0..ActiveActorCount::<T>::get() {
+      let branch = Pallet::<T>::classify_next_due_tick_deadline(now_tick)
+        .expect("target remains due while earlier temporal sources settle");
+      if matches!(
+        branch,
+        DueBlockDeadlineBranch::TemporalTrigger(candidate)
+          | DueBlockDeadlineBranch::TemporalTriggerBusy(candidate)
+          if candidate == actor
+      ) {
+        break;
+      }
+      let earlier = match branch {
+        DueBlockDeadlineBranch::TemporalTrigger(earlier)
+        | DueBlockDeadlineBranch::TemporalTriggerBusy(earlier) => earlier,
+        _ => panic!("fixture prefix must be temporal"),
+      };
+      let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+      assert_eq!(
+        Pallet::<T>::process_next_due_tick_deadline(
+          &mut meter,
+          ServiceResidenceKind::Pending,
+          now,
+          now_tick,
+          None,
+        ),
+        Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(earlier))
+      );
+    }
+    assert!(matches!(
+      Pallet::<T>::classify_next_due_tick_deadline(now_tick),
+      Ok(DueBlockDeadlineBranch::TemporalTrigger(candidate))
+        | Ok(DueBlockDeadlineBranch::TemporalTriggerBusy(candidate))
+        if candidate == actor
+    ));
+  }
+
+  fn maximum_parked_balance_activation<T: Config>(
+    owner: &T::AccountId,
+  ) -> Result<ParkedBalanceActivationOf<T>, BenchmarkError> {
+    let maximum = T::MaxWhitelistSize::get().min(T::MaxContractSteps::get());
+    let assets =
+      T::BenchmarkHelper::setup_max_encoded_predicate_assets(owner, maximum.saturating_add(1))?;
+    let rules: Vec<_> = assets
+      .into_iter()
+      .filter(|asset| {
+        *asset != T::FeeNativeAssetId::get()
+          && asset.encoded_size() == T::AssetId::max_encoded_len()
       })
+      .take(maximum as usize)
+      .map(|asset| ParkedBalanceRule {
+        asset,
+        authored_min_delta: T::AssetOps::minimum_balance(asset).max(One::one()),
+      })
+      .collect();
+    if maximum == 0 || rules.len() != maximum as usize {
+      return Err(BenchmarkError::Stop(
+        "host cannot fill maximum encoded balance watches",
+      ));
+    }
+    ParkedBalanceActivationOf::<T>::try_from_rules(rules)
+      .map_err(|_| BenchmarkError::Stop("maximum balance header is not canonical"))
+  }
+
+  fn prepare_temporal_deadline_occurrence<T: Config>(
+    trigger: TriggerOf<T>,
+    geometry: TemporalDeadlineGeometry,
+    balance_header: bool,
+  ) -> Result<TemporalDeadlineOccurrence<T>, BenchmarkError> {
+    let (family, weight) = match &trigger {
+      Trigger::AtTime { .. } => (
+        TriggerFamily::AtTime,
+        T::WeightInfo::at_time_trigger_occurrence(),
+      ),
+      Trigger::Cadenced { .. } => (
+        TriggerFamily::Cadenced,
+        T::WeightInfo::cadenced_trigger_occurrence(),
+      ),
+      _ => {
+        return Err(BenchmarkError::Stop(
+          "temporal fixture requires a temporal Trigger",
+        ));
+      }
+    };
+    let cadence_period = match &trigger {
+      Trigger::Cadenced { every_ticks } => Some(*every_ticks),
+      _ => None,
+    };
+    // Automatic work has no signer account whose state-hold I/O may be whitelisted away.
+    let (owner, asset, _, funding) = large_header_fields::<T>();
+    let steps = maximum_temporal_control_steps::<T>(asset)?;
+    T::BenchmarkHelper::advance_to_scheduler_tick(2)?;
+    prefund_active_user_creation::<T>(&owner, &steps);
+    let mut contract = user_contract::<T>(
+      Schedule {
+        trigger,
+        cooldown_blocks: 0,
+      },
+      steps,
+    )
+    .unwrap();
+    contract.funding = funding;
+    if balance_header {
+      contract.parked_balance_activation = Some(maximum_parked_balance_activation::<T>(&owner)?);
+      // Admission forbids a Parked Balance plan together with nonce-terminal completion.
+      contract.auto_close_at_cycle_nonce = None;
+    } else {
+      contract.auto_close_at_cycle_nonce = Some(1);
+    }
+    Pallet::<T>::create_user_actor(
+      RawOrigin::Signed(owner).into(),
+      Mutability::Mutable,
+      Some(contract),
+    )?;
+    let actor_id = NextActorId::<T>::get() - 1;
+    assert_max_contract_geometry::<T>(actor_id);
+    seed_actor_for_cycle::<T>(actor_id);
+    assert_measured_actor_accounts::<T>(&[actor_id]);
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("temporal generation exists");
+    let source = TriggerDeadlineHandles::<T>::get(actor_id).expect("temporal source exists");
+    let WakeupKey::Tick(due) = source.key else {
+      panic!("temporal source uses the Tick clock")
+    };
+    let next_due = cadence_period.map(|period| due.checked_add(period).unwrap());
+    let neighbors = prepare_temporal_deadline_neighbors::<T>(source, next_due, geometry)?;
+    T::BenchmarkHelper::finalize_scheduler_clock()?;
+    T::BenchmarkHelper::advance_to_scheduler_tick(due)?;
+    let now_tick = Pallet::<T>::current_scheduler_tick().expect("due host clock exists");
+    assert_eq!(now_tick, due);
+    prepare_temporal_deadline_frontier::<T>(actor, now_tick);
+    assert_eq!(TriggerDeadlineHandles::<T>::get(actor_id), Some(source));
+    assert_eq!(
+      DeadlineHeaders::<T>::get(source.key).unwrap().count,
+      1 + neighbors.source.len() as u32
+    );
+    if let Some(next) = next_due {
+      assert_eq!(
+        DeadlineHeaders::<T>::get(WakeupKey::Tick(next)).map(|header| header.count),
+        (!neighbors.destination.is_empty()).then_some(neighbors.destination.len() as u32),
+      );
+    }
+    let first_guard_due = DeadlineIndexPages::<T>::iter_prefix(WakeupClock::Tick)
+      .flat_map(|(_, page)| page.into_iter())
+      .map(|key| match key {
+        WakeupKey::Tick(tick) => tick,
+        WakeupKey::Block(_) => panic!("Tick index contains only Tick keys"),
+      })
+      .max()
+      .unwrap()
+      .checked_add(1_000)
+      .expect("future guard ticks fit");
+    let guards = (Pallet::<T>::effective_active_actor_limit() - ActiveActorCount::<T>::get())
+      .min(T::MaxActorIdentities::get() - ActorIdentityCount::<T>::get())
+      .min(
+        T::MaxSystemSovereigns::get() - SystemSovereignCount::<T>::get()
+          + neighbors.vacant_sovereigns.len() as u32,
+      );
+    assert!(guards > 32, "deep Tick index requires multiple heap pages");
+    let keys = DeadlineIndexLen::<T>::get(WakeupClock::Tick) + guards;
+    for seed in 0..guards {
+      let guard_due = first_guard_due.checked_add(u64::from(seed)).unwrap();
+      let owner = account("temporal-deadline-guard", seed, 0);
+      let contract = system_contract::<T>(
+        Schedule {
+          trigger: Trigger::cadenced(guard_due - now_tick),
+          cooldown_blocks: 0,
+        },
+        make_inert_contract_steps::<T>(),
+      );
+      if let Some(sovereign_id) = neighbors.vacant_sovereigns.get(seed as usize) {
+        assert_eq!(
+          SystemSovereigns::<T>::get(sovereign_id),
+          Some(SystemSovereignState::Vacant)
+        );
+        Pallet::<T>::create_system_actor_at_sovereign_id(
+          RawOrigin::Root.into(),
+          *sovereign_id,
+          owner,
+          Mutability::Mutable,
+          contract,
+        )?;
+      } else {
+        Pallet::<T>::create_system_actor(
+          RawOrigin::Root.into(),
+          owner,
+          Mutability::Mutable,
+          contract,
+        )?;
+      }
+      let guard = NextActorId::<T>::get() - 1;
+      assert_eq!(
+        TriggerDeadlineHandles::<T>::get(guard).unwrap().key,
+        WakeupKey::Tick(guard_due)
+      );
+    }
+    assert_waiting_population_capacity::<T>();
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Tick), keys);
+    assert_eq!(DeadlineIndexPositions::<T>::get(source.key), Some(0));
+    let tail = DeadlineIndexPages::<T>::get(WakeupClock::Tick, u64::from((keys - 1) / 32)).unwrap()
+      [(keys as usize - 1) % 32];
+    assert_eq!(
+      tail,
+      WakeupKey::Tick(first_guard_due + u64::from(guards - 1))
+    );
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("full temporal index has reachable canonical authority");
+    let identity = Pallet::<T>::actor_identity(actor_id).unwrap();
+    let native = T::FeeNativeAssetId::get();
+    let balance = T::AssetOps::balance(&identity.sovereign_account, native);
+    let trigger_fee =
+      Pallet::<T>::trigger_fee_for_weight(ActorType::User, family, weight).trigger_fee;
+    Ok(TemporalDeadlineOccurrence {
+      actor,
+      due,
+      keys,
+      identity,
+      balance,
+      trigger_fee,
+      source,
+      next_due,
+      neighbors,
+    })
+  }
+
+  fn assert_temporal_deadline_occurrence<T: Config>(fixture: &TemporalDeadlineOccurrence<T>) {
+    let actor_id = fixture.actor.actor_id;
+    let now = frame_system::Pallet::<T>::block_number();
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    for (key, survivors) in core::iter::once((fixture.source.key, &fixture.neighbors.source)).chain(
+      fixture
+        .next_due
+        .map(|next| (WakeupKey::Tick(next), &fixture.neighbors.destination)),
+    ) {
+      if survivors.is_empty() {
+        assert!(!DeadlineHeaders::<T>::contains_key(key));
+        assert!(!DeadlineIndexPositions::<T>::contains_key(key));
+        assert!(DeadlinePages::<T>::iter_prefix(key).next().is_none());
+      } else {
+        assert_eq!(
+          DeadlineHeaders::<T>::get(key).unwrap().count,
+          survivors.len() as u32
+        );
+        for handle in survivors {
+          assert_eq!(
+            TriggerDeadlineHandles::<T>::get(handle.actor.actor_id),
+            Some(*handle)
+          );
+          assert_eq!(
+            DeadlinePages::<T>::get(key, handle.page).unwrap().entries[usize::from(handle.slot)],
+            Some(handle.actor)
+          );
+        }
+      }
+    }
+    if !fixture.neighbors.source.is_empty() {
+      let key = fixture.source.key;
+      assert!(!DeadlinePages::<T>::contains_key(key, fixture.source.page));
+      let header = DeadlineHeaders::<T>::get(key).unwrap();
+      assert_eq!(
+        (
+          header.first_page,
+          header.page_count,
+          header.first_vacant_page
+        ),
+        (1, 4, Some(3))
+      );
+      assert_eq!(DeadlinePages::<T>::get(key, 1).unwrap().previous_page, None);
+      assert_eq!(
+        DeadlinePages::<T>::get(key, 3).unwrap().next_vacant_page,
+        Some(4)
+      );
+      assert_eq!(
+        DeadlinePages::<T>::get(key, 4)
+          .unwrap()
+          .previous_vacant_page,
+        Some(3)
+      );
+    }
+    if !fixture.neighbors.destination.is_empty() {
+      let key = WakeupKey::Tick(fixture.next_due.unwrap());
+      let header = DeadlineHeaders::<T>::get(key).unwrap();
+      let page = DeadlinePages::<T>::get(key, 0).unwrap();
+      assert_eq!((header.page_count, header.first_vacant_page), (2, Some(0)));
+      assert_eq!(
+        (page.live_entries, page.next_vacant_page, page.entries[31]),
+        (31, Some(1), None)
+      );
+      assert_eq!(
+        DeadlinePages::<T>::get(key, 1)
+          .unwrap()
+          .previous_vacant_page,
+        Some(0)
+      );
+    }
+    assert_eq!(
+      DeadlineIndexLen::<T>::get(WakeupClock::Tick),
+      fixture.keys - u32::from(fixture.neighbors.source.is_empty()),
     );
     assert_eq!(
       ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
       Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
     );
+    assert_eq!(
+      ServiceNodes::<T>::get(actor_id).unwrap().eligible_from,
+      now.saturating_add(1u32.into())
+    );
+    let hot = Pallet::<T>::actor_hot(actor_id).unwrap();
+    assert!(hot.pending_signal && hot.trigger_wakeup_pointer.is_none());
+    assert_eq!(hot.cycle_state, CycleState::Idle);
+    assert!(Pallet::<T>::actor_run_state(actor_id).is_none());
+    assert_eq!(
+      Pallet::<T>::actor_identity(actor_id).unwrap().cycle_nonce,
+      fixture.identity.cycle_nonce
+    );
+    assert_eq!(
+      T::AssetOps::balance(
+        &fixture.identity.sovereign_account,
+        T::FeeNativeAssetId::get()
+      ),
+      fixture.balance.saturating_sub(fixture.trigger_fee)
+    );
     assert!(!ActorControlLocators::<T>::contains_key(actor_id));
     assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
+    let head = ActorContractHeads::<T>::get(actor_id).unwrap();
+    assert!(matches!(
+      (&head.header.trigger, &hot.trigger_runtime_state),
+      (
+        Trigger::AtTime { .. },
+        TriggerRuntimeState::AtTime { consumed: true, .. }
+      ) | (
+        Trigger::Cadenced { .. },
+        TriggerRuntimeState::Cadenced {
+          anchor_tick: Some(_)
+        }
+      )
+    ));
+    assert_eq!(head.header.step_count, T::MaxContractSteps::get());
+    assert_eq!(
+      head.first_step.as_ref().unwrap().task.encoded_size(),
+      TaskOf::<T>::max_encoded_len()
+    );
+    assert_eq!(
+      head
+        .first_step
+        .as_ref()
+        .unwrap()
+        .precondition
+        .as_ref()
+        .unwrap()
+        .predicate_count(),
+      benchmark_predicate_capacity::<T>()
+    );
+    assert_eq!(
+      head.header.funding.encoded_size(),
+      FundingSourcePolicyOf::<T>::max_encoded_len()
+    );
+    assert_max_contract_geometry::<T>(actor_id);
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("full temporal occurrence preserves canonical authority");
+  }
+
+  /// Complete Tick dispatch, including its separately charged classifier. This diagnostic
+  /// must not be added to the occurrence owner or used to price only its preloaded helper.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn temporal_deadline_cadenced_deep_index() -> Result<(), BenchmarkError> {
+    let fixture = prepare_temporal_deadline_occurrence::<T>(
+      Trigger::cadenced(100),
+      TemporalDeadlineGeometry::Singleton,
+      false,
+    )?;
+    let now = frame_system::Pallet::<T>::block_number();
+    let charged = T::WeightInfo::classify_due_tick_deadline().saturating_add(
+      T::WeightInfo::at_time_trigger_occurrence().max(T::WeightInfo::cadenced_trigger_occurrence()),
+    );
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::process_next_due_tick_deadline(
+          &mut meter,
+          ServiceResidenceKind::Pending,
+          now,
+          fixture.due,
+          None,
+        ),
+        Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(
+          fixture.actor
+        ))
+      );
+    }
+    assert_eq!(meter.consumed(), charged);
+    frame::log::info!(
+      "Complete Cadenced Tick witness: keys={}, charged_ref_time={}, charged_proof_size={}",
+      fixture.keys,
+      charged.ref_time(),
+      charged.proof_size(),
+    );
+    assert_temporal_deadline_occurrence::<T>(&fixture);
+    Ok(())
+  }
+
+  struct BusyTemporalRearm<T: Config> {
+    actor: ActorRef,
+    due: SchedulerTick,
+    next_due: SchedulerTick,
+    source: DeadlineHandleOf<T>,
+    source_count: u32,
+    destination_count: u32,
+    keys: u32,
+    hot: ActorHotStateOf<T>,
+    preserved: Vec<u8>,
+  }
+
+  fn busy_temporal_preserved_state<T: Config>(actor_id: ActorId) -> Vec<u8> {
+    let identity = Pallet::<T>::actor_identity(actor_id).unwrap();
+    (
+      &identity,
+      Pallet::<T>::actor_run_state(actor_id),
+      ActorProcesses::<T>::get(actor_id),
+      ServiceNodes::<T>::get(actor_id),
+      ServiceHeader::<T>::get(),
+      DeadlineHandles::<T>::get(actor_id),
+      ActorStateHolds::<T>::get(actor_id),
+      T::AssetOps::balance(&identity.sovereign_account, T::FeeNativeAssetId::get()),
+      T::AssetOps::balance(&T::FeeSink::get(), T::FeeNativeAssetId::get()),
+      frame_system::Pallet::<T>::events(),
+    )
+      .encode()
+  }
+
+  fn prepare_busy_temporal_rearm<T: Config>(
+    failed_attempts: u32,
+    module_failure: bool,
+  ) -> Result<BusyTemporalRearm<T>, BenchmarkError> {
+    let suspended = failed_attempts > 0;
+    let continued_failure = module_failure && !suspended;
+    let required_steps = if continued_failure { 3 } else { 2 };
+    if failed_attempts > 2
+      || T::MaxContractSteps::get() < required_steps
+      || (suspended && T::MaxRetryAttempts::get() <= failed_attempts)
+    {
+      return Err(BenchmarkError::Stop(
+        "host cannot represent a busy temporal suffix",
+      ));
+    }
+    // Two retries sleep for two blocks. A four-tick cadence becomes due after those
+    // attempts but before that Block deadline, on both reference and block-clock test hosts.
+    let period = if failed_attempts == 2 { 4 } else { 100 };
+    let fixture = prepare_temporal_deadline_occurrence::<T>(
+      Trigger::cadenced(period),
+      TemporalDeadlineGeometry::Singleton,
+      true,
+    )?;
+    // The maximum Task fixture is not an effect-execution witness. Author a false first
+    // predicate through ordinary replacement so Opening commits a skip and retains its suffix.
+    let mut contract = Pallet::<T>::actor_contract(fixture.actor.actor_id).unwrap();
+    if contract.steps.len() < required_steps as usize {
+      return Err(BenchmarkError::Stop(
+        "admitted Contract cannot retain the busy suffix",
+      ));
+    }
+    contract.steps[0].precondition = Some(packed_predicate_clauses::<T>(
+      vec![Predicate::BlockNumberBelow {
+        threshold: Zero::zero(),
+      }],
+      1,
+    ));
+    if suspended || continued_failure {
+      let task = if module_failure {
+        let (asset, total, recipient) = T::BenchmarkHelper::setup_temporary_split_transfer(
+          &fixture.identity.owner,
+          &fixture.identity.sovereign_account,
+        )?;
+        assert_distinct_measured_accounts::<T>(&[
+          &fixture.identity.owner,
+          &fixture.identity.sovereign_account,
+          &recipient,
+          &T::FeeSink::get(),
+        ]);
+        ActorTask::SplitTransfer {
+          asset,
+          amount: AmountResolution::Fixed(total),
+          legs: BoundedVec::try_from(vec![
+            SplitLeg {
+              to: fixture.identity.owner.clone(),
+              share: Perbill::from_percent(50),
+            },
+            SplitLeg {
+              to: recipient,
+              share: Perbill::from_percent(50),
+            },
+          ])
+          .map_err(|_| BenchmarkError::Stop("host cannot admit two SplitTransfer legs"))?,
+        }
+      } else {
+        let asset_owner = measured_account::<T>("temporal-retry-assets", 0);
+        let retry_asset = T::BenchmarkHelper::setup_predicate_assets(&asset_owner, 2)?
+          .into_iter()
+          .find(|asset| *asset != T::FeeNativeAssetId::get())
+          .ok_or(BenchmarkError::Stop(
+            "temporal retry needs a non-native asset",
+          ))?;
+        assert!(T::AssetOps::balance(&fixture.identity.sovereign_account, retry_asset).is_zero());
+        ActorTask::Transfer {
+          to: measured_account::<T>("temporal-retry-recipient", 0),
+          asset: retry_asset,
+          amount: AmountResolution::Fixed(One::one()),
+        }
+      };
+      contract.steps[1] = Step {
+        precondition: None,
+        task,
+        on_error: if continued_failure {
+          StepErrorPolicy::ContinueNextStep
+        } else {
+          StepErrorPolicy::RetryLater {
+            max_attempts: failed_attempts + 1,
+          }
+        },
+      };
+    }
+    Pallet::<T>::update_contract(
+      RawOrigin::Signed(fixture.identity.owner.clone()).into(),
+      fixture.actor.actor_id,
+      contract,
+    )?;
+    let head = ActorContractHeads::<T>::get(fixture.actor.actor_id).unwrap();
+    let activation = head
+      .header
+      .parked_balance_activation
+      .as_ref()
+      .expect("busy temporal fixture retains its maximum Parked Balance header");
+    assert_eq!(
+      activation.watches.len() as u32,
+      T::MaxWhitelistSize::get().min(T::MaxContractSteps::get())
+    );
+    assert!(
+      activation
+        .watches
+        .iter()
+        .all(|watch| watch.asset.encoded_size() == T::AssetId::max_encoded_len())
+    );
+    assert!(head.header.auto_close_at_cycle_nonce.is_none());
+    let actor = Pallet::<T>::load_actor_ref(fixture.actor.actor_id).unwrap();
+    let WakeupKey::Tick(first_due) = TriggerDeadlineHandles::<T>::get(actor.actor_id)
+      .unwrap()
+      .key
+    else {
+      panic!("replacement retains a cadence source")
+    };
+    if first_due > Pallet::<T>::current_scheduler_tick().unwrap() {
+      T::BenchmarkHelper::finalize_scheduler_clock()?;
+      T::BenchmarkHelper::advance_to_scheduler_tick(first_due)?;
+    }
+    prepare_temporal_deadline_frontier::<T>(actor, first_due);
+    Pallet::<T>::process_due_temporal_deadline(actor, first_due)
+      .expect("initial occurrence admits ordinary readiness");
+    let eligible = ServiceNodes::<T>::get(actor.actor_id)
+      .unwrap()
+      .eligible_from;
+    frame_system::Pallet::<T>::set_block_number(eligible);
+    Pallet::<T>::execute_cycle(Weight::MAX);
+    let run = Pallet::<T>::actor_run_state(actor.actor_id).expect("ordinary Opening retains a Run");
+    assert_eq!(run.cursor, 1);
+    for _ in 0..failed_attempts.max(u32::from(continued_failure)) {
+      let run = Pallet::<T>::actor_run_state(actor.actor_id).unwrap();
+      frame_system::Pallet::<T>::set_block_number(run.eligible_at);
+      Pallet::<T>::execute_cycle(Weight::MAX);
+    }
+    let run = Pallet::<T>::actor_run_state(actor.actor_id).unwrap();
+    assert_eq!(run.cursor, if continued_failure { 2 } else { 1 });
+    assert_eq!(run.unsuccessful_attempts_at_cursor, failed_attempts);
+    if module_failure {
+      assert_eq!(
+        run.last_step_outcome,
+        Some(StepOutcome::Failed(TaskFailure::temporary(
+          Error::<T>::RecipientDepositUnavailable
+        ),))
+      );
+      assert_eq!(
+        run.suspension,
+        suspended.then_some(SuspensionReason::Temporary)
+      );
+      assert!(run.last_committed_step_block.is_some());
+      // Running cannot carry a suspension. All remaining optional fields are populated.
+      let absent_suspension_bytes =
+        Option::<SuspensionReason>::max_encoded_len() - run.suspension.encoded_size();
+      assert_eq!(
+        run.encoded_size(),
+        ActorRunStateOf::<T>::max_encoded_len() - absent_suspension_bytes
+      );
+    } else if suspended {
+      assert_eq!(run.last_step_outcome, Some(StepOutcome::FundingUnavailable));
+      assert_eq!(run.suspension, Some(SuspensionReason::FundingUnavailable));
+    }
+    if suspended {
+      assert_eq!(
+        run.eligible_at,
+        Pallet::<T>::suspension_eligible_at(
+          0,
+          None,
+          frame_system::Pallet::<T>::block_number(),
+          failed_attempts,
+        )
+        .unwrap()
+      );
+    }
+    let hot = Pallet::<T>::actor_hot(actor.actor_id).unwrap();
+    assert_eq!(
+      hot.cycle_state,
+      if suspended {
+        CycleState::Suspended
+      } else {
+        CycleState::Running
+      }
+    );
+    if failed_attempts == 2 {
+      let retry =
+        DeadlineHandles::<T>::get(actor.actor_id).expect("second retry owns a Block deadline");
+      assert_eq!(retry.actor, actor);
+      assert_eq!(retry.key, WakeupKey::Block(run.eligible_at));
+      assert_eq!(
+        ActorProcesses::<T>::get(actor.actor_id).unwrap().residence,
+        Some(ProcessResidence::Deadline {
+          key: retry.key,
+          page: retry.page,
+          slot: retry.slot
+        })
+      );
+      assert!(!ServiceNodes::<T>::contains_key(actor.actor_id));
+    } else {
+      assert_eq!(
+        ActorProcesses::<T>::get(actor.actor_id).unwrap().residence,
+        Some(ProcessResidence::Service(ServiceResidenceKind::Live))
+      );
+    }
+    assert!(!hot.pending_signal);
+    let source = TriggerDeadlineHandles::<T>::get(actor.actor_id).unwrap();
+    let WakeupKey::Tick(due) = source.key else {
+      panic!("cadence owns a Tick source")
+    };
+    T::BenchmarkHelper::finalize_scheduler_clock()?;
+    T::BenchmarkHelper::advance_to_scheduler_tick(due)?;
+    prepare_temporal_deadline_frontier::<T>(actor, due);
+    if failed_attempts == 2 {
+      assert!(
+        run.eligible_at > frame_system::Pallet::<T>::block_number(),
+        "Block-first service cannot extract the target retry before this Tick occurrence"
+      );
+    }
+    let next_due = due.checked_add(period).unwrap();
+    let destination = WakeupKey::Tick(next_due);
+    let source_count = DeadlineHeaders::<T>::get(source.key).unwrap().count;
+    let destination_count = DeadlineHeaders::<T>::get(destination).map_or(0, |header| header.count);
+    let keys = DeadlineIndexLen::<T>::get(WakeupClock::Tick);
+    assert!(keys > 32, "busy rearm retains the deep admitted Tick index");
+    let preserved = busy_temporal_preserved_state::<T>(actor.actor_id);
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("busy temporal source is ordinarily admitted");
+    Ok(BusyTemporalRearm {
+      actor,
+      due,
+      next_due,
+      source,
+      source_count,
+      destination_count,
+      keys,
+      hot,
+      preserved,
+    })
+  }
+
+  /// Signed close releases one ordinary suspended Block retry residence and its independent
+  /// minimum Tick Trigger, repairing the full temporal index without executing the retry Task.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_actor_user_suspended_deadline_two_clock_deep_index() -> Result<(), BenchmarkError> {
+    let fixture = prepare_busy_temporal_rearm::<T>(2, true)?;
+    let actor_id = fixture.actor.actor_id;
+    assert_eq!(fixture.source_count, 1);
+    assert_eq!(
+      DeadlineIndexPositions::<T>::get(fixture.source.key),
+      Some(0)
+    );
+    let retry = DeadlineHandles::<T>::get(actor_id).expect("Suspended Run owns a Block retry");
+    assert!(matches!(retry.key, WakeupKey::Block(_)));
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Deadline {
+        key: retry.key,
+        page: retry.page,
+        slot: retry.slot,
+      })
+    );
+    assert_eq!(
+      TriggerDeadlineHandles::<T>::get(actor_id).map(|handle| handle.key),
+      Some(fixture.source.key)
+    );
+    assert_eq!(
+      Pallet::<T>::actor_hot(actor_id).unwrap().cycle_state,
+      CycleState::Suspended
+    );
+    assert!(ActorStateHolds::<T>::contains_key(actor_id));
+    let identity = Pallet::<T>::actor_identity(actor_id).expect("signed Actor owns identity");
+    let balance = T::AssetOps::balance(&identity.sovereign_account, T::FeeNativeAssetId::get());
+    let keys = fixture.keys;
+    #[block]
+    {
+      Pallet::<T>::close_actor(RawOrigin::Signed(identity.owner.clone()).into(), actor_id).unwrap();
+    }
+    assert!(!ActorProcesses::<T>::contains_key(actor_id));
+    assert!(!ActorRunStateStore::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Tick), keys - 1);
+    assert!(!DeadlineIndexPositions::<T>::contains_key(
+      fixture.source.key
+    ));
+    assert_eq!(
+      T::AssetOps::balance(&identity.sovereign_account, T::FeeNativeAssetId::get()),
+      balance
+    );
+    assert_deadline_clock_indices::<T>(WakeupClock::Block);
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
+    Ok(())
+  }
+
+  /// A suspended Block retry and independent Tick Trigger each repair a deep index on close.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_actor_user_suspended_deadline_both_deep() -> Result<(), BenchmarkError> {
+    let fixture = prepare_busy_temporal_rearm::<T>(2, true)?;
+    let actor_id = fixture.actor.actor_id;
+    assert_eq!(fixture.source_count, 1);
+    let retry = DeadlineHandles::<T>::get(actor_id).expect("Suspended Run owns a Block retry");
+    let WakeupKey::Block(retry_due) = retry.key else {
+      panic!("retry residence uses the Block clock")
+    };
+    assert_eq!(DeadlineIndexPositions::<T>::get(retry.key), Some(0));
+    assert_eq!(
+      DeadlineIndexPositions::<T>::get(fixture.source.key),
+      Some(0)
+    );
+    let tick_guards: Vec<_> = DeadlineIndexPages::<T>::iter_prefix(WakeupClock::Tick)
+      .flat_map(|(_, page)| page.into_iter())
+      .filter(|key| *key != fixture.source.key)
+      .map(|key| {
+        let guard = DeadlinePages::<T>::get(key, 0)
+          .expect("future Tick key owns a guard page")
+          .entries[0]
+          .expect("future Tick guard is live");
+        let ActorClass::System { sovereign_id } = Pallet::<T>::actor_identity(guard.actor_id)
+          .unwrap()
+          .actor_class
+        else {
+          panic!("future Tick guard is System")
+        };
+        (guard.actor_id, sovereign_id)
+      })
+      .collect();
+    assert_eq!(tick_guards.len(), (fixture.keys - 1) as usize);
+    let count = tick_guards.len() / 2;
+    assert!(count > 32 && tick_guards.len() - count > 32);
+    for (seed, (guard, sovereign_id)) in tick_guards.into_iter().take(count).enumerate() {
+      Pallet::<T>::close_actor(RawOrigin::Root.into(), guard)?;
+      assert_eq!(
+        SystemSovereigns::<T>::get(sovereign_id),
+        Some(SystemSovereignState::Vacant)
+      );
+      let due = retry_due.saturating_add((1_000u32 + seed as u32).into());
+      create_canonical_deadline_guard_at_sovereign::<T>(seed as u32, due, Some(sovereign_id));
+    }
+    let tick_keys = DeadlineIndexLen::<T>::get(WakeupClock::Tick);
+    let block_keys = DeadlineIndexLen::<T>::get(WakeupClock::Block);
+    assert_eq!(tick_keys, fixture.keys - count as u32);
+    assert_eq!(block_keys, 1 + count as u32);
+    assert_eq!(
+      DeadlineIndexPositions::<T>::get(fixture.source.key),
+      Some(0)
+    );
+    assert_eq!(DeadlineIndexPositions::<T>::get(retry.key), Some(0));
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Deadline {
+        key: retry.key,
+        page: retry.page,
+        slot: retry.slot,
+      })
+    );
+    assert_eq!(
+      Pallet::<T>::actor_hot(actor_id).unwrap().cycle_state,
+      CycleState::Suspended
+    );
+    assert!(ActorRunStateStore::<T>::contains_key(actor_id));
+    assert!(ActorStateHolds::<T>::contains_key(actor_id));
+    let identity = Pallet::<T>::actor_identity(actor_id).expect("signed Actor owns identity");
+    let balance = T::AssetOps::balance(&identity.sovereign_account, T::FeeNativeAssetId::get());
+    assert_deadline_clock_indices::<T>(WakeupClock::Block);
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("both deep clocks retain canonical retry authority");
+    #[block]
+    {
+      Pallet::<T>::close_actor(RawOrigin::Signed(identity.owner.clone()).into(), actor_id).unwrap();
+    }
+    assert!(!ActorProcesses::<T>::contains_key(actor_id));
+    assert!(!ActorRunStateStore::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Tick), tick_keys - 1);
+    assert_eq!(
+      DeadlineIndexLen::<T>::get(WakeupClock::Block),
+      block_keys - 1
+    );
+    assert!(!DeadlineIndexPositions::<T>::contains_key(
+      fixture.source.key
+    ));
+    assert!(!DeadlineIndexPositions::<T>::contains_key(retry.key));
+    assert_eq!(
+      T::AssetOps::balance(&identity.sovereign_account, T::FeeNativeAssetId::get()),
+      balance
+    );
+    assert_deadline_clock_indices::<T>(WakeupClock::Block);
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
+    Ok(())
+  }
+
+  fn assert_busy_temporal_rearm<T: Config>(fixture: BusyTemporalRearm<T>) {
+    let BusyTemporalRearm {
+      actor,
+      next_due,
+      source,
+      source_count,
+      destination_count,
+      keys,
+      mut hot,
+      preserved,
+      ..
+    } = fixture;
+    let destination = WakeupKey::Tick(next_due);
+    let rearmed = TriggerDeadlineHandles::<T>::get(actor.actor_id).unwrap();
+    assert_eq!((rearmed.actor, rearmed.key), (actor, destination));
+    hot.trigger_wakeup_pointer = Some(TriggerWakeupPointer {
+      tick: next_due,
+      page_id: rearmed.page,
+      slot: u32::from(rearmed.slot),
+    });
+    assert_eq!(Pallet::<T>::actor_hot(actor.actor_id), Some(hot));
+    assert_eq!(
+      busy_temporal_preserved_state::<T>(actor.actor_id),
+      preserved
+    );
+    assert_eq!(
+      DeadlineHeaders::<T>::get(source.key).map_or(0, |header| header.count),
+      source_count - 1
+    );
+    assert_eq!(
+      DeadlineHeaders::<T>::get(destination).unwrap().count,
+      destination_count + 1
+    );
+    assert_eq!(
+      DeadlineIndexLen::<T>::get(WakeupClock::Tick),
+      keys - u32::from(source_count == 1) + u32::from(destination_count == 0)
+    );
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("busy rearm preserves Run and current service authority");
+  }
+
+  /// Non-useful temporal work owns rearm resources, not a useful-occurrence Trigger fee.
+  #[benchmark(pov_mode = Measured)]
+  fn cadenced_running_rearm() -> Result<(), BenchmarkError> {
+    let fixture = prepare_busy_temporal_rearm::<T>(0, true)?;
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::process_due_temporal_deadline(fixture.actor, fixture.due),
+        Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(
+          fixture.actor
+        ))
+      );
+    }
+    assert_busy_temporal_rearm::<T>(fixture);
+    Ok(())
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn cadenced_suspended_service_rearm() -> Result<(), BenchmarkError> {
+    let fixture = prepare_busy_temporal_rearm::<T>(1, true)?;
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::process_due_temporal_deadline(fixture.actor, fixture.due),
+        Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(
+          fixture.actor
+        ))
+      );
+    }
+    assert_busy_temporal_rearm::<T>(fixture);
+    Ok(())
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn cadenced_suspended_deadline_rearm() -> Result<(), BenchmarkError> {
+    let fixture = prepare_busy_temporal_rearm::<T>(2, true)?;
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::process_due_temporal_deadline(fixture.actor, fixture.due),
+        Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(
+          fixture.actor
+        ))
+      );
+    }
+    assert_busy_temporal_rearm::<T>(fixture);
+    Ok(())
   }
 
   fn prepare_zero_step_opening<T: Config>(actor_type: ActorType) -> ActorId {
@@ -8369,6 +11709,7 @@ mod benches {
     actor_type: ActorType,
     fee: T::Balance,
   ) {
+    assert_retained_service_turn::<T>(actor_id, frame_system::Pallet::<T>::block_number());
     let identity = benchmark_fixture_identity::<T>(actor_id).expect("zero-Step identity survives");
     assert_eq!(identity.cycle_nonce, 1);
     assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
@@ -8496,13 +11837,7 @@ mod benches {
       Pallet::<T>::active_actor_state(actor_id).unwrap().encode(),
       encoded_state
     );
-    let retained_header = ServiceHeader::<T>::get();
-    assert_eq!(retained_header.cursor, service_header.cursor);
-    assert_eq!(retained_header.count, service_header.count);
-    assert_eq!(
-      retained_header.round_block,
-      Some(frame_system::Pallet::<T>::block_number())
-    );
+    assert_eq!(ServiceHeader::<T>::get(), service_header);
     assert_eq!(
       ServiceNodes::<T>::get(actor_id).map(|node| node.encode()),
       Some(source_service)
@@ -8556,368 +11891,6 @@ mod benches {
     );
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("authorized Mutable close releases the unavailable head");
-  }
-
-  fn prepare_zero_step_user_insolvency<T: Config>(
-    crossing: bool,
-  ) -> (ActorId, UserPipelineAccounting<T>) {
-    prepare_user_pipeline_insolvency::<T>(crossing, ContractSteps::<T>::default(), false)
-  }
-
-  fn prepare_user_pipeline_insolvency<T: Config>(
-    crossing: bool,
-    steps: ContractSteps<T>,
-    with_window: bool,
-  ) -> (ActorId, UserPipelineAccounting<T>) {
-    frame_system::Pallet::<T>::set_block_number(1u32.into());
-    assert_eq!(ActorReadyOccupancy::<T>::get(), 0);
-    let feed = crossing.then(|| {
-      T::BenchmarkHelper::setup_observation_feeds(1)
-        .unwrap()
-        .into_iter()
-        .next()
-        .unwrap()
-    });
-    let (trigger, family, weight) = match feed {
-      Some(feed) => {
-        assert!(matches!(
-          T::ObservationProvider::current(&feed),
-          CanonicalObservationState::Available { value: 1, .. }
-        ));
-        (
-          Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 1),
-          TriggerFamily::ObservationCrossing,
-          T::WeightInfo::observation_crossing_trigger_occurrence(),
-        )
-      }
-      None => (
-        Trigger::manual(),
-        TriggerFamily::Manual,
-        T::WeightInfo::manual_trigger(),
-      ),
-    };
-    let owner: T::AccountId = account("zero-step-insolvent-owner", 0, 0);
-    ensure_creation_balance::<T>(&owner);
-    let required = Pallet::<T>::user_pipeline_machine_capacity_requirement(&steps).unwrap();
-    prefund_active_user_creation::<T>(&owner, &steps);
-    let mut contract = user_contract::<T>(
-      Schedule {
-        trigger,
-        cooldown_blocks: 0,
-      },
-      steps,
-    )
-    .unwrap();
-    if with_window {
-      let start = frame_system::Pallet::<T>::block_number();
-      contract.window = Some(ScheduleWindow {
-        start,
-        end: start.checked_add(&T::MinWindowLength::get()).unwrap(),
-      });
-    }
-    Pallet::<T>::create_user_actor(
-      RawOrigin::Signed(owner.clone()).into(),
-      Mutability::Mutable,
-      Some(contract),
-    )
-    .expect("User Contract is ordinarily admitted before its paid Trigger");
-    let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    let payer = benchmark_fixture_identity::<T>(actor_id)
-      .unwrap()
-      .sovereign_account;
-    let native = T::FeeNativeAssetId::get();
-    assert_eq!(T::AssetOps::balance(&payer, native), required);
-    let trigger_fee =
-      Pallet::<T>::trigger_fee_for_weight(ActorType::User, family, weight).trigger_fee;
-    assert!(!trigger_fee.is_zero());
-    T::AssetOps::mint(&payer, native, trigger_fee - One::one()).unwrap();
-    let sink_before = T::AssetOps::balance(&T::FeeSink::get(), native);
-    match feed {
-      Some(feed) => {
-        frame_system::Pallet::<T>::set_block_number(2u32.into());
-        assert!(publish_zero_step_observation::<T>(feed, 1_000) >= 2);
-        Pallet::<T>::service_crossing_transitions(Weight::MAX);
-        assert!(CrossingMemberships::<T>::contains_key(actor_id));
-        assert!(IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id));
-      }
-      None => {
-        Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id).unwrap();
-      }
-    }
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).unwrap();
-    assert!(cell.hot.pending_signal);
-    assert_eq!(cell.identity.cycle_nonce, 0);
-    frame_system::Pallet::<T>::set_block_number(cell.eligible_at.unwrap());
-    assert_eq!(ActorReadyOccupancy::<T>::get(), 1);
-    assert_eq!(T::AssetOps::balance(&payer, native), required - One::one());
-    assert_eq!(
-      T::AssetOps::balance(&T::FeeSink::get(), native),
-      sink_before + trigger_fee
-    );
-    assert!(!Pallet::<T>::pipeline_capacity_sufficient(actor_id, ActorType::User, &payer).unwrap());
-    frame_system::Pallet::<T>::assert_has_event(
-      Event::<T>::TriggerOccurrenceProcessed {
-        actor_id,
-        trigger_family: family,
-        fee: trigger_fee,
-      }
-      .into(),
-    );
-    #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("paid readiness may survive insufficient Pipeline capacity");
-    (actor_id, user_pipeline_accounting::<T>(actor_id))
-  }
-
-  fn assert_user_pipeline_insolvency<T: Config>(
-    actor_id: ActorId,
-    before: UserPipelineAccounting<T>,
-  ) {
-    assert!(benchmark_fixture_identity::<T>(actor_id).is_none());
-    assert!(benchmark_fixture_hot::<T>(actor_id).is_none());
-    assert!(!ActorContractHeads::<T>::contains_key(actor_id));
-    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
-    assert!(
-      ActorContractTailChunks::<T>::iter_prefix(actor_id)
-        .next()
-        .is_none()
-    );
-    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
-    assert!(!CrossingMemberships::<T>::contains_key(actor_id));
-    assert!(!IndexedTriggerDetectionDisabled::<T>::contains_key(
-      actor_id
-    ));
-    assert_eq!(ActorReadyOccupancy::<T>::get(), 0);
-    assert_eq!(ActorReadyHead::<T>::get(), ActorReadyTail::<T>::get());
-    let native = T::FeeNativeAssetId::get();
-    assert_eq!(
-      T::AssetOps::balance(&before.payer, native),
-      before.payer_balance
-    );
-    assert_eq!(
-      T::AssetOps::balance(&T::FeeSink::get(), native),
-      before.sink_balance
-    );
-    let receipt: <T as frame_system::Config>::RuntimeEvent = Event::<T>::PipelineFeeCharged {
-      actor_id,
-      fee: before.fee,
-    }
-    .into();
-    assert!(
-      !frame_system::Pallet::<T>::events()
-        .iter()
-        .any(|record| record.event == receipt)
-    );
-    frame_system::Pallet::<T>::assert_has_event(
-      Event::<T>::ActorClosed {
-        actor_id,
-        reason: CloseReason::CycleAdmissionInsufficient,
-      }
-      .into(),
-    );
-    #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("Pipeline apoptosis releases all process resources");
-  }
-
-  /// Direct cleanup-owner comparison with the existing Manual one-Step apoptosis fixture.
-  #[benchmark]
-  fn pipeline_admission_apoptosis_crossing() {
-    let (actor_id, before) = prepare_zero_step_user_insolvency::<T>(true);
-    let instance = Pallet::<T>::active_actor_view(actor_id).unwrap();
-    let cutoff = ActorReadyTail::<T>::get();
-    #[block]
-    {
-      Pallet::<T>::finalize_actor(actor_id, &instance, CloseReason::CycleAdmissionInsufficient)
-        .unwrap();
-    }
-    assert_eq!(ActorReadyOccupancy::<T>::get(), 0);
-    assert!(ActorReadyHead::<T>::get() < cutoff);
-    benchmark_fixture_ready_drain_tombstones::<T>(cutoff, 1)
-      .expect("outer FIFO retires the closed primary's tombstone after cleanup measurement");
-    assert_user_pipeline_insolvency::<T>(actor_id, before);
-  }
-
-  /// Complete FIFO liability check and Manual User apoptosis one balance unit below admission.
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_paged_zero_step_user_insolvency() {
-    let (actor_id, before) = prepare_zero_step_user_insolvency::<T>(false);
-    #[block]
-    {
-      let pass = Pallet::<T>::execute_cycle(Weight::MAX);
-      assert!(pass.effect_consumed.is_zero() && !pass.starved);
-    }
-    assert_user_pipeline_insolvency::<T>(actor_id, before);
-  }
-
-  /// The same paid-readiness insolvency with retained Crossing cleanup inside the FIFO atom.
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_paged_zero_step_user_crossing_insolvency() {
-    let (actor_id, before) = prepare_zero_step_user_insolvency::<T>(true);
-    #[block]
-    {
-      let pass = Pallet::<T>::execute_cycle(Weight::MAX);
-      assert!(pass.effect_consumed.is_zero() && !pass.starved);
-    }
-    assert_user_pipeline_insolvency::<T>(actor_id, before);
-  }
-
-  fn prepare_max_contract_user_insolvency<T: Config>(
-    with_window: bool,
-  ) -> (
-    ActorId,
-    UserPipelineAccounting<T>,
-    Option<WakeupPointer<BlockNumberFor<T>>>,
-  ) {
-    let steps = make_max_contract_steps::<T>(account("insolvent-contract-recipient", 0, 0));
-    let (actor_id, before) = prepare_user_pipeline_insolvency::<T>(true, steps, with_window);
-    assert_max_contract_geometry::<T>(actor_id);
-    let hot = benchmark_fixture_hot::<T>(actor_id).unwrap();
-    let pointer = hot.wakeup_pointer;
-    assert_eq!(pointer.is_some(), with_window);
-    if let Some(pointer) = pointer {
-      let WakeupKey::Block(at) = pointer.block else {
-        panic!("window expiry has a Block reference")
-      };
-      assert!(at > frame_system::Pallet::<T>::block_number());
-      assert!(Pallet::<T>::wakeup_page_entry_matches(pointer, actor_id));
-      assert_eq!(ActorWaitingOccupancies::<T>::get(pointer.block), 1);
-    }
-    (actor_id, before, pointer)
-  }
-
-  /// Full FIFO insolvency at the host Step-count maximum, including retained Crossing cleanup.
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_paged_user_crossing_insolvency_max_contract() {
-    let (actor_id, before, _) = prepare_max_contract_user_insolvency::<T>(false);
-    #[block]
-    {
-      let pass = Pallet::<T>::execute_cycle(Weight::MAX);
-      assert!(pass.effect_consumed.is_zero() && !pass.starved);
-    }
-    assert_user_pipeline_insolvency::<T>(actor_id, before);
-  }
-
-  /// The same maximum-Step Contract also retains one future window reference before apoptosis.
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_paged_user_crossing_insolvency_max_contract_window() {
-    let (actor_id, before, pointer) = prepare_max_contract_user_insolvency::<T>(true);
-    let pointer = pointer.unwrap();
-    #[block]
-    {
-      let pass = Pallet::<T>::execute_cycle(Weight::MAX);
-      assert!(pass.effect_consumed.is_zero() && !pass.starved);
-    }
-    assert_user_pipeline_insolvency::<T>(actor_id, before);
-    assert!(!Pallet::<T>::wakeup_page_entry_matches(pointer, actor_id));
-    assert!(!ActorWaitingHeads::<T>::contains_key(pointer.block));
-    assert!(!ActorWaitingTails::<T>::contains_key(pointer.block));
-    assert!(!ActorWaitingCursorIndices::<T>::contains_key(pointer.block));
-  }
-
-  /// Complete single-key Block source consumption and expiry closure, excluding clock selection.
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_wakeup_zero_step_user_expiry() {
-    frame_system::Pallet::<T>::set_block_number(1u32.into());
-    let owner: T::AccountId = account("zero-step-window-owner", 0, 0);
-    ensure_creation_balance::<T>(&owner);
-    let steps = ContractSteps::<T>::default();
-    prefund_active_user_creation::<T>(&owner, &steps);
-    let start = frame_system::Pallet::<T>::block_number();
-    let end = start.saturating_add(T::MinWindowLength::get());
-    let mut contract = user_contract::<T>(
-      Schedule {
-        trigger: Trigger::manual(),
-        cooldown_blocks: 0,
-      },
-      steps,
-    )
-    .unwrap();
-    contract.window = Some(ScheduleWindow { start, end });
-    Pallet::<T>::create_user_actor(
-      RawOrigin::Signed(owner).into(),
-      Mutability::Immutable,
-      Some(contract),
-    )
-    .expect("Immutable zero-Step User window is ordinarily admitted");
-    let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    let identity = benchmark_fixture_identity::<T>(actor_id).unwrap();
-    assert_eq!(identity.cycle_nonce, 0);
-    let hot = benchmark_fixture_hot::<T>(actor_id).unwrap();
-    assert!(!hot.pending_signal && hot.queue_ticket.is_none());
-    let expired = end.saturating_add(1u32.into());
-    let key = WakeupKey::Block(expired);
-    assert_eq!(hot.wakeup_pointer.unwrap().block, key);
-    assert_eq!(ActorWaitingOccupancies::<T>::get(key), 1);
-    assert!(ActorStateHolds::<T>::contains_key(actor_id));
-    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
-    frame_system::Pallet::<T>::set_block_number(end);
-    T::BenchmarkHelper::advance_to_scheduler_tick(expired.saturated_into()).unwrap();
-    #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("ordinary expired window and host deadlines are coherent");
-    let native = T::FeeNativeAssetId::get();
-    let payer_before = T::AssetOps::balance(&identity.sovereign_account, native);
-    let sink = T::FeeSink::get();
-    let sink_before = T::AssetOps::balance(&sink, native);
-    let fee = Pallet::<T>::pipeline_fee_for_actor(actor_id, ActorType::User)
-      .unwrap()
-      .total_fee;
-    assert!(!fee.is_zero());
-    #[block]
-    {
-      polkadot_sdk::frame_support::storage::with_transaction(|| {
-        let (due, stats) = Pallet::<T>::wakeup_substrate_drain_key(key, 1);
-        assert_eq!(stats.entries_scanned, 1);
-        assert_eq!(due.len(), 1);
-        let (due_actor, state, admission, loaded_step) = due.into_iter().next().unwrap();
-        assert_eq!(due_actor, actor_id);
-        assert!(loaded_step.is_none());
-        let view = Pallet::<T>::derive_active_actor_view(
-          state.identity.clone(),
-          state.hot.clone(),
-          state.contract.clone(),
-        );
-        assert!(
-          Pallet::<T>::expiry_substitution_due_loaded(&view, state.run_state.as_ref()).unwrap()
-        );
-        Pallet::<T>::finalize_actor_from_consumed_state(
-          actor_id,
-          state,
-          &admission,
-          CloseReason::WindowExpired,
-        )
-        .unwrap();
-        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
-          Ok::<(), DispatchError>(()),
-        )
-      })
-      .unwrap();
-    }
-    assert!(benchmark_fixture_identity::<T>(actor_id).is_none());
-    assert!(benchmark_fixture_hot::<T>(actor_id).is_none());
-    assert!(!ActorContractHeads::<T>::contains_key(actor_id));
-    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
-    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
-    assert!(!ActorWaitingOccupancies::<T>::contains_key(key));
-    assert_eq!(
-      T::AssetOps::balance(&identity.sovereign_account, native),
-      payer_before
-    );
-    assert_eq!(T::AssetOps::balance(&sink, native), sink_before);
-    let receipt: <T as frame_system::Config>::RuntimeEvent =
-      Event::<T>::PipelineFeeCharged { actor_id, fee }.into();
-    assert!(
-      !frame_system::Pallet::<T>::events()
-        .iter()
-        .any(|record| record.event == receipt)
-    );
-    frame_system::Pallet::<T>::assert_has_event(
-      Event::<T>::ActorClosed {
-        actor_id,
-        reason: CloseReason::WindowExpired,
-      }
-      .into(),
-    );
-    #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("window expiry releases its source and process resources");
   }
 
   fn prepare_zero_step_cadenced<T: Config>(close: bool) -> ActorId {
@@ -9178,6 +12151,1344 @@ mod benches {
     assert_eq!(T::AssetOps::balance(&sovereign, native), payer_before - fee);
     assert_eq!(T::AssetOps::balance(&sink, native), sink_before + fee);
     assert_zero_step_cadenced::<T>(actor_id, true, fee);
+  }
+
+  struct SystemTransferHeaderWitness<T: Config> {
+    sovereign: T::AccountId,
+    recipient: T::AccountId,
+    asset: T::AssetId,
+    source_before: T::Balance,
+    recipient_before: T::Balance,
+    sovereign_native_before: T::Balance,
+    sink_native_before: T::Balance,
+    effect_weight: Weight,
+  }
+
+  fn capture_system_transfer_header<T: Config>(
+    actor_id: ActorId,
+  ) -> SystemTransferHeaderWitness<T> {
+    let state =
+      Pallet::<T>::active_actor_state(actor_id).expect("real System Transfer authority exists");
+    assert_eq!(state.identity.actor_class.actor_type(), ActorType::System);
+    assert_eq!(state.contract.steps.len(), 1);
+    assert!(state.contract.steps[0].precondition.is_none());
+    assert!(ActorStateHolds::<T>::get(actor_id).is_none());
+    let FundingSourcePolicy::SignedAllowlist(sources) = &state.contract.funding else {
+      panic!("real System Transfer owns the maximum signed funding head")
+    };
+    assert_eq!(sources.len() as u32, T::MaxWhitelistSize::get());
+    assert!(sources.contains(&state.identity.owner));
+    let ActorTask::Transfer {
+      asset,
+      ref to,
+      amount: AmountResolution::Percent(percent),
+    } = state.contract.steps[0].task
+    else {
+      panic!("real System Transfer owns a positive Percent Step")
+    };
+    assert_eq!(percent, Perbill::from_percent(50));
+    assert_ne!(asset, T::FeeNativeAssetId::get());
+    let sovereign = state.identity.sovereign_account;
+    let source_before = T::AssetOps::balance(&sovereign, asset);
+    assert!(source_before > T::AssetOps::minimum_balance(asset));
+    let effect_weight = T::TaskEffectWeight::actual_effect_weight(
+      &state.contract.steps[0].task,
+      TaskEffectExecution::Invoked,
+    )
+    .expect("System Transfer has host effect Weight evidence");
+    assert!(!effect_weight.is_zero());
+    let native = T::FeeNativeAssetId::get();
+    SystemTransferHeaderWitness {
+      recipient: to.clone(),
+      recipient_before: T::AssetOps::balance(to, asset),
+      sovereign_native_before: T::AssetOps::balance(&sovereign, native),
+      sink_native_before: T::AssetOps::balance(&T::FeeSink::get(), native),
+      sovereign,
+      asset,
+      source_before,
+      effect_weight,
+    }
+  }
+
+  fn assert_system_transfer_header<T: Config>(
+    actor_id: ActorId,
+    witness: SystemTransferHeaderWitness<T>,
+    measured_effect: Weight,
+  ) {
+    assert_eq!(measured_effect, witness.effect_weight);
+    let state = Pallet::<T>::active_actor_state(actor_id)
+      .expect("System Transfer completion retains process authority");
+    assert_eq!(state.identity.actor_class.actor_type(), ActorType::System);
+    assert_eq!(state.hot.cycle_state, CycleState::Idle);
+    assert_eq!(state.identity.cycle_nonce, 1);
+    assert!(!state.hot.pending_signal);
+    assert!(state.run_state.is_none() && state.hot.queue_ticket.is_none());
+    assert!(ActorStateHolds::<T>::get(actor_id).is_none());
+    assert_retained_service_turn::<T>(actor_id, frame_system::Pallet::<T>::block_number());
+    let source_after = T::AssetOps::balance(&witness.sovereign, witness.asset);
+    assert!(
+      source_after < witness.source_before,
+      "real System Transfer must debit positive custody"
+    );
+    assert_eq!(
+      T::AssetOps::balance(&witness.recipient, witness.asset),
+      witness.recipient_before + (witness.source_before - source_after),
+      "real System Transfer must credit the authored recipient"
+    );
+    let native = T::FeeNativeAssetId::get();
+    assert_eq!(
+      T::AssetOps::balance(&witness.sovereign, native),
+      witness.sovereign_native_before,
+      "System Transfer must not pay User fees"
+    );
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      witness.sink_native_before,
+      "System Transfer must not credit the User Fee Sink"
+    );
+    let pipeline: <T as frame_system::Config>::RuntimeEvent = Event::<T>::PipelineFeeCharged {
+      actor_id,
+      fee: Zero::zero(),
+    }
+    .into();
+    assert!(
+      !frame_system::Pallet::<T>::events()
+        .iter()
+        .any(|record| record.event == pipeline)
+    );
+    let action: <T as frame_system::Config>::RuntimeEvent = Event::<T>::ActionFeeCharged {
+      actor_id,
+      cycle_nonce: 1,
+      step_index: 0,
+      actual_effect_weight: witness.effect_weight,
+      fee: Zero::zero(),
+    }
+    .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == action)
+        .count(),
+      1,
+      "System invocation keeps an effect receipt with zero Action fee"
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("System Transfer preserves canonical Actor ownership");
+  }
+
+  struct UserTransferHeaderWitness<T: Config> {
+    payer: T::AccountId,
+    recipient: T::AccountId,
+    asset: T::AssetId,
+    source_before: T::Balance,
+    recipient_before: T::Balance,
+    payer_native_before: T::Balance,
+    sink_native_before: T::Balance,
+    pipeline_fee: T::Balance,
+    effect_weight: Weight,
+    progress: bool,
+  }
+
+  fn capture_user_transfer_header<T: Config>(
+    actor_id: ActorId,
+    predicates: u32,
+    observation: bool,
+    mixed: bool,
+    progress: bool,
+  ) -> UserTransferHeaderWitness<T> {
+    let state =
+      Pallet::<T>::active_actor_state(actor_id).expect("real User Transfer authority exists");
+    assert_eq!(state.identity.actor_class.actor_type(), ActorType::User);
+    assert_eq!(state.contract.steps.len(), if progress { 2 } else { 1 });
+    if progress {
+      assert!(matches!(
+        state.contract.steps[1].task,
+        ActorTask::StopCycle | ActorTask::Burn { .. }
+      ));
+      assert!(state.contract.steps[1].precondition.is_none());
+    }
+    assert_eq!(
+      state.contract.steps[0]
+        .precondition
+        .as_ref()
+        .map_or(0, Precondition::evaluation_units),
+      predicates,
+      "real Transfer must retain exactly the requested current-Step predicate width"
+    );
+    if observation || mixed {
+      let precondition = state.contract.steps[0]
+        .precondition
+        .as_ref()
+        .expect("observed Transfer owns a current-Step predicate");
+      let mut feeds = alloc::collections::BTreeSet::new();
+      let mut balance_thresholds = alloc::collections::BTreeSet::new();
+      let mut block_count = 0;
+      for predicate in precondition.clauses.iter().flat_map(|clause| clause.iter()) {
+        match predicate {
+          Predicate::BalanceBelow { threshold, .. } if mixed => {
+            assert!(balance_thresholds.insert(*threshold));
+          }
+          Predicate::BlockNumberAbove { threshold } if mixed => {
+            assert_eq!(*threshold, 0);
+            assert!(frame_system::Pallet::<T>::block_number() > 0u32.into());
+            block_count += 1;
+          }
+          Predicate::ObservationAbove {
+            feed,
+            threshold,
+            max_age_blocks,
+          } => {
+            assert_eq!((*threshold, *max_age_blocks), (0, 100));
+            assert_eq!(feed.encoded_size(), T::ObservationFeedId::max_encoded_len());
+            assert!(feeds.insert(*feed));
+            assert!(matches!(T::ObservationProvider::current(feed),
+              CanonicalObservationState::Available { value, .. } if value > 0));
+          }
+          _ => panic!("Transfer has an unrequested current-Step predicate source"),
+        }
+      }
+      assert_eq!(
+        feeds.len() as u32,
+        if mixed {
+          (predicates + 1) / 3
+        } else {
+          predicates
+        }
+      );
+      if mixed {
+        assert_eq!(block_count, predicates / 3);
+        let expected = (0..predicates)
+          .step_by(3)
+          .map(|index| {
+            <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
+              .saturating_sub(index.saturated_into())
+          })
+          .collect::<alloc::collections::BTreeSet<_>>();
+        assert_eq!(balance_thresholds, expected);
+      }
+    }
+    let FundingSourcePolicy::SignedAllowlist(sources) = &state.contract.funding else {
+      panic!("real Transfer profile has signed maximum funding policy")
+    };
+    assert_eq!(sources.len() as u32, T::MaxWhitelistSize::get());
+    assert!(sources.contains(&state.identity.owner));
+    let ActorTask::Transfer {
+      asset,
+      ref to,
+      amount: AmountResolution::Percent(percent),
+    } = state.contract.steps[0].task
+    else {
+      panic!("real Transfer profile owns Percent Step zero")
+    };
+    assert_eq!(percent, Perbill::from_percent(50));
+    assert_ne!(asset, T::FeeNativeAssetId::get());
+    let payer = state.identity.sovereign_account;
+    let source_before = T::AssetOps::balance(&payer, asset);
+    assert!(source_before > T::AssetOps::minimum_balance(asset));
+    let effect_weight = T::TaskEffectWeight::actual_effect_weight(
+      &state.contract.steps[0].task,
+      TaskEffectExecution::Invoked,
+    )
+    .expect("Transfer effect has host Weight evidence");
+    assert!(!effect_weight.is_zero());
+    let native = T::FeeNativeAssetId::get();
+    UserTransferHeaderWitness {
+      recipient: to.clone(),
+      recipient_before: T::AssetOps::balance(to, asset),
+      asset,
+      source_before,
+      payer_native_before: T::AssetOps::balance(&payer, native),
+      sink_native_before: T::AssetOps::balance(&T::FeeSink::get(), native),
+      pipeline_fee: Pallet::<T>::pipeline_fee_for_actor(actor_id, ActorType::User)
+        .unwrap()
+        .total_fee,
+      payer,
+      effect_weight,
+      progress,
+    }
+  }
+
+  fn assert_user_transfer_header<T: Config>(
+    actor_id: ActorId,
+    witness: UserTransferHeaderWitness<T>,
+    measured_effect: Weight,
+  ) {
+    assert_user_transfer_header_common::<T>(actor_id, witness, measured_effect, false);
+  }
+
+  fn assert_user_transfer_header_common<T: Config>(
+    actor_id: ActorId,
+    witness: UserTransferHeaderWitness<T>,
+    measured_effect: Weight,
+    terminal: bool,
+  ) {
+    let progress = witness.progress;
+    assert!(!terminal || !progress, "terminal fixture has one Step");
+    assert_eq!(
+      measured_effect, witness.effect_weight,
+      "real Transfer effect Weight must be separate from Pipeline control"
+    );
+    if !terminal {
+      let state = Pallet::<T>::active_actor_state(actor_id)
+        .expect("Transfer completion retains active Actor");
+      assert_eq!(
+        state.hot.cycle_state,
+        if progress {
+          CycleState::Running
+        } else {
+          CycleState::Idle
+        }
+      );
+      assert_eq!(state.identity.cycle_nonce, if progress { 0 } else { 1 });
+      assert!(!state.hot.pending_signal);
+      if progress {
+        let run = state
+          .run_state
+          .as_ref()
+          .expect("positive Transfer keeps a paid Running successor");
+        assert_eq!(run.cycle_nonce, 1);
+        assert_eq!(run.cursor, 1);
+        assert_eq!(run.last_step_outcome, Some(StepOutcome::Executed));
+        assert_eq!(run.cumulative_outcomes.committed_effectful_tasks, 1);
+        assert_eq!(
+          run.last_committed_step_block,
+          Some(frame_system::Pallet::<T>::block_number())
+        );
+        assert_eq!(
+          run.eligible_at,
+          frame_system::Pallet::<T>::block_number().saturating_add(1u32.into())
+        );
+        assert!(matches!(
+          state.contract.steps[1].task,
+          ActorTask::StopCycle | ActorTask::Burn { .. }
+        ));
+      } else {
+        assert!(state.run_state.is_none());
+      }
+      assert!(state.hot.queue_ticket.is_none());
+      assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+      assert_retained_service_turn::<T>(actor_id, frame_system::Pallet::<T>::block_number());
+    }
+    let source_after = T::AssetOps::balance(&witness.payer, witness.asset);
+    assert!(
+      source_after < witness.source_before,
+      "real Transfer must debit positive custody"
+    );
+    let moved = witness.source_before - source_after;
+    assert_eq!(
+      T::AssetOps::balance(&witness.recipient, witness.asset),
+      witness.recipient_before + moved,
+      "real Transfer must credit the authored recipient"
+    );
+    let pipeline_receipt: <T as frame_system::Config>::RuntimeEvent =
+      Event::<T>::PipelineFeeCharged {
+        actor_id,
+        fee: witness.pipeline_fee,
+      }
+      .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == pipeline_receipt)
+        .count(),
+      1
+    );
+    let native = T::FeeNativeAssetId::get();
+    let payer_native_after = T::AssetOps::balance(&witness.payer, native);
+    assert!(
+      payer_native_after < witness.payer_native_before - witness.pipeline_fee,
+      "effectful Transfer must charge Action fee separately from Pipeline"
+    );
+    let action_fee = witness.payer_native_before - witness.pipeline_fee - payer_native_after;
+    let action_receipt: <T as frame_system::Config>::RuntimeEvent = Event::<T>::ActionFeeCharged {
+      actor_id,
+      cycle_nonce: 1,
+      step_index: 0,
+      actual_effect_weight: witness.effect_weight,
+      fee: action_fee,
+    }
+    .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == action_receipt)
+        .count(),
+      1,
+      "real Transfer must emit one exact Action fee receipt"
+    );
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      witness.sink_native_before + witness.pipeline_fee + action_fee,
+      "Action and Pipeline collector credits must match their independent fees"
+    );
+    #[cfg(feature = "try-runtime")]
+    if !terminal {
+      Pallet::<T>::do_try_state().expect("real Transfer preserves canonical Actor ownership");
+    }
+  }
+
+  struct UserTransferTerminalWitness<T: Config> {
+    transfer: UserTransferHeaderWitness<T>,
+    owner: T::AccountId,
+    owner_hold: T::Balance,
+    identity_count: u32,
+    active_count: u32,
+    peers: Option<[(ActorRef, Vec<u8>); 2]>,
+  }
+
+  fn capture_user_transfer_terminal<T: Config>(
+    actor_id: ActorId,
+    with_peers: bool,
+  ) -> UserTransferTerminalWitness<T> {
+    let transfer = capture_user_transfer_header::<T>(actor_id, 0, false, false, false);
+    let identity =
+      Pallet::<T>::actor_identity(actor_id).expect("terminal Actor exists before Service");
+    let head = ActorContractHeads::<T>::get(actor_id).expect("terminal Contract head exists");
+    assert_eq!(head.header.auto_close_at_cycle_nonce, Some(1));
+    assert_eq!(
+      ServiceHeader::<T>::get().count,
+      if with_peers { 3 } else { 1 },
+      "terminal profile owns the intended Service ring"
+    );
+    let node = ServiceNodes::<T>::get(actor_id).expect("terminal owns one Service node");
+    let actor = Pallet::<T>::load_actor_ref(actor_id).unwrap();
+    assert_eq!(ServiceHeader::<T>::get().cursor, Some(actor));
+    let peers = with_peers.then(|| {
+      assert_ne!(node.previous, actor);
+      assert_ne!(node.next, actor);
+      assert_ne!(node.previous, node.next);
+      [node.previous, node.next].map(|peer| {
+        let mut expected = ServiceNodes::<T>::get(peer.actor_id).expect("peer is Service-resident");
+        if peer == node.previous {
+          expected.next = node.next;
+        }
+        if peer == node.next {
+          expected.previous = node.previous;
+        }
+        (
+          peer,
+          (
+            Some(expected),
+            ActorProcesses::<T>::get(peer.actor_id),
+            ActorSemanticStates::<T>::get(peer.actor_id),
+          )
+            .encode(),
+        )
+      })
+    });
+    let hold_reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
+    let owner_hold = T::StateHoldCurrency::balance_on_hold(&hold_reason, &identity.owner);
+    assert!(
+      !owner_hold.is_zero(),
+      "active User must own a real refundable hold"
+    );
+    assert!(ActorStateHolds::<T>::contains_key(actor_id));
+    UserTransferTerminalWitness {
+      transfer,
+      owner: identity.owner,
+      owner_hold,
+      identity_count: ActorIdentityCount::<T>::get(),
+      active_count: ActiveActorCount::<T>::get(),
+      peers,
+    }
+  }
+
+  fn assert_user_transfer_terminal<T: Config>(
+    actor_id: ActorId,
+    witness: UserTransferTerminalWitness<T>,
+    measured_effect: Weight,
+  ) {
+    assert_user_transfer_header_common::<T>(actor_id, witness.transfer, measured_effect, true);
+    assert_eq!(ActorIdentityCount::<T>::get(), witness.identity_count - 1);
+    assert_eq!(ActiveActorCount::<T>::get(), witness.active_count - 1);
+    assert!(Pallet::<T>::actor_identity(actor_id).is_none());
+    assert!(!ActorProcesses::<T>::contains_key(actor_id));
+    assert!(!ActorSemanticStates::<T>::contains_key(actor_id));
+    assert!(!ActorContractHeads::<T>::contains_key(actor_id));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert!(!ActorRunStateStore::<T>::contains_key(actor_id));
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    assert_eq!(
+      ServiceHeader::<T>::get().count,
+      if witness.peers.is_some() { 2 } else { 0 },
+      "terminal must unlink its Service node"
+    );
+    if let Some(peers) = witness.peers {
+      assert_eq!(
+        ServiceHeader::<T>::get().cursor,
+        Some(peers[1].0),
+        "terminal must advance the Service cursor to its successor"
+      );
+      for (peer, expected) in peers {
+        assert_eq!(
+          (
+            ServiceNodes::<T>::get(peer.actor_id),
+            ActorProcesses::<T>::get(peer.actor_id),
+            ActorSemanticStates::<T>::get(peer.actor_id)
+          )
+            .encode(),
+          expected,
+          "terminal must preserve peer state and relink peer Service nodes"
+        );
+      }
+    }
+    let hold_reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
+    assert!(witness.owner_hold > Zero::zero());
+    assert_eq!(
+      T::StateHoldCurrency::balance_on_hold(&hold_reason, &witness.owner),
+      Zero::zero(),
+      "terminal must release the owner's entire scoped Actor hold"
+    );
+    frame_system::Pallet::<T>::assert_has_event(
+      Event::<T>::ActorClosed {
+        actor_id,
+        reason: CloseReason::AutoCloseNonceReached,
+      }
+      .into(),
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("terminal Transfer preserves canonical Actor ownership");
+  }
+
+  struct SystemBurnHeaderWitness<T: Config> {
+    sovereign: T::AccountId,
+    asset: T::AssetId,
+    source_before: T::Balance,
+    expected_burn: T::Balance,
+    sovereign_native_before: T::Balance,
+    sink_native_before: T::Balance,
+    effect_weight: Weight,
+  }
+
+  fn capture_system_burn_header<T: Config>(actor_id: ActorId) -> SystemBurnHeaderWitness<T> {
+    let state =
+      Pallet::<T>::active_actor_state(actor_id).expect("real System Burn authority exists");
+    assert_eq!(state.identity.actor_class.actor_type(), ActorType::System);
+    assert_eq!(state.contract.steps.len(), 1);
+    assert!(state.contract.steps[0].precondition.is_none());
+    assert!(ActorStateHolds::<T>::get(actor_id).is_none());
+    let FundingSourcePolicy::SignedAllowlist(sources) = &state.contract.funding else {
+      panic!("System Burn owns a maximum signed funding head")
+    };
+    assert_eq!(sources.len() as u32, T::MaxWhitelistSize::get());
+    assert!(sources.contains(&state.identity.owner));
+    let ActorTask::Burn {
+      asset,
+      amount: AmountResolution::Percent(percent),
+    } = state.contract.steps[0].task
+    else {
+      panic!("System Burn owns positive Percent Step zero")
+    };
+    assert_eq!(percent, Perbill::from_percent(50));
+    assert_ne!(asset, T::FeeNativeAssetId::get());
+    let sovereign = state.identity.sovereign_account;
+    let source_before = T::AssetOps::balance(&sovereign, asset);
+    let expected_burn =
+      percent.mul_floor(source_before.saturating_sub(T::AssetOps::minimum_balance(asset)));
+    assert!(!expected_burn.is_zero() && expected_burn < source_before);
+    let effect_weight = T::TaskEffectWeight::actual_effect_weight(
+      &state.contract.steps[0].task,
+      TaskEffectExecution::Invoked,
+    )
+    .expect("System Burn has host effect Weight evidence");
+    assert!(!effect_weight.is_zero());
+    let native = T::FeeNativeAssetId::get();
+    SystemBurnHeaderWitness {
+      sovereign_native_before: T::AssetOps::balance(&sovereign, native),
+      sink_native_before: T::AssetOps::balance(&T::FeeSink::get(), native),
+      sovereign,
+      asset,
+      source_before,
+      expected_burn,
+      effect_weight,
+    }
+  }
+
+  fn assert_system_burn_header<T: Config>(
+    actor_id: ActorId,
+    witness: SystemBurnHeaderWitness<T>,
+    measured_effect: Weight,
+  ) {
+    assert_eq!(measured_effect, witness.effect_weight);
+    let state =
+      Pallet::<T>::active_actor_state(actor_id).expect("System Burn retains process authority");
+    assert_eq!(state.identity.actor_class.actor_type(), ActorType::System);
+    assert_eq!(state.hot.cycle_state, CycleState::Idle);
+    assert_eq!(state.identity.cycle_nonce, 1);
+    assert!(!state.hot.pending_signal);
+    assert!(state.run_state.is_none() && state.hot.queue_ticket.is_none());
+    assert!(ActorStateHolds::<T>::get(actor_id).is_none());
+    assert_retained_service_turn::<T>(actor_id, frame_system::Pallet::<T>::block_number());
+    assert_eq!(
+      T::AssetOps::balance(&witness.sovereign, witness.asset),
+      witness.source_before - witness.expected_burn,
+      "real System Burn must debit exact authored custody"
+    );
+    let burn: <T as frame_system::Config>::RuntimeEvent = Event::<T>::BurnExecuted {
+      actor_id,
+      cycle_nonce: 1,
+      step_index: 0,
+      asset: witness.asset,
+      amount: witness.expected_burn,
+    }
+    .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == burn)
+        .count(),
+      1
+    );
+    let native = T::FeeNativeAssetId::get();
+    assert_eq!(
+      T::AssetOps::balance(&witness.sovereign, native),
+      witness.sovereign_native_before,
+      "System Burn must not pay User fees"
+    );
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      witness.sink_native_before,
+      "System Burn must not credit the User Fee Sink"
+    );
+    let pipeline: <T as frame_system::Config>::RuntimeEvent = Event::<T>::PipelineFeeCharged {
+      actor_id,
+      fee: Zero::zero(),
+    }
+    .into();
+    assert!(
+      !frame_system::Pallet::<T>::events()
+        .iter()
+        .any(|record| record.event == pipeline)
+    );
+    let action: <T as frame_system::Config>::RuntimeEvent = Event::<T>::ActionFeeCharged {
+      actor_id,
+      cycle_nonce: 1,
+      step_index: 0,
+      actual_effect_weight: witness.effect_weight,
+      fee: Zero::zero(),
+    }
+    .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == action)
+        .count(),
+      1,
+      "System Burn invocation retains an effect receipt with zero Action fee"
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("System Burn preserves canonical Actor ownership");
+  }
+
+  struct UserBurnHeaderWitness<T: Config> {
+    payer: T::AccountId,
+    asset: T::AssetId,
+    source_before: T::Balance,
+    expected_burn: T::Balance,
+    payer_native_before: T::Balance,
+    sink_native_before: T::Balance,
+    pipeline_fee: T::Balance,
+    effect_weight: Weight,
+  }
+
+  fn capture_user_burn_header<T: Config>(actor_id: ActorId) -> UserBurnHeaderWitness<T> {
+    let state = Pallet::<T>::active_actor_state(actor_id).expect("real User Burn authority exists");
+    assert_eq!(state.identity.actor_class.actor_type(), ActorType::User);
+    assert_eq!(state.contract.steps.len(), 1);
+    assert!(state.contract.steps[0].precondition.is_none());
+    let FundingSourcePolicy::SignedAllowlist(sources) = &state.contract.funding else {
+      panic!("real Burn profile has signed maximum funding policy")
+    };
+    assert_eq!(sources.len() as u32, T::MaxWhitelistSize::get());
+    assert!(sources.contains(&state.identity.owner));
+    let ActorTask::Burn {
+      asset,
+      amount: AmountResolution::Percent(percent),
+    } = state.contract.steps[0].task
+    else {
+      panic!("real Burn profile owns Percent Step zero")
+    };
+    assert_eq!(percent, Perbill::from_percent(50));
+    assert_ne!(asset, T::FeeNativeAssetId::get());
+    let payer = state.identity.sovereign_account;
+    let source_before = T::AssetOps::balance(&payer, asset);
+    let expected_burn =
+      percent.mul_floor(source_before.saturating_sub(T::AssetOps::minimum_balance(asset)));
+    assert!(!expected_burn.is_zero() && expected_burn < source_before);
+    let effect_weight = T::TaskEffectWeight::actual_effect_weight(
+      &state.contract.steps[0].task,
+      TaskEffectExecution::Invoked,
+    )
+    .expect("Burn effect has host Weight evidence");
+    assert!(!effect_weight.is_zero());
+    let native = T::FeeNativeAssetId::get();
+    UserBurnHeaderWitness {
+      payer_native_before: T::AssetOps::balance(&payer, native),
+      sink_native_before: T::AssetOps::balance(&T::FeeSink::get(), native),
+      pipeline_fee: Pallet::<T>::pipeline_fee_for_actor(actor_id, ActorType::User)
+        .expect("admitted Burn Pipeline fee exists")
+        .total_fee,
+      payer,
+      asset,
+      source_before,
+      expected_burn,
+      effect_weight,
+    }
+  }
+
+  fn assert_user_burn_header<T: Config>(
+    actor_id: ActorId,
+    witness: UserBurnHeaderWitness<T>,
+    measured_effect: Weight,
+  ) {
+    assert_eq!(measured_effect, witness.effect_weight);
+    let state =
+      Pallet::<T>::active_actor_state(actor_id).expect("Burn completion retains active Actor");
+    assert_eq!(state.hot.cycle_state, CycleState::Idle);
+    assert_eq!(state.identity.cycle_nonce, 1);
+    assert!(!state.hot.pending_signal);
+    assert!(state.run_state.is_none() && state.hot.queue_ticket.is_none());
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert_retained_service_turn::<T>(actor_id, frame_system::Pallet::<T>::block_number());
+    assert_eq!(
+      T::AssetOps::balance(&witness.payer, witness.asset),
+      witness.source_before - witness.expected_burn,
+      "real Burn must debit exactly its authored spend"
+    );
+    let burn_receipt: <T as frame_system::Config>::RuntimeEvent = Event::<T>::BurnExecuted {
+      actor_id,
+      cycle_nonce: 1,
+      step_index: 0,
+      asset: witness.asset,
+      amount: witness.expected_burn,
+    }
+    .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == burn_receipt)
+        .count(),
+      1
+    );
+    let pipeline_receipt: <T as frame_system::Config>::RuntimeEvent =
+      Event::<T>::PipelineFeeCharged {
+        actor_id,
+        fee: witness.pipeline_fee,
+      }
+      .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == pipeline_receipt)
+        .count(),
+      1
+    );
+    let native = T::FeeNativeAssetId::get();
+    let after = T::AssetOps::balance(&witness.payer, native);
+    assert!(
+      after < witness.payer_native_before - witness.pipeline_fee,
+      "positive Burn must charge Action fee independently of Pipeline"
+    );
+    let action_fee = witness.payer_native_before - witness.pipeline_fee - after;
+    let action_receipt: <T as frame_system::Config>::RuntimeEvent = Event::<T>::ActionFeeCharged {
+      actor_id,
+      cycle_nonce: 1,
+      step_index: 0,
+      actual_effect_weight: witness.effect_weight,
+      fee: action_fee,
+    }
+    .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == action_receipt)
+        .count(),
+      1
+    );
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      witness.sink_native_before + witness.pipeline_fee + action_fee,
+      "Burn Action and Pipeline collector credits must match independent fees"
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("real Burn preserves canonical Actor ownership");
+  }
+
+  fn capture_user_burn_successor<T: Config>(actor_id: ActorId) -> UserBurnHeaderWitness<T> {
+    let state = Pallet::<T>::active_actor_state(actor_id)
+      .expect("positive Transfer retains Running successor authority");
+    assert_eq!(state.identity.actor_class.actor_type(), ActorType::User);
+    assert_eq!(state.contract.steps.len(), 2);
+    let run = state
+      .run_state
+      .as_ref()
+      .expect("first Action committed a Run");
+    assert_eq!(state.hot.cycle_state, CycleState::Running);
+    assert_eq!(run.cursor, 1);
+    assert_eq!(run.last_step_outcome, Some(StepOutcome::Executed));
+    let ActorTask::Burn {
+      asset,
+      amount: AmountResolution::Percent(percent),
+    } = state.contract.steps[1].task
+    else {
+      panic!("second Step owns an authored positive Burn")
+    };
+    assert!(state.contract.steps[1].precondition.is_none());
+    assert_eq!(percent, Perbill::from_percent(50));
+    assert_ne!(asset, T::FeeNativeAssetId::get());
+    let ActorTask::Transfer {
+      asset: first_asset, ..
+    } = state.contract.steps[0].task
+    else {
+      panic!("first Step is an already committed Transfer")
+    };
+    assert_ne!(asset, first_asset);
+    let payer = state.identity.sovereign_account;
+    let source_before = T::AssetOps::balance(&payer, asset);
+    let expected_burn =
+      percent.mul_floor(source_before.saturating_sub(T::AssetOps::minimum_balance(asset)));
+    assert!(!expected_burn.is_zero() && expected_burn < source_before);
+    let effect_weight = T::TaskEffectWeight::actual_effect_weight(
+      &state.contract.steps[1].task,
+      TaskEffectExecution::Invoked,
+    )
+    .expect("carried Burn has host Weight evidence");
+    assert!(!effect_weight.is_zero());
+    let native = T::FeeNativeAssetId::get();
+    UserBurnHeaderWitness {
+      payer_native_before: T::AssetOps::balance(&payer, native),
+      sink_native_before: T::AssetOps::balance(&T::FeeSink::get(), native),
+      pipeline_fee: Pallet::<T>::pipeline_fee_for_actor(actor_id, ActorType::User)
+        .expect("admitted Pipeline fee remains identifiable")
+        .total_fee,
+      payer,
+      asset,
+      source_before,
+      expected_burn,
+      effect_weight,
+    }
+  }
+
+  fn assert_user_burn_successor<T: Config>(
+    actor_id: ActorId,
+    witness: UserBurnHeaderWitness<T>,
+    measured_effect: Weight,
+  ) {
+    assert_eq!(measured_effect, witness.effect_weight);
+    let state = Pallet::<T>::active_actor_state(actor_id)
+      .expect("positive Burn successor retains active Actor");
+    assert_eq!(state.hot.cycle_state, CycleState::Idle);
+    assert_eq!(state.identity.cycle_nonce, 1);
+    assert!(!state.hot.pending_signal);
+    assert!(state.run_state.is_none() && state.hot.queue_ticket.is_none());
+    assert_retained_service_turn::<T>(actor_id, frame_system::Pallet::<T>::block_number());
+    assert_eq!(
+      T::AssetOps::balance(&witness.payer, witness.asset),
+      witness.source_before - witness.expected_burn,
+      "carried Burn must debit its distinct authored asset exactly"
+    );
+    let burn_receipt: <T as frame_system::Config>::RuntimeEvent = Event::<T>::BurnExecuted {
+      actor_id,
+      cycle_nonce: 1,
+      step_index: 1,
+      asset: witness.asset,
+      amount: witness.expected_burn,
+    }
+    .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == burn_receipt)
+        .count(),
+      1
+    );
+    let pipeline_receipt: <T as frame_system::Config>::RuntimeEvent =
+      Event::<T>::PipelineFeeCharged {
+        actor_id,
+        fee: witness.pipeline_fee,
+      }
+      .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == pipeline_receipt)
+        .count(),
+      1,
+      "carried Burn must reuse its already paid Pipeline authority"
+    );
+    let native = T::FeeNativeAssetId::get();
+    let action_fee = T::WeightToFee::weight_to_fee(&witness.effect_weight);
+    assert!(!action_fee.is_zero());
+    assert_eq!(
+      T::AssetOps::balance(&witness.payer, native),
+      witness.payer_native_before - action_fee,
+      "carried Burn must pay its own Action effect only"
+    );
+    let action_receipt: <T as frame_system::Config>::RuntimeEvent = Event::<T>::ActionFeeCharged {
+      actor_id,
+      cycle_nonce: 1,
+      step_index: 1,
+      actual_effect_weight: witness.effect_weight,
+      fee: action_fee,
+    }
+    .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == action_receipt)
+        .count(),
+      1
+    );
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      witness.sink_native_before + action_fee,
+      "carried Burn collector must receive only its new Action fee"
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("carried Burn preserves canonical Actor ownership");
+  }
+
+  struct UserSplitFailureWitness<T: Config> {
+    payer: T::AccountId,
+    owner: T::AccountId,
+    recipient: T::AccountId,
+    asset: T::AssetId,
+    payer_before: T::Balance,
+    owner_before: T::Balance,
+    recipient_before: T::Balance,
+    payer_native_before: T::Balance,
+    sink_native_before: T::Balance,
+    pipeline_fee: T::Balance,
+    effect_weight: Weight,
+  }
+
+  fn prepare_user_split_failure<T: Config>()
+  -> Result<(ActorId, UserSplitFailureWitness<T>), polkadot_sdk::frame_benchmarking::BenchmarkError>
+  {
+    let owner: T::AccountId = account("user-split-failure-owner", 0, 0);
+    ensure_creation_balance::<T>(&owner);
+    let initial = BoundedVec::try_from(vec![Step {
+      precondition: None,
+      task: ActorTask::StopCycle,
+      on_error: StepErrorPolicy::AbortCycle,
+    }])
+    .expect("one-Step provisional Contract fits");
+    prefund_active_user_creation::<T>(&owner, &initial);
+    Pallet::<T>::create_user_actor(
+      RawOrigin::Signed(owner.clone()).into(),
+      Mutability::Mutable,
+      user_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        initial,
+      ),
+    )
+    .expect("real User SplitTransfer authority is created");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let identity = Pallet::<T>::actor_identity(actor_id).expect("created User identity exists");
+    let (asset, total, recipient) =
+      T::BenchmarkHelper::setup_temporary_split_transfer(&owner, &identity.sovereign_account)?;
+    assert_eq!(total, 2u32.into());
+    assert_distinct_measured_accounts::<T>(&[
+      &owner,
+      &identity.sovereign_account,
+      &recipient,
+      &T::FeeSink::get(),
+    ]);
+    let mut contract =
+      Pallet::<T>::actor_contract(actor_id).expect("User provisional Contract is retained");
+    contract.steps[0] = Step {
+      precondition: None,
+      task: ActorTask::SplitTransfer {
+        asset,
+        amount: AmountResolution::Fixed(total),
+        legs: BoundedVec::try_from(vec![
+          SplitLeg {
+            to: owner.clone(),
+            share: Perbill::from_percent(50),
+          },
+          SplitLeg {
+            to: recipient.clone(),
+            share: Perbill::from_percent(50),
+          },
+        ])
+        .map_err(|_| {
+          polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
+            "host cannot admit two SplitTransfer legs",
+          )
+        })?,
+      },
+      on_error: StepErrorPolicy::RetryLater { max_attempts: 2 },
+    };
+    let maximum = T::MaxWhitelistSize::get();
+    assert!(maximum > 0);
+    let mut sources = alloc::collections::BTreeSet::from([owner.clone()]);
+    for index in 0..maximum.saturating_sub(1) {
+      sources.insert(account("user-split-failure-source", index, 0));
+    }
+    assert_eq!(sources.len() as u32, maximum);
+    contract.funding = FundingSourcePolicy::SignedAllowlist(
+      sources
+        .try_into()
+        .expect("maximum signed funding policy fits"),
+    );
+    frame_system::Pallet::<T>::set_block_number(
+      frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()),
+    );
+    Pallet::<T>::update_contract(RawOrigin::Signed(owner.clone()).into(), actor_id, contract)
+      .expect("ordinary authored User retry Contract is admitted");
+    assert!(T::AssetOps::balance(&identity.sovereign_account, asset) >= total);
+    assert!(T::AssetOps::balance(&owner, asset) >= One::one());
+    assert!(T::AssetOps::balance(&recipient, asset).is_zero());
+    let state = Pallet::<T>::active_actor_state(actor_id).expect("replaced User authority exists");
+    let native = T::FeeNativeAssetId::get();
+    let resources = Pallet::<T>::derive_step_resource_envelopes(&state.contract)
+      .expect("admitted SplitTransfer resources exist");
+    let action = Pallet::<T>::maximum_current_action_fee(
+      ActorType::User,
+      &state.contract.steps[0],
+      resources[0],
+    )
+    .expect("admitted SplitTransfer Action maximum exists")
+    .total_fee;
+    let trigger = Pallet::<T>::trigger_fee_for_weight(
+      ActorType::User,
+      TriggerFamily::Manual,
+      T::WeightInfo::manual_trigger(),
+    )
+    .trigger_fee;
+    let pipeline = Pallet::<T>::pipeline_fee_for_actor(actor_id, ActorType::User)
+      .expect("admitted SplitTransfer Pipeline quote exists")
+      .total_fee;
+    let reserve = T::MinUserBalance::get()
+      .max(T::AssetOps::minimum_balance(native))
+      .checked_add(&pipeline)
+      .and_then(|value| value.checked_add(&trigger))
+      .and_then(|value| value.checked_add(&action))
+      .and_then(|value| value.checked_add(&action))
+      .expect("two Action attempts and Opening funding fit");
+    let current = T::AssetOps::balance(&identity.sovereign_account, native);
+    if current < reserve {
+      T::AssetOps::mint(&identity.sovereign_account, native, reserve - current)
+        .expect("real retry and Opening fee capacity is funded");
+    }
+    frame_system::Pallet::<T>::set_block_number(
+      frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()),
+    );
+    GlobalCircuitBreaker::<T>::put(false);
+    Pallet::<T>::manual_trigger(RawOrigin::Signed(owner.clone()).into(), actor_id)
+      .expect("real Manual occurrence publishes retry Opening");
+    let after_trigger = T::AssetOps::balance(&identity.sovereign_account, native);
+    let required = T::MinUserBalance::get()
+      .max(T::AssetOps::minimum_balance(native))
+      .checked_add(&pipeline)
+      .and_then(|value| value.checked_add(&action))
+      .and_then(|value| value.checked_add(&action))
+      .expect("post-Trigger two-Action capacity fits");
+    if after_trigger < required {
+      T::AssetOps::mint(
+        &identity.sovereign_account,
+        native,
+        required - after_trigger,
+      )
+      .expect("real post-Trigger fee capacity is funded");
+    }
+    frame_system::Pallet::<T>::set_block_number(
+      frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()),
+    );
+    let state =
+      Pallet::<T>::active_actor_state(actor_id).expect("real Idle retry authority exists");
+    assert_eq!(state.hot.cycle_state, CycleState::Idle);
+    assert!(state.hot.pending_signal && state.run_state.is_none());
+    let effect_weight = T::TaskEffectWeight::actual_effect_weight(
+      &state.contract.steps[0].task,
+      TaskEffectExecution::Invoked,
+    )
+    .expect("SplitTransfer attempted effect has host Weight evidence");
+    assert!(!effect_weight.is_zero());
+    let witness = UserSplitFailureWitness {
+      payer_before: T::AssetOps::balance(&identity.sovereign_account, asset),
+      owner_before: T::AssetOps::balance(&owner, asset),
+      recipient_before: T::AssetOps::balance(&recipient, asset),
+      payer_native_before: T::AssetOps::balance(&identity.sovereign_account, native),
+      sink_native_before: T::AssetOps::balance(&T::FeeSink::get(), native),
+      pipeline_fee: pipeline,
+      effect_weight,
+      payer: identity.sovereign_account,
+      owner,
+      recipient,
+      asset,
+    };
+    Ok((actor_id, witness))
+  }
+
+  fn assert_user_split_failure<T: Config>(
+    actor_id: ActorId,
+    witness: &UserSplitFailureWitness<T>,
+    measured_effect: Weight,
+  ) {
+    assert_eq!(measured_effect, witness.effect_weight);
+    let now = frame_system::Pallet::<T>::block_number();
+    let state = Pallet::<T>::active_actor_state(actor_id)
+      .expect("failed SplitTransfer retains User process authority");
+    assert_eq!(state.hot.cycle_state, CycleState::Suspended);
+    assert_eq!(state.identity.cycle_nonce, 0);
+    assert!(!state.hot.pending_signal);
+    let run = state
+      .run_state
+      .as_ref()
+      .expect("temporary SplitTransfer failure retains Run");
+    assert_eq!(run.cycle_nonce, 1);
+    assert_eq!(run.cursor, 0);
+    assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+    assert_eq!(run.eligible_at, now.saturating_add(1u32.into()));
+    assert!(matches!(
+      run.last_step_outcome,
+      Some(StepOutcome::Failed(_))
+    ));
+    assert_retained_service_turn::<T>(actor_id, now);
+    let native = T::FeeNativeAssetId::get();
+    let action_fee = T::WeightToFee::weight_to_fee(&witness.effect_weight);
+    assert!(!action_fee.is_zero());
+    let expected_source = if witness.asset == native {
+      witness.payer_before - witness.pipeline_fee - action_fee
+    } else {
+      witness.payer_before
+    };
+    assert_eq!(
+      T::AssetOps::balance(&witness.payer, witness.asset),
+      expected_source,
+      "late-leg failure must not debit sovereign custody beyond independent fees"
+    );
+    assert_eq!(
+      T::AssetOps::balance(&witness.owner, witness.asset),
+      witness.owner_before,
+      "late-leg failure must not credit first recipient"
+    );
+    assert_eq!(
+      T::AssetOps::balance(&witness.recipient, witness.asset),
+      witness.recipient_before,
+      "late-leg failure must not credit ineligible recipient"
+    );
+    let pipeline_receipt: <T as frame_system::Config>::RuntimeEvent =
+      Event::<T>::PipelineFeeCharged {
+        actor_id,
+        fee: witness.pipeline_fee,
+      }
+      .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == pipeline_receipt)
+        .count(),
+      1
+    );
+    assert_eq!(
+      T::AssetOps::balance(&witness.payer, native),
+      witness.payer_native_before - witness.pipeline_fee - action_fee
+    );
+    let action_receipt: <T as frame_system::Config>::RuntimeEvent = Event::<T>::ActionFeeCharged {
+      actor_id,
+      cycle_nonce: 1,
+      step_index: 0,
+      actual_effect_weight: witness.effect_weight,
+      fee: action_fee,
+    }
+    .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == action_receipt)
+        .count(),
+      1
+    );
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      witness.sink_native_before + witness.pipeline_fee + action_fee,
+      "failed attempt must settle only its Pipeline and attempted Action charges"
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("temporary SplitTransfer preserves canonical authority");
+  }
+
+  struct UserSplitHeaderWitness<T: Config> {
+    payer: T::AccountId,
+    asset: T::AssetId,
+    source_before: T::Balance,
+    total: T::Balance,
+    distributed: T::Balance,
+    recipients: Vec<(T::AccountId, T::Balance, T::Balance)>,
+    payer_native_before: T::Balance,
+    sink_native_before: T::Balance,
+    pipeline_fee: T::Balance,
+    effect_weight: Weight,
+  }
+
+  fn capture_user_split_header<T: Config>(actor_id: ActorId) -> UserSplitHeaderWitness<T> {
+    let state =
+      Pallet::<T>::active_actor_state(actor_id).expect("real User SplitTransfer authority exists");
+    assert_eq!(state.identity.actor_class.actor_type(), ActorType::User);
+    assert_eq!(state.contract.steps.len(), 1);
+    assert!(state.contract.steps[0].precondition.is_none());
+    let FundingSourcePolicy::SignedAllowlist(sources) = &state.contract.funding else {
+      panic!("real SplitTransfer profile has signed maximum funding policy")
+    };
+    assert_eq!(sources.len() as u32, T::MaxWhitelistSize::get());
+    assert!(sources.contains(&state.identity.owner));
+    let ActorTask::SplitTransfer {
+      asset,
+      amount: AmountResolution::Percent(percent),
+      ref legs,
+    } = state.contract.steps[0].task
+    else {
+      panic!("real SplitTransfer profile owns Percent Step zero")
+    };
+    assert_eq!(percent, Perbill::from_percent(50));
+    assert_ne!(asset, T::FeeNativeAssetId::get());
+    assert!(T::MaxSplitTransferLegs::get() >= 2);
+    assert_eq!(legs.len() as u32, T::MaxSplitTransferLegs::get());
+    let payer = state.identity.sovereign_account;
+    let source_before = T::AssetOps::balance(&payer, asset);
+    let total =
+      percent.mul_floor(source_before.saturating_sub(T::AssetOps::minimum_balance(asset)));
+    assert!(!total.is_zero() && total < source_before);
+    let share = Perbill::from_rational(1u32, T::MaxSplitTransferLegs::get());
+    let mut unique = alloc::collections::BTreeSet::new();
+    let recipients = legs
+      .iter()
+      .map(|leg| {
+        assert_eq!(leg.share, share);
+        assert!(unique.insert(leg.to.clone()) && leg.to != payer);
+        assert!(
+          !SovereignIndex::<T>::contains_key(&leg.to),
+          "complete Step diagnostic has ordinary recipients, unlike ingress-heavy effect owner"
+        );
+        let amount = share.mul_floor(total);
+        assert!(!amount.is_zero());
+        (leg.to.clone(), T::AssetOps::balance(&leg.to, asset), amount)
+      })
+      .collect::<Vec<_>>();
+    let distributed = recipients
+      .iter()
+      .fold(Zero::zero(), |sum: T::Balance, (_, _, amount)| {
+        sum
+          .checked_add(amount)
+          .expect("bounded SplitTransfer distribution fits")
+      });
+    assert!(distributed > Zero::zero() && distributed <= total);
+    let effect_weight = T::TaskEffectWeight::actual_effect_weight(
+      &state.contract.steps[0].task,
+      TaskEffectExecution::Invoked,
+    )
+    .expect("SplitTransfer effect has host Weight evidence");
+    assert!(!effect_weight.is_zero());
+    let native = T::FeeNativeAssetId::get();
+    UserSplitHeaderWitness {
+      payer_native_before: T::AssetOps::balance(&payer, native),
+      sink_native_before: T::AssetOps::balance(&T::FeeSink::get(), native),
+      pipeline_fee: Pallet::<T>::pipeline_fee_for_actor(actor_id, ActorType::User)
+        .expect("admitted SplitTransfer Pipeline fee exists")
+        .total_fee,
+      payer,
+      asset,
+      source_before,
+      total,
+      distributed,
+      recipients,
+      effect_weight,
+    }
+  }
+
+  fn assert_user_split_header<T: Config>(
+    actor_id: ActorId,
+    witness: UserSplitHeaderWitness<T>,
+    measured_effect: Weight,
+  ) {
+    assert_eq!(measured_effect, witness.effect_weight);
+    let state = Pallet::<T>::active_actor_state(actor_id)
+      .expect("SplitTransfer completion retains active Actor");
+    assert_eq!(state.hot.cycle_state, CycleState::Idle);
+    assert_eq!(state.identity.cycle_nonce, 1);
+    assert!(!state.hot.pending_signal);
+    assert!(state.run_state.is_none() && state.hot.queue_ticket.is_none());
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert_retained_service_turn::<T>(actor_id, frame_system::Pallet::<T>::block_number());
+    assert_eq!(
+      T::AssetOps::balance(&witness.payer, witness.asset),
+      witness.source_before - witness.distributed,
+      "real SplitTransfer must debit exactly the distributed custody"
+    );
+    for (recipient, before, amount) in &witness.recipients {
+      assert_eq!(
+        T::AssetOps::balance(recipient, witness.asset),
+        *before + *amount,
+        "real SplitTransfer must credit every authored recipient"
+      );
+    }
+    let split_receipt: <T as frame_system::Config>::RuntimeEvent =
+      Event::<T>::SplitTransferExecuted {
+        actor_id,
+        cycle_nonce: 1,
+        step_index: 0,
+        asset: witness.asset,
+        total: witness.total,
+        distributed: witness.distributed,
+        retained: witness.total - witness.distributed,
+        legs: T::MaxSplitTransferLegs::get(),
+        effective_legs: T::MaxSplitTransferLegs::get(),
+      }
+      .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == split_receipt)
+        .count(),
+      1
+    );
+    let pipeline_receipt: <T as frame_system::Config>::RuntimeEvent =
+      Event::<T>::PipelineFeeCharged {
+        actor_id,
+        fee: witness.pipeline_fee,
+      }
+      .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == pipeline_receipt)
+        .count(),
+      1
+    );
+    let native = T::FeeNativeAssetId::get();
+    let after = T::AssetOps::balance(&witness.payer, native);
+    assert!(
+      after < witness.payer_native_before - witness.pipeline_fee,
+      "positive SplitTransfer must charge Action fee independently of Pipeline"
+    );
+    let action_fee = witness.payer_native_before - witness.pipeline_fee - after;
+    let action_receipt: <T as frame_system::Config>::RuntimeEvent = Event::<T>::ActionFeeCharged {
+      actor_id,
+      cycle_nonce: 1,
+      step_index: 0,
+      actual_effect_weight: witness.effect_weight,
+      fee: action_fee,
+    }
+    .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == action_receipt)
+        .count(),
+      1
+    );
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      witness.sink_native_before + witness.pipeline_fee + action_fee,
+      "SplitTransfer Action and Pipeline collector credits must match independent fees"
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("real SplitTransfer preserves canonical Actor ownership");
   }
 
   struct UserPipelineAccounting<T: Config> {
@@ -10493,229 +14804,3196 @@ mod benches {
     (owner, asset, trigger, funding)
   }
 
-  /// Exact zero-Step head byte maximum, with a future window reference and complete User control.
-  /// This byte certificate does not certify maximum Waiting geometry or CPU branch dominance.
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_inner_zero_step_user_max_head() {
-    let (owner, asset, trigger, funding) = large_header_fields::<T>();
-    let steps = ContractSteps::<T>::default();
-    prefund_active_user_creation::<T>(&owner, &steps);
-    let extra = full_attempt_fee::<T>(&steps)
-      .checked_add(
-        &Pallet::<T>::trigger_fee_for_weight(
-          ActorType::User,
-          TriggerFamily::AddressEvent,
-          T::WeightInfo::address_event_trigger_occurrence(),
-        )
-        .trigger_fee,
-      )
-      .unwrap();
-    let now = frame_system::Pallet::<T>::block_number();
-    let end = now.saturating_add(T::MinWindowLength::get());
-    Pallet::<T>::create_user_actor(
-      RawOrigin::Signed(owner.clone()).into(),
-      Mutability::Mutable,
-      Some(ActorContract {
-        trigger,
-        cooldown_blocks: 0,
-        window: Some(ScheduleWindow { start: now, end }),
-        steps,
-        funding,
-        completion: CompletionPolicy::Persistent,
-        auto_close_at_cycle_nonce: Some(T::MaxAutoCloseNonceHorizon::get()),
-      }),
-    )
-    .expect("maximum-header zero-Step User Contract is ordinarily admitted");
-    let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    let head = ActorContractHeads::<T>::get(actor_id).unwrap();
+  #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+  enum ZeroStepHeaderSource {
+    Manual,
+    ManualImmutableClose,
+    AddressEvent,
+    AtTimeDue,
+    AtTimeDueImmutableClose,
+    AtTimePreservedLatch,
+    CadencedDue,
+    CadencedDueImmutableClose,
+    CrossingWaiting,
+    CrossingArmed,
+    CrossingArmedNewPage,
+    CrossingArmedVacancy,
+    CrossingArmedFullPageClose,
+    CrossingWaitingTailClose,
+    ObservationChange,
+    ObservationChangeSharedPageClose,
+    ObservationChangeFullFreePageClose,
+    ObservationChangeTwoPagesClose,
+    ObservationChangeHeadRelinkClose,
+    ObservationChangeTwoPageFanoutClose,
+    ObservationChangePendingSecondPageClose,
+    ObservationChangePendingSecondPageRetain,
+    ObservationChangePendingHeadRelinkClose,
+  }
+
+  fn assert_maximum_zero_step_header<T: Config>(
+    actor_id: ActorId,
+    family: TriggerFamily,
+  ) -> ActorContractHeadOf<T> {
+    let head = ActorContractHeads::<T>::get(actor_id).expect("admitted head exists");
+    assert_eq!(
+      head.header.trigger.family(),
+      family,
+      "maximum-header fixture must bind requested Trigger family"
+    );
     assert_eq!(head.header.step_count, 0);
-    assert!(head.first_step.is_none() && head.first_step_resources.is_none());
+    assert!(head.first_step.is_none());
+    assert!(head.header.parked_balance_activation.is_none());
+    let trigger_width = match family {
+      TriggerFamily::Manual => TriggerOf::<T>::manual().encoded_size(),
+      TriggerFamily::AddressEvent => TriggerOf::<T>::max_encoded_len(),
+      TriggerFamily::AtTime => TriggerOf::<T>::at_time(1).encoded_size(),
+      TriggerFamily::Cadenced => TriggerOf::<T>::cadenced(1).encoded_size(),
+      TriggerFamily::ObservationCrossing => {
+        1 + T::ObservationFeedId::max_encoded_len()
+          + CrossingDirection::max_encoded_len()
+          + 2 * ObservationValue::max_encoded_len()
+      }
+      TriggerFamily::ObservationChange => 1 + T::ObservationFeedId::max_encoded_len(),
+    };
+    let window_payload = if matches!(family, TriggerFamily::AtTime | TriggerFamily::Cadenced) {
+      assert!(head.header.window.is_none());
+      assert_eq!(head.header.cooldown_blocks, 0);
+      ScheduleWindow::<BlockNumberFor<T>>::max_encoded_len()
+    } else {
+      0
+    };
+    assert_eq!(head.header.trigger.encoded_size(), trigger_width);
+    // Remove only impossible payloads, retaining their Option tags and each family's Trigger.
     assert_eq!(
       head.header.encoded_size(),
       ActorContractHeaderOf::<T>::max_encoded_len()
+        - ParkedBalanceActivationOf::<T>::max_encoded_len()
+        - TriggerOf::<T>::max_encoded_len()
+        + trigger_width
+        - window_payload
+    );
+    head
+  }
+
+  fn singleton_temporal_source<T: Config>(
+    actor_id: ActorId,
+    family: TriggerFamily,
+  ) -> DeadlineHandleOf<T> {
+    let source = TriggerDeadlineHandles::<T>::get(actor_id).expect("AtTime source exists");
+    let actor = Pallet::<T>::load_actor_ref(actor_id).unwrap();
+    assert_eq!(source.actor, actor);
+    let WakeupKey::Tick(due) = source.key else {
+      panic!("AtTime uses the Tick clock")
+    };
+    assert!(due > Pallet::<T>::current_scheduler_tick().unwrap());
+    let hot = Pallet::<T>::actor_hot(actor_id).unwrap();
+    assert!(match (family, hot.trigger_runtime_state) {
+      (
+        TriggerFamily::AtTime,
+        TriggerRuntimeState::AtTime {
+          consumed: false, ..
+        },
+      ) => true,
+      (TriggerFamily::Cadenced, TriggerRuntimeState::Cadenced { .. }) => true,
+      _ => false,
+    });
+    let pointer = hot
+      .trigger_wakeup_pointer
+      .expect("AtTime retains exact semantic pointer");
+    assert_eq!(
+      (pointer.tick, pointer.page_id, pointer.slot),
+      (due, source.page, u32::from(source.slot))
+    );
+    let header = DeadlineHeaders::<T>::get(source.key).unwrap();
+    assert_eq!(
+      (header.count, header.page_count),
+      (1, 1),
+      "scoped AtTime source is a singleton key"
+    );
+    let page = DeadlinePages::<T>::get(source.key, source.page).unwrap();
+    assert_eq!(page.live_entries, 1);
+    assert_eq!(page.entries[source.slot as usize], Some(actor));
+    source
+  }
+
+  struct ZeroStepHeaderFixture<T: Config> {
+    actor: ActorRef,
+    at_time: Option<(DeadlineHandleOf<T>, u32)>,
+    cadenced: Option<(DeadlineHandleOf<T>, u32)>,
+    crossing: Option<(T::ObservationFeedId, u64, CrossingPhase)>,
+    crossing_shape: Option<(CrossingLeafKeyOf<T>, u32, u32)>,
+    crossing_guards: Vec<(ActorId, Vec<u8>)>,
+    observation_change: Option<(T::ObservationFeedId, u32, u64, u32, u32)>,
+    observation_guards: Vec<(ActorId, Vec<u8>)>,
+    observation_padding: Option<(T::ObservationFeedId, Vec<(ActorId, Vec<u8>)>)>,
+    observation_two_page_fanout_pending: Option<bool>,
+    observation_pending_snapshot: Option<(Vec<u8>, Vec<u8>)>,
+    observation_free_len: u32,
+    class: ActorClass,
+    owner: T::AccountId,
+    identity_count: u32,
+    active_count: u32,
+    payer: T::AccountId,
+    asset: T::AssetId,
+    custody: T::Balance,
+    payer_native_before: T::Balance,
+    sink_native_before: T::Balance,
+    pipeline_fee: T::Balance,
+    header: Vec<u8>,
+    hold: Option<Vec<u8>>,
+    owner_hold_before: T::Balance,
+    owner_hold_after: T::Balance,
+    successor: ActorRef,
+    peers: [(ActorRef, Vec<u8>); 2],
+  }
+
+  fn prepare_zero_step_header<T: Config>(
+    actor_type: ActorType,
+    source: ZeroStepHeaderSource,
+    close: bool,
+  ) -> ZeroStepHeaderFixture<T> {
+    let (owner, asset, address_trigger, funding) = large_header_fields::<T>();
+    let crossing_feed = matches!(
+      source,
+      ZeroStepHeaderSource::CrossingWaiting
+        | ZeroStepHeaderSource::CrossingArmed
+        | ZeroStepHeaderSource::CrossingArmedNewPage
+        | ZeroStepHeaderSource::CrossingArmedVacancy
+        | ZeroStepHeaderSource::CrossingArmedFullPageClose
+        | ZeroStepHeaderSource::CrossingWaitingTailClose
+    )
+    .then(|| {
+      let feed = T::BenchmarkHelper::setup_max_encoded_observation_feeds(1)
+        .expect("maximum-width canonical observation feed exists")
+        .into_iter()
+        .next()
+        .unwrap();
+      assert!(matches!(
+        T::ObservationProvider::current(&feed),
+        CanonicalObservationState::Available { value: 1, .. }
+      ));
+      feed
+    });
+    let mut observation_padding_feed = None;
+    let observation_feed = matches!(
+      source,
+      ZeroStepHeaderSource::ObservationChange
+        | ZeroStepHeaderSource::ObservationChangeSharedPageClose
+        | ZeroStepHeaderSource::ObservationChangeFullFreePageClose
+        | ZeroStepHeaderSource::ObservationChangeTwoPagesClose
+        | ZeroStepHeaderSource::ObservationChangeHeadRelinkClose
+        | ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose
+        | ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose
+        | ZeroStepHeaderSource::ObservationChangePendingSecondPageClose
+        | ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain
+    )
+    .then(|| {
+      let relink = matches!(
+        source,
+        ZeroStepHeaderSource::ObservationChangeHeadRelinkClose
+          | ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose
+      );
+      let mut feeds =
+        T::BenchmarkHelper::setup_max_encoded_observation_feeds(if relink { 2 } else { 1 })
+          .expect("maximum-width observation change feed exists")
+          .into_iter();
+      let feed = feeds.next().unwrap();
+      if relink {
+        let padding = feeds.next().expect("second maximum-width feed exists");
+        assert_ne!(feed, padding);
+        assert_eq!(
+          padding.encoded_size(),
+          T::ObservationFeedId::max_encoded_len()
+        );
+        observation_padding_feed = Some(padding);
+      }
+      assert_eq!(feed.encoded_size(), T::ObservationFeedId::max_encoded_len());
+      assert!(matches!(
+        T::ObservationProvider::current(&feed),
+        CanonicalObservationState::Available { value: 1, .. }
+      ));
+      feed
+    });
+    let preserved = source == ZeroStepHeaderSource::AtTimePreservedLatch;
+    let family = match source {
+      ZeroStepHeaderSource::Manual
+      | ZeroStepHeaderSource::ManualImmutableClose
+      | ZeroStepHeaderSource::AtTimePreservedLatch => TriggerFamily::Manual,
+      ZeroStepHeaderSource::AddressEvent => TriggerFamily::AddressEvent,
+      ZeroStepHeaderSource::AtTimeDue | ZeroStepHeaderSource::AtTimeDueImmutableClose => {
+        TriggerFamily::AtTime
+      }
+      ZeroStepHeaderSource::CadencedDue | ZeroStepHeaderSource::CadencedDueImmutableClose => {
+        TriggerFamily::Cadenced
+      }
+      ZeroStepHeaderSource::CrossingWaiting
+      | ZeroStepHeaderSource::CrossingArmed
+      | ZeroStepHeaderSource::CrossingArmedNewPage
+      | ZeroStepHeaderSource::CrossingArmedVacancy
+      | ZeroStepHeaderSource::CrossingArmedFullPageClose
+      | ZeroStepHeaderSource::CrossingWaitingTailClose => TriggerFamily::ObservationCrossing,
+      ZeroStepHeaderSource::ObservationChange
+      | ZeroStepHeaderSource::ObservationChangeSharedPageClose
+      | ZeroStepHeaderSource::ObservationChangeFullFreePageClose
+      | ZeroStepHeaderSource::ObservationChangeTwoPagesClose
+      | ZeroStepHeaderSource::ObservationChangeHeadRelinkClose
+      | ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose
+      | ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose
+      | ZeroStepHeaderSource::ObservationChangePendingSecondPageClose
+      | ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain => {
+        TriggerFamily::ObservationChange
+      }
+    };
+    let (trigger, trigger_weight) = match family {
+      TriggerFamily::Manual => (Trigger::manual(), T::WeightInfo::manual_trigger()),
+      TriggerFamily::AddressEvent => (
+        address_trigger,
+        T::WeightInfo::address_event_trigger_occurrence(),
+      ),
+      TriggerFamily::AtTime => (
+        Trigger::at_time(8),
+        T::WeightInfo::at_time_trigger_occurrence(),
+      ),
+      TriggerFamily::Cadenced => (
+        Trigger::cadenced(8),
+        T::WeightInfo::cadenced_trigger_occurrence(),
+      ),
+      TriggerFamily::ObservationCrossing => (
+        Trigger::observation_crossing(crossing_feed.unwrap(), CrossingDirection::Rising, 2, 1),
+        T::WeightInfo::observation_crossing_trigger_occurrence(),
+      ),
+      TriggerFamily::ObservationChange => (
+        Trigger::observation_change(observation_feed.unwrap()),
+        T::WeightInfo::observation_change_trigger_occurrence(),
+      ),
+    };
+    if matches!(family, TriggerFamily::AtTime | TriggerFamily::Cadenced) || preserved {
+      assert!(
+        T::MaxTemporalDelayTicks::get() >= 8,
+        "future source survives setup Service peers"
+      );
+      T::BenchmarkHelper::advance_to_scheduler_tick(2)
+        .expect("ordinary consensus clock is available");
+    }
+    assert_ne!(
+      asset,
+      T::FeeNativeAssetId::get(),
+      "custody witness is independent of Pipeline fees"
+    );
+    assert!(
+      T::MaxAutoCloseNonceHorizon::get() >= 2,
+      "host supports a nonterminal nonce target"
+    );
+    let steps = ContractSteps::<T>::default();
+    if actor_type == ActorType::User {
+      prefund_active_user_creation::<T>(&owner, &steps);
+    }
+    let schedule = Schedule {
+      trigger,
+      cooldown_blocks: 0,
+    };
+    let mut contract = match actor_type {
+      ActorType::User => user_contract::<T>(schedule, steps.clone()),
+      ActorType::System => system_contract::<T>(schedule, steps.clone()),
+    }
+    .expect("zero-Step Contract exists");
+    contract.funding = funding;
+    let end = T::MinWindowLength::get().saturating_add(1_000u32.into());
+    contract.window = (!matches!(family, TriggerFamily::AtTime | TriggerFamily::Cadenced))
+      .then_some(ScheduleWindow {
+        start: 1u32.into(),
+        end,
+      });
+    contract.auto_close_at_cycle_nonce = Some(if close { 1 } else { 2 });
+    let immutable = matches!(
+      source,
+      ZeroStepHeaderSource::ManualImmutableClose
+        | ZeroStepHeaderSource::AtTimeDueImmutableClose
+        | ZeroStepHeaderSource::CadencedDueImmutableClose
+    );
+    if immutable {
+      assert!(
+        actor_type == ActorType::User && close,
+        "immutable maximum-header witness requires authored User terminal nonce"
+      );
+    }
+    let hold_reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
+    let owner_hold_before = T::StateHoldCurrency::balance_on_hold(&hold_reason, &owner);
+    match actor_type {
+      ActorType::User => Pallet::<T>::create_user_actor(
+        RawOrigin::Signed(owner.clone()).into(),
+        if immutable {
+          Mutability::Immutable
+        } else {
+          Mutability::Mutable
+        },
+        Some(contract),
+      ),
+      ActorType::System => Pallet::<T>::create_system_actor(
+        RawOrigin::Root.into(),
+        owner.clone(),
+        Mutability::Mutable,
+        Some(contract),
+      ),
+    }
+    .expect("maximum legal zero-Step family header is admitted");
+    let owner_hold_after = T::StateHoldCurrency::balance_on_hold(&hold_reason, &owner);
+    if actor_type == ActorType::System {
+      assert_eq!(
+        owner_hold_after, owner_hold_before,
+        "System has no User hold"
+      );
+    }
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    assert_measured_actor_accounts::<T>(&[actor_id]);
+    let identity = Pallet::<T>::actor_identity(actor_id).expect("admitted identity exists");
+    assert_eq!(identity.actor_class.actor_type(), actor_type);
+    assert_eq!(
+      identity.mutability,
+      if immutable {
+        Mutability::Immutable
+      } else {
+        Mutability::Mutable
+      }
+    );
+    if immutable {
+      let temporal_source =
+        matches!(family, TriggerFamily::AtTime | TriggerFamily::Cadenced).then(|| {
+          TriggerDeadlineHandles::<T>::get(actor_id)
+            .expect("Immutable temporal Actor owns future Tick source")
+        });
+      assert_eq!(
+        Pallet::<T>::close_actor(RawOrigin::Signed(owner.clone()).into(), actor_id),
+        Err(Error::<T>::ImmutableActor.into()),
+        "owner cannot close the Immutable User before its authored terminal cycle"
+      );
+      assert!(ActorProcesses::<T>::contains_key(actor_id));
+      if let Some(source) = temporal_source {
+        assert_eq!(
+          TriggerDeadlineHandles::<T>::get(actor_id),
+          Some(source),
+          "owner refusal must preserve Immutable temporal source authority"
+        );
+      }
+    }
+    let payer = identity.sovereign_account;
+    let class = identity.actor_class;
+    assert_eq!(class.owner_slot().is_some(), actor_type == ActorType::User);
+    if let ActorClass::System { sovereign_id } = class {
+      assert_eq!(
+        SystemSovereigns::<T>::get(sovereign_id),
+        Some(SystemSovereignState::Occupied(actor_id))
+      );
+    }
+    let mut head = assert_maximum_zero_step_header::<T>(actor_id, family);
+    if let Some(feed) = crossing_feed {
+      assert_eq!(feed.encoded_size(), T::ObservationFeedId::max_encoded_len());
+      assert_eq!(
+        head.header.trigger.encoded_size(),
+        TriggerOf::<T>::observation_crossing(feed, CrossingDirection::Rising, 2, 1).encoded_size()
+      );
+      assert!(CrossingMemberships::<T>::contains_key(actor_id));
+    }
+    let mut at_time_source = (family == TriggerFamily::AtTime)
+      .then(|| singleton_temporal_source::<T>(actor_id, TriggerFamily::AtTime));
+    let cadenced_source = (family == TriggerFamily::Cadenced)
+      .then(|| singleton_temporal_source::<T>(actor_id, TriggerFamily::Cadenced));
+    let trigger_fee =
+      Pallet::<T>::trigger_fee_for_weight(actor_type, family, trigger_weight).trigger_fee;
+    if actor_type == ActorType::User {
+      let reserve = full_attempt_fee::<T>(&steps)
+        .checked_add(&trigger_fee)
+        .expect("Trigger and Pipeline fees fit");
+      T::AssetOps::mint(&payer, T::FeeNativeAssetId::get(), reserve).expect("fees are prefunded");
+    } else {
+      // Positive native custody is a preservation witness, not a System fee prerequisite.
+      let minimum = T::AssetOps::minimum_balance(T::FeeNativeAssetId::get()).max(One::one());
+      let custody = minimum
+        .checked_add(&minimum)
+        .expect("two native minima fit");
+      T::AssetOps::mint(&payer, T::FeeNativeAssetId::get(), custody)
+        .expect("System native custody witness is funded");
+    }
+    assert!(!Pallet::<T>::actor_hot(actor_id).unwrap().pending_signal);
+    let amount = T::AssetOps::minimum_balance(asset).max(One::one());
+    T::AssetOps::mint(&owner, asset, amount).expect("signed source has transferable custody");
+    let source_before = T::AssetOps::balance(&owner, asset);
+    let custody_before = T::AssetOps::balance(&payer, asset);
+    let native = T::FeeNativeAssetId::get();
+    let payer_before_trigger = T::AssetOps::balance(&payer, native);
+    let sink_before_trigger = T::AssetOps::balance(&T::FeeSink::get(), native);
+    if actor_type == ActorType::System {
+      assert!(trigger_fee.is_zero());
+    }
+    T::BenchmarkHelper::transfer_signed(&owner, &payer, asset, amount)
+      .expect("real signed movement supplies non-native custody");
+    assert_eq!(T::AssetOps::balance(&owner, asset), source_before - amount);
+    if family != TriggerFamily::AddressEvent {
+      assert!(
+        !Pallet::<T>::actor_hot(actor_id).unwrap().pending_signal,
+        "custody movement must not publish Manual, Crossing or temporal readiness"
+      );
+      assert_eq!(T::AssetOps::balance(&payer, native), payer_before_trigger);
+      assert_eq!(
+        T::AssetOps::balance(&T::FeeSink::get(), native),
+        sink_before_trigger
+      );
+    }
+    let mut pre_fanout_guards = Vec::new();
+    let mut pre_fanout_padding_guards = Vec::new();
+    if matches!(
+      source,
+      ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose
+        | ZeroStepHeaderSource::ObservationChangePendingSecondPageClose
+        | ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain
+        | ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose
+    ) {
+      assert_eq!(
+        close,
+        source != ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain,
+        "two-page fanout witnesses distinguish retained and terminal Opening"
+      );
+      let feed = observation_feed.unwrap();
+      let page_size = T::ObservationPageSize::get();
+      assert!(page_size > 1 && T::MaxObservationFanoutPagesPerBlock::get() >= 2);
+      let slot = ObservationSubscriptionSlot::<T>::get(actor_id).unwrap();
+      assert!(slot.is_multiple_of(page_size));
+      let head_relink = source == ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose;
+      if head_relink {
+        let padding =
+          observation_padding_feed.expect("pending head unlink has an independent feed");
+        for index in 0..page_size - 1 {
+          let guard = create_zero_step_observation_guard::<T>(index, padding);
+          assert_eq!(
+            ObservationSubscriptionSlot::<T>::get(guard),
+            Some(slot + index + 1)
+          );
+          pre_fanout_padding_guards.push(guard);
+        }
+      }
+      for index in 0..if head_relink {
+        page_size
+      } else {
+        2 * page_size - 1
+      } {
+        let guard = create_zero_step_observation_guard::<T>(index, feed);
+        assert_eq!(
+          ObservationSubscriptionSlot::<T>::get(guard),
+          Some(slot + index + 1 + u32::from(head_relink) * (page_size - 1))
+        );
+        pre_fanout_guards.push(guard);
+      }
+      let list = ObservationSubscriberPageLists::<T>::get(feed).unwrap();
+      assert_eq!(
+        (list.head, list.tail, list.count),
+        (slot / page_size, slot / page_size + 1, 2)
+      );
+    }
+    if let Some(feed) = observation_feed {
+      let current = publish_zero_step_observation::<T>(feed, 1_000);
+      assert!(
+        current > 1,
+        "real publication changes the current observation"
+      );
+      Pallet::<T>::do_fanout_dirty_observation_page()
+        .expect("real deferred fanout publishes ObservationChange readiness");
+      if matches!(
+        source,
+        ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose
+          | ZeroStepHeaderSource::ObservationChangePendingSecondPageClose
+          | ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain
+          | ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose
+      ) {
+        let slot = ObservationSubscriptionSlot::<T>::get(actor_id).unwrap();
+        let page_size = T::ObservationPageSize::get();
+        let dirty = DirtyObservationFeeds::<T>::get(feed)
+          .expect("first fanout leaves the linked second page pending");
+        assert_eq!(dirty.next_subscriber_page, Some(slot / page_size + 1));
+        if source == ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose {
+          Pallet::<T>::do_fanout_dirty_observation_page()
+            .expect("real second-page fanout completes before measured Opening");
+          assert!(!DirtyObservationFeeds::<T>::contains_key(feed));
+        }
+        assert!(pre_fanout_guards.iter().enumerate().all(|(index, guard)| {
+          let hot = benchmark_fixture_hot::<T>(*guard).unwrap();
+          let admitted = source == ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose
+            || (source != ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose
+              && index < (page_size - 1) as usize);
+          hot.pending_signal == admitted && ServiceNodes::<T>::contains_key(*guard) == admitted
+        }));
+      }
+      assert!(IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id));
+      assert!(ObservationSubscriptionSlot::<T>::contains_key(actor_id));
+    }
+    if let Some(feed) = crossing_feed {
+      let mut current = publish_zero_step_observation::<T>(feed, 1_000);
+      assert!(
+        (2..=1_000).contains(&current),
+        "real publication crosses authored threshold"
+      );
+      Pallet::<T>::service_crossing_transitions(Weight::MAX);
+      assert!(IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id));
+      assert!(CrossingMemberships::<T>::contains_key(actor_id));
+      assert!(matches!(
+        Pallet::<T>::actor_hot(actor_id)
+          .unwrap()
+          .trigger_runtime_state,
+        TriggerRuntimeState::ObservationCrossing { .. }
+      ));
+      if matches!(
+        source,
+        ZeroStepHeaderSource::CrossingArmed
+          | ZeroStepHeaderSource::CrossingArmedNewPage
+          | ZeroStepHeaderSource::CrossingArmedVacancy
+          | ZeroStepHeaderSource::CrossingArmedFullPageClose
+      ) {
+        let native = T::FeeNativeAssetId::get();
+        let payer_after_fire = T::AssetOps::balance(&payer, native);
+        let sink_after_fire = T::AssetOps::balance(&T::FeeSink::get(), native);
+        frame_system::Pallet::<T>::set_block_number(
+          frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()),
+        );
+        for _ in 0..T::MaxCrossingTransitionsPerBlock::get() {
+          if current <= 1 {
+            break;
+          }
+          let next = publish_zero_step_observation::<T>(feed, 1);
+          assert!(
+            next < current,
+            "real publication approaches the rearm boundary"
+          );
+          current = next;
+        }
+        assert_eq!(
+          current, 1,
+          "bounded publications reach the Armed rearm value"
+        );
+        Pallet::<T>::service_crossing_transitions(Weight::MAX);
+        assert!(IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id));
+        assert!(Pallet::<T>::actor_hot(actor_id).unwrap().pending_signal);
+        assert_eq!(T::AssetOps::balance(&payer, native), payer_after_fire);
+        assert_eq!(
+          T::AssetOps::balance(&T::FeeSink::get(), native),
+          sink_after_fire
+        );
+      }
+    }
+    if family == TriggerFamily::Manual {
+      let info = Pallet::<T>::manual_trigger(RawOrigin::Signed(owner.clone()).into(), actor_id)
+        .expect("real authorized Manual occurrence publishes readiness");
+      assert_eq!(info.actual_weight, Some(trigger_weight));
+      assert_eq!(
+        info.pays_fee,
+        if actor_type == ActorType::User {
+          Pays::No
+        } else {
+          Pays::Yes
+        }
+      );
+    }
+    if let Some(source) = at_time_source.or(cadenced_source) {
+      let WakeupKey::Tick(due) = source.key else {
+        unreachable!()
+      };
+      T::BenchmarkHelper::finalize_scheduler_clock().unwrap();
+      T::BenchmarkHelper::advance_to_scheduler_tick(due).expect("clock reaches AtTime source");
+      let now_tick = Pallet::<T>::current_scheduler_tick().unwrap();
+      prepare_temporal_deadline_frontier::<T>(source.actor, now_tick);
+      let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+      assert_eq!(
+        Pallet::<T>::process_next_due_tick_deadline(
+          &mut meter,
+          ServiceResidenceKind::Live,
+          frame_system::Pallet::<T>::block_number(),
+          now_tick,
+          None
+        ),
+        Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(
+          source.actor
+        ))
+      );
+      assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+      assert!(match (
+        family,
+        Pallet::<T>::actor_hot(actor_id)
+          .unwrap()
+          .trigger_runtime_state
+      ) {
+        (TriggerFamily::AtTime, TriggerRuntimeState::AtTime { consumed: true, .. }) => true,
+        (TriggerFamily::Cadenced, TriggerRuntimeState::Cadenced { .. }) => true,
+        _ => false,
+      });
+    }
+    assert_eq!(
+      T::AssetOps::balance(&payer, native),
+      payer_before_trigger - trigger_fee
     );
     assert_eq!(
-      head.encoded_size(),
-      ActorContractHeaderOf::<T>::max_encoded_len() + 2
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      sink_before_trigger + trigger_fee
     );
-    let sovereign = benchmark_fixture_identity::<T>(actor_id)
-      .unwrap()
-      .sovereign_account;
-    T::AssetOps::mint(&sovereign, T::FeeNativeAssetId::get(), extra).unwrap();
-    let ingress = T::AssetOps::minimum_balance(asset).max(1u32.into());
-    T::AssetOps::mint(&owner, asset, ingress + ingress).unwrap();
-    T::BenchmarkHelper::enable_asset_ops_ingress();
-    T::BenchmarkHelper::transfer_signed(&owner, &sovereign, asset, ingress)
-      .expect("certified ingress activates the maximum-header zero-Step Actor");
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).unwrap();
-    assert!(cell.hot.pending_signal);
-    frame_system::Pallet::<T>::set_block_number(cell.eligible_at.unwrap());
-    assert!(T::AssetOps::balance(&sovereign, asset) >= ingress);
+    let occurrence: <T as frame_system::Config>::RuntimeEvent =
+      Event::<T>::TriggerOccurrenceProcessed {
+        actor_id,
+        trigger_family: family,
+        fee: trigger_fee,
+      }
+      .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == occurrence)
+        .count(),
+      1
+    );
+    let custody = custody_before + amount;
+    assert_eq!(T::AssetOps::balance(&payer, asset), custody);
+    assert!(Pallet::<T>::actor_hot(actor_id).unwrap().pending_signal);
+    let eligible = ServiceNodes::<T>::get(actor_id)
+      .expect("useful occurrence publishes Service")
+      .eligible_from;
+    frame_system::Pallet::<T>::set_block_number(eligible);
+    if preserved {
+      let old_actor = Pallet::<T>::load_actor_ref(actor_id).unwrap();
+      let mut replacement = Pallet::<T>::actor_contract(actor_id).unwrap();
+      replacement.trigger = Trigger::at_time(8);
+      replacement.window = None;
+      Pallet::<T>::update_contract(
+        RawOrigin::Signed(owner.clone()).into(),
+        actor_id,
+        replacement,
+      )
+      .expect("ordinary replacement preserves paid Manual readiness");
+      let actor = Pallet::<T>::load_actor_ref(actor_id).unwrap();
+      assert_eq!(
+        actor.generation,
+        old_actor.generation.checked_add(1).unwrap()
+      );
+      assert!(Pallet::<T>::actor_hot(actor_id).unwrap().pending_signal);
+      assert_eq!(
+        Pallet::<T>::actor_identity(actor_id).unwrap().cycle_nonce,
+        0
+      );
+      assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+      assert_eq!(
+        T::AssetOps::balance(&payer, native),
+        payer_before_trigger - trigger_fee
+      );
+      assert_eq!(
+        T::AssetOps::balance(&T::FeeSink::get(), native),
+        sink_before_trigger + trigger_fee
+      );
+      at_time_source = Some(singleton_temporal_source::<T>(
+        actor_id,
+        TriggerFamily::AtTime,
+      ));
+      head = assert_maximum_zero_step_header::<T>(actor_id, TriggerFamily::AtTime);
+      let eligible = ServiceNodes::<T>::get(actor_id).unwrap().eligible_from;
+      assert!(eligible >= frame_system::Pallet::<T>::block_number());
+      frame_system::Pallet::<T>::set_block_number(eligible);
+    }
+    let mut crossing_guards = Vec::new();
+    if source == ZeroStepHeaderSource::CrossingWaitingTailClose {
+      assert!(
+        close,
+        "the two-page Crossing witness measures terminal Opening"
+      );
+      let feed = crossing_feed.unwrap();
+      let page_size = T::CrossingPageSize::get();
+      assert!(page_size > 1);
+      let target = CrossingMemberships::<T>::get(actor_id).unwrap();
+      assert_eq!((target.page, target.offset), (0, 0));
+      for index in 0..page_size {
+        let guard = create_zero_step_crossing_guard::<T>(index, feed, 2);
+        let locator = CrossingMemberships::<T>::get(guard).unwrap();
+        assert_eq!(locator.key, target.key);
+        assert_eq!(
+          (locator.page, locator.offset),
+          if index + 1 == page_size {
+            (1, 0)
+          } else {
+            (0, index + 1)
+          }
+        );
+        crossing_guards.push((
+          guard,
+          (
+            Pallet::<T>::actor_identity(guard),
+            ActorProcesses::<T>::get(guard),
+            ActorSemanticStates::<T>::get(guard),
+          )
+            .encode(),
+        ));
+      }
+      let leaf = CrossingLeafStates::<T>::get(target.key).unwrap();
+      assert_eq!(
+        (leaf.member_count, leaf.page_count, leaf.tail_page),
+        (page_size + 1, 2, 1)
+      );
+      assert_eq!(
+        CrossingMemberPages::<T>::get(target.key, 0)
+          .unwrap()
+          .entries
+          .len() as u32,
+        page_size
+      );
+      assert_eq!(
+        CrossingMemberPages::<T>::get(target.key, 1)
+          .unwrap()
+          .entries
+          .len(),
+        1
+      );
+    }
+    if matches!(
+      source,
+      ZeroStepHeaderSource::CrossingArmedNewPage
+        | ZeroStepHeaderSource::CrossingArmedVacancy
+        | ZeroStepHeaderSource::CrossingArmedFullPageClose
+    ) {
+      assert_eq!(
+        close,
+        source == ZeroStepHeaderSource::CrossingArmedFullPageClose,
+        "Armed destination witnesses separate retained rearm from terminal cleanup"
+      );
+      let feed = crossing_feed.unwrap();
+      let page_size = T::CrossingPageSize::get();
+      assert!(page_size > 1);
+      let destination_members =
+        page_size - u32::from(source == ZeroStepHeaderSource::CrossingArmedVacancy);
+      let source_key = CrossingMemberships::<T>::get(actor_id).unwrap().key;
+      let destination = CrossingLeafKey {
+        feed,
+        traversal: CrossingTraversal::Upward,
+        threshold: 2,
+      };
+      assert_ne!(source_key, destination);
+      for index in 0..destination_members {
+        let guard = create_zero_step_crossing_guard::<T>(index, feed, 2);
+        let locator = CrossingMemberships::<T>::get(guard).unwrap();
+        assert_eq!(
+          (locator.key, locator.page, locator.offset),
+          (destination, 0, index)
+        );
+        crossing_guards.push((
+          guard,
+          (
+            Pallet::<T>::actor_identity(guard),
+            ActorProcesses::<T>::get(guard),
+            ActorSemanticStates::<T>::get(guard),
+          )
+            .encode(),
+        ));
+      }
+      let leaf = CrossingLeafStates::<T>::get(destination).unwrap();
+      assert_eq!(
+        (leaf.member_count, leaf.page_count, leaf.tail_page),
+        (destination_members, 1, 0)
+      );
+      assert_eq!(
+        CrossingMemberPages::<T>::get(destination, 0)
+          .unwrap()
+          .entries
+          .len() as u32,
+        destination_members
+      );
+      assert_eq!(
+        CrossingLeafStates::<T>::get(source_key)
+          .unwrap()
+          .member_count,
+        1
+      );
+    }
+    let mut observation_guards = Vec::new();
+    let mut observation_padding = None;
+    if matches!(
+      source,
+      ZeroStepHeaderSource::ObservationChangeSharedPageClose
+        | ZeroStepHeaderSource::ObservationChangeFullFreePageClose
+        | ZeroStepHeaderSource::ObservationChangeTwoPagesClose
+        | ZeroStepHeaderSource::ObservationChangeHeadRelinkClose
+        | ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose
+        | ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose
+        | ZeroStepHeaderSource::ObservationChangePendingSecondPageClose
+        | ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain
+    ) {
+      assert!(
+        close || source == ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain,
+        "shared-page witness measures authored terminal cleanup or pending-page rearm"
+      );
+      let feed = observation_feed.unwrap();
+      let slot = ObservationSubscriptionSlot::<T>::get(actor_id).unwrap();
+      let page_size = T::ObservationPageSize::get();
+      assert!(
+        page_size > 1 && slot.is_multiple_of(page_size),
+        "shared-page target starts its full subscriber page"
+      );
+      let relink = matches!(
+        source,
+        ZeroStepHeaderSource::ObservationChangeHeadRelinkClose
+          | ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose
+      );
+      if relink {
+        let padding = observation_padding_feed.expect("independent padding feed exists");
+        let mut guards = Vec::new();
+        for index in 0..page_size - 1 {
+          let guard = if pre_fanout_padding_guards.is_empty() {
+            create_zero_step_observation_guard::<T>(index, padding)
+          } else {
+            pre_fanout_padding_guards[index as usize]
+          };
+          assert_eq!(
+            ObservationSubscriptionSlot::<T>::get(guard),
+            Some(slot + index + 1)
+          );
+          guards.push((
+            guard,
+            (
+              Pallet::<T>::actor_identity(guard),
+              ActorProcesses::<T>::get(guard),
+              ActorSemanticStates::<T>::get(guard),
+            )
+              .encode(),
+          ));
+        }
+        let pad_page = ObservationSubscriberPages::<T>::get(padding, slot / page_size).unwrap();
+        assert_eq!(pad_page.entries.len() as u32, page_size);
+        assert_eq!(pad_page.entries[0], None);
+        assert_eq!(ObservationSubscriberCount::<T>::get(padding), page_size - 1);
+        observation_padding = Some((padding, guards));
+      }
+      let fanout = matches!(
+        source,
+        ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose
+          | ZeroStepHeaderSource::ObservationChangePendingSecondPageClose
+          | ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain
+          | ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose
+      );
+      let guard_count = if relink {
+        page_size
+      } else if source == ZeroStepHeaderSource::ObservationChangeTwoPagesClose || fanout {
+        2 * page_size - 1
+      } else {
+        page_size - 1
+      };
+      assert_eq!(pre_fanout_guards.is_empty(), !fanout);
+      for index in 0..guard_count {
+        let guard = if fanout {
+          pre_fanout_guards[index as usize]
+        } else {
+          create_zero_step_observation_guard::<T>(index, feed)
+        };
+        assert_eq!(
+          ObservationSubscriptionSlot::<T>::get(guard),
+          Some(slot + index + 1 + u32::from(relink) * (page_size - 1))
+        );
+        observation_guards.push((
+          guard,
+          (
+            Pallet::<T>::actor_identity(guard),
+            ActorProcesses::<T>::get(guard),
+            ActorSemanticStates::<T>::get(guard),
+          )
+            .encode(),
+        ));
+      }
+      let page = ObservationSubscriberPages::<T>::get(feed, slot / page_size).unwrap();
+      assert_eq!(
+        page.entries.len() as u32,
+        if relink { 1 } else { page_size }
+      );
+      assert!(page.entries.iter().all(Option::is_some));
+      assert_eq!(ObservationSubscriberCount::<T>::get(feed), guard_count + 1);
+      let page_id = slot / page_size;
+      let second =
+        relink || fanout || source == ZeroStepHeaderSource::ObservationChangeTwoPagesClose;
+      let list = ObservationSubscriberPageLists::<T>::get(feed).unwrap();
+      assert_eq!(
+        (list.head, list.tail, list.count),
+        (page_id, page_id + u32::from(second), 1 + u32::from(second))
+      );
+      assert_eq!(
+        (page.previous, page.next),
+        (None, second.then_some(page_id + 1))
+      );
+      if second {
+        let next = ObservationSubscriberPages::<T>::get(feed, page_id + 1).unwrap();
+        assert_eq!((next.previous, next.next), (Some(page_id), None));
+        assert_eq!(next.entries.len() as u32, page_size);
+        assert!(next.entries.iter().all(Option::is_some));
+      }
+      if source == ZeroStepHeaderSource::ObservationChangeFullFreePageClose {
+        assert_eq!(
+          ObservationFreeSlotLen::<T>::get(),
+          0,
+          "the free-slot page begins empty before donor setup"
+        );
+        let mut donors = Vec::new();
+        for index in 0..page_size - 1 {
+          donors.push(create_zero_step_observation_guard::<T>(
+            page_size + index,
+            feed,
+          ));
+        }
+        for donor in donors {
+          Pallet::<T>::close_actor(RawOrigin::Root.into(), donor)
+            .expect("ordinary donor close fills the free-slot page to its last vacancy");
+        }
+        assert_eq!(ObservationFreeSlotLen::<T>::get(), page_size - 1);
+        assert_eq!(
+          ObservationFreeSlotPages::<T>::get(0).unwrap().len() as u32,
+          page_size - 1
+        );
+        assert_eq!(ObservationSubscriberCount::<T>::get(feed), page_size);
+        assert_eq!(
+          ObservationSubscriberPageLists::<T>::get(feed)
+            .unwrap()
+            .count,
+          1
+        );
+      }
+    }
+    create_zero_step_system_follower::<T>();
+    create_zero_step_system_follower::<T>();
+    let now = frame_system::Pallet::<T>::block_number();
+    if let Some(window) = head.header.window {
+      assert!(
+        now <= window.end,
+        "nonce completion precedes the window boundary"
+      );
+    }
+    let actor = Pallet::<T>::load_actor_ref(actor_id).unwrap();
+    let node = ServiceNodes::<T>::get(actor_id).unwrap();
+    assert_eq!(
+      ServiceHeader::<T>::get().count,
+      3 + match source {
+        ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose =>
+          observation_guards.len() as u32,
+        ZeroStepHeaderSource::ObservationChangePendingSecondPageClose
+        | ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain =>
+          T::ObservationPageSize::get() - 1,
+        _ => 0,
+      }
+    );
+    assert_eq!(ServiceHeader::<T>::get().cursor, Some(actor));
+    assert_ne!(node.next, actor);
+    assert_ne!(node.previous, node.next);
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    let peers = [node.previous, node.next].map(|peer| {
+      let mut expected = ServiceNodes::<T>::get(peer.actor_id).unwrap();
+      if close {
+        if peer == node.previous {
+          expected.next = node.next;
+        }
+        if peer == node.next {
+          expected.previous = node.previous;
+        }
+      }
+      (
+        peer,
+        (
+          Some(expected),
+          ActorProcesses::<T>::get(peer.actor_id),
+          ActorSemanticStates::<T>::get(peer.actor_id),
+        )
+          .encode(),
+      )
+    });
+    let mut hold = ActorStateHolds::<T>::get(actor_id);
+    assert_eq!(hold.is_some(), actor_type == ActorType::User);
+    let mut owner_hold_after = T::StateHoldCurrency::balance_on_hold(&hold_reason, &owner);
+    if preserved {
+      assert_eq!(
+        at_time_source,
+        Some(singleton_temporal_source::<T>(
+          actor_id,
+          TriggerFamily::AtTime
+        ))
+      );
+      assert!(!ActorActivationAuthorities::<T>::contains_key(actor_id));
+      assert!(!ActorObservationFeeds::<T>::contains_key(actor_id));
+      assert!(!ObservationSubscriptionSlot::<T>::contains_key(actor_id));
+      assert!(!CrossingMemberships::<T>::contains_key(actor_id));
+      if let Some(hold) = &mut hold {
+        let pointer = Pallet::<T>::actor_hot(actor_id)
+          .unwrap()
+          .trigger_wakeup_pointer
+          .unwrap();
+        let bytes: T::Balance = u32::try_from(pointer.encoded_size()).unwrap().into();
+        let released = T::ActorStateHoldPerByte::get()
+          .checked_mul(&bytes)
+          .and_then(|value| value.checked_add(&T::ActorStateHoldBase::get()))
+          .unwrap();
+        assert_eq!(
+          hold.breakdown.detector, released,
+          "AtTime owns only its pointer detector hold"
+        );
+        // Project the expected hold without mutating state or performing cleanup in setup.
+        hold.breakdown.detector = Zero::zero();
+        owner_hold_after = owner_hold_after.checked_sub(&released).unwrap();
+      }
+    }
+    if cadenced_source.is_some() && !close {
+      if let Some(hold) = &mut hold {
+        assert!(
+          hold.breakdown.detector.is_zero(),
+          "due cadence has no retained pointer hold"
+        );
+        let pointer = TriggerWakeupPointer {
+          tick: 0,
+          page_id: 0,
+          slot: 0,
+        };
+        let bytes: T::Balance = u32::try_from(pointer.encoded_size()).unwrap().into();
+        let rearmed = T::ActorStateHoldPerByte::get()
+          .checked_mul(&bytes)
+          .and_then(|value| value.checked_add(&T::ActorStateHoldBase::get()))
+          .unwrap();
+        hold.breakdown.detector = rearmed;
+        owner_hold_after = owner_hold_after.checked_add(&rearmed).unwrap();
+      }
+    }
+    let hold = hold.map(|hold| hold.encode());
+    let at_time = at_time_source.map(|source| {
+      (
+        source,
+        DeadlineIndexLen::<T>::get(WakeupClock::Tick)
+          .checked_sub(u32::from(preserved))
+          .unwrap(),
+      )
+    });
+    let pipeline_fee = Pallet::<T>::pipeline_fee_for_actor(actor_id, actor_type)
+      .expect("certified Pipeline quote exists")
+      .total_fee;
+    assert_eq!(pipeline_fee.is_zero(), actor_type == ActorType::System);
+    let payer_native_before = T::AssetOps::balance(&payer, native);
+    let sink_native_before = T::AssetOps::balance(&T::FeeSink::get(), native);
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("maximum-header readiness and window are coherent");
-    let before = user_pipeline_accounting::<T>(actor_id);
+    Pallet::<T>::do_try_state().expect("real occurrence and three-member Service are coherent");
+    ZeroStepHeaderFixture {
+      actor,
+      at_time,
+      cadenced: cadenced_source
+        .map(|source| (source, DeadlineIndexLen::<T>::get(WakeupClock::Tick))),
+      crossing: crossing_feed.map(|feed| {
+        let CanonicalObservationState::Available { revision, .. } =
+          T::ObservationProvider::current(&feed)
+        else {
+          panic!("Crossing Opening has a current observation")
+        };
+        assert!(IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id));
+        let phase = if matches!(
+          source,
+          ZeroStepHeaderSource::CrossingArmed
+            | ZeroStepHeaderSource::CrossingArmedNewPage
+            | ZeroStepHeaderSource::CrossingArmedVacancy
+            | ZeroStepHeaderSource::CrossingArmedFullPageClose
+        ) {
+          CrossingPhase::Armed
+        } else {
+          CrossingPhase::WaitingForRearm
+        };
+        (feed, revision, phase)
+      }),
+      observation_change: observation_feed.map(|feed| {
+        let CanonicalObservationState::Available { revision, .. } =
+          T::ObservationProvider::current(&feed)
+        else {
+          panic!("ObservationChange Opening has current truth")
+        };
+        assert!(IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id));
+        let slot = ObservationSubscriptionSlot::<T>::get(actor_id)
+          .expect("admitted ObservationChange owns one subscription slot");
+        assert_eq!(
+          ObservationSubscriptionSlotOwner::<T>::get(slot),
+          Some(actor_id)
+        );
+        let page = ObservationSubscriberPages::<T>::get(feed, slot / T::ObservationPageSize::get())
+          .expect("admitted ObservationChange owns one subscriber page");
+        assert_eq!(
+          page.entries[(slot % T::ObservationPageSize::get()) as usize],
+          Some(actor_id)
+        );
+        assert_eq!(
+          ObservationSubscriberCount::<T>::get(feed),
+          observation_guards.len() as u32 + 1
+        );
+        assert_eq!(
+          ObservationSubscriberPageLists::<T>::get(feed)
+            .unwrap()
+            .count,
+          1 + u32::from(observation_guards.len() as u32 + 1 > T::ObservationPageSize::get())
+        );
+        assert_eq!(
+          ActorObservationFeeds::<T>::get(actor_id).map(|feeds| feeds.to_vec()),
+          Some(vec![feed])
+        );
+        (
+          feed,
+          slot,
+          revision,
+          ObservationSubscriberCount::<T>::get(feed),
+          ObservationSubscriptionCount::<T>::get(),
+        )
+      }),
+      observation_guards,
+      observation_padding,
+      observation_two_page_fanout_pending: match source {
+        ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose => Some(false),
+        ZeroStepHeaderSource::ObservationChangePendingSecondPageClose
+        | ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain
+        | ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose => Some(true),
+        _ => None,
+      },
+      observation_pending_snapshot: (matches!(
+        source,
+        ZeroStepHeaderSource::ObservationChangePendingSecondPageClose
+          | ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain
+          | ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose
+      ))
+      .then(|| {
+        let feed = observation_feed.unwrap();
+        (
+          DirtyObservationFeeds::<T>::get(feed).unwrap().encode(),
+          DirtyObservationListState::<T>::get().encode(),
+        )
+      }),
+      observation_free_len: ObservationFreeSlotLen::<T>::get(),
+      crossing_shape: crossing_feed.map(|feed| {
+        let locator = CrossingMemberships::<T>::get(actor_id)
+          .expect("paid Crossing retains exact detector membership");
+        let leaf = CrossingLeafStates::<T>::get(locator.key).unwrap();
+        let two_pages = source == ZeroStepHeaderSource::CrossingWaitingTailClose;
+        let armed_destination = matches!(
+          source,
+          ZeroStepHeaderSource::CrossingArmedNewPage
+            | ZeroStepHeaderSource::CrossingArmedVacancy
+            | ZeroStepHeaderSource::CrossingArmedFullPageClose
+        );
+        assert_eq!(
+          (leaf.member_count, leaf.page_count),
+          (
+            1 + if two_pages {
+              crossing_guards.len() as u32
+            } else {
+              0
+            },
+            1 + u32::from(two_pages)
+          )
+        );
+        if armed_destination {
+          assert_eq!(
+            crossing_guards.len() as u32,
+            T::CrossingPageSize::get()
+              - u32::from(source == ZeroStepHeaderSource::CrossingArmedVacancy)
+          );
+          let destination = CrossingLeafKey {
+            feed,
+            traversal: CrossingTraversal::Upward,
+            threshold: 2,
+          };
+          let armed = CrossingLeafStates::<T>::get(destination).unwrap();
+          assert_eq!(
+            (armed.member_count, armed.page_count),
+            (crossing_guards.len() as u32, 1)
+          );
+        }
+        assert_eq!(
+          CrossingMemberPages::<T>::get(locator.key, 0)
+            .unwrap()
+            .entries
+            .len() as u32,
+          if two_pages {
+            T::CrossingPageSize::get()
+          } else {
+            1
+          }
+        );
+        if two_pages {
+          assert_eq!(
+            CrossingMemberPages::<T>::get(locator.key, 1)
+              .unwrap()
+              .entries
+              .len(),
+            1
+          );
+        }
+        let count = CrossingFeedMembershipCount::<T>::get(feed);
+        let user_count = CrossingUserFeedMembershipCount::<T>::get(feed);
+        assert_eq!(
+          count,
+          1 + crossing_guards.len() as u32,
+          "Crossing fixture owns its admitted feed members"
+        );
+        assert_eq!(user_count, u32::from(actor_type == ActorType::User));
+        (locator.key, count, user_count)
+      }),
+      crossing_guards,
+      class,
+      owner,
+      identity_count: ActorIdentityCount::<T>::get(),
+      active_count: ActiveActorCount::<T>::get(),
+      payer,
+      asset,
+      custody,
+      payer_native_before,
+      sink_native_before,
+      pipeline_fee,
+      header: head.encode(),
+      hold,
+      owner_hold_before,
+      owner_hold_after,
+      successor: node.next,
+      peers,
+    }
+  }
+
+  fn assert_at_time_opening_input<T: Config>(fixture: &ZeroStepHeaderFixture<T>, retained: bool) {
+    let (source, keys_after) = fixture.at_time.expect("AtTime source witness exists");
+    let actor_id = fixture.actor.actor_id;
+    let hot = Pallet::<T>::actor_hot(actor_id).unwrap();
+    assert!(hot.pending_signal && ActorRunStateStore::<T>::get(actor_id).is_none());
+    if retained {
+      assert_eq!(
+        TriggerDeadlineHandles::<T>::get(actor_id),
+        Some(source),
+        "preserved AtTime source must survive until the measured boundary"
+      );
+      assert_eq!(
+        singleton_temporal_source::<T>(actor_id, TriggerFamily::AtTime),
+        source
+      );
+      assert_eq!(
+        DeadlineIndexLen::<T>::get(WakeupClock::Tick),
+        keys_after + 1
+      );
+    } else {
+      assert!(
+        !TriggerDeadlineHandles::<T>::contains_key(actor_id),
+        "due AtTime source must be consumed before measured Opening"
+      );
+      assert!(matches!(
+        hot.trigger_runtime_state,
+        TriggerRuntimeState::AtTime { consumed: true, .. }
+      ));
+      assert!(hot.trigger_wakeup_pointer.is_none());
+      assert!(!DeadlineHeaders::<T>::contains_key(source.key));
+      assert!(!DeadlinePages::<T>::contains_key(source.key, source.page));
+      assert!(!DeadlineIndexPositions::<T>::contains_key(source.key));
+      assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Tick), keys_after);
+    }
+  }
+
+  fn assert_cadenced_opening_input<T: Config>(fixture: &ZeroStepHeaderFixture<T>) {
+    let (source, keys_before) = fixture
+      .cadenced
+      .expect("Cadenced due-source witness exists");
+    let actor_id = fixture.actor.actor_id;
+    let hot = Pallet::<T>::actor_hot(actor_id).unwrap();
+    assert!(hot.pending_signal && ActorRunStateStore::<T>::get(actor_id).is_none());
+    assert!(matches!(
+      hot.trigger_runtime_state,
+      TriggerRuntimeState::Cadenced { .. }
+    ));
+    assert!(
+      hot.trigger_wakeup_pointer.is_none(),
+      "cadence must rearm inside measured Opening"
+    );
+    assert!(
+      !TriggerDeadlineHandles::<T>::contains_key(actor_id),
+      "due Cadenced source must be consumed before measured Opening"
+    );
+    assert!(!DeadlineHeaders::<T>::contains_key(source.key));
+    assert!(!DeadlinePages::<T>::contains_key(source.key, source.page));
+    assert!(!DeadlineIndexPositions::<T>::contains_key(source.key));
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Tick), keys_before);
+  }
+
+  fn assert_crossing_opening_input<T: Config>(fixture: &ZeroStepHeaderFixture<T>) {
+    let (feed, _, expected_phase) = fixture.crossing.expect("Crossing source witness exists");
+    let actor_id = fixture.actor.actor_id;
+    let hot = Pallet::<T>::actor_hot(actor_id).unwrap();
+    assert!(hot.pending_signal && ActorRunStateStore::<T>::get(actor_id).is_none());
+    assert!(
+      IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id),
+      "paid Crossing latch disables detection until measured Opening"
+    );
+    assert!(CrossingMemberships::<T>::contains_key(actor_id));
+    if !fixture.crossing_guards.is_empty() {
+      let key = fixture.crossing_shape.unwrap().0;
+      let page_size = T::CrossingPageSize::get();
+      let guard_count = fixture.crossing_guards.len() as u32;
+      assert!(
+        guard_count == page_size
+          || (expected_phase == CrossingPhase::Armed && guard_count + 1 == page_size)
+      );
+      let leaf = CrossingLeafStates::<T>::get(key).unwrap();
+      if expected_phase == CrossingPhase::Armed {
+        assert_eq!((leaf.member_count, leaf.page_count), (1, 1));
+        let destination = CrossingLeafKey {
+          feed,
+          traversal: CrossingTraversal::Upward,
+          threshold: 2,
+        };
+        let armed = CrossingLeafStates::<T>::get(destination).unwrap();
+        assert_eq!(
+          (armed.member_count, armed.page_count, armed.tail_page),
+          (guard_count, 1, 0)
+        );
+        assert_eq!(
+          CrossingMemberPages::<T>::get(destination, 0)
+            .unwrap()
+            .entries
+            .len() as u32,
+          guard_count,
+          "Armed destination must retain its guard width before measured Opening"
+        );
+        assert!(!CrossingMemberPages::<T>::contains_key(destination, 1));
+      } else {
+        assert_eq!(
+          (leaf.member_count, leaf.page_count, leaf.tail_page),
+          (page_size + 1, 2, 1)
+        );
+        assert!(
+          CrossingMemberPages::<T>::contains_key(key, 1),
+          "Crossing tail page must survive until measured Opening"
+        );
+      }
+    }
+    let CanonicalObservationState::Available { value, .. } = T::ObservationProvider::current(&feed)
+    else {
+      panic!("Crossing Opening needs authoritative observation")
+    };
+    assert!(
+      match expected_phase {
+        CrossingPhase::Armed => value <= 1,
+        CrossingPhase::WaitingForRearm => value >= 2,
+      },
+      "current Crossing truth selects the requested rearm phase"
+    );
+    assert!(
+      matches!(
+        hot.trigger_runtime_state,
+        TriggerRuntimeState::ObservationCrossing {
+          phase: CrossingPhase::WaitingForRearm,
+          ..
+        }
+      ),
+      "paid Crossing latch retains its pre-Opening phase"
+    );
+  }
+
+  fn assert_observation_change_opening_input<T: Config>(fixture: &ZeroStepHeaderFixture<T>) {
+    let (feed, slot, revision, _, _) = fixture
+      .observation_change
+      .expect("ObservationChange source witness exists");
+    let actor_id = fixture.actor.actor_id;
+    let hot = Pallet::<T>::actor_hot(actor_id).unwrap();
+    assert!(hot.pending_signal && ActorRunStateStore::<T>::get(actor_id).is_none());
+    assert!(
+      IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id),
+      "paid ObservationChange latch must disable detector evaluation until Opening"
+    );
+    assert_eq!(ObservationSubscriptionSlot::<T>::get(actor_id), Some(slot));
+    if let Some(pending) = fixture.observation_two_page_fanout_pending {
+      if pending {
+        let dirty = DirtyObservationFeeds::<T>::get(feed)
+          .expect("real second-page fanout must remain pending before Opening");
+        assert_eq!(
+          dirty.next_subscriber_page,
+          Some(slot / T::ObservationPageSize::get() + 1)
+        );
+      } else {
+        assert!(
+          !DirtyObservationFeeds::<T>::contains_key(feed),
+          "both real fanout pages must finish before Opening"
+        );
+      }
+      let page_size = T::ObservationPageSize::get();
+      let head_relink = fixture.observation_padding.is_some();
+      assert_eq!(
+        fixture.observation_guards.len() as u32,
+        if head_relink {
+          page_size
+        } else {
+          2 * page_size - 1
+        }
+      );
+      let next = ObservationSubscriberPages::<T>::get(feed, slot / page_size + 1)
+        .expect("multi-page fanout must retain its full second subscriber page");
+      assert_eq!(next.entries.len() as u32, page_size);
+      for (index, (guard, _)) in fixture.observation_guards.iter().enumerate() {
+        let hot = benchmark_fixture_hot::<T>(*guard).unwrap();
+        let admitted = !pending || (!head_relink && index < (page_size - 1) as usize);
+        assert_eq!(
+          hot.pending_signal && ServiceNodes::<T>::contains_key(*guard),
+          admitted,
+          "multi-page fanout guards must reflect only visited pages"
+        );
+        assert_eq!(
+          ObservationSubscriptionSlot::<T>::get(*guard),
+          Some(slot + index as u32 + 1 + u32::from(head_relink) * (page_size - 1))
+        );
+      }
+    }
+    assert!(matches!(T::ObservationProvider::current(&feed),
+      CanonicalObservationState::Available { revision: current, .. } if current == revision));
+  }
+
+  fn assert_zero_step_header<T: Config>(fixture: ZeroStepHeaderFixture<T>, close: bool) {
+    let actor_id = fixture.actor.actor_id;
+    assert_eq!(
+      ActorIdentityCount::<T>::get(),
+      fixture.identity_count - u32::from(close),
+      "zero-Step identity count must match lifecycle outcome"
+    );
+    assert_eq!(
+      ActiveActorCount::<T>::get(),
+      fixture.active_count - u32::from(close),
+      "zero-Step active count must match lifecycle outcome"
+    );
+    if let ActorClass::System { sovereign_id } = fixture.class {
+      assert_eq!(
+        SystemSovereigns::<T>::get(sovereign_id),
+        Some(if close {
+          SystemSovereignState::Vacant
+        } else {
+          SystemSovereignState::Occupied(actor_id)
+        }),
+        "zero-Step System reservation must match lifecycle outcome"
+      );
+    }
+    let native = T::FeeNativeAssetId::get();
+    assert_eq!(
+      T::AssetOps::balance(&fixture.payer, native),
+      fixture.payer_native_before - fixture.pipeline_fee
+    );
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      fixture.sink_native_before + fixture.pipeline_fee
+    );
+    let receipt: <T as frame_system::Config>::RuntimeEvent = Event::<T>::PipelineFeeCharged {
+      actor_id,
+      fee: fixture.pipeline_fee,
+    }
+    .into();
+    assert_eq!(
+      frame_system::Pallet::<T>::events()
+        .iter()
+        .filter(|record| record.event == receipt)
+        .count(),
+      usize::from(fixture.class.actor_type() == ActorType::User)
+    );
+    let hold_reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
+    assert_eq!(
+      T::StateHoldCurrency::balance_on_hold(&hold_reason, &fixture.owner),
+      if close {
+        fixture.owner_hold_before
+      } else {
+        fixture.owner_hold_after
+      },
+      "zero-Step owner hold must match lifecycle outcome"
+    );
+    assert_eq!(
+      T::AssetOps::balance(&fixture.payer, fixture.asset),
+      fixture.custody
+    );
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+    if let Some((feed, slot, revision, feed_count, total_count)) = fixture.observation_change {
+      assert!(
+        !IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id),
+        "ObservationChange detector must rearm or close during Opening"
+      );
+      let page_id = slot / T::ObservationPageSize::get();
+      if close {
+        assert!(!ObservationSubscriptionSlot::<T>::contains_key(actor_id));
+        assert!(
+          !ObservationSubscriptionSlotOwner::<T>::contains_key(slot),
+          "ObservationChange close must release its slot owner"
+        );
+        assert!(!ActorObservationFeeds::<T>::contains_key(actor_id));
+        if let Some((padding, pad_guards)) = &fixture.observation_padding {
+          let page_size = T::ObservationPageSize::get();
+          assert!(
+            !ObservationSubscriberPages::<T>::contains_key(feed, page_id),
+            "ObservationChange head page must unlink when its last subscriber closes"
+          );
+          let next = ObservationSubscriberPages::<T>::get(feed, page_id + 1)
+            .expect("ObservationChange successor page survives head unlink");
+          assert_eq!(
+            (next.previous, next.next),
+            (None, None),
+            "ObservationChange successor must clear its previous link"
+          );
+          assert_eq!(next.entries.len() as u32, page_size);
+          for (index, (guard, state)) in fixture.observation_guards.iter().enumerate() {
+            assert_eq!(
+              next.entries[index],
+              Some(*guard),
+              "ObservationChange relink must preserve successor guards"
+            );
+            assert_eq!(
+              (
+                Pallet::<T>::actor_identity(*guard),
+                ActorProcesses::<T>::get(*guard),
+                ActorSemanticStates::<T>::get(*guard)
+              )
+                .encode(),
+              *state,
+              "ObservationChange relink must preserve successor semantics"
+            );
+          }
+          let list = ObservationSubscriberPageLists::<T>::get(feed).unwrap();
+          assert_eq!(
+            (list.head, list.tail, list.count),
+            (page_id + 1, page_id + 1, 1),
+            "ObservationChange list must advance to its surviving head"
+          );
+          let pad_page = ObservationSubscriberPages::<T>::get(*padding, page_id)
+            .expect("independent padding page survives target close");
+          assert_eq!(pad_page.entries.len() as u32, page_size);
+          assert_eq!(pad_page.entries[0], None);
+          for (index, (guard, state)) in pad_guards.iter().enumerate() {
+            assert_eq!(pad_page.entries[index + 1], Some(*guard));
+            assert_eq!(
+              (
+                Pallet::<T>::actor_identity(*guard),
+                ActorProcesses::<T>::get(*guard),
+                ActorSemanticStates::<T>::get(*guard)
+              )
+                .encode(),
+              *state,
+              "padding feed guards must not change on target close"
+            );
+          }
+          assert_eq!(
+            ObservationSubscriberCount::<T>::get(*padding),
+            page_size - 1
+          );
+          assert_eq!(
+            ObservationSubscriberPageLists::<T>::get(*padding)
+              .unwrap()
+              .count,
+            1
+          );
+        } else if fixture.observation_guards.is_empty() {
+          assert!(
+            !ObservationSubscriberPages::<T>::contains_key(feed, page_id),
+            "ObservationChange close must reclaim its singleton subscriber page"
+          );
+          assert!(!ObservationSubscriberPageLists::<T>::contains_key(feed));
+        } else {
+          let page = ObservationSubscriberPages::<T>::get(feed, page_id)
+            .expect("shared ObservationChange page must survive target close");
+          let page_size = T::ObservationPageSize::get();
+          let second_page = (fixture.observation_guards.len() as u32 + 1 > page_size).then(|| {
+            ObservationSubscriberPages::<T>::get(feed, page_id + 1)
+              .expect("second ObservationChange page must survive target close")
+          });
+          assert_eq!(page.entries.len() as u32, page_size);
+          assert_eq!(
+            page.entries[0], None,
+            "shared ObservationChange close must clear only its slot"
+          );
+          assert_eq!(
+            (page.previous, page.next),
+            (None, second_page.as_ref().map(|_| page_id + 1)),
+            "two-page ObservationChange head link must survive close"
+          );
+          if let Some(next) = &second_page {
+            assert_eq!(
+              (next.previous, next.next),
+              (Some(page_id), None),
+              "two-page ObservationChange link must survive close"
+            );
+            assert_eq!(next.entries.len() as u32, page_size);
+          }
+          for (index, (guard, state)) in fixture.observation_guards.iter().enumerate() {
+            let offset = (index as u32 + 1) % page_size;
+            let guard_page = if index as u32 + 1 < page_size {
+              &page
+            } else {
+              second_page.as_ref().expect("second guard page exists")
+            };
+            assert_eq!(
+              guard_page.entries[offset as usize],
+              Some(*guard),
+              "shared ObservationChange close must preserve guard subscription"
+            );
+            assert_eq!(
+              (
+                Pallet::<T>::actor_identity(*guard),
+                ActorProcesses::<T>::get(*guard),
+                ActorSemanticStates::<T>::get(*guard)
+              )
+                .encode(),
+              *state,
+              "shared ObservationChange close must preserve guard semantics"
+            );
+          }
+          let list = ObservationSubscriberPageLists::<T>::get(feed).unwrap();
+          assert_eq!(
+            (list.head, list.tail, list.count),
+            (
+              page_id,
+              page_id + u32::from(second_page.is_some()),
+              1 + u32::from(second_page.is_some())
+            ),
+            "ObservationChange page list must preserve linked survivors"
+          );
+        }
+        assert_eq!(
+          ObservationFreeSlotLen::<T>::get(),
+          fixture.observation_free_len + 1,
+          "ObservationChange close must recycle exactly its slot"
+        );
+        let free_page = ObservationFreeSlotPages::<T>::get(
+          fixture.observation_free_len / T::ObservationPageSize::get(),
+        )
+        .unwrap();
+        assert_eq!(
+          free_page.last(),
+          Some(&slot),
+          "ObservationChange close must recycle its exact slot"
+        );
+        if fixture.observation_free_len + 1 == T::ObservationPageSize::get() {
+          assert_eq!(
+            free_page.len() as u32,
+            T::ObservationPageSize::get(),
+            "ObservationChange close must fill the existing free-slot page"
+          );
+        }
+      } else {
+        assert_eq!(
+          ObservationSubscriptionSlot::<T>::get(actor_id),
+          Some(slot),
+          "retained ObservationChange must keep exact slot"
+        );
+        assert_eq!(
+          ObservationSubscriptionSlotOwner::<T>::get(slot),
+          Some(actor_id)
+        );
+        let page = ObservationSubscriberPages::<T>::get(feed, page_id)
+          .expect("retained ObservationChange subscriber page exists");
+        assert_eq!(
+          page.entries[(slot % T::ObservationPageSize::get()) as usize],
+          Some(actor_id)
+        );
+        assert_eq!(
+          ObservationSubscriberPageLists::<T>::get(feed)
+            .unwrap()
+            .count,
+          1 + u32::from(fixture.observation_two_page_fanout_pending == Some(true))
+        );
+        assert_eq!(
+          ActorObservationFeeds::<T>::get(actor_id).map(|feeds| feeds.to_vec()),
+          Some(vec![feed])
+        );
+        assert!(matches!(T::ObservationProvider::current(&feed),
+          CanonicalObservationState::Available { revision: current, .. } if current == revision));
+      }
+      assert_eq!(
+        ObservationSubscriberCount::<T>::get(feed),
+        feed_count - u32::from(close),
+        "ObservationChange feed count must match lifecycle outcome"
+      );
+      assert_eq!(
+        ObservationSubscriptionCount::<T>::get(),
+        total_count - u32::from(close),
+        "ObservationChange total subscriptions must match lifecycle outcome"
+      );
+      if fixture.observation_two_page_fanout_pending == Some(true) {
+        let page_size = T::ObservationPageSize::get();
+        let dirty = DirtyObservationFeeds::<T>::get(feed)
+          .expect("Opening must preserve unfinished second-page fanout");
+        assert_eq!(
+          dirty.next_subscriber_page,
+          Some(slot / page_size + 1),
+          "Opening must preserve the pending fanout cursor"
+        );
+        let (expected_dirty, expected_list) = fixture
+          .observation_pending_snapshot
+          .as_ref()
+          .expect("pending fanout snapshot exists");
+        assert_eq!(
+          &dirty.encode(),
+          expected_dirty,
+          "Opening must preserve the entire pending feed state"
+        );
+        assert_eq!(
+          &DirtyObservationListState::<T>::get().encode(),
+          expected_list,
+          "Opening must preserve the pending feed list"
+        );
+        for (index, (guard, state)) in fixture.observation_guards.iter().enumerate() {
+          if !close {
+            assert_eq!(
+              (
+                Pallet::<T>::actor_identity(*guard),
+                ActorProcesses::<T>::get(*guard),
+                ActorSemanticStates::<T>::get(*guard)
+              )
+                .encode(),
+              *state,
+              "retained Opening must preserve guard semantics"
+            );
+          }
+          let hot = benchmark_fixture_hot::<T>(*guard).unwrap();
+          let head_relink = fixture.observation_padding.is_some();
+          let admitted = !head_relink && index < (page_size - 1) as usize;
+          assert_eq!(
+            hot.pending_signal && ServiceNodes::<T>::contains_key(*guard),
+            admitted,
+            "Opening must not visit pending second-page guards"
+          );
+          if !close {
+            let guard_slot = slot + index as u32 + 1 + u32::from(head_relink) * (page_size - 1);
+            assert_eq!(
+              ObservationSubscriptionSlot::<T>::get(*guard),
+              Some(guard_slot),
+              "retained Opening must preserve guard subscription slots"
+            );
+            let guard_page = ObservationSubscriberPages::<T>::get(feed, guard_slot / page_size)
+              .expect("retained Opening must preserve both subscriber pages");
+            assert_eq!(
+              guard_page.entries[(guard_slot % page_size) as usize],
+              Some(*guard)
+            );
+          }
+        }
+      }
+    }
+    if let Some((feed, revision, expected_phase)) = fixture.crossing {
+      let (key, count, user_count) = fixture
+        .crossing_shape
+        .expect("Crossing source geometry exists");
+      let expected_key = if expected_phase == CrossingPhase::Armed {
+        CrossingLeafKey {
+          feed,
+          traversal: CrossingTraversal::Upward,
+          threshold: 2,
+        }
+      } else {
+        key
+      };
+      assert!(
+        !IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id),
+        "Crossing detector must rearm or close with the measured Opening"
+      );
+      if close {
+        assert!(
+          !CrossingMemberships::<T>::contains_key(actor_id),
+          "close must release Crossing membership"
+        );
+        if fixture.crossing_guards.is_empty() {
+          assert!(
+            !CrossingLeafStates::<T>::contains_key(key),
+            "Crossing close must reclaim its singleton leaf"
+          );
+          assert!(
+            !CrossingMemberPages::<T>::contains_key(key, 0),
+            "Crossing close must reclaim its singleton page"
+          );
+          assert!(!CrossingLeafStates::<T>::contains_key(expected_key));
+          assert!(!CrossingMemberPages::<T>::contains_key(expected_key, 0));
+        } else if expected_phase == CrossingPhase::Armed {
+          assert_ne!(key, expected_key);
+          assert!(
+            !CrossingLeafStates::<T>::contains_key(key),
+            "terminal Armed close must reclaim its Waiting source leaf"
+          );
+          assert!(!CrossingMemberPages::<T>::contains_key(key, 0));
+          let page_size = T::CrossingPageSize::get();
+          assert_eq!(fixture.crossing_guards.len() as u32, page_size);
+          let leaf = CrossingLeafStates::<T>::get(expected_key)
+            .expect("terminal Armed close preserves the full destination leaf");
+          assert_eq!(
+            (leaf.member_count, leaf.page_count, leaf.tail_page),
+            (page_size, 1, 0)
+          );
+          let page = CrossingMemberPages::<T>::get(expected_key, 0)
+            .expect("terminal Armed close preserves the destination member page");
+          assert_eq!(page.entries.len() as u32, page_size);
+          assert!(!CrossingMemberPages::<T>::contains_key(expected_key, 1));
+          for (index, (guard, state)) in fixture.crossing_guards.iter().enumerate() {
+            assert_eq!(page.entries[index].actor_id, *guard);
+            let locator = CrossingMemberships::<T>::get(*guard).unwrap();
+            assert_eq!(
+              (locator.key, locator.page, locator.offset),
+              (expected_key, 0, index as u32),
+              "terminal Armed close must preserve guard locators"
+            );
+            assert_eq!(
+              (
+                Pallet::<T>::actor_identity(*guard),
+                ActorProcesses::<T>::get(*guard),
+                ActorSemanticStates::<T>::get(*guard)
+              )
+                .encode(),
+              *state,
+              "terminal Armed close must preserve guard semantics"
+            );
+          }
+        } else {
+          assert_eq!(
+            key, expected_key,
+            "Waiting close keeps the surviving detector leaf"
+          );
+          let page_size = T::CrossingPageSize::get();
+          assert_eq!(fixture.crossing_guards.len() as u32, page_size);
+          let leaf = CrossingLeafStates::<T>::get(key)
+            .expect("Crossing tail swap retains the nonempty leaf");
+          assert_eq!(
+            (leaf.member_count, leaf.page_count, leaf.tail_page),
+            (page_size, 1, 0),
+            "Crossing close must reclaim the singleton tail page"
+          );
+          let page = CrossingMemberPages::<T>::get(key, 0).unwrap();
+          assert_eq!(page.entries.len() as u32, page_size);
+          assert!(
+            !CrossingMemberPages::<T>::contains_key(key, 1),
+            "Crossing close must delete its empty tail page"
+          );
+          for (index, (guard, state)) in fixture.crossing_guards.iter().enumerate() {
+            let expected_offset = if index + 1 == fixture.crossing_guards.len() {
+              0
+            } else {
+              index as u32 + 1
+            };
+            assert_eq!(
+              page.entries[expected_offset as usize].actor_id, *guard,
+              "Crossing tail member must replace the closed source slot"
+            );
+            let locator = CrossingMemberships::<T>::get(*guard).unwrap();
+            assert_eq!(
+              (locator.key, locator.page, locator.offset),
+              (key, 0, expected_offset),
+              "Crossing survivors must own reciprocal page positions"
+            );
+            assert_eq!(
+              (
+                Pallet::<T>::actor_identity(*guard),
+                ActorProcesses::<T>::get(*guard),
+                ActorSemanticStates::<T>::get(*guard)
+              )
+                .encode(),
+              *state,
+              "Crossing tail swap must preserve guard semantics"
+            );
+          }
+        }
+      } else {
+        assert_eq!(
+          CrossingMemberships::<T>::get(actor_id).map(|locator| locator.key),
+          Some(expected_key),
+          "retained Crossing must occupy the current phase leaf"
+        );
+        if expected_phase == CrossingPhase::Armed {
+          assert_ne!(key, expected_key);
+          assert!(!CrossingLeafStates::<T>::contains_key(key));
+          assert!(!CrossingMemberPages::<T>::contains_key(key, 0));
+        }
+        let leaf =
+          CrossingLeafStates::<T>::get(expected_key).expect("retained Crossing leaf exists");
+        if fixture.crossing_guards.is_empty() {
+          assert_eq!((leaf.member_count, leaf.page_count), (1, 1));
+          assert!(CrossingMemberPages::<T>::get(expected_key, 0).is_some());
+        } else {
+          let page_size = T::CrossingPageSize::get();
+          let allocate = fixture.crossing_guards.len() as u32 == page_size;
+          assert_eq!(
+            (leaf.member_count, leaf.page_count, leaf.tail_page),
+            (
+              page_size + u32::from(allocate),
+              1 + u32::from(allocate),
+              u32::from(allocate)
+            ),
+            "Armed rearm must fill the destination or allocate its next page"
+          );
+          let head = CrossingMemberPages::<T>::get(expected_key, 0).unwrap();
+          assert_eq!(head.entries.len() as u32, page_size);
+          if allocate {
+            let next = CrossingMemberPages::<T>::get(expected_key, 1)
+              .expect("Armed rearm creates a new member page");
+            assert_eq!(next.entries.len(), 1);
+            assert_eq!(next.entries[0].actor_id, actor_id);
+          } else {
+            assert!(
+              !CrossingMemberPages::<T>::contains_key(expected_key, 1),
+              "Armed vacancy rearm must not allocate a second page"
+            );
+            assert_eq!(head.entries[(page_size - 1) as usize].actor_id, actor_id);
+          }
+          let locator = CrossingMemberships::<T>::get(actor_id).unwrap();
+          assert_eq!(
+            (locator.key, locator.page, locator.offset),
+            (
+              expected_key,
+              u32::from(allocate),
+              if allocate { 0 } else { page_size - 1 }
+            ),
+            "Armed target must own the destination's reciprocal locator"
+          );
+          for (index, (guard, state)) in fixture.crossing_guards.iter().enumerate() {
+            assert_eq!(head.entries[index].actor_id, *guard);
+            let guard_locator = CrossingMemberships::<T>::get(*guard).unwrap();
+            assert_eq!(
+              (guard_locator.key, guard_locator.page, guard_locator.offset),
+              (expected_key, 0, index as u32),
+              "Armed guard must retain its original page position"
+            );
+            assert_eq!(
+              (
+                Pallet::<T>::actor_identity(*guard),
+                ActorProcesses::<T>::get(*guard),
+                ActorSemanticStates::<T>::get(*guard)
+              )
+                .encode(),
+              *state,
+              "Armed destination rearm must preserve guard semantics"
+            );
+          }
+        }
+        assert!(
+          CrossingMemberships::<T>::contains_key(actor_id),
+          "retained Crossing must keep canonical membership"
+        );
+        let hot = Pallet::<T>::actor_hot(actor_id).unwrap();
+        assert!(
+          matches!(hot.trigger_runtime_state,
+          TriggerRuntimeState::ObservationCrossing {
+            phase, installed_at_revision
+          } if phase == expected_phase && installed_at_revision == revision),
+          "retained Crossing must rearm to current phase"
+        );
+        assert!(matches!(T::ObservationProvider::current(&feed),
+          CanonicalObservationState::Available { revision: current, .. } if current == revision));
+      }
+      assert_eq!(
+        CrossingFeedMembershipCount::<T>::get(feed),
+        count - u32::from(close),
+        "Crossing feed count must match lifecycle outcome"
+      );
+      assert_eq!(
+        CrossingUserFeedMembershipCount::<T>::get(feed),
+        user_count - u32::from(close && fixture.class.actor_type() == ActorType::User),
+        "Crossing User feed count must match lifecycle outcome"
+      );
+    }
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    if close || fixture.cadenced.is_none() {
+      assert!(
+        !TriggerDeadlineHandles::<T>::contains_key(actor_id),
+        "zero-Step must release its independent Trigger deadline"
+      );
+    }
+    if let Some((source, keys_before)) = fixture.cadenced {
+      assert!(
+        !DeadlineHeaders::<T>::contains_key(source.key),
+        "Cadenced due source must remain consumed"
+      );
+      assert!(!DeadlinePages::<T>::contains_key(source.key, source.page));
+      assert!(!DeadlineIndexPositions::<T>::contains_key(source.key));
+      if close {
+        assert_eq!(
+          DeadlineIndexLen::<T>::get(WakeupClock::Tick),
+          keys_before,
+          "Cadenced close must reclaim the Opening rearm"
+        );
+      } else {
+        let handle =
+          TriggerDeadlineHandles::<T>::get(actor_id).expect("retained cadence must rearm");
+        assert_eq!(handle.actor, fixture.actor);
+        let WakeupKey::Tick(due) = source.key else {
+          unreachable!()
+        };
+        assert_eq!(handle.key, WakeupKey::Tick(due.checked_add(8).unwrap()));
+        assert!(
+          due
+            < Pallet::<T>::current_scheduler_tick()
+              .unwrap()
+              .saturating_add(1)
+        );
+        let hot = Pallet::<T>::actor_hot(actor_id).unwrap();
+        assert_eq!(
+          hot.trigger_wakeup_pointer,
+          Some(TriggerWakeupPointer {
+            tick: due + 8,
+            page_id: handle.page,
+            slot: u32::from(handle.slot)
+          })
+        );
+        let header = DeadlineHeaders::<T>::get(handle.key).expect("rearm key exists");
+        assert_eq!((header.count, header.page_count), (1, 1));
+        let page = DeadlinePages::<T>::get(handle.key, handle.page).unwrap();
+        assert_eq!(page.entries[handle.slot as usize], Some(fixture.actor));
+        assert_eq!(
+          DeadlineIndexLen::<T>::get(WakeupClock::Tick),
+          keys_before + 1
+        );
+        assert!(DeadlineIndexPositions::<T>::contains_key(handle.key));
+      }
+    }
+    if let Some((source, keys)) = fixture.at_time {
+      assert!(
+        !DeadlineHeaders::<T>::contains_key(source.key),
+        "AtTime source key must be reclaimed"
+      );
+      assert!(
+        !DeadlinePages::<T>::contains_key(source.key, source.page),
+        "AtTime source page must be reclaimed"
+      );
+      assert!(
+        !DeadlineIndexPositions::<T>::contains_key(source.key),
+        "AtTime source heap position must be reclaimed"
+      );
+      assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Tick), keys);
+    }
+    assert_eq!(ServiceHeader::<T>::get().cursor, Some(fixture.successor));
+    assert_eq!(
+      ServiceHeader::<T>::get().count,
+      (if close { 2 } else { 3 })
+        + match fixture.observation_two_page_fanout_pending {
+          Some(false) => fixture.observation_guards.len() as u32,
+          Some(true) if fixture.observation_padding.is_none() => T::ObservationPageSize::get() - 1,
+          _ => 0,
+        }
+    );
+    for (peer, expected) in fixture.peers {
+      assert_eq!(
+        (
+          ServiceNodes::<T>::get(peer.actor_id),
+          ActorProcesses::<T>::get(peer.actor_id),
+          ActorSemanticStates::<T>::get(peer.actor_id)
+        )
+          .encode(),
+        expected
+      );
+    }
+    if close {
+      assert!(ActorSemanticStates::<T>::get(actor_id).is_none());
+      assert!(!ActorProcesses::<T>::contains_key(actor_id));
+      assert!(!ActorContractHeads::<T>::contains_key(actor_id));
+      assert!(!ServiceNodes::<T>::contains_key(actor_id));
+      assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+      assert!(SovereignIndex::<T>::get(&fixture.payer).is_none());
+      if let ActorClass::User { owner_slot: slot } = fixture.class {
+        assert_eq!(
+          Pallet::<T>::available_owner_slot(&fixture.owner, Some(slot))
+            .expect("close frees the exact User owner slot"),
+          slot
+        );
+      }
+      frame_system::Pallet::<T>::assert_has_event(
+        Event::<T>::ActorClosed {
+          actor_id,
+          reason: CloseReason::AutoCloseNonceReached,
+        }
+        .into(),
+      );
+    } else {
+      assert_retained_service_turn::<T>(actor_id, frame_system::Pallet::<T>::block_number());
+      let state = Pallet::<T>::active_actor_state(actor_id).expect("Persistent Actor survives");
+      assert_eq!(state.identity.actor_class, fixture.class);
+      assert_eq!(state.identity.cycle_nonce, 1);
+      assert_eq!(state.hot.cycle_state, CycleState::Idle);
+      assert!(!state.hot.pending_signal);
+      if fixture.cadenced.is_some() {
+        assert!(matches!(
+          state.hot.trigger_runtime_state,
+          TriggerRuntimeState::Cadenced { .. }
+        ));
+      }
+      if fixture.at_time.is_some() {
+        assert!(matches!(
+          state.hot.trigger_runtime_state,
+          TriggerRuntimeState::AtTime { consumed: true, .. }
+        ));
+        assert!(state.hot.trigger_wakeup_pointer.is_none() && state.hot.wakeup_pointer.is_none());
+      }
+      assert_eq!(
+        ActorContractHeads::<T>::get(actor_id).unwrap().encode(),
+        fixture.header
+      );
+      assert_eq!(
+        ActorStateHolds::<T>::get(actor_id).map(|hold| hold.encode()),
+        fixture.hold,
+        "zero-Step retained hold must match released detector authority"
+      );
+    }
+    frame_system::Pallet::<T>::assert_has_event(
+      Event::<T>::CycleSummary {
+        actor_id,
+        cycle_nonce: 1,
+        result: CycleResult::Completed,
+        outcomes: OutcomeTotals::default(),
+      }
+      .into(),
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("zero-Step completion preserves custody and exact peers");
+  }
+
+  /// User zero-Step AddressEvent Opening at the maximum legal header width, with distinct Service
+  /// neighbors. Signed ingress and loading are setup; the measured inner owner collects Pipeline
+  /// payment, completes the control-only Cycle and advances the retained Service head.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_address_event() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::User, ZeroStepHeaderSource::AddressEvent, false);
+    let actor_id = fixture.actor.actor_id;
     let (state, admission) = consume_zero_step_opening::<T>(actor_id);
     let now = frame_system::Pallet::<T>::block_number();
     #[block]
     {
       execute_zero_step_inner::<T>(actor_id, state, &admission, now);
     }
-    assert_user_pipeline_accounting::<T>(actor_id, before);
-    assert_eq!(
-      benchmark_fixture_identity::<T>(actor_id)
-        .unwrap()
-        .cycle_nonce,
-      1
-    );
-    let hot = benchmark_fixture_hot::<T>(actor_id).unwrap();
-    assert_eq!(hot.cycle_state, CycleState::Idle);
-    assert!(!hot.pending_signal && hot.queue_ticket.is_none());
-    let pointer = hot
-      .wakeup_pointer
-      .expect("future window retains its Block reference");
-    assert_eq!(
-      pointer.block,
-      WakeupKey::Block(end.saturating_add(1u32.into()))
-    );
-    assert!(Pallet::<T>::wakeup_page_entry_matches(pointer, actor_id));
-    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
-    #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state()
-      .expect("maximum-header zero-Step completion and holds are coherent");
+    assert_zero_step_header::<T>(fixture, false);
   }
 
-  /// Large admitted head, with host-qualified field widths and semantic predicate cardinality.
-  /// Compact resource widths and decode-branch dominance remain separate envelope questions.
-  #[benchmark(pov_mode = Measured)]
-  fn pipeline_large_head_opening_collection() {
-    let (owner, asset, trigger, funding) = large_header_fields::<T>();
-    let feed = T::BenchmarkHelper::contract_head_observation_feed()
-      .expect("host provides a Contract-head feed witness");
-    assert_eq!(feed.encoded_size(), T::ObservationFeedId::max_encoded_len());
-    let predicate =
-      Predicate::<T::AssetId, T::Balance, u32, T::ObservationFeedId>::ObservationAbove {
-        feed,
-        threshold: 1,
-        max_age_blocks: 1,
-      };
-    assert_eq!(
-      predicate.encoded_size(),
-      Predicate::<T::AssetId, T::Balance, u32, T::ObservationFeedId>::max_encoded_len()
-    );
-    let predicates = benchmark_predicate_capacity::<T>();
-    assert!(predicates > 0 && predicates <= T::MaxPreconditionClauses::get());
-    let precondition = packed_predicate_clauses::<T>(
-      (0..predicates)
-        .map(|index| Predicate::ObservationAbove {
-          feed,
-          threshold: u128::from(index) + 1,
-          max_age_blocks: 1,
-        })
-        .collect(),
-      1,
-    );
-    let legs = T::MaxSplitTransferLegs::get();
-    assert!(legs > 0 && legs <= Perbill::ACCURACY);
-    let task = ActorTask::SplitTransfer {
-      asset,
-      amount: AmountResolution::Fixed(1u32.into()),
-      legs: (0..legs)
-        .map(|index| SplitLeg {
-          to: account("large-head-recipient", index, 0),
-          share: Perbill::from_parts(Perbill::ACCURACY / legs),
-        })
-        .collect::<Vec<_>>()
-        .try_into()
-        .unwrap(),
-    };
-    assert_eq!(task.encoded_size(), TaskOf::<T>::max_encoded_len());
-    let steps: ContractSteps<T> = vec![Step {
-      precondition: Some(precondition),
-      task,
-      on_error: StepErrorPolicy::RetryLater { max_attempts: 2 },
-    }]
-    .try_into()
-    .unwrap();
-    prefund_active_user_creation::<T>(&owner, &steps);
-    let extra = full_attempt_fee::<T>(&steps)
-      .checked_add(
-        &Pallet::<T>::trigger_fee_for_weight(
-          ActorType::User,
-          TriggerFamily::AddressEvent,
-          T::WeightInfo::address_event_trigger_occurrence(),
-        )
-        .trigger_fee,
-      )
-      .expect("large-head fee funding fits");
+  /// Same legal header with authored nonce-one close: the inner owner also releases User state
+  /// and unlinks a Service head whose two neighbors are distinct, without transferring custody.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_address_event_close() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::User, ZeroStepHeaderSource::AddressEvent, true);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
     let now = frame_system::Pallet::<T>::block_number();
-    Pallet::<T>::create_user_actor(
-      RawOrigin::Signed(owner.clone()).into(),
-      Mutability::Mutable,
-      Some(ActorContract {
-        trigger,
-        cooldown_blocks: 0,
-        window: Some(ScheduleWindow {
-          start: now,
-          end: now.saturating_add(T::MinWindowLength::get()),
-        }),
-        steps,
-        funding,
-        completion: CompletionPolicy::Persistent,
-        auto_close_at_cycle_nonce: Some(T::MaxAutoCloseNonceHorizon::get()),
-      }),
-    )
-    .expect("large-head User Contract is admitted without fixture mutation");
-    let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    let opening = Pallet::<T>::active_actor_view(actor_id).expect("Idle User view exists");
-    let native = T::FeeNativeAssetId::get();
-    T::AssetOps::mint(&opening.sovereign_account, native, extra).unwrap();
-    let ingress = T::AssetOps::minimum_balance(asset).max(1u32.into());
-    T::AssetOps::mint(&owner, asset, ingress + ingress).unwrap();
-    T::BenchmarkHelper::enable_asset_ops_ingress();
-    T::BenchmarkHelper::transfer_signed(&owner, &opening.sovereign_account, asset, ingress)
-      .expect("certified signed ingress reaches the large-head Actor");
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).expect("Ready cell exists");
-    assert!(cell.hot.pending_signal);
-    frame_system::Pallet::<T>::set_block_number(
-      cell.eligible_at.expect("Ready eligibility exists"),
-    );
-    let opening = Pallet::<T>::active_actor_view(actor_id).expect("latched Idle User view exists");
-    let head = ActorContractHeads::<T>::get(actor_id).expect("admitted head exists");
-    assert_eq!(head.header.step_count, 1);
-    let stored = head.first_step.expect("admitted Step exists");
-    assert_eq!(stored.precondition.unwrap().predicate_count(), predicates);
-    assert_eq!(stored.task.encoded_size(), TaskOf::<T>::max_encoded_len());
-    #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("large-head fixture and User holds are coherent");
-    let sink = T::FeeSink::get();
-    let payer_before = T::AssetOps::balance(&opening.sovereign_account, native);
-    let sink_before = T::AssetOps::balance(&sink, native);
-    let fee = Pallet::<T>::pipeline_fee_for_actor(actor_id, ActorType::User)
-      .expect("certified Pipeline fee exists")
-      .total_fee;
-    assert!(
-      !fee.is_zero(),
-      "this collection profile requires a nonzero host fee"
-    );
     #[block]
     {
-      Pallet::<T>::charge_pipeline_opening(actor_id, &opening)
-        .expect("funded large-head Pipeline collection succeeds");
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
     }
-    assert_eq!(
-      T::AssetOps::balance(&opening.sovereign_account, native),
-      payer_before - fee
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// System zero-Step AddressEvent Opening at the same maximum legal header width. No User
+  /// fee prefunding, owner slot or state hold is installed; Service still advances normally.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_address_event() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::System, ZeroStepHeaderSource::AddressEvent, false);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// Authored System close releases process authority and relinks distinct Service neighbors,
+  /// without collecting fees or transferring either native or non-native custody.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_address_event_close() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::System, ZeroStepHeaderSource::AddressEvent, true);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Manual zero-Step Opening with maximum funding, window and nonce fields. Custody ingress
+  /// does not wake the Actor; the signed Manual occurrence and loading are outside this owner.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_manual_header() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::User, ZeroStepHeaderSource::Manual, false);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// The maximum Manual header closes at nonce one, releasing User hold and exact owner slot.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_manual_header_close() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::User, ZeroStepHeaderSource::Manual, true);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Immutable User Manual closes only by its authored nonce, preserving sovereign custody.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_immutable_manual_header_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::ManualImmutableClose,
+      true,
     );
-    assert_eq!(T::AssetOps::balance(&sink, native), sink_before + fee);
-    frame_system::Pallet::<T>::assert_last_event(
-      Event::<T>::PipelineFeeCharged { actor_id, fee }.into(),
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// System Manual completion preserves positive custody without User fees or hold authority.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_manual_header() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::System, ZeroStepHeaderSource::Manual, false);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// System Manual nonce closure releases its reservation and relinks distinct Service peers.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_manual_header_close() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::System, ZeroStepHeaderSource::Manual, true);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Maximum-header User head-page unlink rewrites the surviving successor page and feed list.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_observation_change_head_relink_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::ObservationChangeHeadRelinkClose,
+      true,
     );
-    assert_eq!(
-      benchmark_fixture_identity::<T>(actor_id)
-        .unwrap()
-        .cycle_nonce,
-      0
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// System head-page unlink preserves successor and independent padding-feed subscribers.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_observation_change_head_relink_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::ObservationChangeHeadRelinkClose,
+      true,
     );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Real two-page observation fanout precedes maximum-header User terminal Opening.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_observation_change_two_page_fanout_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Root-created System target closes after the same real two-page fanout, without User fees.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_observation_change_two_page_fanout_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// User close preserves the second page's real unfinished fanout cursor.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_observation_change_pending_second_page_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::ObservationChangePendingSecondPageClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// System close preserves unfinished fanout without User fee or hold authority.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_observation_change_pending_second_page_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::ObservationChangePendingSecondPageClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// User rearm preserves deferred second-page fanout and the paid target's subscription.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_observation_change_pending_second_page_retain() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain,
+      false,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// System rearm preserves deferred fanout without User fee or hold authority.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_observation_change_pending_second_page_retain() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain,
+      false,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// User close unlinks a head page while real second-page fanout remains pending.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_observation_change_pending_head_relink_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// System close preserves the deferred cursor across the same head unlink.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_observation_change_pending_head_relink_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Maximum-header User close preserves both occupied subscriber pages and their live link.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_observation_change_two_pages_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::ObservationChangeTwoPagesClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// System close preserves the linked subscriber pages without User fee or hold authority.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_observation_change_two_pages_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::ObservationChangeTwoPagesClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Maximum-header User ObservationChange close fills a pre-populated free-slot page while
+  /// retaining every subscriber in the full shared live page.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_observation_change_full_free_page_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::ObservationChangeFullFreePageClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Root-created System target fills the same free-slot page without User fee/hold authority.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_observation_change_full_free_page_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::ObservationChangeFullFreePageClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Full shared subscriber page after real User publication: maximum header close clears only
+  /// the target slot while preserving every later System subscriber and the page list.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_observation_change_shared_page_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::ObservationChangeSharedPageClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Root-created System target has the same full-page close without User hold or fees.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_observation_change_shared_page_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::ObservationChangeSharedPageClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Maximum-header User ObservationChange: real publication and fanout precede Opening.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_observation_change_header() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::ObservationChange,
+      false,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// Authored User nonce close releases the singleton subscriber page, slot and state hold.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_observation_change_header_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::ObservationChange,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Maximum-header System ObservationChange retains subscription without User fee or hold.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_observation_change_header() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::ObservationChange,
+      false,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// Authored System close releases subscription and reservation without custody transfer.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_observation_change_header_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::ObservationChange,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_observation_change_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Maximum-header User terminal Armed close reclaims the old Waiting leaf, not its guards.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_crossing_header_armed_full_page_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::CrossingArmedFullPageClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// System terminal Armed close preserves the full destination without User hold/fee authority.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_crossing_header_armed_full_page_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::CrossingArmedFullPageClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Maximum-header User Armed rearm fills the destination's last page vacancy.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_crossing_header_armed_vacancy() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::CrossingArmedVacancy,
+      false,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// System Armed rearm fills the same vacancy without User fee or hold authority.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_crossing_header_armed_vacancy() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::CrossingArmedVacancy,
+      false,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// Maximum-header User Armed rearm allocates the full destination leaf's second member page.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_crossing_header_armed_new_page() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::CrossingArmedNewPage,
+      false,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// Root-created System Armed rearm allocates the same page without User fee/hold authority.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_crossing_header_armed_new_page() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::CrossingArmedNewPage,
+      false,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// Maximum-header User Crossing: a paid latch remains while current observation rearms Armed.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_crossing_header_armed() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::User, ZeroStepHeaderSource::CrossingArmed, false);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// User nonce close reclaims the paid Crossing source despite the later rearm value.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_crossing_header_armed_close() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::User, ZeroStepHeaderSource::CrossingArmed, true);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Root-created System Crossing re-arms Armed without User fee or hold authority.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_crossing_header_armed() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::CrossingArmed,
+      false,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// System Armed close removes detector and process but preserves sovereign custody.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_crossing_header_armed_close() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::System, ZeroStepHeaderSource::CrossingArmed, true);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Maximum-header User Waiting Crossing close swaps a live tail member into the head slot.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_crossing_waiting_tail_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::CrossingWaitingTailClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// System Waiting Crossing close reclaims its tail page without User fee/hold authority.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_crossing_waiting_tail_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::CrossingWaitingTailClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Maximum-header User Crossing: a real paid occurrence is setup; Opening re-arms detection.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_crossing_header_waiting() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::CrossingWaiting,
+      false,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// Closing User Crossing removes detection and Service membership with no custody unwind.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_crossing_header_waiting_close() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::User, ZeroStepHeaderSource::CrossingWaiting, true);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Root-created System Crossing retains one WaitingForRearm detector after paid readiness.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_crossing_header_waiting() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::CrossingWaiting,
+      false,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// System close reclaims detector/process authority without User fee or hold semantics.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_crossing_header_waiting_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::CrossingWaiting,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_crossing_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Maximum legal Mutable User Cadenced header; Opening owns the next Tick registration.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_cadenced_header() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::User, ZeroStepHeaderSource::CadencedDue, false);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_cadenced_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// Terminal User cadence rearm and cleanup stay together inside measured Opening.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_cadenced_header_close() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::User, ZeroStepHeaderSource::CadencedDue, true);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_cadenced_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Immutable User cadence closes by authored nonce, reclaiming transient Tick rearm.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_immutable_cadenced_header_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::CadencedDueImmutableClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_cadenced_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Maximum legal System cadence has ordinary Root creation and no User fee exemption.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_cadenced_header() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::System, ZeroStepHeaderSource::CadencedDue, false);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_cadenced_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// System terminal cadence leaves no Trigger deadline, process or sovereign reservation.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_cadenced_header_close() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::System, ZeroStepHeaderSource::CadencedDue, true);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_cadenced_opening_input::<T>(&fixture);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Maximum legal Mutable User AtTime header after ordinary due-source consumption.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_at_time_header() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::User, ZeroStepHeaderSource::AtTimeDue, false);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_at_time_opening_input::<T>(&fixture, false);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// Authored nonce-one User closure after due AtTime materialization; no block window is legal.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_at_time_header_close() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::User, ZeroStepHeaderSource::AtTimeDue, true);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_at_time_opening_input::<T>(&fixture, false);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Immutable User AtTime closes by authored nonce after ordinary Tick-source consumption.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_immutable_at_time_header_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::AtTimeDueImmutableClose,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_at_time_opening_input::<T>(&fixture, false);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// Mutable System AtTime completion after a real fee-exempt due occurrence.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_at_time_header() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::System, ZeroStepHeaderSource::AtTimeDue, false);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_at_time_opening_input::<T>(&fixture, false);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// System AtTime closure releases the reservation without transferring positive custody.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_at_time_header_close() {
+    let fixture =
+      prepare_zero_step_header::<T>(ActorType::System, ZeroStepHeaderSource::AtTimeDue, true);
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_at_time_opening_input::<T>(&fixture, false);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// A paid Manual latch survives replacement; Opening removes the future AtTime singleton
+  /// and its User detector hold. Replacement is setup, not measured work.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_at_time_preserved_latch() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::AtTimePreservedLatch,
+      false,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_at_time_opening_input::<T>(&fixture, true);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// User terminal Opening owns both retained one-shot reclamation and Service-resident close.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_user_at_time_preserved_latch_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::User,
+      ZeroStepHeaderSource::AtTimePreservedLatch,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_at_time_opening_input::<T>(&fixture, true);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
+  }
+
+  /// System preserved readiness still requires the independent future AtTime source removal.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_at_time_preserved_latch() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::AtTimePreservedLatch,
+      false,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_at_time_opening_input::<T>(&fixture, true);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, false);
+  }
+
+  /// System terminal Opening removes its future AtTime source and reclaims process authority.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_zero_step_system_at_time_preserved_latch_close() {
+    let fixture = prepare_zero_step_header::<T>(
+      ActorType::System,
+      ZeroStepHeaderSource::AtTimePreservedLatch,
+      true,
+    );
+    let actor_id = fixture.actor.actor_id;
+    let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    assert_at_time_opening_input::<T>(&fixture, true);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+    }
+    assert_zero_step_header::<T>(fixture, true);
   }
 
   fn prepare_temporal_control_cell<T: Config>(at_time: bool) -> ActorId {
@@ -11154,8 +18432,8 @@ mod benches {
     Ok(())
   }
 
-  /// True host-bounded Opening predicates and tail Opening legs precede missing-receipt failure.
-  /// The sole tracked receipt has no accumulated ingress; no independent funding maximum is claimed.
+  /// True current-Step Balance predicates precede a System Unstake's missing-receipt failure.
+  /// The Actor remains Idle in Service. Tail count is retained, not independent funding maxima.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_inner_opening_failed_max(
     t: Linear<
@@ -11182,8 +18460,8 @@ mod benches {
     Ok(())
   }
 
-  /// True current predicates and two tail-Step current-Available legs precede an unfunded fixed Transfer.
-  /// This reachable retry corner does not establish envelope dominance.
+  /// True current-Step Balance predicates precede an unfunded System fixed Transfer.
+  /// This no-effect Block-deadline corner does not establish complete retry-frontier dominance.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_inner_opening_retry_max(
     t: Linear<
@@ -11207,8 +18485,8 @@ mod benches {
     Ok(())
   }
 
-  /// Measures direct minimal-geometry fresh-Opening completion at every tail-chunk count. StopCycle
-  /// terminates the cycle without an effect, Opening host reads, run persistence, or placement.
+  /// Unpredicated System StopCycle completes its Cycle and advances retained Service.
+  /// It creates no Task effect, Action receipt or retained Run; it does not destroy the Actor.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_inner_opening_complete_min(
     t: Linear<
@@ -11302,6 +18580,311 @@ mod benches {
     Ok(())
   }
 
+  /// Diagnostic: positive User Transfer followed by authored Service-resident terminal close.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_opening_user_transfer_terminal()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, count) =
+      prepare_reachable_opening::<T>(0, ReachableOpeningProfile::UserTransferTerminalHeaderMax)?;
+    assert_eq!(count, 1);
+    let witness = capture_user_transfer_terminal::<T>(actor_id, false);
+    let now = frame_system::Pallet::<T>::block_number();
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    let measured_effect;
+    #[block]
+    {
+      measured_effect =
+        execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    }
+    assert_user_transfer_terminal::<T>(actor_id, witness, measured_effect);
+    Ok(())
+  }
+
+  /// Diagnostic: effectful User terminal unlinks an interior member of a real three-node Service.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_opening_user_transfer_terminal_peers()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, count) =
+      prepare_reachable_opening::<T>(0, ReachableOpeningProfile::UserTransferTerminalHeaderMax)?;
+    assert_eq!(count, 1);
+    create_zero_step_system_follower::<T>();
+    create_zero_step_system_follower::<T>();
+    let witness = capture_user_transfer_terminal::<T>(actor_id, true);
+    let now = frame_system::Pallet::<T>::block_number();
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    let measured_effect;
+    #[block]
+    {
+      measured_effect =
+        execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    }
+    assert_user_transfer_terminal::<T>(actor_id, witness, measured_effect);
+    Ok(())
+  }
+
+  /// Diagnostic: real positive System Transfer with the maximum signed funding head.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_opening_system_transfer_header_max()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, count) =
+      prepare_reachable_opening::<T>(0, ReachableOpeningProfile::SystemTransferHeaderMax)?;
+    assert_eq!(count, 1);
+    let witness = capture_system_transfer_header::<T>(actor_id);
+    let now = frame_system::Pallet::<T>::block_number();
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    let measured_effect;
+    #[block]
+    {
+      measured_effect =
+        execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    }
+    assert_system_transfer_header::<T>(actor_id, witness, measured_effect);
+    Ok(())
+  }
+
+  /// Diagnostic: real positive System Burn with maximum signed funding-policy width.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_opening_system_burn_header_max()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, count) =
+      prepare_reachable_opening::<T>(0, ReachableOpeningProfile::SystemBurnHeaderMax)?;
+    assert_eq!(count, 1);
+    let witness = capture_system_burn_header::<T>(actor_id);
+    let now = frame_system::Pallet::<T>::block_number();
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    let measured_effect;
+    #[block]
+    {
+      measured_effect =
+        execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    }
+    assert_system_burn_header::<T>(actor_id, witness, measured_effect);
+    Ok(())
+  }
+
+  /// Diagnostic: maximum funding header with a real positive User Transfer Step, not StopCycle.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_opening_user_transfer_header_max()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, count) =
+      prepare_reachable_opening::<T>(0, ReachableOpeningProfile::UserTransferHeaderMax)?;
+    assert_eq!(count, 1);
+    let witness = capture_user_transfer_header::<T>(actor_id, 0, false, false, false);
+    let now = frame_system::Pallet::<T>::block_number();
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    let measured_effect;
+    #[block]
+    {
+      measured_effect =
+        execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    }
+    assert_user_transfer_header::<T>(actor_id, witness, measured_effect);
+    Ok(())
+  }
+
+  /// Diagnostic: the positive Transfer also evaluates maximum current-Step Balance predicates.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_opening_user_transfer_predicated_header_max()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, count) =
+      prepare_reachable_opening::<T>(0, ReachableOpeningProfile::UserTransferPredicateHeaderMax)?;
+    assert_eq!(count, 1);
+    let witness = capture_user_transfer_header::<T>(
+      actor_id,
+      benchmark_predicate_capacity::<T>(),
+      false,
+      false,
+      false,
+    );
+    let now = frame_system::Pallet::<T>::block_number();
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    let measured_effect;
+    #[block]
+    {
+      measured_effect =
+        execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    }
+    assert_user_transfer_header::<T>(actor_id, witness, measured_effect);
+    Ok(())
+  }
+
+  /// Diagnostic: real Transfer with maximum-width canonical Observation predicates.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_opening_user_transfer_observation_header_max()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, count) =
+      prepare_reachable_opening::<T>(0, ReachableOpeningProfile::UserTransferObservationHeaderMax)?;
+    assert_eq!(count, 1);
+    let witness = capture_user_transfer_header::<T>(
+      actor_id,
+      benchmark_predicate_capacity::<T>(),
+      true,
+      false,
+      false,
+    );
+    let now = frame_system::Pallet::<T>::block_number();
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    let measured_effect;
+    #[block]
+    {
+      measured_effect =
+        execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    }
+    assert_user_transfer_header::<T>(actor_id, witness, measured_effect);
+    Ok(())
+  }
+
+  /// Diagnostic: real Transfer with maximum-width mixed Balance, Observation and block predicates.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_opening_user_transfer_mixed_header_max()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, count) =
+      prepare_reachable_opening::<T>(0, ReachableOpeningProfile::UserTransferMixedHeaderMax)?;
+    assert_eq!(count, 1);
+    let witness = capture_user_transfer_header::<T>(
+      actor_id,
+      benchmark_predicate_capacity::<T>(),
+      false,
+      true,
+      false,
+    );
+    let now = frame_system::Pallet::<T>::block_number();
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    let measured_effect;
+    #[block]
+    {
+      measured_effect =
+        execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    }
+    assert_user_transfer_header::<T>(actor_id, witness, measured_effect);
+    Ok(())
+  }
+
+  /// Diagnostic: paid positive Opening advances to an authored B+1 StopCycle successor.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_opening_user_transfer_progress_two()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, count) =
+      prepare_reachable_opening::<T>(1, ReachableOpeningProfile::UserTransferProgressTwo)?;
+    assert_eq!(count, 2);
+    let witness = capture_user_transfer_header::<T>(actor_id, 0, false, false, true);
+    let now = frame_system::Pallet::<T>::block_number();
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    let measured_effect;
+    #[block]
+    {
+      measured_effect =
+        execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    }
+    assert_user_transfer_header::<T>(actor_id, witness, measured_effect);
+    Ok(())
+  }
+
+  fn prepare_user_transfer_burn_successor<T: Config>()
+  -> Result<(ActorId, UserBurnHeaderWitness<T>), polkadot_sdk::frame_benchmarking::BenchmarkError>
+  {
+    let (actor_id, count) =
+      prepare_reachable_opening::<T>(1, ReachableOpeningProfile::UserTransferBurnTwo)?;
+    assert_eq!(count, 2);
+    let transfer = capture_user_transfer_header::<T>(actor_id, 0, false, false, true);
+    let now = frame_system::Pallet::<T>::block_number();
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    assert_eq!(loaded_step.cursor, 0);
+    let effect = execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    assert_user_transfer_header::<T>(actor_id, transfer, effect);
+    Ok((actor_id, capture_user_burn_successor::<T>(actor_id)))
+  }
+
+  /// Diagnostic: paid Running successor invokes a distinct Burn after positive Transfer.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_running_user_transfer_burn_two()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, witness) = prepare_user_transfer_burn_successor::<T>()?;
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    assert_eq!(loaded_step.cursor, 1);
+    let now = frame_system::Pallet::<T>::block_number();
+    let measured_effect;
+    #[block]
+    {
+      measured_effect =
+        execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    }
+    assert_user_burn_successor::<T>(actor_id, witness, measured_effect);
+    Ok(())
+  }
+
+  /// Diagnostic: real User Burn with an admitted maximum signed funding head.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_opening_user_burn_header_max()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, count) =
+      prepare_reachable_opening::<T>(0, ReachableOpeningProfile::UserBurnHeaderMax)?;
+    assert_eq!(count, 1);
+    let witness = capture_user_burn_header::<T>(actor_id);
+    let now = frame_system::Pallet::<T>::block_number();
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    let measured_effect;
+    #[block]
+    {
+      measured_effect =
+        execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    }
+    assert_user_burn_header::<T>(actor_id, witness, measured_effect);
+    Ok(())
+  }
+
+  /// Diagnostic: real User SplitTransfer with maximum legal fanout and signed funding head.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_opening_user_split_header_max()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, count) =
+      prepare_reachable_opening::<T>(0, ReachableOpeningProfile::UserSplitHeaderMax)?;
+    assert_eq!(count, 1);
+    let witness = capture_user_split_header::<T>(actor_id);
+    let now = frame_system::Pallet::<T>::block_number();
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    let measured_effect;
+    #[block]
+    {
+      measured_effect =
+        execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    }
+    assert_user_split_header::<T>(actor_id, witness, measured_effect);
+    Ok(())
+  }
+
+  /// Diagnostic: a real User SplitTransfer late-leg refusal retains one paid retry without custody leaks.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_inner_opening_user_split_late_failure()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, witness) = prepare_user_split_failure::<T>()?;
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    assert_eq!(loaded_step.cursor, 0);
+    let now = frame_system::Pallet::<T>::block_number();
+    let measured_effect;
+    #[block]
+    {
+      measured_effect =
+        execute_reachable_step_inner::<T>(actor_id, state, admission, loaded_step, now);
+    }
+    assert_user_split_failure::<T>(actor_id, &witness, measured_effect);
+    Ok(())
+  }
+
   /// Complete maximum-header User inner completion with positive tails and funding-hold release.
   /// This reaches the simultaneous funding-policy/tail envelope; outer FIFO work stays out.
   #[benchmark(pov_mode = Measured)]
@@ -11392,9 +18975,8 @@ mod benches {
     Ok(())
   }
 
-  /// Measures the direct minimal-geometry fresh-Opening progress path at every tail-chunk count.
-  /// Current percentage resolution skips on zero custody; real tail ingress supplies the bounded
-  /// funding corner without Opening surfaces or predicates.
+  /// Unpredicated System percentage resolution skips on zero custody and retains a Running
+  /// successor in Service. Unrelated tail payload may narrow to satisfy ordinary host admission.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_inner_opening_progress_min(
     t: Linear<
@@ -11419,8 +19001,8 @@ mod benches {
     Ok(())
   }
 
-  /// True current predicates on every Step and two current-Available legs per tail Step precede StopCycle.
-  /// No retained Run or successor placement is claimed by this corner.
+  /// True current-Step Balance predicates precede System StopCycle and retained Service placement.
+  /// No Action receipt, Task effect or retained Run is produced. Tail count is not tail evaluation.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_inner_opening_complete_max(
     t: Linear<
@@ -11445,8 +19027,8 @@ mod benches {
     Ok(())
   }
 
-  /// Current-read progress after canonical frame loading and source consumption. Two current-Available
-  /// legs and full current predicates per Step define this declared corner.
+  /// False independent current-Step Balance predicates skip System AddLiquidity and retain a
+  /// Running successor in Service. Neither amount resolution nor the Task effect is executed.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_inner_opening_progress_max(
     t: Linear<
@@ -11893,6 +19475,17 @@ mod benches {
     assert_eq!(before.identity.actor_class.actor_type(), ActorType::System);
     assert!(!ActorStateHolds::<T>::contains_key(actor_id));
     assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    let attempt_block = frame_system::Pallet::<T>::block_number().saturating_add(1u32.into());
+    let due = Pallet::<T>::suspension_eligible_at(2, None, attempt_block, 1)
+      .expect("fixture retry deadline is representable");
+    let guards = (0..33)
+      .map(|seed| create_canonical_deadline_guard::<T>(seed, due))
+      .collect::<alloc::vec::Vec<_>>();
+    frame_system::Pallet::<T>::set_block_number(attempt_block);
+    Pallet::<T>::close_actor(RawOrigin::Root.into(), guards[31])
+      .expect("first page becomes the vacancy head");
+    let page = DeadlinePages::<T>::get(WakeupKey::Block(due), 0).expect("destination page exists");
+    assert_eq!((page.live_entries, page.next_vacant_page), (31, Some(1)));
 
     #[block]
     {
@@ -11918,11 +19511,45 @@ mod benches {
     let handle = DeadlineHandles::<T>::get(actor_id)
       .expect("retry turn owns one canonical Deadline residence");
     assert_eq!(handle.key, WakeupKey::Block(due));
+    assert_eq!((handle.page, handle.slot), (0, 31));
+    let header = DeadlineHeaders::<T>::get(handle.key).expect("destination bucket remains");
+    assert_eq!((header.count, header.first_vacant_page), (33, Some(1)));
+    let page = DeadlinePages::<T>::get(handle.key, 1).expect("successor vacancy remains");
+    assert_eq!(page.previous_vacant_page, None);
     assert!(!ActorStateHolds::<T>::contains_key(actor_id));
     assert!(!ActorControlLocators::<T>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state()
       .expect("retry-to-Deadline complete owner preserves canonical state");
+    Ok(())
+  }
+
+  /// Complete retry publication of a new minimum key into the fullest admitted Block index.
+  /// This is independent of the populated-page branch: heap insertion owns additional writes.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_service_retry_to_deadline_new_key() -> Result<(), BenchmarkError> {
+    let (actor_id, _) = prepare_reachable_opening::<T>(0, ReachableOpeningProfile::RetryMin)?;
+    let now = frame_system::Pallet::<T>::block_number();
+    let due = Pallet::<T>::suspension_eligible_at(2, None, now, 1)
+      .expect("retry deadline is representable");
+    let keys = populate_canonical_deadline_index::<T>(due);
+    assert!(!DeadlineHeaders::<T>::contains_key(WakeupKey::Block(due)));
+
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::execute_cycle(Weight::MAX));
+    }
+    let handle = DeadlineHandles::<T>::get(actor_id).expect("retry publishes its new key");
+    assert_eq!(handle.key, WakeupKey::Block(due));
+    assert_eq!((handle.page, handle.slot), (0, 0));
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Block), keys + 1);
+    assert_eq!(DeadlineIndexPositions::<T>::get(handle.key), Some(0));
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("retry retains its Run");
+    assert_eq!(run.last_step_outcome, Some(StepOutcome::FundingUnavailable));
+    assert_eq!((run.cursor, run.unsuccessful_attempts_at_cursor), (0, 1));
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("new-key retry preserves complete canonical state");
     Ok(())
   }
 
@@ -12151,8 +19778,8 @@ mod benches {
   }
 
   /// Measures one complete canonical due-Deadline recovery pass. The fixture owns a legal
-  /// one-member Block deadline bucket and sleeping process; the outer owner includes the mandatory
-  /// two-clock envelope, Block frontier classification, Deadline removal, and B+1 Service
+  /// populated Block deadline bucket whose due head has three distinct maintenance neighbors;
+  /// the outer owner includes the mandatory two-clock envelope, frontier classification, removal, and B+1 Service
   /// publication rather than measuring only the inner return atom. The independent Tick frontier
   /// may also process host-genesis work when it is already due; only admission refusal is invalid.
   #[benchmark(pov_mode = Measured)]
@@ -12165,6 +19792,7 @@ mod benches {
     let run = ActorRunStateStore::<T>::get(actor_id)
       .expect("ordinary retry attempt publishes one suspended Run");
     let now = run.eligible_at;
+    prepare_deadline_removal_neighbors::<T>(actor);
     frame_system::Pallet::<T>::set_block_number(now);
     let handle = DeadlineHandles::<T>::get(actor_id)
       .expect("due retry owns one legal canonical Deadline member");
@@ -12196,6 +19824,9 @@ mod benches {
       Err(DependencyReviewWorkerError::InsufficientWeight)
     ));
     assert!(!DeadlineHandles::<T>::contains_key(actor.actor_id));
+    assert!(!DeadlinePages::<T>::contains_key(handle.key, handle.page));
+    let header = DeadlineHeaders::<T>::get(handle.key).expect("surviving deadline bucket remains");
+    assert_eq!((header.first_page, header.count), (1, 96));
     let node =
       ServiceNodes::<T>::get(actor.actor_id).expect("due retry returns to canonical Service");
     assert_eq!(node.eligible_from, now.saturating_add(1u32.into()));
@@ -12206,6 +19837,56 @@ mod benches {
     assert!(!ActorControlLocators::<T>::contains_key(actor.actor_id));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("due-Deadline complete owner preserves canonical state");
+    Ok(())
+  }
+
+  /// Complete two-clock pass whose Block return deletes a minimum singleton bucket from the
+  /// fullest admitted index. Populated-page unlink remains a separately measured branch.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_due_deadline_to_service_deep_index() -> Result<(), BenchmarkError> {
+    let (actor_id, _) = prepare_reachable_opening::<T>(0, ReachableOpeningProfile::RetryMin)?;
+    Pallet::<T>::execute_cycle(Weight::MAX);
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("retry retains its generation");
+    let now = ActorRunStateStore::<T>::get(actor_id)
+      .expect("retry retains its Run")
+      .eligible_at;
+    let keys = populate_canonical_deadline_index::<T>(now);
+    frame_system::Pallet::<T>::set_block_number(now);
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    let pass;
+
+    #[block]
+    {
+      pass = Pallet::<T>::service_due_deadline_frontiers(
+        &mut meter,
+        ServiceResidenceKind::Live,
+        now,
+        0,
+        None,
+        None,
+      )
+      .expect("complete deep-index deadline pass is admitted");
+    }
+    assert!(
+      matches!(pass.block, Ok(DueBlockDeadlineMutation::RetryReturned(returned)) if returned == actor)
+    );
+    assert!(!matches!(
+      pass.tick,
+      Err(DependencyReviewWorkerError::InsufficientWeight)
+    ));
+    assert!(!DeadlineHeaders::<T>::contains_key(WakeupKey::Block(now)));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Block), keys - 1);
+    assert_eq!(
+      DeadlineIndexPositions::<T>::get(WakeupKey::Block(now.saturating_add(1_000u32.into()))),
+      Some(0),
+    );
+    assert_eq!(
+      ServiceNodes::<T>::get(actor_id).unwrap().eligible_from,
+      now.saturating_add(1u32.into())
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("deep-index frontier pass preserves canonical state");
     Ok(())
   }
 
@@ -12323,7 +20004,6 @@ mod benches {
       ),
     )?;
     assert_eq!(run.cursor, 1);
-    assert!(run.opening_snapshot.is_empty());
     assert!(matches!(
       ActorControlLocators::<T>::get(actor_id),
       Some(ActorControlLocation::Ready { .. })
@@ -12458,11 +20138,6 @@ mod benches {
       suspended.suspension,
       Some(SuspensionReason::FundingUnavailable)
     );
-    if dense {
-      assert_eq!(suspended.opening_snapshot.len() as u32, 4);
-    } else {
-      assert!(suspended.opening_snapshot.is_empty());
-    }
     frame_system::Pallet::<T>::set_block_number(suspended.eligible_at);
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
     let pass = Pallet::<T>::service_due_deadline_frontiers(
@@ -12505,7 +20180,6 @@ mod benches {
     let actor_id = prepare_reachable_running::<T>(3)?;
     let source = ActorRunStateStore::<T>::get(actor_id).expect("dense Running source exists");
     assert_eq!(source.cursor, 1);
-    assert_eq!(source.opening_snapshot.len() as u32, 6);
     let now = source.eligible_at;
     frame_system::Pallet::<T>::set_block_number(now);
     let (state, admission, loaded_step) =
@@ -12879,14 +20553,11 @@ mod benches {
   fn run_complete() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     let actor_id = prepare_reachable_running::<T>(T::MaxContractSteps::get())?;
     let state = Pallet::<T>::active_actor_state(actor_id).expect("real completion state exists");
-    let run = state
+    let cycle_nonce = state
       .run_state
       .as_ref()
-      .expect("real completion Run exists");
-    assert_eq!(
-      run.opening_snapshot.len(),
-      Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
+      .expect("real completion Run exists")
+      .cycle_nonce;
     #[block]
     {
       Pallet::<T>::write_run_state(actor_id, None)
@@ -12895,7 +20566,7 @@ mod benches {
     assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
     let completed_identity =
       benchmark_fixture_identity::<T>(actor_id).expect("completed Actor retains identity");
-    assert_eq!(completed_identity.cycle_nonce, run.cycle_nonce);
+    assert_eq!(completed_identity.cycle_nonce, cycle_nonce);
     let completed = benchmark_fixture_hot::<T>(actor_id).expect("completed Actor retains hot");
     assert_eq!(completed.cycle_state, CycleState::Idle);
     assert!(completed.queue_ticket.is_none());
@@ -12955,7 +20626,7 @@ mod benches {
   /// placement are the complete Actor-owned boundary.
   #[benchmark(pov_mode = Measured)]
   fn observation_change_trigger_occurrence() {
-    let owner: T::AccountId = whitelisted_caller();
+    let owner = measured_account::<T>("observation-occurrence-owner", 0);
     let recipient: T::AccountId = account("observation-occurrence-recipient", 0, 0);
     let feed = observation_feed_pool::<T>(1)[0];
     let contract_steps = make_contract_steps::<T>(recipient);
@@ -12974,6 +20645,7 @@ mod benches {
     )
     .expect("ObservationChange benchmark Actor exists");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    assert_measured_actor_accounts::<T>(&[actor_id]);
     frame_system::Pallet::<T>::set_block_number(1u32.into());
     #[block]
     {
@@ -12999,6 +20671,35 @@ mod benches {
         crate::ServiceResidenceKind::Pending,
       ))
     );
+  }
+
+  /// One full funded/watch header occurrence for economic Trigger fee calibration only.
+  /// Ordinary fanout owns its actual execution Weight; do not add this unit to its page.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn observation_change_trigger_full_header_occurrence() -> Result<(), BenchmarkError> {
+    let (feed, actors) = prepare_observation_max_header_page::<T>(true, false)?;
+    let actor_id = actors[0];
+    assert!(
+      !benchmark_fixture_semantic_hot::<T>(actor_id)
+        .unwrap()
+        .pending_signal
+    );
+    #[block]
+    {
+      assert!(Pallet::<T>::signal_observation_subscriber(
+        actor_id,
+        feed,
+        TriggerCauseProvenance::Deferred,
+        0,
+      )?);
+    }
+    let hot = benchmark_fixture_semantic_hot::<T>(actor_id).unwrap();
+    assert!(hot.pending_signal);
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    Ok(())
   }
 
   #[benchmark]
@@ -13065,6 +20766,7 @@ mod benches {
         owner, feed, 0,
       ));
     }
+    assert_measured_actor_accounts::<T>(&actors);
     let previous_owner: T::AccountId = account("observation-fanout-previous", 0, 0);
     let next_owner: T::AccountId = account("observation-fanout-next", 0, 0);
     let _ = bench_create_system_observation::<T>(previous_owner, previous_feed);
@@ -13092,6 +20794,345 @@ mod benches {
     }
   }
 
+  fn prepare_observation_max_header_page<T: Config>(
+    full_header: bool,
+    one_tail_subscriber: bool,
+  ) -> Result<(T::ObservationFeedId, Vec<ActorId>), BenchmarkError> {
+    let mut feeds = T::BenchmarkHelper::setup_observation_feeds(3)
+      .expect("observation benchmark feeds must be available")
+      .into_iter();
+    let previous_feed = feeds.next().expect("previous observation feed is required");
+    let feed = feeds.next().expect("measured observation feed is required");
+    let next_feed = feeds.next().expect("next observation feed is required");
+    let (_, asset, _, funding) = large_header_fields::<T>();
+    let steps = maximum_temporal_control_steps::<T>(asset)?;
+    let mut actors = alloc::vec::Vec::new();
+    for index in 0..T::ObservationPageSize::get() + u32::from(one_tail_subscriber) {
+      let owner: T::AccountId = account("observation-max-header-page", index, 0);
+      ensure_creation_balance::<T>(&owner);
+      prefund_active_user_creation::<T>(&owner, &steps);
+      let mut contract = user_contract::<T>(
+        Schedule {
+          trigger: observation_trigger::<T>(feed),
+          cooldown_blocks: 0,
+        },
+        steps.clone(),
+      )
+      .expect("maximum-Step User Contract exists");
+      if full_header {
+        contract.funding = funding.clone();
+        contract.parked_balance_activation = Some(maximum_parked_balance_activation::<T>(&owner)?);
+      }
+      Pallet::<T>::create_user_actor(
+        RawOrigin::Signed(owner).into(),
+        Mutability::Mutable,
+        Some(contract),
+      )?;
+      let actor_id = NextActorId::<T>::get() - 1;
+      assert_max_contract_geometry::<T>(actor_id);
+      let head = ActorContractHeads::<T>::get(actor_id).unwrap();
+      assert_eq!(head.header.step_count, T::MaxContractSteps::get());
+      assert_eq!(
+        head.first_step.as_ref().unwrap().task.encoded_size(),
+        TaskOf::<T>::max_encoded_len()
+      );
+      if full_header {
+        assert_eq!(
+          head.header.funding.encoded_size(),
+          FundingSourcePolicyOf::<T>::max_encoded_len()
+        );
+        assert_eq!(
+          head
+            .header
+            .parked_balance_activation
+            .as_ref()
+            .unwrap()
+            .watches
+            .len(),
+          T::MaxWhitelistSize::get().min(T::MaxContractSteps::get()) as usize
+        );
+      }
+      seed_actor_for_cycle::<T>(actor_id);
+      actors.push(actor_id);
+    }
+    assert_measured_actor_accounts::<T>(&actors);
+    let _ = bench_create_system_observation::<T>(
+      account("observation-max-header-previous", 0, 0),
+      previous_feed,
+    );
+    let _ =
+      bench_create_system_observation::<T>(account("observation-max-header-next", 0, 0), next_feed);
+    for dirty_feed in [previous_feed, feed, next_feed] {
+      Pallet::<T>::note_observation_changed(dirty_feed, 1)?;
+    }
+    DirtyObservationListState::<T>::mutate(|list| list.cursor = Some(feed));
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("max-header subscriber page is canonically admitted");
+    Ok((feed, actors))
+  }
+
+  fn assert_observation_max_header_fanout<T: Config>(
+    feed: T::ObservationFeedId,
+    actors: Vec<ActorId>,
+    remaining_dirty_feeds: u32,
+  ) {
+    assert!(!DirtyObservationFeeds::<T>::contains_key(feed));
+    assert_eq!(
+      DirtyObservationListState::<T>::get().count,
+      remaining_dirty_feeds
+    );
+    for actor_id in actors {
+      let hot = benchmark_fixture_semantic_hot::<T>(actor_id).unwrap();
+      assert!(hot.pending_signal);
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
+      assert_eq!(
+        ActorContractHeads::<T>::get(actor_id)
+          .unwrap()
+          .header
+          .step_count,
+        T::MaxContractSteps::get()
+      );
+    }
+  }
+
+  fn assert_observation_max_header_quantum<T: Config>(
+    feed: T::ObservationFeedId,
+    actors: Vec<ActorId>,
+    positions: u32,
+    other_dirty_feeds: u32,
+  ) {
+    let processed = usize::try_from(positions.min(T::ObservationPageSize::get()))
+      .expect("bounded subscriber positions fit usize");
+    if processed == actors.len() {
+      assert_observation_max_header_fanout::<T>(feed, actors, other_dirty_feeds);
+      return;
+    }
+    let dirty = DirtyObservationFeeds::<T>::get(feed).expect("unfinished page stays dirty");
+    let page =
+      ObservationSubscriberPageLists::<T>::get(feed).expect("subscriber page remains linked");
+    assert_eq!(dirty.next_subscriber_page, Some(page.head));
+    assert_eq!(dirty.next_subscriber_position, processed as u32);
+    assert_eq!(
+      DirtyObservationListState::<T>::get().count,
+      other_dirty_feeds + 1
+    );
+    for (index, actor_id) in actors.into_iter().enumerate() {
+      let hot = benchmark_fixture_semantic_hot::<T>(actor_id).unwrap();
+      assert_eq!(hot.pending_signal, index < processed);
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        if index < processed {
+          Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+        } else {
+          None
+        },
+      );
+    }
+  }
+
+  fn isolate_dirty_observation_feed<T: Config>(
+    feed: T::ObservationFeedId,
+  ) -> Result<(), BenchmarkError> {
+    let dirty = DirtyObservationListState::<T>::get();
+    for other in [dirty.head, dirty.tail] {
+      let other = other.expect("neighboring dirty feed exists");
+      assert_ne!(other, feed);
+      Pallet::<T>::clear_dirty_observation_feed(other)?;
+    }
+    assert_eq!(DirtyObservationListState::<T>::get().count, 1);
+    Ok(())
+  }
+
+  fn observation_fanout_prepass_available<T: Config>() -> Weight {
+    let scan = T::WeightInfo::dependency_scan_source_probe().saturating_add(
+      T::WeightInfo::process_dependency_scan_unit()
+        .max(T::WeightInfo::process_dependency_scan_completion_unit()),
+    );
+    let mandatory = T::WeightInfo::scheduler_on_initialize_cutoff()
+      .saturating_add(Pallet::<T>::deadline_service_weight_upper())
+      .saturating_add(T::WeightInfo::materialization_coordinator_base())
+      .saturating_add(scan)
+      .saturating_add(T::WeightInfo::scheduler_on_idle_base())
+      .saturating_add(T::WeightInfo::block_resource_finalize());
+    T::BlockResourceBudget::get()
+      .limits()
+      .actor_control()
+      .checked_sub(&mandatory)
+      .expect("mandatory Control fits before diagnostic fanout turns")
+  }
+
+  /// Complete ordinary fanout of one full page of funded maximum-Step User headers.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn observation_fanout_max_header_page() -> Result<(), BenchmarkError> {
+    let (feed, actors) = prepare_observation_max_header_page::<T>(false, false)?;
+    #[block]
+    {
+      Pallet::<T>::do_fanout_dirty_observation_page()?;
+    }
+    assert_observation_max_header_fanout::<T>(feed, actors, 2);
+    Ok(())
+  }
+
+  /// Same full page with maximum signed funding and balance-watch header fields.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn observation_fanout_full_header_page() -> Result<(), BenchmarkError> {
+    let (feed, actors) = prepare_observation_max_header_page::<T>(true, false)?;
+    #[block]
+    {
+      Pallet::<T>::do_fanout_dirty_observation_page()?;
+    }
+    assert_observation_max_header_fanout::<T>(feed, actors, 2);
+    Ok(())
+  }
+
+  /// One candidate 12-position turn on a full page of maximum funded/watch User headers.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn observation_fanout_full_header_quantum_12() -> Result<(), BenchmarkError> {
+    let (feed, actors) = prepare_observation_max_header_page::<T>(true, false)?;
+    #[block]
+    {
+      Pallet::<T>::do_fanout_dirty_observation_quantum(12)?;
+    }
+    assert_observation_max_header_quantum::<T>(feed, actors, 12, 2);
+    Ok(())
+  }
+
+  /// Two metered 12-position turns on the same maximum-header subscriber page.
+  /// The diagnostic upper admits exactly two turns; it is not a production coefficient.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn observation_fanout_full_header_two_quantum_12() -> Result<(), BenchmarkError> {
+    let (feed, actors) = prepare_observation_max_header_page::<T>(true, false)?;
+    // Isolate same-feed continuation; the multi-feed fixture rotates to a neighbor after Q12.
+    isolate_dirty_observation_feed::<T>(feed)?;
+    let ordinary = Weight::from_parts(20_000_000_000, 185_000);
+    let base = T::WeightInfo::observation_fanout_base();
+    let probe = T::WeightInfo::observation_fanout_branch_probe();
+    let fault = T::WeightInfo::record_observation_fanout_worker_fault();
+    let two_turn_allowance = base
+      .saturating_add(probe.saturating_add(ordinary).saturating_mul(2))
+      .saturating_add(fault);
+    let available = observation_fanout_prepass_available::<T>();
+    assert!(two_turn_allowance.all_lte(available));
+    #[block]
+    {
+      let (consumed, turns) =
+        Pallet::<T>::fanout_dirty_observations_with_quanta(two_turn_allowance, 0, 12, ordinary);
+      assert_eq!(turns, 2);
+      assert!(consumed.all_lte(available));
+    }
+    assert_observation_max_header_quantum::<T>(feed, actors, 24, 0);
+    Ok(())
+  }
+
+  /// One resumed 12-position turn on a full maximum-header page after Q12 committed.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn observation_fanout_full_header_second_quantum_12() -> Result<(), BenchmarkError> {
+    let (feed, actors) = prepare_observation_max_header_page::<T>(true, false)?;
+    isolate_dirty_observation_feed::<T>(feed)?;
+    assert!(Pallet::<T>::do_fanout_dirty_observation_quantum(12)?);
+    assert_eq!(
+      DirtyObservationFeeds::<T>::get(feed)
+        .expect("page remains dirty after first quantum")
+        .next_subscriber_position,
+      12
+    );
+    let ordinary = Weight::from_parts(20_000_000_000, 185_000);
+    let allowance = T::WeightInfo::observation_fanout_base()
+      .saturating_add(T::WeightInfo::observation_fanout_branch_probe())
+      .saturating_add(ordinary)
+      .saturating_add(T::WeightInfo::record_observation_fanout_worker_fault());
+    let available = observation_fanout_prepass_available::<T>();
+    assert!(allowance.all_lte(available));
+    #[block]
+    {
+      let (consumed, turns) =
+        Pallet::<T>::fanout_dirty_observations_with_quanta(allowance, 0, 12, ordinary);
+      assert_eq!(turns, 1);
+      assert!(consumed.all_lte(available));
+    }
+    assert_observation_max_header_quantum::<T>(feed, actors, 24, 0);
+    Ok(())
+  }
+
+  /// One candidate 24-position turn on the same admissible subscriber geometry.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn observation_fanout_full_header_quantum_24() -> Result<(), BenchmarkError> {
+    let (feed, actors) = prepare_observation_max_header_page::<T>(true, false)?;
+    #[block]
+    {
+      Pallet::<T>::do_fanout_dirty_observation_quantum(24)?;
+    }
+    assert_observation_max_header_quantum::<T>(feed, actors, 24, 2);
+    Ok(())
+  }
+
+  /// One candidate 32-position turn on the same admissible subscriber geometry.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn observation_fanout_full_header_quantum_32() -> Result<(), BenchmarkError> {
+    let (feed, actors) = prepare_observation_max_header_page::<T>(true, false)?;
+    #[block]
+    {
+      Pallet::<T>::do_fanout_dirty_observation_quantum(32)?;
+    }
+    assert_observation_max_header_quantum::<T>(feed, actors, 32, 2);
+    Ok(())
+  }
+
+  /// One remaining maximum-header subscriber on a real second page after the first page commits.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn observation_fanout_full_header_tail_page() -> Result<(), BenchmarkError> {
+    let (feed, actors) = prepare_observation_max_header_page::<T>(true, true)?;
+    assert!(Pallet::<T>::do_fanout_dirty_observation_page()?);
+    let first_page = ObservationSubscriberPageLists::<T>::get(feed)
+      .expect("subscriber list is retained until the tail page completes")
+      .head;
+    let tail_page = ObservationSubscriberPages::<T>::get(feed, first_page)
+      .expect("the first page remains linked")
+      .next
+      .expect("the last subscriber must occupy a second page");
+    let state = DirtyObservationFeeds::<T>::get(feed).expect("tail feed remains dirty");
+    assert_eq!(state.next_subscriber_page, Some(tail_page));
+    assert_eq!(state.next_subscriber_position, 0);
+    assert!(
+      !benchmark_fixture_semantic_hot::<T>(*actors.last().unwrap())
+        .unwrap()
+        .pending_signal
+    );
+    for _ in 0..2 {
+      if DirtyObservationListState::<T>::get().cursor == Some(feed) {
+        break;
+      }
+      Pallet::<T>::do_fanout_dirty_observation_page()?;
+    }
+    assert_eq!(DirtyObservationListState::<T>::get().cursor, Some(feed));
+    #[block]
+    {
+      Pallet::<T>::do_fanout_dirty_observation_page()?;
+    }
+    assert_observation_max_header_fanout::<T>(feed, actors, 0);
+    Ok(())
+  }
+
+  /// Full funded/watch header page with the bounded ready queue saturated by reusable tombstones.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn observation_fanout_full_header_tombstone_page() -> Result<(), BenchmarkError> {
+    let (feed, actors) = prepare_observation_max_header_page::<T>(true, false)?;
+    install_saturated_tombstone_queue::<T>();
+    assert_eq!(
+      ActorReadyTail::<T>::get() - ActorReadyHead::<T>::get(),
+      u64::from(T::MaxQueueLength::get())
+    );
+    #[block]
+    {
+      Pallet::<T>::do_fanout_dirty_observation_page()?;
+    }
+    assert_observation_max_header_fanout::<T>(feed, actors, 2);
+    Ok(())
+  }
+
   #[benchmark]
   fn observation_fanout_wakeup_page() {
     let feed = T::BenchmarkHelper::setup_observation_feeds(1)
@@ -13106,6 +21147,7 @@ mod benches {
         owner, feed, 100,
       ));
     }
+    assert_measured_actor_accounts::<T>(&actors);
     Pallet::<T>::note_observation_changed(feed, 1)
       .expect("observation change ingress must succeed");
     #[block]
@@ -13145,6 +21187,7 @@ mod benches {
       );
       actors.push(actor_id);
     }
+    assert_measured_actor_accounts::<T>(&actors);
     Pallet::<T>::note_observation_changed(feed, 1)
       .expect("observation change ingress must succeed");
     #[block]
@@ -13201,6 +21244,7 @@ mod benches {
         owner, feed, 0,
       ));
     }
+    assert_measured_actor_accounts::<T>(&actors);
     install_saturated_tombstone_queue::<T>();
     Pallet::<T>::note_observation_changed(feed, 1)
       .expect("observation change ingress must succeed");
@@ -13306,6 +21350,27 @@ mod benches {
       assert_eq!(
         Pallet::<T>::crossing_radix_min_ge(feed, CrossingTraversal::Upward, 0, 0, 0, u128::MAX,),
         Ok(Some(2))
+      );
+    }
+  }
+
+  /// Diagnostic upper-bound candidate for a radix lookup past a populated low prefix.
+  /// Two indexed members are canonical, but the lower bound is selected directly: ordinary
+  /// Crossing progression removes a fired low leaf before advancing the cursor beyond it.
+  /// Do not promote this fixture to the charged owner without a reachable cursor witness.
+  #[benchmark(extra)]
+  fn crossing_search_divergent_prefix_probe() {
+    let (feed, _) = prepare_crossing_work::<T>(2);
+    bench_create_system_crossing::<T>(
+      measured_account::<T>("crossing-search-divergent", 1),
+      feed,
+      u128::MAX - 1,
+    );
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::crossing_radix_min_ge(feed, CrossingTraversal::Upward, 0, 0, 3, u128::MAX),
+        Ok(Some(u128::MAX - 1))
       );
     }
   }
@@ -13692,6 +21757,23 @@ mod benches {
       second_owner,
       Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
     );
+    for index in 2..T::CrossingPageSize::get() {
+      let owner: T::AccountId = account("crossing-skip-probe-guard", index, 0);
+      bench_create_system_crossing::<T>(owner, feed, 2);
+    }
+    let locator = CrossingMemberships::<T>::get(first_actor).expect("first skip has a locator");
+    let neighbor = CrossingMemberships::<T>::get(second_actor).expect("second skip has a locator");
+    assert_eq!(
+      (neighbor.key, neighbor.page, neighbor.offset),
+      (locator.key, locator.page, 1)
+    );
+    assert_eq!(
+      CrossingMemberPages::<T>::get(locator.key, locator.page)
+        .expect("skip pair source page exists")
+        .entries
+        .len() as u32,
+      T::CrossingPageSize::get(),
+    );
     for actor_id in [first_actor, second_actor] {
       benchmark_fixture_mutate_hot::<T>(actor_id, |hot| {
         let TriggerRuntimeState::ObservationCrossing {
@@ -13716,9 +21798,7 @@ mod benches {
         exhausted: false,
       },
     );
-    for actor_id in [first_actor, second_actor] {
-      benchmark_fixture_align_primary_control::<T>(actor_id);
-    }
+    // Canonical Unsignaled Actors own semantic authority, not a frame primary.
     #[block]
     {
       assert_eq!(
@@ -14009,6 +22089,7 @@ mod benches {
       second_owner,
       Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
     );
+    assert_measured_actor_accounts::<T>(&[first_actor, second_actor]);
     Pallet::<T>::note_observation_transition(
       feed,
       ObservationTransition {
@@ -14060,21 +22141,171 @@ mod benches {
     }
   }
 
+  // Retained ordinary-header late-fee control for exact-source comparison with the full-header
+  // branch; historical EXP-0156 results remain distinct from any current-Wasm reissue.
+  #[benchmark(extra)]
+  fn crossing_placed_pair_late_fee_fallback_unit() {
+    let feed = T::BenchmarkHelper::setup_observation_feeds(1)
+      .expect("Crossing benchmark feed must be available")
+      .into_iter()
+      .next()
+      .expect("one Crossing benchmark feed is required");
+    let first_actor = bench_create_user_with_trigger::<T>(
+      account("crossing-late-fee", 0, 0),
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+    );
+    let second_actor = bench_create_user_with_trigger::<T>(
+      account("crossing-late-fee", 1, 0),
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+    );
+    assert_measured_actor_accounts::<T>(&[first_actor, second_actor]);
+    let second_sovereign = Pallet::<T>::actor_identity(second_actor)
+      .expect("underfunded actor identity exists")
+      .sovereign_account;
+    let native = T::FeeNativeAssetId::get();
+    let balance = T::AssetOps::balance(&second_sovereign, native);
+    let minimum = T::MinUserBalance::get();
+    assert!(balance > minimum);
+    T::AssetOps::burn(&second_sovereign, native, balance.saturating_sub(minimum))
+      .expect("post-creation fee depletion must succeed");
+    assert_eq!(T::AssetOps::balance(&second_sovereign, native), minimum);
+    Pallet::<T>::note_observation_transition(
+      feed,
+      ObservationTransition {
+        revision: 2,
+        previous: Some(1),
+        current: 2,
+      },
+    )
+    .expect("Crossing benchmark transition must be admitted");
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::FireCohortPlacedBatch
+    );
+    #[block]
+    {
+      Pallet::<T>::benchmark_crossing_placed_batch_or_single_unit(2)
+        .expect("late underfunding must fall back to scalar progress");
+    }
+    assert!(benchmark_fixture_semantic_hot::<T>(first_actor).is_some_and(|hot| hot.pending_signal));
+    assert!(
+      benchmark_fixture_semantic_hot::<T>(second_actor).is_some_and(|hot| !hot.pending_signal)
+    );
+  }
+
+  // Diagnostic only: a funded first maximum funded/watch User header pays inside the pair,
+  // the later underfunded peer rolls it back, and the scalar retry pays once on commit.
+  // The ordinary-header observation belongs to EXP-0156, not this stricter fixture.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn crossing_placed_pair_late_fee_full_header_unit() {
+    let feed = T::BenchmarkHelper::setup_observation_feeds(1)
+      .expect("Crossing benchmark feed must be available")
+      .into_iter()
+      .next()
+      .expect("one Crossing benchmark feed is required");
+    let (_, asset, _, funding) = large_header_fields::<T>();
+    let steps = maximum_temporal_control_steps::<T>(asset)
+      .expect("maximum-step User Crossing Contract exists");
+    let mut actors = alloc::vec::Vec::new();
+    for index in 0..2 {
+      let owner: T::AccountId = account("crossing-late-fee-full-header", index, 0);
+      ensure_creation_balance::<T>(&owner);
+      prefund_active_user_creation::<T>(&owner, &steps);
+      let mut contract = user_contract::<T>(
+        Schedule {
+          trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+          cooldown_blocks: 0,
+        },
+        steps.clone(),
+      )
+      .expect("maximum-step Crossing Contract exists");
+      contract.funding = funding.clone();
+      contract.parked_balance_activation = Some(
+        maximum_parked_balance_activation::<T>(&owner).expect("maximum User balance watch exists"),
+      );
+      Pallet::<T>::create_user_actor(
+        RawOrigin::Signed(owner).into(),
+        Mutability::Mutable,
+        Some(contract),
+      )
+      .expect("maximum-header Crossing User creation succeeds");
+      let actor_id = NextActorId::<T>::get() - 1;
+      assert_max_contract_geometry::<T>(actor_id);
+      actors.push(actor_id);
+    }
+    let [first_actor, second_actor] = [actors[0], actors[1]];
+    assert_measured_actor_accounts::<T>(&[first_actor, second_actor]);
+    let second_sovereign = Pallet::<T>::actor_identity(second_actor)
+      .expect("underfunded actor identity exists")
+      .sovereign_account;
+    let native = T::FeeNativeAssetId::get();
+    let balance = T::AssetOps::balance(&second_sovereign, native);
+    let minimum = T::MinUserBalance::get();
+    assert!(balance > minimum);
+    T::AssetOps::burn(&second_sovereign, native, balance.saturating_sub(minimum))
+      .expect("post-creation fee depletion must succeed");
+    assert_eq!(T::AssetOps::balance(&second_sovereign, native), minimum);
+    Pallet::<T>::note_observation_transition(
+      feed,
+      ObservationTransition {
+        revision: 2,
+        previous: Some(1),
+        current: 2,
+      },
+    )
+    .expect("Crossing benchmark transition must be admitted");
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::FireCohortPlacedBatch
+    );
+    #[block]
+    {
+      Pallet::<T>::benchmark_crossing_placed_batch_or_single_unit(2)
+        .expect("late underfunding must fall back to scalar progress");
+    }
+    assert!(benchmark_fixture_semantic_hot::<T>(first_actor).is_some_and(|hot| hot.pending_signal));
+    assert!(
+      benchmark_fixture_semantic_hot::<T>(second_actor).is_some_and(|hot| !hot.pending_signal)
+    );
+  }
+
   #[benchmark]
   fn crossing_placed_maximum_unit() {
     let (feed, first_actor) = prepare_crossing_work::<T>(2);
     let mut actors = alloc::vec![first_actor];
     for index in 0..T::CrossingPageSize::get().saturating_sub(1) {
       let owner: T::AccountId = account("crossing-maximum-unit", index, 0);
-      actors.push(if index < 3 {
-        bench_create_user_with_trigger::<T>(
-          owner,
-          Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
-        )
-      } else {
-        bench_create_system_crossing::<T>(owner, feed, 2)
-      });
+      actors.push(bench_create_user_with_trigger::<T>(
+        owner,
+        Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+      ));
     }
+    assert_measured_actor_accounts::<T>(&actors);
+    let before = crossing_fee_snapshot::<T>(&actors);
     CrossingRangeCursors::<T>::insert(
       feed,
       CrossingRangeCursor {
@@ -14096,6 +22327,10 @@ mod benches {
       Pallet::<T>::crossing_placed_batch_work_unit(CROSSING_COHORT_BENCHMARK_MAX)
         .expect("placed Crossing maximum batch must succeed");
     }
+    assert_crossing_occurrence_fees::<T>(
+      &before,
+      actors.len().min(CROSSING_COHORT_BENCHMARK_MAX as usize),
+    );
     for actor_id in actors
       .into_iter()
       .take(CROSSING_COHORT_BENCHMARK_MAX as usize)
@@ -14124,6 +22359,7 @@ mod benches {
   #[benchmark]
   fn crossing_placed_non_tail_emptied_unit() {
     let actors = prepare_non_tail_crossing_batch::<T>(CROSSING_NON_TAIL_BENCHMARK_MAX);
+    let before = crossing_fee_snapshot::<T>(&actors);
     assert_eq!(
       Pallet::<T>::classify_crossing_work(),
       CrossingWorkPlan::FireCohortPlaced
@@ -14133,6 +22369,8 @@ mod benches {
       Pallet::<T>::crossing_placed_batch_work_unit(CROSSING_COHORT_BENCHMARK_MAX)
         .expect("non-tail Crossing batch with emptied tail must succeed");
     }
+    assert_crossing_occurrence_fees::<T>(&before, CROSSING_NON_TAIL_BENCHMARK_MAX as usize);
+    assert_non_tail_crossing_survivors::<T>(&actors);
     for actor_id in actors
       .into_iter()
       .take(CROSSING_NON_TAIL_BENCHMARK_MAX as usize)
@@ -14161,6 +22399,7 @@ mod benches {
   #[benchmark]
   fn crossing_placed_non_tail_trimmed_unit() {
     let actors = prepare_non_tail_crossing_batch::<T>(CROSSING_TRIMMED_BENCHMARK_TAIL);
+    let before = crossing_fee_snapshot::<T>(&actors);
     assert_eq!(
       Pallet::<T>::classify_crossing_work(),
       CrossingWorkPlan::FireCohortPlaced
@@ -14170,6 +22409,8 @@ mod benches {
       Pallet::<T>::crossing_placed_batch_work_unit(CROSSING_COHORT_BENCHMARK_MAX)
         .expect("non-tail Crossing batch with trimmed tail must succeed");
     }
+    assert_crossing_occurrence_fees::<T>(&before, CROSSING_NON_TAIL_BENCHMARK_MAX as usize);
+    assert_non_tail_crossing_survivors::<T>(&actors);
     for actor_id in actors
       .into_iter()
       .take(CROSSING_NON_TAIL_BENCHMARK_MAX as usize)
@@ -14197,7 +22438,7 @@ mod benches {
 
   #[benchmark(extra)]
   fn crossing_skip_unit() {
-    let (_, actor_id) = prepare_crossing_work::<T>(2);
+    let (feed, actor_id) = prepare_crossing_work::<T>(2);
     benchmark_fixture_mutate_hot::<T>(actor_id, |hot| {
       let TriggerRuntimeState::ObservationCrossing {
         installed_at_revision,
@@ -14208,7 +22449,23 @@ mod benches {
       };
       *installed_at_revision = 2;
     });
-    benchmark_fixture_align_primary_control::<T>(actor_id);
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    // Canonical Unsignaled authority is semantic; no frame primary exists to align.
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::SkipPostInstallationTransition,
+    );
     #[block]
     {
       Pallet::<T>::crossing_work_unit().expect("post-installation Crossing skip must succeed");
@@ -14258,9 +22515,11 @@ mod benches {
         exhausted: false,
       },
     );
-    for actor_id in [first_actor, second_actor] {
-      benchmark_fixture_align_primary_control::<T>(actor_id);
-    }
+    // Canonical Unsignaled Actors own semantic authority, not a frame primary.
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::SkipPostInstallationPair,
+    );
     #[block]
     {
       Pallet::<T>::crossing_pair_work_unit().expect("Crossing skip pair must succeed");
@@ -14303,7 +22562,7 @@ mod benches {
 
   #[benchmark]
   fn transaction_extension_ingress_base() {
-    let owner: T::AccountId = whitelisted_caller();
+    let owner = measured_account::<T>("unmatched-ingress-owner", 0);
     let populated_actor_id = bench_create_user::<T>(owner);
     let proof_witness = Pallet::<T>::active_actor_view(populated_actor_id)
       .expect("benchmark actor exists")
@@ -15094,6 +23353,2817 @@ mod benches {
       });
     }
   }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_header_profiles_use_real_sources_and_service_peers() {
+    for (source, actor_type, close) in [
+      (ZeroStepHeaderSource::AddressEvent, ActorType::User, false),
+      (ZeroStepHeaderSource::AddressEvent, ActorType::User, true),
+      (ZeroStepHeaderSource::AddressEvent, ActorType::System, false),
+      (ZeroStepHeaderSource::AddressEvent, ActorType::System, true),
+      (ZeroStepHeaderSource::Manual, ActorType::User, false),
+      (ZeroStepHeaderSource::Manual, ActorType::User, true),
+      (
+        ZeroStepHeaderSource::ManualImmutableClose,
+        ActorType::User,
+        true,
+      ),
+      (ZeroStepHeaderSource::Manual, ActorType::System, false),
+      (ZeroStepHeaderSource::Manual, ActorType::System, true),
+      (
+        ZeroStepHeaderSource::ObservationChangeHeadRelinkClose,
+        ActorType::User,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangeHeadRelinkClose,
+        ActorType::System,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain,
+        ActorType::User,
+        false,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain,
+        ActorType::System,
+        false,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose,
+        ActorType::User,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose,
+        ActorType::System,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangePendingSecondPageClose,
+        ActorType::User,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangePendingSecondPageClose,
+        ActorType::System,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose,
+        ActorType::User,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose,
+        ActorType::System,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangeTwoPagesClose,
+        ActorType::User,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangeTwoPagesClose,
+        ActorType::System,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangeFullFreePageClose,
+        ActorType::User,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangeFullFreePageClose,
+        ActorType::System,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangeSharedPageClose,
+        ActorType::User,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChangeSharedPageClose,
+        ActorType::System,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChange,
+        ActorType::User,
+        false,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChange,
+        ActorType::User,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChange,
+        ActorType::System,
+        false,
+      ),
+      (
+        ZeroStepHeaderSource::ObservationChange,
+        ActorType::System,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::CrossingWaitingTailClose,
+        ActorType::User,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::CrossingWaitingTailClose,
+        ActorType::System,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::CrossingArmedFullPageClose,
+        ActorType::User,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::CrossingArmedFullPageClose,
+        ActorType::System,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::CrossingArmedVacancy,
+        ActorType::User,
+        false,
+      ),
+      (
+        ZeroStepHeaderSource::CrossingArmedVacancy,
+        ActorType::System,
+        false,
+      ),
+      (
+        ZeroStepHeaderSource::CrossingArmedNewPage,
+        ActorType::User,
+        false,
+      ),
+      (
+        ZeroStepHeaderSource::CrossingArmedNewPage,
+        ActorType::System,
+        false,
+      ),
+      (ZeroStepHeaderSource::CrossingArmed, ActorType::User, false),
+      (ZeroStepHeaderSource::CrossingArmed, ActorType::User, true),
+      (
+        ZeroStepHeaderSource::CrossingArmed,
+        ActorType::System,
+        false,
+      ),
+      (ZeroStepHeaderSource::CrossingArmed, ActorType::System, true),
+      (
+        ZeroStepHeaderSource::CrossingWaiting,
+        ActorType::User,
+        false,
+      ),
+      (ZeroStepHeaderSource::CrossingWaiting, ActorType::User, true),
+      (
+        ZeroStepHeaderSource::CrossingWaiting,
+        ActorType::System,
+        false,
+      ),
+      (
+        ZeroStepHeaderSource::CrossingWaiting,
+        ActorType::System,
+        true,
+      ),
+      (ZeroStepHeaderSource::CadencedDue, ActorType::User, false),
+      (ZeroStepHeaderSource::CadencedDue, ActorType::User, true),
+      (
+        ZeroStepHeaderSource::CadencedDueImmutableClose,
+        ActorType::User,
+        true,
+      ),
+      (ZeroStepHeaderSource::CadencedDue, ActorType::System, false),
+      (ZeroStepHeaderSource::CadencedDue, ActorType::System, true),
+      (ZeroStepHeaderSource::AtTimeDue, ActorType::User, false),
+      (ZeroStepHeaderSource::AtTimeDue, ActorType::User, true),
+      (
+        ZeroStepHeaderSource::AtTimeDueImmutableClose,
+        ActorType::User,
+        true,
+      ),
+      (ZeroStepHeaderSource::AtTimeDue, ActorType::System, false),
+      (ZeroStepHeaderSource::AtTimeDue, ActorType::System, true),
+      (
+        ZeroStepHeaderSource::AtTimePreservedLatch,
+        ActorType::User,
+        false,
+      ),
+      (
+        ZeroStepHeaderSource::AtTimePreservedLatch,
+        ActorType::User,
+        true,
+      ),
+      (
+        ZeroStepHeaderSource::AtTimePreservedLatch,
+        ActorType::System,
+        false,
+      ),
+      (
+        ZeroStepHeaderSource::AtTimePreservedLatch,
+        ActorType::System,
+        true,
+      ),
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(actor_type, source, close);
+        let actor_id = fixture.actor.actor_id;
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        if fixture.observation_change.is_some() {
+          assert_observation_change_opening_input::<Test>(&fixture);
+        }
+        if fixture.crossing.is_some() {
+          assert_crossing_opening_input::<Test>(&fixture);
+        }
+        if fixture.cadenced.is_some() {
+          assert_cadenced_opening_input::<Test>(&fixture);
+        }
+        if fixture.at_time.is_some() {
+          assert_at_time_opening_input::<Test>(
+            &fixture,
+            source == ZeroStepHeaderSource::AtTimePreservedLatch,
+          );
+        }
+        let now = frame_system::Pallet::<Test>::block_number();
+        execute_zero_step_inner::<Test>(actor_id, state, &admission, now);
+        assert_zero_step_header::<Test>(fixture, close);
+        let expected_family = match source {
+          ZeroStepHeaderSource::Manual
+          | ZeroStepHeaderSource::ManualImmutableClose
+          | ZeroStepHeaderSource::AtTimePreservedLatch => TriggerFamily::Manual,
+          ZeroStepHeaderSource::AddressEvent => TriggerFamily::AddressEvent,
+          ZeroStepHeaderSource::AtTimeDue | ZeroStepHeaderSource::AtTimeDueImmutableClose => {
+            TriggerFamily::AtTime
+          }
+          ZeroStepHeaderSource::CadencedDue | ZeroStepHeaderSource::CadencedDueImmutableClose => {
+            TriggerFamily::Cadenced
+          }
+          ZeroStepHeaderSource::CrossingWaiting
+          | ZeroStepHeaderSource::CrossingArmed
+          | ZeroStepHeaderSource::CrossingArmedNewPage
+          | ZeroStepHeaderSource::CrossingArmedVacancy
+          | ZeroStepHeaderSource::CrossingArmedFullPageClose
+          | ZeroStepHeaderSource::CrossingWaitingTailClose => TriggerFamily::ObservationCrossing,
+          ZeroStepHeaderSource::ObservationChange
+          | ZeroStepHeaderSource::ObservationChangeSharedPageClose
+          | ZeroStepHeaderSource::ObservationChangeFullFreePageClose
+          | ZeroStepHeaderSource::ObservationChangeTwoPagesClose
+          | ZeroStepHeaderSource::ObservationChangeHeadRelinkClose
+          | ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose
+          | ZeroStepHeaderSource::ObservationChangePendingSecondPageClose
+          | ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain
+          | ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose => {
+            TriggerFamily::ObservationChange
+          }
+        };
+        let occurrences = frame_system::Pallet::<Test>::events()
+          .iter()
+          .filter_map(|record| match &record.event {
+            crate::mock::RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
+              actor_id: receipt_actor,
+              trigger_family,
+              ..
+            }) if *receipt_actor == actor_id => Some(*trigger_family),
+            _ => None,
+          })
+          .collect::<Vec<_>>();
+        assert_eq!(
+          occurrences,
+          vec![expected_family],
+          "one useful source, no replacement fee or duplicate occurrence"
+        );
+        if actor_type == ActorType::System {
+          assert!(!frame_system::Pallet::<Test>::events().iter().any(
+            |record| match &record.event {
+              crate::mock::RuntimeEvent::Actors(
+                Event::PipelineFeeCharged {
+                  actor_id: receipt_actor,
+                  ..
+                }
+                | Event::ActionFeeCharged {
+                  actor_id: receipt_actor,
+                  ..
+                },
+              ) => *receipt_actor == actor_id,
+              crate::mock::RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
+                actor_id: receipt_actor,
+                fee,
+                ..
+              }) => *receipt_actor == actor_id && !fee.is_zero(),
+              _ => false,
+            }
+          ));
+        }
+        assert!(!frame_system::Pallet::<Test>::events().iter().any(|record| matches!(
+          &record.event,
+          crate::mock::RuntimeEvent::Actors(Event::ActionFeeCharged { actor_id: receipt_actor, .. })
+            if *receipt_actor == actor_id
+        )));
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_crossing_armed_full_page_close_rejects_leaked_source_and_guard_drift() {
+    enum Corruption {
+      OldLeaf,
+      MissingDestination,
+      WrongGuardLocator,
+      DamagedGuard,
+    }
+    for corruption in [
+      Corruption::OldLeaf,
+      Corruption::MissingDestination,
+      Corruption::WrongGuardLocator,
+      Corruption::DamagedGuard,
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::CrossingArmedFullPageClose,
+          true,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (feed, _, _) = fixture.crossing.unwrap();
+        let old_key = fixture.crossing_shape.unwrap().0;
+        let old_leaf = CrossingLeafStates::<Test>::get(old_key).unwrap();
+        let destination = CrossingLeafKey {
+          feed,
+          traversal: CrossingTraversal::Upward,
+          threshold: 2,
+        };
+        let first_guard = fixture.crossing_guards[0].0;
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        assert_crossing_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::OldLeaf => {
+            CrossingLeafStates::<Test>::insert(old_key, old_leaf);
+            "terminal Armed close must reclaim its Waiting source leaf"
+          }
+          Corruption::MissingDestination => {
+            CrossingLeafStates::<Test>::remove(destination);
+            "terminal Armed close preserves the full destination leaf"
+          }
+          Corruption::WrongGuardLocator => {
+            CrossingMemberships::<Test>::mutate(first_guard, |locator| {
+              locator.as_mut().unwrap().page = 1;
+            });
+            "terminal Armed close must preserve guard locators"
+          }
+          Corruption::DamagedGuard => {
+            ActorSemanticStates::<Test>::remove(first_guard);
+            "terminal Armed close must preserve guard semantics"
+          }
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, true)
+        }))
+        .expect_err("terminal Armed result must reject leaf or survivor corruption");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_crossing_armed_vacancy_rejects_premature_or_wrong_fill() {
+    enum Corruption {
+      EarlyGuardLoss,
+      SpuriousPage,
+      WrongLocator,
+      DamagedGuard,
+    }
+    for corruption in [
+      Corruption::EarlyGuardLoss,
+      Corruption::SpuriousPage,
+      Corruption::WrongLocator,
+      Corruption::DamagedGuard,
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::CrossingArmedVacancy,
+          false,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (feed, _, _) = fixture.crossing.unwrap();
+        let destination = CrossingLeafKey {
+          feed,
+          traversal: CrossingTraversal::Upward,
+          threshold: 2,
+        };
+        let first_guard = fixture.crossing_guards[0].0;
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        if matches!(corruption, Corruption::EarlyGuardLoss) {
+          let mut page = CrossingMemberPages::<Test>::get(destination, 0).unwrap();
+          let _ = page.entries.pop();
+          CrossingMemberPages::<Test>::insert(destination, 0, page);
+          let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_crossing_opening_input::<Test>(&fixture)
+          }))
+          .expect_err("lost vacancy guard invalidates Opening input");
+          let actual = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+          assert!(
+            actual
+              .contains("Armed destination must retain its guard width before measured Opening")
+          );
+          return;
+        }
+        assert_crossing_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::SpuriousPage => {
+            let page = CrossingMemberPages::<Test>::get(destination, 0).unwrap();
+            CrossingMemberPages::<Test>::insert(destination, 1, page);
+            "Armed vacancy rearm must not allocate a second page"
+          }
+          Corruption::WrongLocator => {
+            CrossingMemberships::<Test>::mutate(actor_id, |locator| {
+              locator.as_mut().unwrap().page = 1;
+            });
+            "Armed target must own the destination's reciprocal locator"
+          }
+          Corruption::DamagedGuard => {
+            ActorSemanticStates::<Test>::remove(first_guard);
+            "Armed destination rearm must preserve guard semantics"
+          }
+          Corruption::EarlyGuardLoss => unreachable!(),
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, false)
+        }))
+        .expect_err("Armed vacancy postconditions must reject page or guard corruption");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_crossing_armed_new_page_rejects_premature_or_lost_allocation() {
+    enum Corruption {
+      EarlyDestinationPage,
+      MissingPage,
+      WrongLocator,
+      DamagedGuard,
+    }
+    for corruption in [
+      Corruption::EarlyDestinationPage,
+      Corruption::MissingPage,
+      Corruption::WrongLocator,
+      Corruption::DamagedGuard,
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::CrossingArmedNewPage,
+          false,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (feed, _, _) = fixture.crossing.unwrap();
+        let destination = CrossingLeafKey {
+          feed,
+          traversal: CrossingTraversal::Upward,
+          threshold: 2,
+        };
+        let first_guard = fixture.crossing_guards[0].0;
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        if matches!(corruption, Corruption::EarlyDestinationPage) {
+          let mut page = CrossingMemberPages::<Test>::get(destination, 0).unwrap();
+          let _ = page.entries.pop();
+          CrossingMemberPages::<Test>::insert(destination, 0, page);
+          let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_crossing_opening_input::<Test>(&fixture)
+          }))
+          .expect_err("incomplete Armed destination invalidates Opening input");
+          let actual = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+          assert!(
+            actual
+              .contains("Armed destination must retain its guard width before measured Opening")
+          );
+          return;
+        }
+        assert_crossing_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::MissingPage => {
+            CrossingMemberPages::<Test>::remove(destination, 1);
+            "Armed rearm creates a new member page"
+          }
+          Corruption::WrongLocator => {
+            CrossingMemberships::<Test>::mutate(actor_id, |locator| {
+              locator.as_mut().unwrap().page = 0;
+            });
+            "Armed target must own the destination's reciprocal locator"
+          }
+          Corruption::DamagedGuard => {
+            ActorSemanticStates::<Test>::remove(first_guard);
+            "Armed destination rearm must preserve guard semantics"
+          }
+          Corruption::EarlyDestinationPage => unreachable!(),
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, false)
+        }))
+        .expect_err("Armed rearm postconditions must reject page or guard corruption");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_crossing_waiting_tail_close_rejects_early_or_missing_tail_swap() {
+    enum Corruption {
+      EarlyTailRemoval,
+      StalePage,
+      WrongLocator,
+      StaleGuard,
+    }
+    for corruption in [
+      Corruption::EarlyTailRemoval,
+      Corruption::StalePage,
+      Corruption::WrongLocator,
+      Corruption::StaleGuard,
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::CrossingWaitingTailClose,
+          true,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (key, _, _) = fixture.crossing_shape.unwrap();
+        let tail = fixture.crossing_guards.last().unwrap().0;
+        let old_tail_page = CrossingMemberPages::<Test>::get(key, 1).unwrap();
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        if matches!(corruption, Corruption::EarlyTailRemoval) {
+          CrossingMemberPages::<Test>::remove(key, 1);
+          let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_crossing_opening_input::<Test>(&fixture)
+          }))
+          .expect_err("missing tail page invalidates the measured boundary");
+          let actual = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+          assert!(actual.contains("Crossing tail page must survive until measured Opening"));
+          return;
+        }
+        assert_crossing_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::StalePage => {
+            CrossingMemberPages::<Test>::insert(key, 1, old_tail_page);
+            "Crossing close must delete its empty tail page"
+          }
+          Corruption::WrongLocator => {
+            CrossingMemberships::<Test>::mutate(tail, |locator| {
+              locator.as_mut().unwrap().page = 1;
+            });
+            "Crossing survivors must own reciprocal page positions"
+          }
+          Corruption::StaleGuard => {
+            ActorSemanticStates::<Test>::remove(tail);
+            "Crossing tail swap must preserve guard semantics"
+          }
+          Corruption::EarlyTailRemoval => unreachable!(),
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, true)
+        }))
+        .expect_err("tail swap postconditions must reject missing cleanup or survivor corruption");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_crossing_header_requires_measured_rearm_and_close_cleanup() {
+    enum Corruption {
+      LostDetectorLatch,
+      RetainedDisabled,
+      WrongPhase,
+      CloseMembership,
+      CloseLeaf,
+      ClosePage,
+      CloseFeedCount,
+    }
+    for (close, corruption) in [
+      (false, Corruption::LostDetectorLatch),
+      (false, Corruption::RetainedDisabled),
+      (false, Corruption::WrongPhase),
+      (true, Corruption::CloseMembership),
+      (true, Corruption::CloseLeaf),
+      (true, Corruption::ClosePage),
+      (true, Corruption::CloseFeedCount),
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::CrossingWaiting,
+          close,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let membership = CrossingMemberships::<Test>::get(actor_id).unwrap();
+        let leaf = CrossingLeafStates::<Test>::get(membership.key).unwrap();
+        let page = CrossingMemberPages::<Test>::get(membership.key, 0).unwrap();
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        assert_crossing_opening_input::<Test>(&fixture);
+        if let Corruption::LostDetectorLatch = corruption {
+          IndexedTriggerDetectionDisabled::<Test>::remove(actor_id);
+          let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_crossing_opening_input::<Test>(&fixture);
+          }))
+          .expect_err("Crossing readiness must enter Opening with its detector disabled");
+          let actual = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+          assert!(actual.contains("paid Crossing latch disables detection until measured Opening"));
+          return;
+        }
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::RetainedDisabled => {
+            IndexedTriggerDetectionDisabled::<Test>::insert(actor_id, ());
+            "Crossing detector must rearm or close with the measured Opening"
+          }
+          Corruption::WrongPhase => {
+            ActorSemanticStates::<Test>::mutate(actor_id, |state| {
+              let ActorSemanticState::Active(state) = state.as_mut().unwrap() else {
+                unreachable!()
+              };
+              let TriggerRuntimeState::ObservationCrossing { phase, .. } =
+                &mut state.hot.trigger_runtime_state
+              else {
+                unreachable!()
+              };
+              *phase = CrossingPhase::Armed;
+            });
+            "retained Crossing must rearm to current phase"
+          }
+          Corruption::CloseMembership => {
+            CrossingMemberships::<Test>::insert(actor_id, membership);
+            "close must release Crossing membership"
+          }
+          Corruption::CloseLeaf => {
+            CrossingLeafStates::<Test>::insert(membership.key, leaf);
+            "Crossing close must reclaim its singleton leaf"
+          }
+          Corruption::ClosePage => {
+            CrossingMemberPages::<Test>::insert(membership.key, 0, page);
+            "Crossing close must reclaim its singleton page"
+          }
+          Corruption::CloseFeedCount => {
+            CrossingFeedMembershipCount::<Test>::insert(fixture.crossing.unwrap().0, 1);
+            "Crossing feed count must match lifecycle outcome"
+          }
+          Corruption::LostDetectorLatch => unreachable!(),
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, close);
+        }))
+        .expect_err("postconditions must reject misplaced Crossing ownership");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_observation_change_header_rejects_lost_latch_and_subscription_debt() {
+    enum Corruption {
+      LostLatch,
+      RetainedDisabled,
+      WrongSlot,
+      ClosePage,
+      CloseSlotOwner,
+      CloseFeedCount,
+    }
+    for (close, corruption) in [
+      (false, Corruption::LostLatch),
+      (false, Corruption::RetainedDisabled),
+      (false, Corruption::WrongSlot),
+      (true, Corruption::ClosePage),
+      (true, Corruption::CloseSlotOwner),
+      (true, Corruption::CloseFeedCount),
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::ObservationChange,
+          close,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (feed, slot, _, _, _) = fixture.observation_change.unwrap();
+        let page_id = slot
+          / <<Test as Config>::ObservationPageSize as polkadot_sdk::frame_support::traits::Get<
+            u32,
+          >>::get();
+        let original_page = ObservationSubscriberPages::<Test>::get(feed, page_id).unwrap();
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        if matches!(corruption, Corruption::LostLatch) {
+          IndexedTriggerDetectionDisabled::<Test>::remove(actor_id);
+          let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_observation_change_opening_input::<Test>(&fixture)
+          }))
+          .expect_err("missing disabled marker must invalidate Opening input");
+          let actual = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+          assert!(actual.contains(
+            "paid ObservationChange latch must disable detector evaluation until Opening"
+          ));
+          return;
+        }
+        assert_observation_change_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::RetainedDisabled => {
+            IndexedTriggerDetectionDisabled::<Test>::insert(actor_id, ());
+            "ObservationChange detector must rearm or close during Opening"
+          }
+          Corruption::WrongSlot => {
+            ObservationSubscriptionSlot::<Test>::insert(actor_id, slot + 1);
+            "retained ObservationChange must keep exact slot"
+          }
+          Corruption::ClosePage => {
+            ObservationSubscriberPages::<Test>::insert(feed, page_id, original_page);
+            "ObservationChange close must reclaim its singleton subscriber page"
+          }
+          Corruption::CloseSlotOwner => {
+            ObservationSubscriptionSlotOwner::<Test>::insert(slot, actor_id);
+            "ObservationChange close must release its slot owner"
+          }
+          Corruption::CloseFeedCount => {
+            ObservationSubscriberCount::<Test>::insert(feed, 1);
+            "ObservationChange feed count must match lifecycle outcome"
+          }
+          Corruption::LostLatch => unreachable!(),
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, close)
+        }))
+        .expect_err("postconditions must reject ObservationChange subscription corruption");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_observation_shared_page_close_rejects_lost_survivors_and_slot() {
+    enum Corruption {
+      Page,
+      GuardSubscription,
+      GuardState,
+      RecycledSlot,
+    }
+    for corruption in [
+      Corruption::Page,
+      Corruption::GuardSubscription,
+      Corruption::GuardState,
+      Corruption::RecycledSlot,
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::ObservationChangeSharedPageClose,
+          true,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (feed, slot, _, _, _) = fixture.observation_change.unwrap();
+        let page_size =
+          <<Test as Config>::ObservationPageSize as polkadot_sdk::frame_support::traits::Get<
+            u32,
+          >>::get();
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        assert_observation_change_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::Page => {
+            ObservationSubscriberPages::<Test>::remove(feed, slot / page_size);
+            "shared ObservationChange page must survive target close"
+          }
+          Corruption::GuardSubscription => {
+            ObservationSubscriberPages::<Test>::mutate(feed, slot / page_size, |page| {
+              page.as_mut().unwrap().entries[1] = None;
+            });
+            "shared ObservationChange close must preserve guard subscription"
+          }
+          Corruption::GuardState => {
+            ActorSemanticStates::<Test>::remove(fixture.observation_guards[0].0);
+            "shared ObservationChange close must preserve guard semantics"
+          }
+          Corruption::RecycledSlot => {
+            ObservationFreeSlotPages::<Test>::mutate(
+              fixture.observation_free_len / page_size,
+              |page| {
+                let _ = page.as_mut().unwrap().pop();
+              },
+            );
+            "ObservationChange close must recycle its exact slot"
+          }
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, true)
+        }))
+        .expect_err("shared-page postcondition must reject survivor or slot corruption");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn user_transfer_terminal_releases_service_and_hold_after_paid_effect() {
+    use polkadot_sdk::frame_support::traits::fungible::MutateHold;
+    for corruption in [None, Some("service"), Some("hold")] {
+      new_test_ext().execute_with(|| {
+        let (actor_id, count) = prepare_reachable_opening::<Test>(
+          0,
+          ReachableOpeningProfile::UserTransferTerminalHeaderMax,
+        )
+        .unwrap();
+        assert_eq!(count, 1);
+        let witness = capture_user_transfer_terminal::<Test>(actor_id, false);
+        let now = frame_system::Pallet::<Test>::block_number();
+        let (state, admission, loaded_step) =
+          benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+        let effect =
+          execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
+        match corruption {
+          None => assert_user_transfer_terminal::<Test>(actor_id, witness, effect),
+          Some(which) => {
+            let expected = if which == "service" {
+              ServiceHeader::<Test>::mutate(|header| header.count = 1);
+              "terminal must unlink its Service node"
+            } else {
+              let reason: <Test as Config>::RuntimeHoldReason = HoldReason::ActorState.into();
+              <Test as Config>::StateHoldCurrency::hold(&reason, &witness.owner, 1)
+                .expect("one native unit corrupts terminal hold release");
+              "terminal must release the owner's entire scoped Actor hold"
+            };
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+              assert_user_transfer_terminal::<Test>(actor_id, witness, effect)
+            }))
+            .expect_err("terminal witness rejects phantom Service or unreleased hold");
+            let actual = panic
+              .downcast_ref::<String>()
+              .map(String::as_str)
+              .or_else(|| panic.downcast_ref::<&str>().copied())
+              .unwrap_or("");
+            assert!(
+              actual.contains(expected),
+              "expected {expected}, got {actual}"
+            );
+          }
+        }
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn user_transfer_terminal_relinks_real_service_peers() {
+    for corruption in [None, Some("peer"), Some("cursor")] {
+      new_test_ext().execute_with(|| {
+        let (actor_id, count) = prepare_reachable_opening::<Test>(
+          0,
+          ReachableOpeningProfile::UserTransferTerminalHeaderMax,
+        )
+        .unwrap();
+        assert_eq!(count, 1);
+        create_zero_step_system_follower::<Test>();
+        create_zero_step_system_follower::<Test>();
+        let witness = capture_user_transfer_terminal::<Test>(actor_id, true);
+        let now = frame_system::Pallet::<Test>::block_number();
+        let (state, admission, loaded_step) =
+          benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+        let effect =
+          execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
+        match corruption {
+          None => assert_user_transfer_terminal::<Test>(actor_id, witness, effect),
+          Some(which) => {
+            let peers = witness.peers.as_ref().unwrap();
+            let expected = if which == "peer" {
+              ServiceNodes::<Test>::remove(peers[0].0.actor_id);
+              "terminal must preserve peer state and relink peer Service nodes"
+            } else {
+              ServiceHeader::<Test>::mutate(|header| header.cursor = Some(peers[0].0));
+              "terminal must advance the Service cursor to its successor"
+            };
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+              assert_user_transfer_terminal::<Test>(actor_id, witness, effect)
+            }))
+            .expect_err("terminal witness rejects missing peer or stale Service cursor");
+            let actual = panic
+              .downcast_ref::<String>()
+              .map(String::as_str)
+              .or_else(|| panic.downcast_ref::<&str>().copied())
+              .unwrap_or("");
+            assert!(
+              actual.contains(expected),
+              "expected {expected}, got {actual}"
+            );
+          }
+        }
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn system_transfer_header_max_moves_custody_without_user_fee_collection() {
+    for corruption in [None, Some("recipient"), Some("sink")] {
+      new_test_ext().execute_with(|| {
+        let (actor_id, count) =
+          prepare_reachable_opening::<Test>(0, ReachableOpeningProfile::SystemTransferHeaderMax)
+            .unwrap();
+        assert_eq!(count, 1);
+        let witness = capture_system_transfer_header::<Test>(actor_id);
+        let now = frame_system::Pallet::<Test>::block_number();
+        let (state, admission, loaded_step) =
+          benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+        let effect =
+          execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
+        match corruption {
+          None => assert_system_transfer_header::<Test>(actor_id, witness, effect),
+          Some(which) => {
+            let sink = <Test as Config>::FeeSink::get();
+            let (account, asset, message) = if which == "recipient" {
+              (
+                &witness.recipient,
+                witness.asset,
+                "real System Transfer must credit the authored recipient",
+              )
+            } else {
+              (
+                &sink,
+                <Test as Config>::FeeNativeAssetId::get(),
+                "System Transfer must not credit the User Fee Sink",
+              )
+            };
+            <Test as Config>::AssetOps::mint(account, asset, 1)
+              .expect("one unit of System effect evidence can be corrupted");
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+              assert_system_transfer_header::<Test>(actor_id, witness, effect)
+            }))
+            .expect_err("System witness rejects missing custody or fictitious User collection");
+            let actual = panic
+              .downcast_ref::<String>()
+              .map(String::as_str)
+              .or_else(|| panic.downcast_ref::<&str>().copied())
+              .unwrap_or("");
+            assert!(actual.contains(message), "expected {message}, got {actual}");
+          }
+        }
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn user_transfer_header_max_requires_real_effect_custody_and_separate_fees() {
+    for (profile, predicates) in [
+      (ReachableOpeningProfile::UserTransferHeaderMax, 0),
+      (
+        ReachableOpeningProfile::UserTransferPredicateHeaderMax,
+        benchmark_predicate_capacity::<Test>(),
+      ),
+      (
+        ReachableOpeningProfile::UserTransferObservationHeaderMax,
+        benchmark_predicate_capacity::<Test>(),
+      ),
+      (
+        ReachableOpeningProfile::UserTransferMixedHeaderMax,
+        benchmark_predicate_capacity::<Test>(),
+      ),
+    ] {
+      for corruption in [None, Some("recipient"), Some("collector")] {
+        new_test_ext().execute_with(|| {
+          let (actor_id, count) = prepare_reachable_opening::<Test>(0, profile).unwrap();
+          assert_eq!(count, 1);
+          let witness = capture_user_transfer_header::<Test>(
+            actor_id,
+            predicates,
+            matches!(
+              profile,
+              ReachableOpeningProfile::UserTransferObservationHeaderMax
+            ),
+            matches!(profile, ReachableOpeningProfile::UserTransferMixedHeaderMax),
+            false,
+          );
+          let now = frame_system::Pallet::<Test>::block_number();
+          let (state, admission, loaded_step) =
+            benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+          let effect =
+            execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
+          match corruption {
+            None => assert_user_transfer_header::<Test>(actor_id, witness, effect),
+            Some(which) => {
+              let sink = <Test as Config>::FeeSink::get();
+              let (account, asset, message) = if which == "recipient" {
+                (
+                  &witness.recipient,
+                  witness.asset,
+                  "real Transfer must credit the authored recipient",
+                )
+              } else {
+                (
+                  &sink,
+                  <Test as Config>::FeeNativeAssetId::get(),
+                  "Action and Pipeline collector credits must match their independent fees",
+                )
+              };
+              <Test as Config>::AssetOps::burn(account, asset, 1)
+                .expect("one unit of post-effect evidence can be corrupted");
+              let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_user_transfer_header::<Test>(actor_id, witness, effect)
+              }))
+              .expect_err("Transfer evidence must reject missing recipient or collector credit");
+              let actual = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&str>().copied())
+                .unwrap_or("");
+              assert!(actual.contains(message), "expected {message}, got {actual}");
+            }
+          }
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn system_burn_header_max_debits_custody_without_user_fee_collection() {
+    for corruption in [None, Some("burn"), Some("sink")] {
+      new_test_ext().execute_with(|| {
+        let (actor_id, count) =
+          prepare_reachable_opening::<Test>(0, ReachableOpeningProfile::SystemBurnHeaderMax)
+            .unwrap();
+        assert_eq!(count, 1);
+        let witness = capture_system_burn_header::<Test>(actor_id);
+        let now = frame_system::Pallet::<Test>::block_number();
+        let (state, admission, loaded_step) =
+          benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+        let effect =
+          execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
+        match corruption {
+          None => assert_system_burn_header::<Test>(actor_id, witness, effect),
+          Some(which) => {
+            let sink = <Test as Config>::FeeSink::get();
+            let (account, asset, message) = if which == "burn" {
+              (
+                &witness.sovereign,
+                witness.asset,
+                "real System Burn must debit exact authored custody",
+              )
+            } else {
+              (
+                &sink,
+                <Test as Config>::FeeNativeAssetId::get(),
+                "System Burn must not credit the User Fee Sink",
+              )
+            };
+            <Test as Config>::AssetOps::mint(account, asset, 1)
+              .expect("one unit of System Burn evidence can be corrupted");
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+              assert_system_burn_header::<Test>(actor_id, witness, effect)
+            }))
+            .expect_err("System Burn rejects phantom Task custody or fee collection");
+            let actual = panic
+              .downcast_ref::<String>()
+              .map(String::as_str)
+              .or_else(|| panic.downcast_ref::<&str>().copied())
+              .unwrap_or("");
+            assert!(actual.contains(message), "expected {message}, got {actual}");
+          }
+        }
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn user_burn_header_max_requires_real_burn_and_separate_fees() {
+    for corruption in [None, Some("burn"), Some("collector")] {
+      new_test_ext().execute_with(|| {
+        let (actor_id, count) =
+          prepare_reachable_opening::<Test>(0, ReachableOpeningProfile::UserBurnHeaderMax).unwrap();
+        assert_eq!(count, 1);
+        let witness = capture_user_burn_header::<Test>(actor_id);
+        let now = frame_system::Pallet::<Test>::block_number();
+        let (state, admission, loaded_step) =
+          benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+        let effect =
+          execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
+        match corruption {
+          None => assert_user_burn_header::<Test>(actor_id, witness, effect),
+          Some(which) => {
+            let (account, asset, message) = if which == "burn" {
+              (
+                &witness.payer,
+                witness.asset,
+                "real Burn must debit exactly its authored spend",
+              )
+            } else {
+              (
+                &<Test as Config>::FeeSink::get(),
+                <Test as Config>::FeeNativeAssetId::get(),
+                "Burn Action and Pipeline collector credits must match independent fees",
+              )
+            };
+            <Test as Config>::AssetOps::mint(account, asset, 1)
+              .expect("one unit of post-effect evidence can be corrupted");
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+              assert_user_burn_header::<Test>(actor_id, witness, effect)
+            }))
+            .expect_err("Burn evidence must reject missing debit or collector credit");
+            let actual = panic
+              .downcast_ref::<String>()
+              .map(String::as_str)
+              .or_else(|| panic.downcast_ref::<&str>().copied())
+              .unwrap_or("");
+            assert!(actual.contains(message), "expected {message}, got {actual}");
+          }
+        }
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn maximum_user_recipient_split_effect_reaches_every_certified_ingress() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_task_split_transfer_user_recipients().unwrap();
+      Pallet::<Test>::test_benchmark_task_split_transfer_expired_user_recipient().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn user_split_header_max_requires_every_leg_and_separate_fees() {
+    for corruption in [None, Some("recipient"), Some("collector")] {
+      new_test_ext().execute_with(|| {
+        let (actor_id, count) =
+          prepare_reachable_opening::<Test>(0, ReachableOpeningProfile::UserSplitHeaderMax)
+            .unwrap();
+        assert_eq!(count, 1);
+        let witness = capture_user_split_header::<Test>(actor_id);
+        let now = frame_system::Pallet::<Test>::block_number();
+        let (state, admission, loaded_step) =
+          benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+        let effect =
+          execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
+        match corruption {
+          None => assert_user_split_header::<Test>(actor_id, witness, effect),
+          Some(which) => {
+            let sink = <Test as Config>::FeeSink::get();
+            let (account, asset, message) = if which == "recipient" {
+              (
+                &witness.recipients[0].0,
+                witness.asset,
+                "real SplitTransfer must credit every authored recipient",
+              )
+            } else {
+              (
+                &sink,
+                <Test as Config>::FeeNativeAssetId::get(),
+                "SplitTransfer Action and Pipeline collector credits must match independent fees",
+              )
+            };
+            <Test as Config>::AssetOps::burn(account, asset, 1)
+              .expect("one unit of post-effect evidence can be corrupted");
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+              assert_user_split_header::<Test>(actor_id, witness, effect)
+            }))
+            .expect_err("SplitTransfer evidence must reject missing leg or collector credit");
+            let actual = panic
+              .downcast_ref::<String>()
+              .map(String::as_str)
+              .or_else(|| panic.downcast_ref::<&str>().copied())
+              .unwrap_or("");
+            assert!(actual.contains(message), "expected {message}, got {actual}");
+          }
+        }
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn user_transfer_progress_two_reuses_paid_machine_and_completes_at_b_plus_one() {
+    new_test_ext().execute_with(|| {
+      let (actor_id, count) =
+        prepare_reachable_opening::<Test>(1, ReachableOpeningProfile::UserTransferProgressTwo)
+          .unwrap();
+      assert_eq!(count, 2);
+      let witness = capture_user_transfer_header::<Test>(actor_id, 0, false, false, true);
+      let now = frame_system::Pallet::<Test>::block_number();
+      let (state, admission, loaded_step) =
+        benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+      let effect =
+        execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
+      let payer = witness.payer;
+      let asset = witness.asset;
+      assert_user_transfer_header::<Test>(actor_id, witness, effect);
+      let custody_after_first = <Test as Config>::AssetOps::balance(&payer, asset);
+      let native = <Test as Config>::FeeNativeAssetId::get();
+      let native_after_first = <Test as Config>::AssetOps::balance(&payer, native);
+      let sink = <Test as Config>::FeeSink::get();
+      let sink_after_first = <Test as Config>::AssetOps::balance(&sink, native);
+      let (state, admission, loaded_step) =
+        benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+      assert_eq!(state.hot.cycle_state, CycleState::Running);
+      assert_eq!(loaded_step.cursor, 1);
+      assert!(matches!(loaded_step.step.task, ActorTask::StopCycle));
+      let now = frame_system::Pallet::<Test>::block_number();
+      let second_effect =
+        execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
+      assert_eq!(
+        second_effect,
+        <Test as Config>::TaskEffectWeight::actual_effect_weight(
+          &ActorTask::StopCycle,
+          TaskEffectExecution::Invoked
+        )
+        .expect("StopCycle has host effect evidence")
+      );
+      let absent_action: <Test as frame_system::Config>::RuntimeEvent =
+        Event::<Test>::ActionFeeCharged {
+          actor_id,
+          cycle_nonce: 1,
+          step_index: 1,
+          actual_effect_weight: second_effect,
+          fee: 0,
+        }
+        .into();
+      assert!(
+        !frame_system::Pallet::<Test>::events()
+          .iter()
+          .any(|record| record.event == absent_action)
+      );
+      let state = Pallet::<Test>::active_actor_state(actor_id).expect("StopCycle retains Actor");
+      assert_eq!(state.hot.cycle_state, CycleState::Idle);
+      assert_eq!(state.identity.cycle_nonce, 1);
+      assert!(state.run_state.is_none());
+      assert_retained_service_turn::<Test>(actor_id, now);
+      assert_eq!(
+        <Test as Config>::AssetOps::balance(&payer, asset),
+        custody_after_first
+      );
+      assert_eq!(
+        <Test as Config>::AssetOps::balance(&payer, native),
+        native_after_first
+      );
+      assert_eq!(
+        <Test as Config>::AssetOps::balance(&sink, native),
+        sink_after_first
+      );
+      let stopped: <Test as frame_system::Config>::RuntimeEvent = Event::<Test>::CycleStopped {
+        actor_id,
+        cycle_nonce: 1,
+        step_index: 1,
+      }
+      .into();
+      assert_eq!(
+        frame_system::Pallet::<Test>::events()
+          .iter()
+          .filter(|record| record.event == stopped)
+          .count(),
+        1
+      );
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn user_transfer_burn_two_charges_second_effect_without_second_pipeline() {
+    for corruption in [None, Some("burn"), Some("collector")] {
+      new_test_ext().execute_with(|| {
+        let (actor_id, witness) = prepare_user_transfer_burn_successor::<Test>().unwrap();
+        let (state, admission, loaded_step) =
+          benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+        assert_eq!(loaded_step.cursor, 1);
+        assert!(matches!(loaded_step.step.task, ActorTask::Burn { .. }));
+        let now = frame_system::Pallet::<Test>::block_number();
+        let effect =
+          execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
+        match corruption {
+          None => assert_user_burn_successor::<Test>(actor_id, witness, effect),
+          Some(which) => {
+            let sink = <Test as Config>::FeeSink::get();
+            let (account, asset, message) = if which == "burn" {
+              (
+                &witness.payer,
+                witness.asset,
+                "carried Burn must debit its distinct authored asset exactly",
+              )
+            } else {
+              (
+                &sink,
+                <Test as Config>::FeeNativeAssetId::get(),
+                "carried Burn collector must receive only its new Action fee",
+              )
+            };
+            <Test as Config>::AssetOps::mint(account, asset, 1)
+              .expect("one unit of carried effect evidence can be corrupted");
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+              assert_user_burn_successor::<Test>(actor_id, witness, effect)
+            }))
+            .expect_err("carried Burn must reject restored custody or altered collector credit");
+            let actual = panic
+              .downcast_ref::<String>()
+              .map(String::as_str)
+              .or_else(|| panic.downcast_ref::<&str>().copied())
+              .unwrap_or("");
+            assert!(actual.contains(message), "expected {message}, got {actual}");
+          }
+        }
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn user_split_late_failure_preserves_custody_and_one_paid_retry() {
+    for corruption in [None, Some("first"), Some("collector")] {
+      new_test_ext().execute_with(|| {
+        let (actor_id, witness) = prepare_user_split_failure::<Test>().unwrap();
+        let (state, admission, loaded_step) =
+          benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+        let now = frame_system::Pallet::<Test>::block_number();
+        let effect =
+          execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
+        match corruption {
+          None => assert_user_split_failure::<Test>(actor_id, &witness, effect),
+          Some(which) => {
+            let sink = <Test as Config>::FeeSink::get();
+            let (account, asset, message) = if which == "first" {
+              (
+                &witness.owner,
+                witness.asset,
+                "late-leg failure must not credit first recipient",
+              )
+            } else {
+              (
+                &sink,
+                <Test as Config>::FeeNativeAssetId::get(),
+                "failed attempt must settle only its Pipeline and attempted Action charges",
+              )
+            };
+            <Test as Config>::AssetOps::mint(account, asset, 1)
+              .expect("one unit of failure evidence can be corrupted");
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+              assert_user_split_failure::<Test>(actor_id, &witness, effect)
+            }))
+            .expect_err("late-leg failure must reject phantom credit or collector drift");
+            let actual = panic
+              .downcast_ref::<String>()
+              .map(String::as_str)
+              .or_else(|| panic.downcast_ref::<&str>().copied())
+              .unwrap_or("");
+            assert!(actual.contains(message), "expected {message}, got {actual}");
+          }
+        }
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn user_split_failure_retry_after_repair_reuses_pipeline() {
+    new_test_ext().execute_with(|| {
+      let (actor_id, witness) = prepare_user_split_failure::<Test>().unwrap();
+      let (state, admission, loaded_step) =
+        benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+      let now = frame_system::Pallet::<Test>::block_number();
+      let effect =
+        execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
+      assert_user_split_failure::<Test>(actor_id, &witness, effect);
+      let native = <Test as Config>::FeeNativeAssetId::get();
+      let payer_after_failure = <Test as Config>::AssetOps::balance(&witness.payer, witness.asset);
+      let sink = <Test as Config>::FeeSink::get();
+      let sink_after_failure = <Test as Config>::AssetOps::balance(&sink, native);
+      let minimum = <Test as Config>::AssetOps::minimum_balance(witness.asset);
+      <Test as Config>::AssetOps::mint(&witness.recipient, witness.asset, minimum)
+        .expect("ordinary recipient repair provides a real asset account");
+      let recipient_after_repair =
+        <Test as Config>::AssetOps::balance(&witness.recipient, witness.asset);
+      let (state, admission, loaded_step) =
+        benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+      assert_eq!(state.hot.cycle_state, CycleState::Suspended);
+      assert_eq!(loaded_step.cursor, 0);
+      let now = frame_system::Pallet::<Test>::block_number();
+      let retry_effect =
+        execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
+      assert_eq!(retry_effect, witness.effect_weight);
+      let state = Pallet::<Test>::active_actor_state(actor_id).expect("retry retains Actor");
+      assert_eq!(state.hot.cycle_state, CycleState::Idle);
+      assert_eq!(state.identity.cycle_nonce, 1);
+      assert!(state.run_state.is_none());
+      assert_retained_service_turn::<Test>(actor_id, now);
+      let action_fee = <Test as Config>::WeightToFee::weight_to_fee(&witness.effect_weight);
+      let expected_source = if witness.asset == native {
+        payer_after_failure - 2 - action_fee
+      } else {
+        payer_after_failure - 2
+      };
+      assert_eq!(
+        <Test as Config>::AssetOps::balance(&witness.payer, witness.asset),
+        expected_source
+      );
+      assert_eq!(
+        <Test as Config>::AssetOps::balance(&witness.owner, witness.asset),
+        witness.owner_before + 1
+      );
+      assert_eq!(
+        <Test as Config>::AssetOps::balance(&witness.recipient, witness.asset),
+        recipient_after_repair + 1
+      );
+      assert_eq!(
+        <Test as Config>::AssetOps::balance(&sink, native),
+        sink_after_failure + action_fee
+      );
+      let pipeline: <Test as frame_system::Config>::RuntimeEvent =
+        Event::<Test>::PipelineFeeCharged {
+          actor_id,
+          fee: witness.pipeline_fee,
+        }
+        .into();
+      assert_eq!(
+        frame_system::Pallet::<Test>::events()
+          .iter()
+          .filter(|record| record.event == pipeline)
+          .count(),
+        1
+      );
+      let split: <Test as frame_system::Config>::RuntimeEvent =
+        Event::<Test>::SplitTransferExecuted {
+          actor_id,
+          cycle_nonce: 1,
+          step_index: 0,
+          asset: witness.asset,
+          total: 2,
+          distributed: 2,
+          retained: 0,
+          legs: 2,
+          effective_legs: 2,
+        }
+        .into();
+      assert_eq!(
+        frame_system::Pallet::<Test>::events()
+          .iter()
+          .filter(|record| record.event == split)
+          .count(),
+        1
+      );
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_immutable_cadenced_due_latch_rejects_owner_close_and_rearm_leak() {
+    new_test_ext().execute_with(|| {
+      let fixture = prepare_zero_step_header::<Test>(
+        ActorType::User,
+        ZeroStepHeaderSource::CadencedDueImmutableClose,
+        true,
+      );
+      let actor_id = fixture.actor.actor_id;
+      assert_eq!(
+        Pallet::<Test>::actor_identity(actor_id).unwrap().mutability,
+        Mutability::Immutable
+      );
+      assert!(fixture.cadenced.is_some());
+      assert!(
+        !TriggerDeadlineHandles::<Test>::contains_key(actor_id),
+        "real cadence due service must consume its source before Opening"
+      );
+      let sink = <Test as Config>::FeeSink::get();
+      let native = <Test as Config>::FeeNativeAssetId::get();
+      let collected = <Test as Config>::AssetOps::balance(&sink, native);
+      let owner = fixture.owner;
+      assert_eq!(
+        Pallet::<Test>::close_actor(RawOrigin::Signed(owner).into(), actor_id),
+        Err(Error::<Test>::ImmutableActor.into())
+      );
+      assert!(Pallet::<Test>::actor_hot(actor_id).unwrap().pending_signal);
+      assert!(ServiceNodes::<Test>::contains_key(actor_id));
+      assert_eq!(
+        <Test as Config>::AssetOps::balance(&sink, native),
+        collected
+      );
+      let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+      assert_cadenced_opening_input::<Test>(&fixture);
+      execute_zero_step_inner::<Test>(
+        actor_id,
+        state,
+        &admission,
+        frame_system::Pallet::<Test>::block_number(),
+      );
+      assert_zero_step_header::<Test>(fixture, true);
+      assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+      assert!(
+        !TriggerDeadlineHandles::<Test>::contains_key(actor_id),
+        "authored Immutable terminal cannot retain a cadence successor"
+      );
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_immutable_at_time_due_latch_rejects_owner_close_but_authored_close_runs() {
+    new_test_ext().execute_with(|| {
+      let fixture = prepare_zero_step_header::<Test>(
+        ActorType::User,
+        ZeroStepHeaderSource::AtTimeDueImmutableClose,
+        true,
+      );
+      let actor_id = fixture.actor.actor_id;
+      assert_eq!(
+        Pallet::<Test>::actor_identity(actor_id).unwrap().mutability,
+        Mutability::Immutable
+      );
+      assert!(fixture.at_time.is_some());
+      assert!(
+        !TriggerDeadlineHandles::<Test>::contains_key(actor_id),
+        "real due processing must consume the one-shot source before Opening"
+      );
+      let sink = <Test as Config>::FeeSink::get();
+      let native = <Test as Config>::FeeNativeAssetId::get();
+      let collected = <Test as Config>::AssetOps::balance(&sink, native);
+      let owner = fixture.owner;
+      assert_eq!(
+        Pallet::<Test>::close_actor(RawOrigin::Signed(owner).into(), actor_id),
+        Err(Error::<Test>::ImmutableActor.into())
+      );
+      assert!(Pallet::<Test>::actor_hot(actor_id).unwrap().pending_signal);
+      assert!(ServiceNodes::<Test>::contains_key(actor_id));
+      assert_eq!(
+        <Test as Config>::AssetOps::balance(&sink, native),
+        collected
+      );
+      let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+      assert_at_time_opening_input::<Test>(&fixture, false);
+      execute_zero_step_inner::<Test>(
+        actor_id,
+        state,
+        &admission,
+        frame_system::Pallet::<Test>::block_number(),
+      );
+      assert_zero_step_header::<Test>(fixture, true);
+      assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_immutable_manual_paid_latch_rejects_owner_close_but_authored_close_runs() {
+    new_test_ext().execute_with(|| {
+      let fixture = prepare_zero_step_header::<Test>(
+        ActorType::User,
+        ZeroStepHeaderSource::ManualImmutableClose,
+        true,
+      );
+      let actor_id = fixture.actor.actor_id;
+      assert_eq!(
+        Pallet::<Test>::actor_identity(actor_id).unwrap().mutability,
+        Mutability::Immutable
+      );
+      let sink = <Test as Config>::FeeSink::get();
+      let native = <Test as Config>::FeeNativeAssetId::get();
+      let collected = <Test as Config>::AssetOps::balance(&sink, native);
+      let owner = fixture.owner;
+      assert_eq!(
+        Pallet::<Test>::close_actor(RawOrigin::Signed(owner).into(), actor_id),
+        Err(Error::<Test>::ImmutableActor.into())
+      );
+      assert!(Pallet::<Test>::actor_hot(actor_id).unwrap().pending_signal);
+      assert!(ServiceNodes::<Test>::contains_key(actor_id));
+      assert_eq!(
+        <Test as Config>::AssetOps::balance(&sink, native),
+        collected
+      );
+      let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+      execute_zero_step_inner::<Test>(
+        actor_id,
+        state,
+        &admission,
+        frame_system::Pallet::<Test>::block_number(),
+      );
+      assert_zero_step_header::<Test>(fixture, true);
+      assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_pending_head_relink_preserves_cursor_and_delivers_successor() {
+    for actor_type in [ActorType::User, ActorType::System] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          actor_type,
+          ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose,
+          true,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (feed, slot, _, count, _) = fixture.observation_change.unwrap();
+        let page_size =
+          <<Test as Config>::ObservationPageSize as polkadot_sdk::frame_support::traits::Get<
+            u32,
+          >>::get();
+        let guards = fixture
+          .observation_guards
+          .iter()
+          .map(|(id, _)| *id)
+          .collect::<Vec<_>>();
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        assert_observation_change_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        assert_zero_step_header::<Test>(fixture, true);
+        assert!(!ObservationSubscriberPages::<Test>::contains_key(
+          feed,
+          slot / page_size
+        ));
+        assert_eq!(
+          DirtyObservationFeeds::<Test>::get(feed)
+            .unwrap()
+            .next_subscriber_page,
+          Some(slot / page_size + 1)
+        );
+        let sink = <Test as Config>::FeeSink::get();
+        let native = <Test as Config>::FeeNativeAssetId::get();
+        let collected_before = <Test as Config>::AssetOps::balance(&sink, native);
+        Pallet::<Test>::do_fanout_dirty_observation_page()
+          .expect("pending successor must fan out after head unlink");
+        assert!(!DirtyObservationFeeds::<Test>::contains_key(feed));
+        assert_eq!(DirtyObservationListState::<Test>::get().count, 0);
+        let page = ObservationSubscriberPages::<Test>::get(feed, slot / page_size + 1)
+          .expect("successor remains the sole live page");
+        assert_eq!((page.previous, page.next), (None, None));
+        assert_eq!(ObservationSubscriberCount::<Test>::get(feed), count - 1);
+        assert_eq!(
+          ObservationSubscriberPageLists::<Test>::get(feed)
+            .unwrap()
+            .count,
+          1
+        );
+        for (index, guard) in guards.iter().enumerate() {
+          assert_eq!(page.entries[index], Some(*guard));
+          assert!(
+            benchmark_fixture_hot::<Test>(*guard)
+              .unwrap()
+              .pending_signal
+          );
+          assert!(ServiceNodes::<Test>::contains_key(*guard));
+        }
+        assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+        assert_eq!(
+          <Test as Config>::AssetOps::balance(&sink, native),
+          collected_before
+        );
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_pending_head_relink_rejects_early_or_damaged_cursor() {
+    enum Corruption {
+      MissingSuccessor,
+      StaleHead,
+      StaleBackLink,
+      LostCursor,
+    }
+    for corruption in [
+      Corruption::MissingSuccessor,
+      Corruption::StaleHead,
+      Corruption::StaleBackLink,
+      Corruption::LostCursor,
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::ObservationChangePendingHeadRelinkClose,
+          true,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (feed, slot, _, _, _) = fixture.observation_change.unwrap();
+        let page_size =
+          <<Test as Config>::ObservationPageSize as polkadot_sdk::frame_support::traits::Get<
+            u32,
+          >>::get();
+        let head = ObservationSubscriberPages::<Test>::get(feed, slot / page_size).unwrap();
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        if matches!(corruption, Corruption::MissingSuccessor) {
+          ObservationSubscriberPages::<Test>::remove(feed, slot / page_size + 1);
+          let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_observation_change_opening_input::<Test>(&fixture)
+          }))
+          .expect_err("missing pending successor invalidates Opening input");
+          let actual = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+          assert!(actual.contains("multi-page fanout must retain its full second subscriber page"));
+          return;
+        }
+        assert_observation_change_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::StaleHead => {
+            ObservationSubscriberPages::<Test>::insert(feed, slot / page_size, head);
+            "ObservationChange head page must unlink when its last subscriber closes"
+          }
+          Corruption::StaleBackLink => {
+            ObservationSubscriberPages::<Test>::mutate(feed, slot / page_size + 1, |page| {
+              page.as_mut().unwrap().previous = Some(slot / page_size);
+            });
+            "ObservationChange successor must clear its previous link"
+          }
+          Corruption::LostCursor => {
+            DirtyObservationFeeds::<Test>::remove(feed);
+            "Opening must preserve unfinished second-page fanout"
+          }
+          Corruption::MissingSuccessor => unreachable!(),
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, true)
+        }))
+        .expect_err("pending head unlink postcondition must reject link/cursor corruption");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_pending_second_page_fanout_continues_after_rearm_or_close() {
+    for actor_type in [ActorType::User, ActorType::System] {
+      for close in [false, true] {
+        new_test_ext().execute_with(|| {
+          let source = if close {
+            ZeroStepHeaderSource::ObservationChangePendingSecondPageClose
+          } else {
+            ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain
+          };
+          let fixture = prepare_zero_step_header::<Test>(actor_type, source, close);
+          let actor_id = fixture.actor.actor_id;
+          let (feed, slot, _, count, _) = fixture.observation_change.unwrap();
+          let page_size =
+            <<Test as Config>::ObservationPageSize as polkadot_sdk::frame_support::traits::Get<
+              u32,
+            >>::get();
+          let first_page_guards = fixture
+            .observation_guards
+            .iter()
+            .take((page_size - 1) as usize)
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+          let pending_guards = fixture
+            .observation_guards
+            .iter()
+            .skip((page_size - 1) as usize)
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+          assert_eq!(pending_guards.len() as u32, page_size);
+          let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+          assert_observation_change_opening_input::<Test>(&fixture);
+          execute_zero_step_inner::<Test>(
+            actor_id,
+            state,
+            &admission,
+            frame_system::Pallet::<Test>::block_number(),
+          );
+          assert_zero_step_header::<Test>(fixture, close);
+          let sink = <Test as Config>::FeeSink::get();
+          let native = <Test as Config>::FeeNativeAssetId::get();
+          let collected_before = <Test as Config>::AssetOps::balance(&sink, native);
+          let target_pending = if close {
+            None
+          } else {
+            Some(
+              benchmark_fixture_hot::<Test>(actor_id)
+                .unwrap()
+                .pending_signal,
+            )
+          };
+          assert_eq!(target_pending, if close { None } else { Some(false) });
+          assert!(pending_guards.iter().all(|guard| {
+            !benchmark_fixture_hot::<Test>(*guard)
+              .unwrap()
+              .pending_signal
+              && !ServiceNodes::<Test>::contains_key(*guard)
+          }));
+          Pallet::<Test>::do_fanout_dirty_observation_page()
+            .expect("deferred second-page fanout must complete after target Opening");
+          assert!(!DirtyObservationFeeds::<Test>::contains_key(feed));
+          assert_eq!(DirtyObservationListState::<Test>::get().count, 0);
+          assert_eq!(
+            ObservationSubscriberCount::<Test>::get(feed),
+            count - u32::from(close)
+          );
+          assert_eq!(
+            ObservationSubscriberPageLists::<Test>::get(feed)
+              .unwrap()
+              .count,
+            2
+          );
+          let second = ObservationSubscriberPages::<Test>::get(feed, slot / page_size + 1)
+            .expect("deferred page survives target Opening");
+          assert_eq!(second.entries.len() as u32, page_size);
+          for (index, guard) in pending_guards.iter().enumerate() {
+            assert_eq!(second.entries[index], Some(*guard));
+            assert!(
+              benchmark_fixture_hot::<Test>(*guard)
+                .unwrap()
+                .pending_signal
+            );
+            assert!(ServiceNodes::<Test>::contains_key(*guard));
+          }
+          assert!(first_page_guards.iter().all(|guard| {
+            benchmark_fixture_hot::<Test>(*guard)
+              .unwrap()
+              .pending_signal
+              && ServiceNodes::<Test>::contains_key(*guard)
+          }));
+          assert_eq!(
+            benchmark_fixture_hot::<Test>(actor_id).map(|hot| hot.pending_signal),
+            target_pending,
+            "second-page fanout cannot re-latch or restore the target"
+          );
+          assert_eq!(
+            <Test as Config>::AssetOps::balance(&sink, native),
+            collected_before,
+            "System guards charge no extra Trigger fee during deferred fanout"
+          );
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_observation_pending_second_page_rearm_preserves_detector_and_cursor() {
+    enum Corruption {
+      DisabledDetector,
+      LostCursor,
+      DirtyList,
+      GuardState,
+    }
+    for corruption in [
+      Corruption::DisabledDetector,
+      Corruption::LostCursor,
+      Corruption::DirtyList,
+      Corruption::GuardState,
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::ObservationChangePendingSecondPageRetain,
+          false,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (feed, _, _, _, _) = fixture.observation_change.unwrap();
+        let guard = fixture.observation_guards.last().unwrap().0;
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        assert_observation_change_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::DisabledDetector => {
+            IndexedTriggerDetectionDisabled::<Test>::insert(actor_id, ());
+            "ObservationChange detector must rearm or close during Opening"
+          }
+          Corruption::LostCursor => {
+            DirtyObservationFeeds::<Test>::remove(feed);
+            "Opening must preserve unfinished second-page fanout"
+          }
+          Corruption::DirtyList => {
+            DirtyObservationListState::<Test>::mutate(|list| list.count += 1);
+            "Opening must preserve the pending feed list"
+          }
+          Corruption::GuardState => {
+            ActorSemanticStates::<Test>::remove(guard);
+            "retained Opening must preserve guard semantics"
+          }
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, false)
+        }))
+        .expect_err("retained Opening must reject detector, cursor or guard corruption");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_observation_pending_second_page_preserves_real_cursor_and_survivors() {
+    enum Corruption {
+      PrematureCompletion,
+      LostCursor,
+      WrongCursor,
+      LostSecondGuard,
+    }
+    for corruption in [
+      Corruption::PrematureCompletion,
+      Corruption::LostCursor,
+      Corruption::WrongCursor,
+      Corruption::LostSecondGuard,
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::ObservationChangePendingSecondPageClose,
+          true,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (feed, slot, _, _, _) = fixture.observation_change.unwrap();
+        let page_size =
+          <<Test as Config>::ObservationPageSize as polkadot_sdk::frame_support::traits::Get<
+            u32,
+          >>::get();
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        if matches!(corruption, Corruption::PrematureCompletion) {
+          DirtyObservationFeeds::<Test>::remove(feed);
+          let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_observation_change_opening_input::<Test>(&fixture)
+          }))
+          .expect_err("premature fanout completion invalidates pending Opening input");
+          let actual = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+          assert!(actual.contains("real second-page fanout must remain pending before Opening"));
+          return;
+        }
+        assert_observation_change_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::LostCursor => {
+            DirtyObservationFeeds::<Test>::remove(feed);
+            "Opening must preserve unfinished second-page fanout"
+          }
+          Corruption::WrongCursor => {
+            DirtyObservationFeeds::<Test>::mutate(feed, |dirty| {
+              dirty.as_mut().unwrap().next_subscriber_page = Some(slot / page_size);
+            });
+            "Opening must preserve the pending fanout cursor"
+          }
+          Corruption::LostSecondGuard => {
+            ObservationSubscriberPages::<Test>::mutate(feed, slot / page_size + 1, |page| {
+              page.as_mut().unwrap().entries[0] = None;
+            });
+            "shared ObservationChange close must preserve guard subscription"
+          }
+          Corruption::PrematureCompletion => unreachable!(),
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, true)
+        }))
+        .expect_err("pending fanout close must reject cursor or guard corruption");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_observation_two_page_fanout_requires_source_completion_and_guard_survival() {
+    for missing_page in [true, false] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::ObservationChangeTwoPageFanoutClose,
+          true,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (feed, slot, _, _, _) = fixture.observation_change.unwrap();
+        let page_size =
+          <<Test as Config>::ObservationPageSize as polkadot_sdk::frame_support::traits::Get<
+            u32,
+          >>::get();
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        if missing_page {
+          ObservationSubscriberPages::<Test>::remove(feed, slot / page_size + 1);
+          let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_observation_change_opening_input::<Test>(&fixture)
+          }))
+          .expect_err("missing second fanout page invalidates Opening input");
+          let actual = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+          assert!(actual.contains("multi-page fanout must retain its full second subscriber page"));
+          return;
+        }
+        assert_observation_change_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        ActorSemanticStates::<Test>::remove(fixture.observation_guards[0].0);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, true)
+        }))
+        .expect_err("changed guard semantics invalidate the multi-page close result");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains("shared ObservationChange close must preserve guard semantics"));
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_observation_head_relink_close_rejects_stale_page_and_successor() {
+    enum Corruption {
+      HeadPage,
+      MissingSuccessor,
+      StalePrevious,
+      StaleList,
+    }
+    for corruption in [
+      Corruption::HeadPage,
+      Corruption::MissingSuccessor,
+      Corruption::StalePrevious,
+      Corruption::StaleList,
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::ObservationChangeHeadRelinkClose,
+          true,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (feed, slot, _, _, _) = fixture.observation_change.unwrap();
+        let page_size =
+          <<Test as Config>::ObservationPageSize as polkadot_sdk::frame_support::traits::Get<
+            u32,
+          >>::get();
+        let page_id = slot / page_size;
+        let old_page = ObservationSubscriberPages::<Test>::get(feed, page_id).unwrap();
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        assert_observation_change_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::HeadPage => {
+            ObservationSubscriberPages::<Test>::insert(feed, page_id, old_page);
+            "ObservationChange head page must unlink when its last subscriber closes"
+          }
+          Corruption::MissingSuccessor => {
+            ObservationSubscriberPages::<Test>::remove(feed, page_id + 1);
+            "ObservationChange successor page survives head unlink"
+          }
+          Corruption::StalePrevious => {
+            ObservationSubscriberPages::<Test>::mutate(feed, page_id + 1, |page| {
+              page.as_mut().unwrap().previous = Some(page_id);
+            });
+            "ObservationChange successor must clear its previous link"
+          }
+          Corruption::StaleList => {
+            ObservationSubscriberPageLists::<Test>::mutate(feed, |list| {
+              list.as_mut().unwrap().head = page_id;
+            });
+            "ObservationChange list must advance to its surviving head"
+          }
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, true)
+        }))
+        .expect_err("head unlink must reject stale page or survivor links");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_observation_two_pages_close_rejects_broken_links_and_list() {
+    enum Corruption {
+      HeadLink,
+      TailPage,
+      PageList,
+    }
+    for corruption in [
+      Corruption::HeadLink,
+      Corruption::TailPage,
+      Corruption::PageList,
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::ObservationChangeTwoPagesClose,
+          true,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (feed, slot, _, _, _) = fixture.observation_change.unwrap();
+        let page_size =
+          <<Test as Config>::ObservationPageSize as polkadot_sdk::frame_support::traits::Get<
+            u32,
+          >>::get();
+        let page_id = slot / page_size;
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        assert_observation_change_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::HeadLink => {
+            ObservationSubscriberPages::<Test>::mutate(feed, page_id, |page| {
+              page.as_mut().unwrap().next = None;
+            });
+            "two-page ObservationChange head link must survive close"
+          }
+          Corruption::TailPage => {
+            ObservationSubscriberPages::<Test>::remove(feed, page_id + 1);
+            "second ObservationChange page must survive target close"
+          }
+          Corruption::PageList => {
+            ObservationSubscriberPageLists::<Test>::mutate(feed, |list| {
+              list.as_mut().unwrap().count = 1;
+            });
+            "ObservationChange page list must preserve linked survivors"
+          }
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, true)
+        }))
+        .expect_err("two-page postcondition must reject linked-page corruption");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_observation_full_free_page_close_rejects_partial_recycling() {
+    for actor_type in [ActorType::User, ActorType::System] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          actor_type,
+          ZeroStepHeaderSource::ObservationChangeFullFreePageClose,
+          true,
+        );
+        let page_size =
+          <<Test as Config>::ObservationPageSize as polkadot_sdk::frame_support::traits::Get<
+            u32,
+          >>::get();
+        assert_eq!(fixture.observation_free_len, page_size - 1);
+        let actor_id = fixture.actor.actor_id;
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        assert_observation_change_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        assert_eq!(
+          ObservationFreeSlotPages::<Test>::get(0).unwrap().len() as u32,
+          page_size
+        );
+        ObservationFreeSlotPages::<Test>::mutate(0, |page| {
+          let _ = page.as_mut().unwrap().remove(0);
+        });
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, true)
+        }))
+        .expect_err("a shortened free-slot page must fail direct postconditions");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(
+          actual.contains("ObservationChange close must fill the existing free-slot page"),
+          "unexpected failure: {actual}"
+        );
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_crossing_armed_header_rejects_wrong_phase_leaf_and_close_debt() {
+    enum Corruption {
+      WrongPhase,
+      WrongLeaf,
+      CloseLeaf,
+      CloseFeedCount,
+    }
+    for (close, corruption) in [
+      (false, Corruption::WrongPhase),
+      (false, Corruption::WrongLeaf),
+      (true, Corruption::CloseLeaf),
+      (true, Corruption::CloseFeedCount),
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::CrossingArmed,
+          close,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let old = CrossingMemberships::<Test>::get(actor_id).unwrap();
+        let leaf = CrossingLeafStates::<Test>::get(old.key).unwrap();
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        assert_crossing_opening_input::<Test>(&fixture);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::WrongPhase => {
+            ActorSemanticStates::<Test>::mutate(actor_id, |state| {
+              let ActorSemanticState::Active(state) = state.as_mut().unwrap() else {
+                unreachable!()
+              };
+              let TriggerRuntimeState::ObservationCrossing { phase, .. } =
+                &mut state.hot.trigger_runtime_state
+              else {
+                unreachable!()
+              };
+              *phase = CrossingPhase::WaitingForRearm;
+            });
+            "retained Crossing must rearm to current phase"
+          }
+          Corruption::WrongLeaf => {
+            CrossingMemberships::<Test>::mutate(actor_id, |locator| {
+              locator.as_mut().unwrap().key = old.key;
+            });
+            "retained Crossing must occupy the current phase leaf"
+          }
+          Corruption::CloseLeaf => {
+            CrossingLeafStates::<Test>::insert(old.key, leaf);
+            "Crossing close must reclaim its singleton leaf"
+          }
+          Corruption::CloseFeedCount => {
+            CrossingFeedMembershipCount::<Test>::insert(fixture.crossing.unwrap().0, 1);
+            "Crossing feed count must match lifecycle outcome"
+          }
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, close);
+        }))
+        .expect_err("postconditions must reject wrong Armed rearm or close debt");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_cadenced_header_requires_measured_rearm_and_close_cleanup() {
+    enum Corruption {
+      EarlyRearm,
+      MissingSuccessor,
+      StaleHold,
+      CloseHandle,
+    }
+    for (close, corruption) in [
+      (false, Corruption::EarlyRearm),
+      (false, Corruption::MissingSuccessor),
+      (false, Corruption::StaleHold),
+      (true, Corruption::CloseHandle),
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::CadencedDue,
+          close,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        assert_cadenced_opening_input::<Test>(&fixture);
+        if let Corruption::EarlyRearm = corruption {
+          TriggerDeadlineHandles::<Test>::insert(actor_id, fixture.cadenced.unwrap().0);
+          let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_cadenced_opening_input::<Test>(&fixture);
+          }))
+          .expect_err("setup must not prepay Opening rearm");
+          let actual = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+          assert!(actual.contains("due Cadenced source must be consumed before measured Opening"));
+          return;
+        }
+        let stale_hold = ActorStateHolds::<Test>::get(actor_id).unwrap();
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::MissingSuccessor => {
+            TriggerDeadlineHandles::<Test>::remove(actor_id);
+            "retained cadence must rearm"
+          }
+          Corruption::StaleHold => {
+            ActorStateHolds::<Test>::insert(actor_id, stale_hold);
+            "zero-Step retained hold must match released detector authority"
+          }
+          Corruption::CloseHandle => {
+            TriggerDeadlineHandles::<Test>::insert(actor_id, fixture.cadenced.unwrap().0);
+            "zero-Step must release its independent Trigger deadline"
+          }
+          Corruption::EarlyRearm => unreachable!(),
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, close);
+        }))
+        .expect_err("postconditions must reject misplaced cadence ownership");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_at_time_header_boundary_distinguishes_source_ownership() {
+    for source in [
+      ZeroStepHeaderSource::AtTimeDue,
+      ZeroStepHeaderSource::AtTimePreservedLatch,
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(ActorType::User, source, false);
+        let actor_id = fixture.actor.actor_id;
+        let _ = consume_zero_step_opening::<Test>(actor_id);
+        let retained = source == ZeroStepHeaderSource::AtTimePreservedLatch;
+        assert_at_time_opening_input::<Test>(&fixture, retained);
+        let message = if retained {
+          TriggerDeadlineHandles::<Test>::remove(actor_id);
+          "preserved AtTime source must survive until the measured boundary"
+        } else {
+          TriggerDeadlineHandles::<Test>::insert(actor_id, fixture.at_time.unwrap().0);
+          "due AtTime source must be consumed before measured Opening"
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_at_time_opening_input::<Test>(&fixture, retained);
+        }))
+        .expect_err("the boundary must reject source work moved across the measurement fence");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_at_time_header_postconditions_reject_retained_authority() {
+    use polkadot_sdk::frame_support::traits::fungible::MutateHold;
+    enum Corruption {
+      Handle,
+      Key,
+      HoldRecord,
+      HoldBalance,
+    }
+    for corruption in [
+      Corruption::Handle,
+      Corruption::Key,
+      Corruption::HoldRecord,
+      Corruption::HoldBalance,
+    ] {
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_zero_step_header::<Test>(
+          ActorType::User,
+          ZeroStepHeaderSource::AtTimePreservedLatch,
+          false,
+        );
+        let actor_id = fixture.actor.actor_id;
+        let (source, _) = fixture.at_time.unwrap();
+        let source_header = DeadlineHeaders::<Test>::get(source.key).unwrap();
+        let before_hold = ActorStateHolds::<Test>::get(actor_id).unwrap();
+        assert!(!before_hold.breakdown.detector.is_zero());
+        let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+        execute_zero_step_inner::<Test>(
+          actor_id,
+          state,
+          &admission,
+          frame_system::Pallet::<Test>::block_number(),
+        );
+        let message = match corruption {
+          Corruption::Handle => {
+            TriggerDeadlineHandles::<Test>::insert(actor_id, source);
+            "zero-Step must release its independent Trigger deadline"
+          }
+          Corruption::Key => {
+            DeadlineHeaders::<Test>::insert(source.key, source_header);
+            "AtTime source key must be reclaimed"
+          }
+          Corruption::HoldRecord => {
+            ActorStateHolds::<Test>::insert(actor_id, before_hold);
+            "zero-Step retained hold must match released detector authority"
+          }
+          Corruption::HoldBalance => {
+            let reason = HoldReason::ActorState.into();
+            <Test as Config>::StateHoldCurrency::hold(
+              &reason,
+              &fixture.owner,
+              before_hold.breakdown.detector,
+            )
+            .expect("corrupt only the produced owner hold balance");
+            "zero-Step owner hold must match lifecycle outcome"
+          }
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          assert_zero_step_header::<Test>(fixture, false);
+        }))
+        .expect_err("postconditions must reject unreclaimed AtTime authority");
+        let actual = panic
+          .downcast_ref::<String>()
+          .map(String::as_str)
+          .or_else(|| panic.downcast_ref::<&str>().copied())
+          .unwrap_or("");
+        assert!(actual.contains(message), "expected {message}, got {actual}");
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_system_header_postconditions_reject_lifecycle_drift() {
+    enum Corruption {
+      IdentityCount,
+      ActiveCount,
+      Sovereign,
+    }
+    for close in [false, true] {
+      for corruption in [
+        Corruption::IdentityCount,
+        Corruption::ActiveCount,
+        Corruption::Sovereign,
+      ] {
+        new_test_ext().execute_with(|| {
+          let fixture = prepare_zero_step_header::<Test>(
+            ActorType::System,
+            ZeroStepHeaderSource::AddressEvent,
+            close,
+          );
+          let actor_id = fixture.actor.actor_id;
+          let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+          execute_zero_step_inner::<Test>(
+            actor_id,
+            state,
+            &admission,
+            frame_system::Pallet::<Test>::block_number(),
+          );
+          let message = match corruption {
+            Corruption::IdentityCount => {
+              ActorIdentityCount::<Test>::mutate(|count| *count += 1);
+              "zero-Step identity count must match lifecycle outcome"
+            }
+            Corruption::ActiveCount => {
+              ActiveActorCount::<Test>::mutate(|count| *count += 1);
+              "zero-Step active count must match lifecycle outcome"
+            }
+            Corruption::Sovereign => {
+              let ActorClass::System { sovereign_id } = fixture.class else {
+                unreachable!()
+              };
+              SystemSovereigns::<Test>::insert(
+                sovereign_id,
+                if close {
+                  SystemSovereignState::Occupied(actor_id)
+                } else {
+                  SystemSovereignState::Vacant
+                },
+              );
+              "zero-Step System reservation must match lifecycle outcome"
+            }
+          };
+          let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_zero_step_header::<Test>(fixture, close);
+          }))
+          .expect_err("postconditions must reject produced lifecycle drift");
+          let actual = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+          assert!(actual.contains(message), "expected {message}, got {actual}");
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn retained_inner_profiles_require_real_service_advancement() {
+    #[derive(Clone, Copy, Debug)]
+    enum Profile {
+      RunningComplete,
+      RunningProgress,
+      SuspendedComplete,
+      SuspendedProgress,
+      ZeroSystem,
+      ZeroUser,
+    }
+    #[derive(Clone, Copy, Debug)]
+    enum Corruption {
+      None,
+      Cursor,
+      Considered,
+      Attempted,
+    }
+    for profile in [
+      Profile::RunningComplete,
+      Profile::RunningProgress,
+      Profile::SuspendedComplete,
+      Profile::SuspendedProgress,
+      Profile::ZeroSystem,
+      Profile::ZeroUser,
+    ] {
+      for predicates in [0, benchmark_predicate_capacity::<Test>()] {
+        if predicates > 0 && matches!(profile, Profile::ZeroSystem | Profile::ZeroUser) {
+          continue;
+        }
+        for corruption in [
+          Corruption::None,
+          Corruption::Cursor,
+          Corruption::Considered,
+          Corruption::Attempted,
+        ] {
+          new_test_ext().execute_with(|| {
+            let (actor_id, postcondition): (ActorId, Box<dyn FnOnce()>) = match profile {
+              Profile::RunningComplete | Profile::RunningProgress => {
+                let branch = if matches!(profile, Profile::RunningComplete) {
+                  RunningInnerBranch::Complete
+                } else {
+                  RunningInnerBranch::Progress
+                };
+                let (actor_id, cursor) = prepare_reachable_running_inner::<Test>(
+                  MAX_STEPS_PER_TAIL_CHUNK, predicates, branch,
+                ).unwrap();
+                (actor_id, Box::new(move || assert_reachable_running_inner::<Test>(
+                  actor_id, cursor, frame_system::Pallet::<Test>::block_number(), branch,
+                )))
+              }
+              Profile::SuspendedComplete | Profile::SuspendedProgress => {
+                let branch = if matches!(profile, Profile::SuspendedComplete) {
+                  RunningInnerBranch::Complete
+                } else {
+                  RunningInnerBranch::Progress
+                };
+                let fixture = prepare_reachable_suspended_tail_success::<Test>(
+                  MAX_STEPS_PER_TAIL_CHUNK, predicates, branch,
+                ).unwrap();
+                (fixture.actor_id, Box::new(move || assert_reachable_suspended_tail_success::<Test>(
+                  fixture, frame_system::Pallet::<Test>::block_number(), branch,
+                )))
+              }
+              Profile::ZeroSystem | Profile::ZeroUser => {
+                let actor_type = if matches!(profile, Profile::ZeroUser) {
+                  ActorType::User
+                } else {
+                  ActorType::System
+                };
+                let actor_id = prepare_zero_step_opening::<Test>(actor_type);
+                let fee = Pallet::<Test>::pipeline_fee_for_actor(actor_id, actor_type).unwrap().total_fee;
+                (actor_id, Box::new(move || assert_zero_step_completion::<Test>(actor_id, actor_type, fee)))
+              }
+            };
+            // Real peers distinguish cursor advancement from the singleton node.next == self case.
+            // These are native witnesses, not a change to any measured benchmark's geometry.
+            let followers = [
+              create_zero_step_system_follower::<Test>(),
+              create_zero_step_system_follower::<Test>(),
+            ];
+            let actor = Pallet::<Test>::load_actor_ref(actor_id).unwrap();
+            let before = ServiceNodes::<Test>::get(actor_id).unwrap();
+            assert_eq!(ServiceHeader::<Test>::get().count, 3);
+            assert_eq!(ServiceHeader::<Test>::get().cursor, Some(actor));
+            assert_ne!(before.next, actor);
+            assert_ne!(before.previous, before.next);
+            let peers = followers.map(|id| (
+              ServiceNodes::<Test>::get(id), ActorProcesses::<Test>::get(id),
+              ActorSemanticStates::<Test>::get(id),
+            ));
+            let now = frame_system::Pallet::<Test>::block_number();
+            if matches!(profile, Profile::ZeroSystem | Profile::ZeroUser) {
+              let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+              execute_zero_step_inner::<Test>(actor_id, state, &admission, now);
+            } else {
+              let (state, admission, step) =
+                benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
+              execute_reachable_step_inner::<Test>(actor_id, state, admission, step, now);
+            }
+            assert_eq!(ServiceHeader::<Test>::get().count, 3);
+            assert_eq!(ServiceHeader::<Test>::get().cursor, Some(before.next));
+            for (id, peer) in followers.into_iter().zip(peers) {
+              assert_eq!((ServiceNodes::<Test>::get(id), ActorProcesses::<Test>::get(id),
+                ActorSemanticStates::<Test>::get(id)), peer, "inner owner must not serve its peers");
+            }
+            // Corrupt only the already-produced result to falsify the benchmark postcondition.
+            match corruption {
+              Corruption::None => {},
+              Corruption::Cursor => ServiceHeader::<Test>::mutate(|header| header.cursor = Some(actor)),
+              Corruption::Considered => ServiceNodes::<Test>::mutate(actor_id, |node| {
+                node.as_mut().unwrap().last_considered = now - 1;
+              }),
+              Corruption::Attempted => ActorProcesses::<Test>::mutate(actor_id, |process| {
+                process.as_mut().unwrap().last_attempted = Some(now - 1);
+              }),
+            }
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(postcondition));
+            if matches!(corruption, Corruption::None) {
+              assert!(result.is_ok(), "{profile:?}/{predicates}: valid retained turn");
+            } else {
+              let panic = result.expect_err("postconditions must reject lost placement evidence");
+              let message = panic.downcast_ref::<String>().map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&str>().copied());
+              let expected = match corruption {
+                Corruption::Cursor => "retained turn must advance Service cursor",
+                Corruption::Considered => "retained turn must record consideration",
+                Corruption::Attempted => "retained turn must record attempt",
+                Corruption::None => unreachable!(),
+              };
+              assert!(message.is_some_and(|message| message.contains(expected)),
+                "{profile:?}/{predicates}/{corruption:?}: the specific placement assertion must reject, not a later try-state audit");
+            }
+          });
+        }
+      }
+    }
+  }
+
   #[cfg(test)]
   #[test]
   fn reachable_opening_tail_profile_boundaries() {
@@ -15148,6 +26218,15 @@ mod benches {
             }
           }
           assert_reachable_opening::<Test>(actor_id, count, profile);
+          // Reject every target receipt, including the mock's nonzero invoked-effect Weight.
+          // Other Tasks skip/reject before invocation; StopCycle suppresses receipts outright.
+          assert!(!frame_system::Pallet::<Test>::events().iter().any(|record| {
+            matches!(
+              &record.event,
+              crate::mock::RuntimeEvent::Actors(Event::ActionFeeCharged { actor_id: receipt_actor, .. })
+                if *receipt_actor == actor_id
+            )
+          }));
           if let Some(accounting) = accounting {
             assert_user_pipeline_accounting::<Test>(actor_id, accounting);
           }
@@ -15155,6 +26234,7 @@ mod benches {
       }
     }
   }
+
   #[cfg(test)]
   #[test]
   fn reachable_suspended_head_inner_allocation_boundaries() {
@@ -15193,9 +26273,7 @@ mod benches {
               );
               if let Some(branch) = branch {
                 if matches!(branch, RunningInnerBranch::Progress) {
-                  let after =
-                    ActorRunStateStore::<Test>::get(actor_id).expect("progress retains Run");
-                  assert_eq!(after.opening_snapshot, before.opening_snapshot);
+                  assert!(ActorRunStateStore::<Test>::contains_key(actor_id));
                 }
                 assert_reachable_suspended_tail_skip::<Test>(
                   skip.expect("freeze fixture exists"),
@@ -15220,6 +26298,7 @@ mod benches {
       assert_eq!(NextActorId::<Test>::get(), 0);
     });
   }
+
   #[cfg(test)]
   #[test]
   fn reachable_suspended_head_retry_payload_tradeoffs() {
@@ -15244,6 +26323,7 @@ mod benches {
         .expect("current-attempt retry reconciles canonical Service ownership");
     });
   }
+
   #[cfg(test)]
   #[test]
   fn reachable_running_inner_fragment_predicate_boundaries() {
@@ -15303,6 +26383,7 @@ mod benches {
       }
     }
   }
+
   #[cfg(test)]
   #[test]
   fn reachable_running_tail_fragment_boundaries() {
@@ -15320,6 +26401,7 @@ mod benches {
       });
     }
   }
+
   #[cfg(test)]
   #[test]
   fn reachable_update_current_attempt_allocation_matches_authored_contract() {
@@ -15336,482 +26418,280 @@ mod benches {
       });
     }
   }
+
   #[cfg(test)]
   #[test]
-  fn mixed_waiting_reference_close_uses_real_opening() {
+  fn complete_cadenced_deadline_worker_reaches_deep_index() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_temporal_deadline_cadenced_deep_index()
+        .expect("complete Cadenced worker reaches the admitted deep Tick index");
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn production_parked_balance_review_covers_retained_and_deep_index_rearm() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_process_due_parked_balance_review().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_process_due_parked_balance_review_deep_index().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn production_availability_review_covers_retained_and_deep_index_rearm() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_process_due_observation_availability_review().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_process_due_observation_availability_review_deep_index()
+        .unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn production_predicate_review_covers_retained_and_deep_index_cleanup() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_process_due_observation_predicate_review().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_process_due_observation_predicate_review_deep_index().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn measured_account_roles_reject_signer_exemption_and_aliases() {
+    new_test_ext().execute_with(|| {
+      let first = measured_account::<Test>("measured-role", 0);
+      let second = measured_account::<Test>("measured-role", 1);
+      let sink = <Test as Config>::FeeSink::get();
+      assert_distinct_measured_accounts::<Test>(&[&first, &second, &sink]);
+      assert!(
+        std::panic::catch_unwind(|| measured_account::<Test>("whitelisted_caller", 0)).is_err()
+      );
+      assert!(
+        std::panic::catch_unwind(|| assert_distinct_measured_accounts::<Test>(&[&first, &first]))
+          .is_err()
+      );
+      assert!(
+        std::panic::catch_unwind(|| assert_distinct_measured_accounts::<Test>(&[&sink, &sink]))
+          .is_err()
+      );
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn temporal_terminal_cleanup_preserves_peers_and_custody() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_cadenced_terminal_cleanup_populated().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn underfunded_temporal_rearm_preserves_custody_and_no_latch() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_cadenced_underfunded_rearm_populated().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn cadenced_parked_balance_occurrence_wakes_after_negative_review() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_cadenced_parked_balance_occurrence().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn signed_parked_two_clock_close_releases_both_indices_and_keeps_custody() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_actor_user_parked_two_clock().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_actor_user_parked_two_clock_deep_index().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_actor_user_parked_two_clock_deep_block().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_actor_user_parked_two_clock_deep_block_tail().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_actor_user_parked_two_clock_both_deep().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn observation_fanout_maximum_header_page_is_ordinarily_admitted() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_observation_fanout_max_header_page().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_observation_fanout_full_header_page().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_observation_fanout_full_header_quantum_12().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_observation_fanout_full_header_two_quantum_12().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_observation_fanout_full_header_second_quantum_12().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_observation_fanout_full_header_quantum_24().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_observation_fanout_full_header_quantum_32().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_observation_fanout_full_header_tail_page().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_observation_fanout_full_header_tombstone_page().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn observation_fanout_worker_rotates_to_another_dirty_feed_before_resuming_a_page() {
+    new_test_ext().execute_with(|| {
+      let (feed, actors) = prepare_observation_max_header_page::<Test>(true, false).unwrap();
+      let ordinary = Weight::from_parts(20_000_000_000, 185_000);
+      let base = <crate::weights::TestWeightInfo as WeightInfo>::observation_fanout_base();
+      let probe = <crate::weights::TestWeightInfo as WeightInfo>::observation_fanout_branch_probe();
+      let fault =
+        <crate::weights::TestWeightInfo as WeightInfo>::record_observation_fanout_worker_fault();
+      let allowance = base
+        .saturating_add(probe.saturating_add(ordinary).saturating_mul(2))
+        .saturating_add(fault);
+      let (_, turns) =
+        Pallet::<Test>::fanout_dirty_observations_with_quanta(allowance, 0, 12, ordinary);
+      assert_eq!(turns, 2);
+      let dirty = DirtyObservationFeeds::<Test>::get(feed).expect("first feed remains dirty");
+      assert_eq!(dirty.next_subscriber_position, 12);
+      assert_eq!(DirtyObservationListState::<Test>::get().count, 2);
+      assert!(
+        actors
+          .iter()
+          .take(12)
+          .all(|id| Pallet::<Test>::pending_signal(*id))
+      );
+      assert!(
+        actors
+          .iter()
+          .skip(12)
+          .all(|id| !Pallet::<Test>::pending_signal(*id))
+      );
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn manual_full_header_trigger_owner_is_ordinarily_admitted() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_manual_trigger_full_header().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn address_event_full_header_trigger_owner_is_ordinarily_admitted() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_address_event_trigger_full_header_occurrence().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn observation_change_full_header_trigger_fee_owner_is_ordinarily_admitted() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_observation_change_trigger_full_header_occurrence().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn production_temporal_occurrences_cover_maximum_headers_and_neighbors() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_at_time_trigger_occurrence().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_cadenced_trigger_occurrence().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn production_busy_temporal_rearms_preserve_phase_maximum_runs() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_cadenced_running_rearm().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_cadenced_suspended_service_rearm().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_cadenced_suspended_deadline_rearm().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_actor_user_suspended_deadline_two_clock_deep_index()
+        .unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_actor_user_suspended_deadline_both_deep().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn mixed_deadline_close_uses_real_opening() {
     for unlink in [false, true] {
       new_test_ext().execute_with(|| {
-        let fixture = prepare_mixed_waiting_close::<Test>(unlink)
-          .expect("mixed Waiting reference is reachable");
+        let fixture = prepare_mixed_deadline_close::<Test>(unlink, MixedDeadlineTarget::System)
+          .expect("mixed idle/Running deadline membership is reachable");
         Pallet::<Test>::close_actor(RawOrigin::Root.into(), fixture.actor_id).unwrap();
-        assert_mixed_waiting_close::<Test>(&fixture, unlink);
+        assert_mixed_deadline_close::<Test>(&fixture, unlink);
       });
     }
   }
 
   #[cfg(test)]
   #[test]
-  fn mixed_waiting_deadline_close_reclaims_full_heap_tail() {
+  fn mixed_deadline_close_reclaims_full_heap_tail() {
     new_test_ext().execute_with(|| {
-      let (fixture, keys) = prepare_mixed_waiting_deadline_close::<Test>()
-        .expect("last Tick reference and full heap follow ordinary lifecycle transitions");
+      let (fixture, keys) = prepare_mixed_deadline_heap_close::<Test>(MixedDeadlineTarget::System)
+        .expect("last Tick member and full heap follow ordinary lifecycle transitions");
       Pallet::<Test>::close_actor(RawOrigin::Root.into(), fixture.actor_id).unwrap();
-      assert_mixed_waiting_deadline_close::<Test>(&fixture, keys);
+      assert_mixed_deadline_heap_close::<Test>(&fixture, keys);
     });
-  }
-
-  #[cfg(test)]
-  #[test]
-  fn full_waiting_heap_close_covers_upward_and_tail_removal() {
-    for upward in [true, false] {
-      new_test_ext().execute_with(|| {
-        let fixture = prepare_full_waiting_heap_close::<Test>(upward);
-        Pallet::<Test>::close_actor(RawOrigin::Root.into(), fixture.actor_id).unwrap();
-        assert_full_waiting_heap_close::<Test>(&fixture);
-      });
-    }
-  }
-
-  #[cfg(test)]
-  #[test]
-  fn cadenced_opening_rearms_tick_heap_before_ready_continuation() {
-    use alloc::collections::BTreeMap;
-
-    for existing_destination in [true, false] {
-      new_test_ext().execute_with(|| {
-        frame_system::Pallet::<Test>::set_block_number(1);
-        let mut steps = inert_contract_steps_of_len::<Test>(2);
-        steps[0].task = ActorTask::Transfer {
-          to: account("cadence-noop-recipient", 0, 0),
-          asset: <Test as Config>::FeeNativeAssetId::get(),
-          amount: AmountResolution::Percent(Perbill::from_percent(50)),
-        };
-        Pallet::<Test>::create_system_actor(
-          RawOrigin::Root.into(),
-          account("cadence-rearm-target", 0, 0),
-          Mutability::Mutable,
-          system_contract::<Test>(
-            Schedule {
-              trigger: Trigger::cadenced(100),
-              cooldown_blocks: 0,
-            },
-            steps,
-          ),
-        )
-        .expect("real Cadenced Contract is admitted");
-        let actor_id = NextActorId::<Test>::get() - 1;
-        let first = Pallet::<Test>::actor_hot(actor_id)
-          .and_then(|hot| hot.trigger_wakeup_pointer)
-          .expect("first cadence")
-          .tick;
-        let next = first + 100;
-        for index in 0..96u32 {
-          let every = if index == 0 && existing_destination {
-            200
-          } else {
-            1_000 + index
-          };
-          Pallet::<Test>::create_system_actor(
-            RawOrigin::Root.into(),
-            account("cadence-rearm-competitor", index, 0),
-            Mutability::Mutable,
-            system_contract::<Test>(
-              Schedule {
-                trigger: Trigger::cadenced(u64::from(every)),
-                cooldown_blocks: 0,
-              },
-              make_inert_contract_steps::<Test>(),
-            ),
-          )
-          .expect("competing Tick primary is admitted");
-        }
-        frame_system::Pallet::<Test>::set_block_number(first);
-        let (mut due, stats) =
-          Pallet::<Test>::wakeup_substrate_drain_key(WakeupKey::Tick(first), 1);
-        assert_eq!(stats.entries_scanned, 1);
-        let (due_actor, state, admission, loaded_step) = due.pop().expect("real due primary");
-        assert_eq!(due_actor, actor_id);
-        assert_eq!(
-          Pallet::<Test>::process_due_temporal_occurrence_loaded(
-            actor_id,
-            state,
-            admission,
-            loaded_step,
-            first,
-          ),
-          Ok(false)
-        );
-        assert_eq!(WakeupCursorLen::<Test>::get(WakeupClock::Tick), 96);
-        #[cfg(feature = "try-runtime")]
-        Pallet::<Test>::do_try_state().expect("due collection reconciles before Opening");
-        let before: BTreeMap<_, _> = WakeupCursorPages::<Test>::iter().collect();
-        Pallet::<Test>::execute_cycle(Weight::MAX);
-        let (location, cell) =
-          Pallet::<Test>::actor_control_cell(actor_id).expect("Running primary");
-        assert!(matches!(location, ActorControlLocation::Ready { .. }));
-        assert_eq!(cell.cursor, 1);
-        let pointer = Pallet::<Test>::actor_hot(actor_id)
-          .and_then(|hot| hot.trigger_wakeup_pointer)
-          .expect("independent rearmed reference");
-        assert_eq!(pointer.tick, next);
-        assert!(matches!(
-          ActorWaitingFrameChunks::<Test>::get((WakeupKey::Tick(next), pointer.page_id))
-            .expect("reference page")
-            .entries[pointer.slot as usize],
-          Some(ActorWaitingEntry::Reference(_))
-        ));
-        assert_eq!(
-          crate::mock::last_step_control_execution()
-            .expect("actual selection")
-            .placement,
-          crate::StepControlPlacement::Queue
-        );
-        let after: BTreeMap<_, _> = WakeupCursorPages::<Test>::iter().collect();
-        if existing_destination {
-          assert_eq!(before, after);
-        } else {
-          let changed = after
-            .iter()
-            .filter(|(key, page)| before.get(key) != Some(page))
-            .count();
-          assert_eq!(changed, 3, "Opening itself repairs three Tick heap pages");
-          assert_eq!(WakeupCursorLen::<Test>::get(WakeupClock::Tick), 97);
-        }
-        #[cfg(feature = "try-runtime")]
-        Pallet::<Test>::do_try_state()
-          .expect("Ready primary and independent Tick reference reconcile");
-      });
-    }
-  }
-
-  #[cfg(test)]
-  #[test]
-  fn opening_retry_reconciles_existing_and_new_waiting_heap_keys() {
-    use alloc::collections::BTreeMap;
-
-    let mut logical_results = Vec::new();
-    for destination_entries in [0, 1, 32] {
-      logical_results.push(new_test_ext().execute_with(|| {
-        let (actor_id, keys, due) = prepare_reachable_waiting_opening::<Test>(destination_entries)
-          .expect("full host population is admitted");
-        let (_, source) = Pallet::<Test>::actor_control_cell(actor_id).expect("Ready source");
-        let capacity = Pallet::<Test>::effective_active_actor_limit();
-        assert_eq!(ActiveActorCount::<Test>::get(), capacity);
-        assert_eq!(keys, 1_023 - destination_entries.saturating_sub(1));
-        let before: BTreeMap<_, _> = WakeupCursorPages::<Test>::iter().collect();
-        Pallet::<Test>::execute_cycle(Weight::MAX);
-        assert_reachable_waiting_opening::<Test>(
-          actor_id,
-          if destination_entries > 0 {
-            keys
-          } else {
-            capacity
-          },
-          due,
-        );
-        let after: BTreeMap<_, _> = WakeupCursorPages::<Test>::iter().collect();
-        if destination_entries > 0 {
-          assert_eq!(before, after, "existing deadline needs no heap repair");
-        } else {
-          assert_eq!(Pallet::<Test>::wakeup_cursor_peek(), Some(due));
-          let changed = after
-            .iter()
-            .filter(|(key, page)| before.get(key) != Some(page))
-            .count();
-          assert_eq!(changed, 6, "full mock population repairs six heap pages");
-        }
-        let execution =
-          crate::mock::last_step_control_execution().expect("actual control selection");
-        assert_eq!(execution.placement, crate::StepControlPlacement::Wakeup);
-        (
-          source.encode(),
-          Pallet::<Test>::actor_run_state(actor_id).encode(),
-          execution,
-        )
-      }));
-    }
-    assert!(logical_results.windows(2).all(|pair| pair[0] == pair[1]));
-  }
-
-  #[cfg(test)]
-  #[test]
-  fn consumed_waiting_publication_extrema_use_complete_host_populations() {
-    let mut source_cells = Vec::new();
-    for destination_entries in [0, 1, 32] {
-      source_cells.push(new_test_ext().execute_with(|| {
-        let (actor_id, count, keys, due) = prepare_reachable_waiting_publication::<Test>(
-          destination_entries,
-          0,
-          ReachableOpeningProfile::RetryMin,
-        )
-        .expect("RetryMin publication and complete host population are admitted");
-        let (_, source) = Pallet::<Test>::actor_control_cell(actor_id).expect("Ready source");
-        let encoded_source = source.encode();
-        let publish = benchmark_fixture_prepare_consumed_service_waiting::<Test>(actor_id, due);
-        publish();
-        assert_reachable_waiting_publication::<Test>(
-          actor_id,
-          count,
-          keys,
-          due,
-          destination_entries,
-        );
-        assert_eq!(ActiveActorCount::<Test>::get(), 1_024);
-        assert_eq!(count, 1);
-        encoded_source
-      }));
-    }
-    assert!(source_cells.windows(2).all(|pair| pair[0] == pair[1]));
-  }
-
-  #[cfg(test)]
-  #[test]
-  fn consumed_running_continued_wakeup_extrema_are_complete_successors() {
-    for dense in [false, true] {
-      new_test_ext().execute_with(|| {
-        let actor_id = if dense {
-          prepare_reachable_running::<Test>(3).expect("largest dense Running fixture is admitted")
-        } else {
-          prepare_low_capture_running::<Test>(None, 0)
-            .expect("maximum-length low-capture Running fixture is admitted")
-        };
-        let source =
-          ActorRunStateStore::<Test>::get(actor_id).expect("continued Running source exists");
-        assert_eq!(source.cursor, 1);
-        if dense {
-          assert_eq!(source.opening_snapshot.len(), 6);
-        } else {
-          assert!(source.opening_snapshot.is_empty());
-        }
-        let now = source.eligible_at;
-        frame_system::Pallet::<Test>::set_block_number(now);
-        let (state, admission, loaded_step) =
-          benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
-        benchmark_fixture_seed_saturated_ready_tombstones::<Test>();
-        assert_eq!(
-          execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now),
-          Weight::zero()
-        );
-        let successor =
-          ActorRunStateStore::<Test>::get(actor_id).expect("continued successor retains Run");
-        assert_eq!(successor.cursor, 2);
-        assert_eq!(successor.last_committed_step_block, Some(now));
-        assert_eq!(
-          crate::mock::last_step_control_execution()
-            .expect("actual selector observes complete successor")
-            .placement,
-          crate::StepControlPlacement::Wakeup
-        );
-        assert!(matches!(
-          ActorControlLocators::<Test>::get(actor_id),
-          Some(ActorControlLocation::Waiting {
-            key: WakeupKey::Block(at),
-            ..
-          }) if at == successor.eligible_at
-        ));
-        assert_eq!(ActorReadyOccupancy::<Test>::get(), 0);
-        #[cfg(feature = "try-runtime")]
-        Pallet::<Test>::do_try_state().expect("complete fallback successor is canonical");
-      });
-    }
-  }
-
-  #[cfg(test)]
-  #[test]
-  fn consumed_running_terminal_successors_publish_one_unsignaled_owner() {
-    for failed in [false, true] {
-      new_test_ext().execute_with(|| {
-        let actor_id = if failed {
-          prepare_run_terminal_failure_source::<Test>()
-            .expect("maximum-length low-capture failure source is admitted")
-        } else {
-          prepare_low_capture_running_with_type::<Test>(
-            ActorType::User,
-            Some(Step {
-              precondition: None,
-              task: ActorTask::StopCycle,
-              on_error: StepErrorPolicy::AbortCycle,
-            }),
-            0,
-          )
-          .expect("maximum-length low-capture completion source is admitted")
-        };
-        let before_hold =
-          ActorStateHolds::<Test>::get(actor_id).expect("terminal User state hold exists");
-        let now = ActorRunStateStore::<Test>::get(actor_id)
-          .expect("low-capture terminal source retains Run")
-          .eligible_at;
-        frame_system::Pallet::<Test>::set_block_number(now);
-        let (state, admission, loaded_step) =
-          benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
-        let effect =
-          execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now);
-        assert_eq!(
-          effect,
-          if failed {
-            Weight::zero()
-          } else {
-            <Test as Config>::TaskEffectWeight::actual_effect_weight(
-              &ActorTask::StopCycle,
-              TaskEffectExecution::Invoked,
-            )
-            .expect("mock supplies StopCycle effect evidence")
-          }
-        );
-        let successor =
-          Pallet::<Test>::active_actor_state(actor_id).expect("terminal authority remains active");
-        assert!(successor.run_state.is_none());
-        assert_eq!(successor.identity.cycle_nonce, 1);
-        assert_eq!(successor.hot.cycle_state, CycleState::Idle);
-        assert!(!successor.hot.pending_signal);
-        assert_eq!(successor.hot.unsuccessful_attempt_streak, u32::from(failed));
-        assert!(successor.hot.queue_ticket.is_none() && successor.hot.wakeup_pointer.is_none());
-        assert!(matches!(
-          ActorControlLocators::<Test>::get(actor_id),
-          Some(ActorControlLocation::Unsignaled)
-        ));
-        assert_eq!(ActorReadyOccupancy::<Test>::get(), 0);
-        let after_hold =
-          ActorStateHolds::<Test>::get(actor_id).expect("terminal User state hold remains owned");
-        assert_eq!(after_hold.owner, before_hold.owner);
-        assert_eq!(after_hold.breakdown, before_hold.breakdown);
-        let execution = crate::mock::last_step_control_execution()
-          .expect("actual selector observes complete terminal successor");
-        assert_eq!(execution.phase, crate::StepControlPhase::Running);
-        assert_eq!(
-          execution.outcome,
-          if failed {
-            crate::StepControlOutcome::Failed
-          } else {
-            crate::StepControlOutcome::Completed
-          }
-        );
-        assert_eq!(execution.placement, crate::StepControlPlacement::None);
-        assert_eq!(
-          execution.task_effect,
-          if failed {
-            TaskEffectExecution::NotInvoked
-          } else {
-            TaskEffectExecution::Invoked
-          }
-        );
-        #[cfg(feature = "try-runtime")]
-        Pallet::<Test>::do_try_state().expect("complete terminal successor is canonical");
-      });
-    }
-  }
-
-  #[cfg(test)]
-  #[test]
-  fn consumed_running_suspension_selects_queue_or_wakeup_from_exact_eligibility() {
-    for (cooldown_blocks, expected_placement) in [
-      (0, crate::StepControlPlacement::Queue),
-      (2, crate::StepControlPlacement::Wakeup),
+    for target in [
+      MixedDeadlineTarget::UserCombined,
+      MixedDeadlineTarget::UserObservation,
+      MixedDeadlineTarget::UserParked,
     ] {
       new_test_ext().execute_with(|| {
-        let actor_id = prepare_run_owner_suspension_source::<Test>(false, cooldown_blocks)
-          .expect("maximum-length low-capture suspension source is admitted");
-        let now = ActorRunStateStore::<Test>::get(actor_id)
-          .expect("low-capture Running retry source exists")
-          .eligible_at;
-        frame_system::Pallet::<Test>::set_block_number(now);
-        let (state, admission, loaded_step) =
-          benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
-        assert_eq!(
-          execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, now),
-          Weight::zero()
-        );
-        let successor =
-          ActorRunStateStore::<Test>::get(actor_id).expect("suspended successor retains Run");
-        assert_eq!(successor.cursor, 1);
-        assert_eq!(successor.last_attempt_block, now);
-        assert_eq!(
-          successor.suspension,
-          Some(SuspensionReason::FundingUnavailable)
-        );
-        assert_eq!(
-          crate::mock::last_step_control_execution()
-            .expect("actual selector observes suspension successor")
-            .placement,
-          expected_placement
-        );
-        match expected_placement {
-          crate::StepControlPlacement::Queue => {
-            assert_eq!(successor.eligible_at, now + 1);
-            assert!(matches!(
-              ActorControlLocators::<Test>::get(actor_id),
-              Some(ActorControlLocation::Ready { .. })
-            ));
-            assert_eq!(ActorReadyOccupancy::<Test>::get(), 1);
+        let (fixture, keys) = prepare_mixed_deadline_heap_close::<Test>(target)
+          .expect("signed User hold and deep Tick heap follow ordinary lifecycle transitions");
+        assert!(ActorStateHolds::<Test>::contains_key(fixture.actor_id));
+        let owner = match target {
+          MixedDeadlineTarget::UserCombined | MixedDeadlineTarget::UserObservation => {
+            account("large-head-owner", 0, 0)
           }
-          crate::StepControlPlacement::Wakeup => {
-            assert_eq!(successor.eligible_at, now + 2);
-            assert!(matches!(
-              ActorControlLocators::<Test>::get(actor_id),
-              Some(ActorControlLocation::Waiting {
-                key: WakeupKey::Block(at),
-                ..
-              }) if at == successor.eligible_at
-            ));
-            assert_eq!(ActorReadyOccupancy::<Test>::get(), 0);
-          }
-          _ => unreachable!(),
-        }
-        #[cfg(feature = "try-runtime")]
-        Pallet::<Test>::do_try_state().expect("complete suspension successor is canonical");
+          MixedDeadlineTarget::UserParked => account("mixed-waiting-user", 32, 0),
+          MixedDeadlineTarget::System => unreachable!("User fixture expected"),
+        };
+        Pallet::<Test>::close_actor(RawOrigin::Signed(owner).into(), fixture.actor_id).unwrap();
+        assert_mixed_deadline_heap_close::<Test>(&fixture, keys);
       });
     }
-  }
-
-  #[cfg(test)]
-  #[test]
-  fn continued_step_reports_waiting_after_ready_capacity_fallback() {
-    new_test_ext().execute_with(|| {
-      let (actor_id, _) = prepare_reachable_opening::<Test>(1, ReachableOpeningProfile::Minimal)
-        .expect("admitted Opening fixture");
-      let (state, admission, loaded_step) =
-        benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
-      // Exercise the consumed-Step placement boundary with real competing Ready owners.
-      // This is not evidence of a complete Executive interleaving that fills the queue.
-      let capacity = <<Test as Config>::MaxQueueLength as Get<u32>>::get();
-      for seed in 0..capacity {
-        let other = bench_create_system_manual::<Test>(60_000_000 + seed);
-        let owner = Pallet::<Test>::actor_identity(other)
-          .expect("competitor identity")
-          .owner;
-        Pallet::<Test>::manual_trigger(RawOrigin::Signed(owner).into(), other)
-          .expect("competing Ready ticket fits");
-        if seed == 1 {
-          frame_system::Pallet::<Test>::set_block_number(2);
-          Pallet::<Test>::deactivate_actor(RawOrigin::Root.into(), other)
-            .expect("non-head lifecycle churn frees an Active slot but retains its tombstone");
-        }
-      }
-      assert_eq!(
-        ActorReadyTail::<Test>::get() - ActorReadyHead::<Test>::get(),
-        u64::from(capacity)
-      );
-      execute_reachable_step_inner::<Test>(actor_id, state, admission, loaded_step, 2);
-      assert!(matches!(
-        ActorControlLocators::<Test>::get(actor_id),
-        Some(ActorControlLocation::Waiting {
-          key: WakeupKey::Block(3),
-          ..
-        })
-      ));
-      assert_eq!(
-        crate::mock::last_step_control_execution().map(|execution| execution.placement),
-        Some(crate::StepControlPlacement::Wakeup)
-      );
-      assert_eq!(
-        ActorRunStateStore::<Test>::get(actor_id)
-          .expect("retained Run")
-          .cursor,
-        1
-      );
-      #[cfg(feature = "try-runtime")]
-      Pallet::<Test>::do_try_state().expect("fallback keeps one canonical process owner");
-    });
   }
 
   #[cfg(test)]
@@ -15884,155 +26764,6 @@ mod benches {
         );
       });
     }
-  }
-
-  #[cfg(test)]
-  #[test]
-  fn pipeline_insolvency_cleans_each_admitted_tail_and_future_window() {
-    let maximum = <<Test as Config>::MaxContractSteps as Get<u32>>::get();
-    for count in 0..=maximum {
-      for with_window in [false, true] {
-        new_test_ext().execute_with(|| {
-          let mut steps = make_max_contract_steps::<Test>(999);
-          steps.truncate(count as usize);
-          let (actor_id, before) =
-            prepare_user_pipeline_insolvency::<Test>(true, steps, with_window);
-          assert_eq!(
-            ActorContractTailChunks::<Test>::iter_prefix(actor_id).count(),
-            count.saturating_sub(1).div_ceil(MAX_STEPS_PER_TAIL_CHUNK) as usize
-          );
-          let hot = benchmark_fixture_hot::<Test>(actor_id).unwrap();
-          assert_eq!(hot.wakeup_pointer.is_some(), with_window);
-          let pass = Pallet::<Test>::execute_cycle(Weight::MAX);
-          assert!(pass.effect_consumed.is_zero() && !pass.starved);
-          assert_user_pipeline_insolvency::<Test>(actor_id, before);
-          if let Some(pointer) = hot.wakeup_pointer {
-            assert!(!Pallet::<Test>::wakeup_page_entry_matches(
-              pointer, actor_id
-            ));
-            assert!(!ActorWaitingCursorIndices::<Test>::contains_key(
-              pointer.block
-            ));
-          }
-        });
-      }
-    }
-  }
-
-  #[cfg(test)]
-  #[test]
-  fn crossing_rearm_unavailability_preserves_paid_head_until_host_recovers() {
-    for unavailable in [
-      ScalarObservationState::Unavailable,
-      ScalarObservationState::Uninitialized,
-    ] {
-      new_test_ext().execute_with(|| {
-        let (actor_id, feed) =
-          prepare_zero_step_observation::<Test>(Some(CrossingPhase::WaitingForRearm), false);
-        let available = crate::mock::MockObservationProvider::observe(&feed, 0, u32::MAX);
-        let follower = create_zero_step_system_follower::<Test>();
-        crate::mock::set_observation(feed, unavailable);
-        let state = Pallet::<Test>::active_actor_state(actor_id)
-          .unwrap()
-          .encode();
-        let head = ActorReadyHead::<Test>::get();
-        let events = frame_system::Pallet::<Test>::events();
-        let before = user_pipeline_accounting::<Test>(actor_id);
-        let complete_refusal =
-          <<Test as Config>::WeightInfo as WeightInfo>::scheduler_paged_zero_step_user_crossing_unavailable();
-        if unavailable == ScalarObservationState::Unavailable {
-          for budget in [
-            Weight::from_parts(complete_refusal.ref_time().saturating_sub(1), u64::MAX),
-            Weight::from_parts(u64::MAX, complete_refusal.proof_size().saturating_sub(1)),
-          ] {
-            let refused = Pallet::<Test>::execute_cycle(budget);
-            assert!(refused.consumed.all_lte(budget));
-            assert!(refused.effect_consumed.is_zero() && refused.starved);
-            assert_eq!(
-              Pallet::<Test>::active_actor_state(actor_id)
-                .unwrap()
-                .encode(),
-              state
-            );
-            assert_eq!(ActorReadyHead::<Test>::get(), head);
-            assert_eq!(frame_system::Pallet::<Test>::events(), events);
-          }
-        }
-        let pass = Pallet::<Test>::execute_cycle(Weight::MAX);
-        assert!(!pass.consumed.is_zero());
-        assert!(pass.effect_consumed.is_zero() && pass.starved);
-        if unavailable == ScalarObservationState::Unavailable {
-          assert_eq!(
-            pass.consumed, complete_refusal,
-            "the complete Crossing refusal replaces provisional FIFO discovery and actor-probe accounting"
-          );
-        }
-        assert_eq!(
-          Pallet::<Test>::active_actor_state(actor_id)
-            .unwrap()
-            .encode(),
-          state
-        );
-        assert_eq!(ActorReadyHead::<Test>::get(), head);
-        assert_eq!(
-          benchmark_fixture_identity::<Test>(follower)
-            .unwrap()
-            .cycle_nonce,
-          0
-        );
-        assert_eq!(frame_system::Pallet::<Test>::events(), events);
-        assert_eq!(
-          <Test as Config>::AssetOps::balance(
-            &before.payer,
-            <Test as Config>::FeeNativeAssetId::get()
-          ),
-          before.payer_balance
-        );
-        assert_eq!(
-          <Test as Config>::AssetOps::balance(
-            &<Test as Config>::FeeSink::get(),
-            <Test as Config>::FeeNativeAssetId::get()
-          ),
-          before.sink_balance
-        );
-        crate::mock::set_observation(feed, available);
-        Pallet::<Test>::execute_cycle(Weight::MAX);
-        assert_user_pipeline_accounting::<Test>(actor_id, before);
-        assert_eq!(
-          benchmark_fixture_identity::<Test>(actor_id)
-            .unwrap()
-            .cycle_nonce,
-          1
-        );
-        assert_eq!(
-          benchmark_fixture_identity::<Test>(follower)
-            .unwrap()
-            .cycle_nonce,
-          1
-        );
-        assert_eq!(ActorReadyHead::<Test>::get(), ActorReadyTail::<Test>::get());
-        #[cfg(feature = "try-runtime")]
-        Pallet::<Test>::do_try_state().unwrap();
-      });
-    }
-  }
-
-  #[cfg(test)]
-  #[test]
-  fn crossing_rearm_unavailability_does_not_block_pipeline_insolvency_close() {
-    new_test_ext().execute_with(|| {
-      let (actor_id, before) = prepare_zero_step_user_insolvency::<Test>(true);
-      let feed = Pallet::<Test>::active_actor_view(actor_id)
-        .unwrap()
-        .trigger
-        .observation_crossing_contract()
-        .unwrap()
-        .feed
-        .to_owned();
-      crate::mock::set_observation(feed, ScalarObservationState::Unavailable);
-      Pallet::<Test>::execute_cycle(Weight::MAX);
-      assert_user_pipeline_insolvency::<Test>(actor_id, before);
-    });
   }
 
   #[cfg(test)]

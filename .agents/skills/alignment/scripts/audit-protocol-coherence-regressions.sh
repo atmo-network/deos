@@ -661,8 +661,8 @@ main() {
         "Actors Mutable-only retry admission evidence is missing"
     require_anchor 'retry_later_aborts_permanent_failure_without_executing_suffix' "$actors_tests" \
         "Actors Permanent-failure no-retry evidence is missing"
-    require_anchor 'invalid_fresh_observation_fails_permanently_and_applies_step_policy' \
-        "$actors_tests" "Actors invalid-observation Permanent-failure evidence is missing"
+    require_anchor 'invalid_manual_observation_profile_refuses_before_pipeline_admission' \
+        "$actors_tests" "Actors invalid Manual-observation atomic-refusal evidence is missing"
     require_anchor 'completed_failed_and_suspended_attempts_update_failure_streak_once' \
         "$actors_tests" "Actors cross-attempt failure-streak transition evidence is missing"
     require_anchor 'fn transition_failure_streak\(' \
@@ -751,8 +751,8 @@ main() {
         "Actors current predicate freshness evidence is missing"
     require_anchor 'predicate_is_rechecked_from_current_state_after_retry' "$actors_tests" \
         "Actors retry-time current predicate evidence is missing"
-    require_anchor 'unavailable_observation_skips_without_incrementing_failures' "$actors_tests" \
-        "Actors false-precondition skip evidence is missing"
+    require_anchor 'predicates_observe_current_step_state' "$actors_tests" \
+        "Actors false-precondition current-state skip evidence is missing"
     require_anchor 'bounded_dnf_is_canonical_and_mode_distinct' "$actors_tests" \
         "Actors canonical bounded-DNF evidence is missing"
     require_anchor 'empty_outer_and_inner_precondition_forms_are_rejected' "$actors_tests" \
@@ -802,8 +802,10 @@ main() {
         "Actors AddressEvent occurrence charging evidence is missing"
     require_anchor 'underfunded_address_event_advances_without_fee_readiness_or_apoptosis' "$actors_tests" \
         "Actors automatic AddressEvent underfunding evidence is missing"
-    require_anchor 'address_event_collection_failure_preserves_source_progress_without_readiness' "$actors_tests" \
-        "Actors automatic AddressEvent collection-failure progression evidence is missing"
+    require_anchor 'TriggerFeeCollectionFailed' "$TEMPLATE_DIR/pallets/actors/src/lib.rs" \
+        "Actors Trigger collection failure is not distinct from underfunding"
+    require_anchor 'address_event_collection_failure_rolls_back_certified_movement_and_retries_once' "$actors_tests" \
+        "Actors certified AddressEvent collection-failure rollback evidence is missing"
     require_anchor 'address_event_trigger_occurrence' \
         "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
         "Actors generated AddressEvent Trigger Weight owner is missing"
@@ -813,6 +815,9 @@ main() {
     require_anchor 'underfunded_observation_change_advances_without_fee_readiness_or_apoptosis' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/observations.rs" \
         "Actors automatic ObservationChange underfunding evidence is missing"
+    require_anchor 'observation_change_collection_failure_preserves_revision_and_faults_until_retry' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/observations.rs" \
+        "Actors ObservationChange collection-failure source/fault evidence is missing"
     require_anchor 'observation_change_trigger_occurrence' \
         "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
         "Actors generated ObservationChange Trigger Weight owner is missing"
@@ -822,9 +827,9 @@ main() {
     require_anchor 'underfunded_crossing_fire_advances_without_fee_readiness_or_apoptosis' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/crossing.rs" \
         "Actors automatic ObservationCrossing underfunding evidence is missing"
-    require_anchor 'crossing_fire_collection_failure_advances_without_readiness' \
+    require_anchor 'crossing_fire_collection_failure_preserves_phase_and_source_until_retry' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/crossing.rs" \
-        "Actors automatic ObservationCrossing collection-failure progression evidence is missing"
+        "Actors ObservationCrossing collection-failure source/phase evidence is missing"
     require_anchor 'crossing_batch_falls_back_to_scalar_progress_for_an_underfunded_member' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/crossing.rs" \
         "Actors ObservationCrossing batch underfunding progress evidence is missing"
@@ -840,13 +845,16 @@ main() {
     require_anchor 'underfunded_at_time_occurrence_selects_prepaid_custody_neutral_apoptosis' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors automatic AtTime underfunded-apoptosis evidence is missing"
+    require_anchor 'temporal_collection_failure_preserves_exact_source_and_retries_once' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
+        "Actors temporal collection-failure source preservation evidence is missing"
     require_anchor 'at_time_trigger_occurrence' \
         "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
-        "Actors generated AtTime Trigger Weight owner is missing"
+        "Actors generated AtTime Trigger Weight owner is missing"}]}},{
     require_anchor 'cadenced_latch_disables_detection_until_pipeline_opening' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors Cadenced useful-latch disable/re-arm evidence is missing"
-    require_anchor 'busy_cadenced_occurrence_advances_deadline_without_future_cycle' \
+    require_anchor 'busy_cadenced_occurrence_rearms_without_fees_or_future_cycle' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors busy Cadenced occurrence evidence is missing"
     require_anchor 'underfunded_cadenced_occurrence_advances_without_fee_readiness_or_apoptosis' \

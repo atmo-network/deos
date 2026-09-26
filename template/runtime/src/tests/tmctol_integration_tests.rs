@@ -37,7 +37,7 @@ use polkadot_sdk::sp_runtime::Perbill;
 use primitives::ecosystem::{actor_ids, protocol_tokens};
 use primitives::{AssetKind, GuaranteeStatus, TmctolConformanceStatus};
 
-use super::actors_integration_tests::has_actor_event;
+use super::actors_integration_tests::{ensure_actor_prepass_context, has_actor_event};
 
 fn all_preconditions(
   predicates: alloc::vec::Vec<
@@ -70,6 +70,7 @@ fn activate_dormant_system(
       window: None,
       steps,
       completion: pallet_deos_actors::CompletionPolicy::Persistent,
+      parked_balance_activation: None,
       funding: FundingSourcePolicy::RuntimePolicy,
       auto_close_at_cycle_nonce: None,
     },
@@ -174,6 +175,7 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
         window: None,
         steps,
         completion: pallet_deos_actors::CompletionPolicy::Persistent,
+        parked_balance_activation: None,
         funding: FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: None,
       },
@@ -1464,7 +1466,10 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
         primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS,
       ));
       Actors::on_initialize(block);
+      ensure_actor_prepass_context();
+      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
       Actors::on_idle(block, budget);
+      Actors::on_finalize(block);
     }
 
     let bucket_lp = <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(lp_id, &bucket);
@@ -2009,7 +2014,10 @@ fn treasury_b_buyback_burns_bldr() {
         primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS,
       ));
       Actors::on_initialize(block);
-      Actors::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
+      ensure_actor_prepass_context();
+      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+      Actors::on_idle(block, Weight::MAX);
+      Actors::on_finalize(block);
     }
     for block in 101..=108 {
       if Actors::actor_run_state(treasury_b_id).is_none() {
@@ -2020,7 +2028,10 @@ fn treasury_b_buyback_burns_bldr() {
         primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS,
       ));
       Actors::on_initialize(block);
-      Actors::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
+      ensure_actor_prepass_context();
+      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+      Actors::on_idle(block, Weight::MAX);
+      Actors::on_finalize(block);
     }
     // Verify at least one cycle executed
     assert!(

@@ -48,12 +48,13 @@ use pallet_deos_actors::{
   AssetFilter, AssetFilterOf, AssetOps, AttemptDisposition, CloseReason, CompletionPolicy,
   ContextMessageGeometry, ContextMessageLimits, ContractSteps, CrossingDirection, CycleResult,
   DexOps, Error, Event, ExecutionContext, FeeCollector, FundingSourcePolicy, IdleStarvationState,
-  InputLimit, LiquidityOps, Mutability, OutcomeTotals, RetryClass, ScheduleWindow, SimulationMode,
-  SourceFilter, SourceFilterOf, SplitLeg, SplitTransferLegsOf, StakingOps, StepControlExecution,
-  StepControlOutcome, StepControlPhase, StepControlPlacement, StepControlWeightContext,
-  StepControlWeightProvider, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, Task,
-  TaskEffectExecution, TaskEffectWeightProvider, TaskOf, Trigger, TriggerFamily, WakeupKey,
-  WeightInfo,
+  InputLimit, LiquidityOps, Mutability, OutcomeTotals, ParkNegativeReason,
+  ParkedBalanceQualification, Precondition, Predicate, ProcessResidence, RetryClass,
+  ScheduleWindow, SimulationMode, SourceFilter, SourceFilterOf, SplitLeg, SplitTransferLegsOf,
+  StakingOps, StepControlExecution, StepControlOutcome, StepControlPhase, StepControlPlacement,
+  StepControlWeightContext, StepControlWeightProvider, StepErrorPolicy, StepOf, StepOutcome,
+  StepSkippedReason, Task, TaskEffectExecution, TaskEffectWeightProvider, TaskOf, Trigger,
+  TriggerFamily, WakeupKey, WeightInfo, certify_parked_balance_watch, classify_parked_balance_plan,
 };
 use pallet_deos_router::{AssetConversionApi, FeeRoutingAdapter};
 use polkadot_sdk::frame_support::{
@@ -97,13 +98,72 @@ fn conservative_actor_resource_limits() -> (Weight, Weight) {
 }
 
 #[test]
+fn crossing_search_minimum_and_non_tail_refill_ceiling_have_distinct_owners() {
+  type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+  let common = W::crossing_worker_base()
+    .saturating_add(W::crossing_work_probe())
+    .saturating_add(W::crossing_selection_probe())
+    .saturating_add(W::record_crossing_worker_fault());
+  let search = common
+    .saturating_add(W::crossing_search_probe())
+    .saturating_add(W::crossing_transition_unit());
+  let refill = common
+    .saturating_add(W::crossing_fire_pair_probe())
+    .saturating_add(W::crossing_tail_refill_probe())
+    .saturating_add(
+      W::crossing_placed_non_tail_emptied_unit().max(W::crossing_placed_non_tail_trimmed_unit()),
+    );
+  let minimum = Actors::materialization_family_minimum(0);
+  assert!(
+    search.all_lte(minimum),
+    "search probe must fit both dimensions: {search:?} > {minimum:?}"
+  );
+  let crossing_ceiling = crate::configs::actor_config::ActorCrossingWorkerWeightLimit::get();
+  assert!(
+    refill.all_lte(crossing_ceiling),
+    "non-tail refill requires family surplus, not the minimum quantum: {refill:?} > {crossing_ceiling:?}"
+  );
+}
+
+#[test]
+fn observation_fanout_minimum_reserves_probe_page_and_fault_capacity() {
+  type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+  let expected = W::observation_fanout_base()
+    .saturating_add(W::observation_fanout_branch_probe())
+    .saturating_add(
+      Actors::observation_fanout_ordinary_weight_upper().max(W::observation_fanout_terminal()),
+    )
+    .saturating_add(W::record_observation_fanout_worker_fault());
+  assert!(W::observation_fanout_branch_probe().ref_time() > 0);
+  assert!(W::observation_fanout_branch_probe().proof_size() > 0);
+  assert_eq!(
+    Actors::materialization_family_minimum(1),
+    expected,
+    "reserved observation minimum must fund the complete first page in both dimensions"
+  );
+  assert!(expected.all_lte(crate::configs::actor_config::ActorObservationFanoutWeightLimit::get()));
+}
+
+#[test]
 fn task_effect_weight_provider_owns_all_task_families() {
   assert!(
     <TmctolTaskEffectWeight as TaskEffectWeightProvider<TaskOf<Runtime>>>::production_weight_identity()
       .is_some()
   );
   assert!(RuntimeAdmissionCertificateAuthority::current().is_some());
-  let (_, actor_base_turn) = conservative_actor_resource_limits();
+  let actor_base_turn = BlockResourceBudgetValue::get().limits().actor_base_turn();
+  assert_eq!(
+    <Runtime as pallet_deos_actors::Config>::MaxSplitTransferLegs::get(),
+    4,
+    "the reference runtime admits no more than four SplitTransfer recipients"
+  );
+  let max_split = <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as WeightInfo>::task_split_transfer(
+    <Runtime as pallet_deos_actors::Config>::MaxSplitTransferLegs::get(),
+  );
+  assert!(
+    max_split.all_lte(actor_base_turn),
+    "maximum configured SplitTransfer effect must fit the actual Actor base/effect domain: split={max_split:?}, base={actor_base_turn:?}"
+  );
   let assert_settlement = |task: &TaskOf<Runtime>| {
     let maximum = TmctolTaskEffectWeight::maximum_effect_weight(task)
       .expect("every runtime Task shape has a production effect reservation");
@@ -272,6 +332,12 @@ fn encoded_control_resource_boundary() {
   let mut witness = None;
   let mut contexts = 0;
   let mut inspect = |context: StepControlWeightContext| {
+    let step = RuntimeStep {
+      precondition: all_preconditions(transfer_matrix_predicates(
+        context.predicate_evaluation_units,
+      )),
+      ..step.clone()
+    };
     let control = RuntimeStepControlWeight::maximum_control_weight(context, &step)
       .expect("declared source context fits typed bounds");
     contexts += 1;
@@ -290,20 +356,15 @@ fn encoded_control_resource_boundary() {
   let tails = <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get()
     .saturating_sub(1)
     .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK);
-  let units = <Runtime as pallet_deos_actors::Config>::MaxPredicatesPerStep::get() * 2;
+  let units = <Runtime as pallet_deos_actors::Config>::MaxPredicatesPerStep::get();
   for opening_tail_chunks in (0..=tails).rev() {
     for predicate_evaluation_units in 0..=units {
-      for opening_snapshot_entries in
-        0..=<Runtime as pallet_deos_actors::Config>::MaxOpeningSnapshotEntries::get()
-      {
-        inspect(StepControlWeightContext {
-          cursor: 0,
-          steps_in_fragment: 1,
-          opening_tail_chunks,
-          predicate_evaluation_units,
-          opening_snapshot_entries,
-        });
-      }
+      inspect(StepControlWeightContext {
+        cursor: 0,
+        steps_in_fragment: 1,
+        opening_tail_chunks,
+        predicate_evaluation_units,
+      });
     }
   }
   for steps_in_fragment in 1..=pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK {
@@ -313,12 +374,11 @@ fn encoded_control_resource_boundary() {
         steps_in_fragment,
         opening_tail_chunks: 0,
         predicate_evaluation_units,
-        opening_snapshot_entries: 0,
       });
     }
   }
   assert_eq!(
-    widest, 19,
+    widest, 20,
     "requalify the stored resource encoding bound when production Weight changes"
   );
   assert!(witness.is_some());
@@ -351,7 +411,6 @@ fn action_collection_control_is_reserved_and_settled_once_in_each_phase() {
       steps_in_fragment: 1,
       opening_tail_chunks: 0,
       predicate_evaluation_units: 0,
-      opening_snapshot_entries: 0,
     };
     let maximum = RuntimeStepControlWeight::maximum_control_weight(context, &step).unwrap();
     let stop_maximum = RuntimeStepControlWeight::maximum_control_weight(context, &stop).unwrap();
@@ -392,23 +451,37 @@ fn action_collection_control_is_reserved_and_settled_once_in_each_phase() {
     assert_eq!(RuntimeStepControlWeight::actual_control_weight(
       context, &stop, stop_maximum, system_invoked,
     ).unwrap(), stop_without);
-    // A predicated StopCycle uses the general execution path and emits the zero-fee receipt.
+    // The current model retains a receipt allowance for predicated StopCycle even though the
+    // canonical emitter excludes every StopCycle. This checks quote algebra, not emitted work.
     let predicated_stop = RuntimeStep {
       precondition: all_preconditions(transfer_matrix_predicates(2)),
       ..stop.clone()
     };
+    let predicated_context = StepControlWeightContext {
+      predicate_evaluation_units: predicated_stop
+        .precondition
+        .as_ref()
+        .unwrap()
+        .evaluation_units(),
+      ..context
+    };
     let predicated_maximum =
-      RuntimeStepControlWeight::maximum_control_weight(context, &predicated_stop).unwrap();
-    assert_eq!(predicated_maximum, stop_maximum.saturating_add(receipt));
+      RuntimeStepControlWeight::maximum_control_weight(predicated_context, &predicated_stop)
+        .unwrap();
+    // Fix the model context to isolate the receipt allowance; this counterfactual unpredicated
+    // Step is an arithmetic witness, not an execution or benchmark fixture.
+    let without_receipt =
+      RuntimeStepControlWeight::maximum_control_weight(predicated_context, &stop).unwrap();
+    assert_eq!(predicated_maximum, without_receipt.saturating_add(receipt));
     let predicated_without = RuntimeStepControlWeight::actual_control_weight(
-      context,
+      predicated_context,
       &predicated_stop,
       predicated_maximum,
       execution,
     )
     .unwrap();
     let predicated_invoked = RuntimeStepControlWeight::actual_control_weight(
-      context,
+      predicated_context,
       &predicated_stop,
       predicated_maximum,
       system_invoked,
@@ -466,10 +539,148 @@ fn action_collection_control_is_reserved_and_settled_once_in_each_phase() {
 }
 
 #[test]
-fn opening_completion_direct_weight_already_owns_invocation_receipt() {
-  use crate::configs::actor_config::{
-    ActorMaxContractSteps, ActorMaxOpeningSnapshotEntries, ActorMaxPredicatesPerStep,
+fn runtime_step_control_predicate_domain_matches_current_step_bound() {
+  use crate::configs::actor_config::{ActorMaxContractSteps, ActorMaxPredicatesPerStep};
+
+  let predicate_limit = ActorMaxPredicatesPerStep::get();
+  let tail_limit = ActorMaxContractSteps::get()
+    .saturating_sub(1)
+    .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK);
+  for predicate_count in 0..=predicate_limit {
+    let step = RuntimeStep {
+      precondition: all_preconditions(transfer_matrix_predicates(predicate_count)),
+      ..make_step(Task::StopCycle)
+    };
+    let units = step
+      .precondition
+      .as_ref()
+      .map_or(0, |p| p.evaluation_units());
+    assert_eq!(
+      units, predicate_count,
+      "one current-Step evaluation, not two"
+    );
+    for tails in 0..=tail_limit {
+      let context = StepControlWeightContext {
+        cursor: 0,
+        steps_in_fragment: 1,
+        opening_tail_chunks: tails,
+        predicate_evaluation_units: units,
+      };
+      assert!(RuntimeStepControlWeight::maximum_control_weight(context, &step).is_some());
+    }
+    for steps_in_fragment in 1..=pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK {
+      let context = StepControlWeightContext {
+        cursor: 1,
+        steps_in_fragment,
+        opening_tail_chunks: 0,
+        predicate_evaluation_units: units,
+      };
+      assert!(RuntimeStepControlWeight::maximum_control_weight(context, &step).is_some());
+    }
+  }
+  let step = RuntimeStep {
+    precondition: all_preconditions(transfer_matrix_predicates(predicate_limit)),
+    ..make_step(Task::StopCycle)
   };
+  for cursor in [0, 1] {
+    for units in [predicate_limit + 1, predicate_limit * 2] {
+      let context = StepControlWeightContext {
+        cursor,
+        steps_in_fragment: 1,
+        opening_tail_chunks: 0,
+        predicate_evaluation_units: units,
+      };
+      assert_eq!(
+        RuntimeStepControlWeight::maximum_control_weight(context, &step),
+        None,
+        "cursor {cursor} must reject the unreachable {units}-unit predicate context",
+      );
+    }
+  }
+}
+
+#[test]
+fn retained_control_only_opening_profile_weights_fit_admission() {
+  use crate::configs::actor_config::{ActorMaxContractSteps, ActorMaxPredicatesPerStep};
+  type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+
+  // A necessary numeric floor over the retained no-effect Manual fixtures, not proof that
+  // these profiles cover other Tasks, Actor classes, Triggers, headers or predicate sources.
+  // Task assets are representative; this quote comparison does not execute the fixtures.
+  // Inspection/placement overlap and the final source/Weight binding need separate evidence.
+  let tails = ActorMaxContractSteps::get()
+    .saturating_sub(1)
+    .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK);
+  for opening_tail_chunks in 0..=tails {
+    let mut profiles = vec![
+      (
+        "failed",
+        Task::Unstake {
+          asset: AssetKind::Native,
+          shares: AmountResolution::Percent(Perbill::from_percent(50)),
+        },
+        W::scheduler_inner_opening_failed_max(opening_tail_chunks),
+      ),
+      (
+        "retry",
+        Task::Transfer {
+          asset: AssetKind::Local(ASSET_A),
+          to: BOB,
+          amount: AmountResolution::Fixed(1),
+        },
+        W::scheduler_inner_opening_retry_max(opening_tail_chunks),
+      ),
+      (
+        "complete",
+        Task::StopCycle,
+        W::scheduler_inner_opening_complete_max(opening_tail_chunks),
+      ),
+    ];
+    if opening_tail_chunks > 0 {
+      profiles.push((
+        "progress",
+        Task::AddLiquidity {
+          asset_a: AssetKind::Native,
+          asset_b: AssetKind::Local(ASSET_A),
+          amount_a: AmountResolution::Percent(Perbill::one()),
+          amount_b: AmountResolution::Percent(Perbill::one()),
+          min_lp_out: 1,
+        },
+        W::scheduler_inner_opening_progress_max(opening_tail_chunks),
+      ));
+    }
+    for (profile, task, retained_weight) in profiles {
+      let step = RuntimeStep {
+        precondition: all_preconditions(transfer_matrix_predicates(
+          ActorMaxPredicatesPerStep::get(),
+        )),
+        task,
+        on_error: if profile == "retry" {
+          StepErrorPolicy::RetryLater {
+            max_attempts: <Runtime as pallet_deos_actors::Config>::MaxRetryAttempts::get(),
+          }
+        } else {
+          StepErrorPolicy::AbortCycle
+        },
+      };
+      let context = StepControlWeightContext {
+        cursor: 0,
+        steps_in_fragment: 1,
+        opening_tail_chunks,
+        predicate_evaluation_units: step.precondition.as_ref().unwrap().evaluation_units(),
+      };
+      let maximum = RuntimeStepControlWeight::maximum_control_weight(context, &step).unwrap();
+      assert!(
+        retained_weight.all_lte(maximum),
+        "{profile}, tails={opening_tail_chunks}: retained profile {retained_weight:?} exceeds model {maximum:?}",
+      );
+    }
+  }
+}
+
+#[test]
+fn predicated_stop_quote_retains_conservative_receipt_allowance() {
+  use crate::configs::actor_config::{ActorMaxContractSteps, ActorMaxPredicatesPerStep};
   type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
   let step = RuntimeStep {
     precondition: all_preconditions(transfer_matrix_predicates(4)),
@@ -479,29 +690,37 @@ fn opening_completion_direct_weight_already_owns_invocation_receipt() {
     .saturating_sub(1)
     .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK)
   {
-    let count =
-      (1 + tails * pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK).min(ActorMaxContractSteps::get());
     let context = StepControlWeightContext {
       cursor: 0,
       steps_in_fragment: 1,
       opening_tail_chunks: tails,
-      predicate_evaluation_units: ActorMaxPredicatesPerStep::get() * 2,
-      opening_snapshot_entries: ((count - 1) * 2).min(ActorMaxOpeningSnapshotEntries::get()),
+      predicate_evaluation_units: ActorMaxPredicatesPerStep::get(),
     };
+    assert_eq!(
+      context.predicate_evaluation_units,
+      step.precondition.as_ref().unwrap().evaluation_units()
+    );
     let maximum = RuntimeStepControlWeight::maximum_control_weight(context, &step).unwrap();
     let execution = StepControlExecution {
       phase: StepControlPhase::Opening,
       outcome: StepControlOutcome::Completed,
-      placement: StepControlPlacement::None,
-      task_effect: TaskEffectExecution::Invoked,
+      placement: StepControlPlacement::Queue,
+      task_effect: TaskEffectExecution::NotInvoked,
       action_fee_collected: false,
     };
-    let direct = <W as WeightInfo>::scheduler_inner_opening_complete_max(tails);
+    let without =
+      RuntimeStepControlWeight::actual_control_weight(context, &step, maximum, execution).unwrap();
+    let invoked = StepControlExecution {
+      task_effect: TaskEffectExecution::Invoked,
+      ..execution
+    };
+    let with =
+      RuntimeStepControlWeight::actual_control_weight(context, &step, maximum, invoked).unwrap();
     assert_eq!(
-      RuntimeStepControlWeight::actual_control_weight(context, &step, maximum, execution),
-      Some(direct)
+      with,
+      without.saturating_add(<W as WeightInfo>::action_invocation_receipt())
     );
-    assert!(direct.all_lte(maximum));
+    assert!(with.all_lte(maximum));
     let transfer = RuntimeStep {
       task: Task::Transfer {
         asset: AssetKind::Native,
@@ -518,17 +737,18 @@ fn opening_completion_direct_weight_already_owns_invocation_receipt() {
     );
     let user = StepControlExecution {
       action_fee_collected: true,
-      ..execution
+      ..invoked
     };
     assert_eq!(
       RuntimeStepControlWeight::actual_control_weight(context, &transfer, transfer_maximum, user),
-      Some(direct.saturating_add(<W as WeightInfo>::fee_collection()))
+      Some(with.saturating_add(<W as WeightInfo>::fee_collection()))
     );
   }
 }
 
 #[test]
-fn runtime_step_control_weight_identity_commits_every_staged_production_branch() {
+fn runtime_step_control_models_bound_current_step_quotes() {
+  // These are model-algebra checks, not evidence that benchmark scopes contain physical work.
   let step = StepOf::<Runtime> {
     precondition: None,
     task: TaskOf::<Runtime>::StopCycle,
@@ -540,7 +760,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
     steps_in_fragment: 1,
     opening_tail_chunks: 0,
     predicate_evaluation_units: 0,
-    opening_snapshot_entries: 0,
   };
   let simple = RuntimeStepControlWeight::maximum_control_weight(simple_context, &step)
     .expect("the production head branch is bounded");
@@ -574,65 +793,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
   .expect("Suspended-head retry actual evidence exists");
   assert_eq!(suspended_head_retry, simple);
   assert!(suspended_head_retry.all_lte(simple));
-  let opening_heavy_retry_context = StepControlWeightContext {
-    predicate_evaluation_units: 5,
-    ..simple_context
-  };
-  let opening_heavy_retry_maximum =
-    RuntimeStepControlWeight::maximum_control_weight(opening_heavy_retry_context, &step)
-      .expect("Opening-heavy Suspended retry maximum exists");
-  let opening_heavy_retry = RuntimeStepControlWeight::actual_control_weight(
-    opening_heavy_retry_context,
-    &step,
-    opening_heavy_retry_maximum,
-    StepControlExecution {
-      task_effect: TaskEffectExecution::NotInvoked,
-      action_fee_collected: false,
-      phase: StepControlPhase::Suspended,
-      outcome: StepControlOutcome::Suspended,
-      placement: StepControlPlacement::Wakeup,
-    },
-  )
-  .expect("Opening-heavy Suspended retry actual evidence exists");
-  assert_eq!(opening_heavy_retry, opening_heavy_retry_maximum);
-  assert!(opening_heavy_retry.all_lte(opening_heavy_retry_maximum));
-  let opening_heavy_complete = RuntimeStepControlWeight::actual_control_weight(
-    opening_heavy_retry_context,
-    &step,
-    opening_heavy_retry_maximum,
-    StepControlExecution {
-      task_effect: TaskEffectExecution::NotInvoked,
-      action_fee_collected: false,
-      phase: StepControlPhase::Suspended,
-      outcome: StepControlOutcome::Completed,
-      placement: StepControlPlacement::None,
-    },
-  )
-  .expect("Opening-heavy Suspended completion actual evidence exists");
-  assert_eq!(opening_heavy_complete, opening_heavy_retry_maximum);
-  assert!(opening_heavy_complete.all_lte(opening_heavy_retry_maximum));
-  let opening_heavy_progress_context = StepControlWeightContext {
-    opening_tail_chunks: 1,
-    ..opening_heavy_retry_context
-  };
-  let opening_heavy_progress_maximum =
-    RuntimeStepControlWeight::maximum_control_weight(opening_heavy_progress_context, &step)
-      .expect("Opening-heavy Suspended progress maximum exists");
-  let opening_heavy_progress = RuntimeStepControlWeight::actual_control_weight(
-    opening_heavy_progress_context,
-    &step,
-    opening_heavy_progress_maximum,
-    StepControlExecution {
-      task_effect: TaskEffectExecution::NotInvoked,
-      action_fee_collected: false,
-      phase: StepControlPhase::Suspended,
-      outcome: StepControlOutcome::Continued,
-      placement: StepControlPlacement::Queue,
-    },
-  )
-  .expect("Opening-heavy Suspended progress actual evidence exists");
-  assert_eq!(opening_heavy_progress, opening_heavy_progress_maximum);
-  assert!(opening_heavy_progress.all_lte(opening_heavy_progress_maximum));
   let suspended_head_complete = RuntimeStepControlWeight::actual_control_weight(
     simple_context,
     &step,
@@ -676,77 +836,59 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
       steps_in_fragment: 1,
       opening_tail_chunks: 2,
       predicate_evaluation_units: 0,
-      opening_snapshot_entries: 0,
     },
     &step,
   )
   .expect("authored Opening tail reconstruction is bounded");
   assert!(simple.all_lte(two_tail_chunks));
-  let authored = RuntimeStepControlWeight::maximum_control_weight(
-    StepControlWeightContext {
-      cursor: 0,
-      steps_in_fragment: 1,
-      opening_tail_chunks: <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get()
-        .saturating_sub(1)
-        .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK),
-      predicate_evaluation_units:
-        <Runtime as pallet_deos_actors::Config>::MaxPredicatesPerStep::get().saturating_mul(2),
-      opening_snapshot_entries:
-        <Runtime as pallet_deos_actors::Config>::MaxOpeningSnapshotEntries::get(),
-    },
-    &step,
-  )
-  .expect("maximum authored Opening geometry is bounded");
   let maximum_opening_tail_chunks =
     <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get()
       .saturating_sub(1)
       .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK);
-  let opening_progress =
-    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_progress_max(
-      maximum_opening_tail_chunks,
-    );
-  let conservative_opening =
-    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_paged_execute_opening_max();
-  assert!(
-    Weight::from_parts(
-      conservative_opening
-        .ref_time()
-        .max(opening_progress.ref_time()),
-      conservative_opening
-        .proof_size()
-        .max(opening_progress.proof_size()),
+  let authored_step = RuntimeStep {
+    precondition: all_preconditions(transfer_matrix_predicates(
+      <Runtime as pallet_deos_actors::Config>::MaxPredicatesPerStep::get(),
+    )),
+    ..step.clone()
+  };
+  let authored_context = StepControlWeightContext {
+    cursor: 0,
+    steps_in_fragment: 1,
+    opening_tail_chunks: maximum_opening_tail_chunks,
+    predicate_evaluation_units: authored_step
+      .precondition
+      .as_ref()
+      .unwrap()
+      .evaluation_units(),
+  };
+  let authored = RuntimeStepControlWeight::maximum_control_weight(authored_context, &authored_step)
+    .expect("maximum current-Step predicate geometry has a quote");
+  for (outcome, placement) in [
+    (StepControlOutcome::Continued, StepControlPlacement::Queue),
+    (StepControlOutcome::Completed, StepControlPlacement::Queue),
+    (StepControlOutcome::Failed, StepControlPlacement::Queue),
+    (StepControlOutcome::Suspended, StepControlPlacement::Wakeup),
+  ] {
+    let actual = RuntimeStepControlWeight::actual_control_weight(
+      authored_context,
+      &authored_step,
+      authored,
+      StepControlExecution {
+        task_effect: TaskEffectExecution::NotInvoked,
+        action_fee_collected: false,
+        phase: StepControlPhase::Opening,
+        outcome,
+        placement,
+      },
     )
-    .all_lte(authored),
-  );
-  let authored_progress_actual = RuntimeStepControlWeight::actual_control_weight(
-    StepControlWeightContext {
-      cursor: 0,
-      steps_in_fragment: 1,
-      opening_tail_chunks: maximum_opening_tail_chunks,
-      predicate_evaluation_units:
-        <Runtime as pallet_deos_actors::Config>::MaxPredicatesPerStep::get().saturating_mul(2),
-      opening_snapshot_entries:
-        <Runtime as pallet_deos_actors::Config>::MaxOpeningSnapshotEntries::get(),
-    },
-    &step,
-    authored,
-    StepControlExecution {
-      task_effect: TaskEffectExecution::NotInvoked,
-      action_fee_collected: false,
-      phase: StepControlPhase::Opening,
-      outcome: StepControlOutcome::Continued,
-      placement: StepControlPlacement::Queue,
-    },
-  )
-  .expect("maximum Opening progress actual evidence exists");
-  assert_eq!(authored_progress_actual, authored);
-  assert!(authored_progress_actual.all_lte(authored));
+    .expect("current predicate-domain model quote exists");
+    assert!(actual.all_lte(authored));
+  }
   let minimal_opening_context = StepControlWeightContext {
     cursor: 0,
     steps_in_fragment: 1,
     opening_tail_chunks: maximum_opening_tail_chunks,
     predicate_evaluation_units: 0,
-    opening_snapshot_entries: 0,
   };
   let minimal_opening_maximum =
     RuntimeStepControlWeight::maximum_control_weight(minimal_opening_context, &step)
@@ -855,82 +997,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
     crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_user_complete_header_max(),
   );
   assert!(zero_tail_completion.all_lte(zero_tail_maximum));
-  let maximal_completion_context = StepControlWeightContext {
-    cursor: 0,
-    steps_in_fragment: 1,
-    opening_tail_chunks: maximum_opening_tail_chunks,
-    predicate_evaluation_units: <Runtime as pallet_deos_actors::Config>::MaxPredicatesPerStep::get(
-    )
-    .saturating_mul(2),
-    opening_snapshot_entries: <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get()
-      .saturating_sub(1)
-      .saturating_mul(2),
-  };
-  let maximal_completion_maximum =
-    RuntimeStepControlWeight::maximum_control_weight(maximal_completion_context, &step)
-      .expect("maximum realizable Opening completion is bounded");
-  let maximal_failed_actual = RuntimeStepControlWeight::actual_control_weight(
-    maximal_completion_context,
-    &step,
-    maximal_completion_maximum,
-    StepControlExecution {
-      task_effect: TaskEffectExecution::NotInvoked,
-      action_fee_collected: false,
-      phase: StepControlPhase::Opening,
-      outcome: StepControlOutcome::Failed,
-      placement: StepControlPlacement::None,
-    },
-  )
-  .expect("maximum Opening failure actual evidence exists");
-  assert_eq!(
-    maximal_failed_actual,
-    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_failed_max(
-      maximum_opening_tail_chunks,
-    ),
-  );
-  assert!(maximal_failed_actual.all_lte(maximal_completion_maximum));
-  let maximal_retry_actual = RuntimeStepControlWeight::actual_control_weight(
-    maximal_completion_context,
-    &step,
-    maximal_completion_maximum,
-    StepControlExecution {
-      task_effect: TaskEffectExecution::NotInvoked,
-      action_fee_collected: false,
-      phase: StepControlPhase::Opening,
-      outcome: StepControlOutcome::Suspended,
-      placement: StepControlPlacement::Wakeup,
-    },
-  )
-  .expect("maximum Opening retry actual evidence exists");
-  assert_eq!(
-    maximal_retry_actual,
-    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_retry_max(
-      maximum_opening_tail_chunks,
-    ),
-  );
-  assert!(maximal_retry_actual.all_lte(maximal_completion_maximum));
-  let maximal_completion_actual = RuntimeStepControlWeight::actual_control_weight(
-    maximal_completion_context,
-    &step,
-    maximal_completion_maximum,
-    StepControlExecution {
-      task_effect: TaskEffectExecution::NotInvoked,
-      action_fee_collected: false,
-      phase: StepControlPhase::Opening,
-      outcome: StepControlOutcome::Completed,
-      placement: StepControlPlacement::None,
-    },
-  )
-  .expect("maximum Opening completion actual evidence exists");
-  assert_eq!(
-    maximal_completion_actual,
-    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_complete_max(
-      maximum_opening_tail_chunks,
-    ),
-  );
-  assert!(maximal_completion_actual.all_lte(maximal_completion_maximum));
-  assert!(authored.ref_time() > simple.ref_time());
-  assert!(authored.proof_size() > simple.proof_size());
   let (control_limit, _) = conservative_actor_resource_limits();
   assert!(
     authored.all_lte(control_limit),
@@ -943,7 +1009,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
         steps_in_fragment: 5,
         opening_tail_chunks: 0,
         predicate_evaluation_units: 0,
-        opening_snapshot_entries: 0,
       },
       &step,
     ),
@@ -954,7 +1019,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
     steps_in_fragment: 4,
     opening_tail_chunks: 0,
     predicate_evaluation_units: 0,
-    opening_snapshot_entries: 0,
   };
   let tail_maximum = RuntimeStepControlWeight::maximum_control_weight(tail_context, &step)
     .expect("tail control maximum exists");
@@ -1062,20 +1126,23 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
 }
 
 #[test]
-fn composed_current_weight_covers_host_models_without_opening_double_charge() {
-  let step = StepOf::<Runtime> {
-    precondition: None,
-    task: TaskOf::<Runtime>::StopCycle,
-    on_error: StepErrorPolicy::AbortCycle,
-  };
+fn current_predicate_weights_cover_host_models() {
+  let step = make_step(Task::Transfer {
+    to: BOB,
+    asset: AssetKind::Native,
+    amount: AmountResolution::Fixed(1),
+  });
   let context = StepControlWeightContext {
     cursor: 0,
     steps_in_fragment: 1,
     opening_tail_chunks: 1,
     predicate_evaluation_units: 0,
-    opening_snapshot_entries: 1,
   };
   let actual = |units, phase, cursor| {
+    let step = RuntimeStep {
+      precondition: all_preconditions(transfer_matrix_predicates(units)),
+      ..step.clone()
+    };
     let context = StepControlWeightContext {
       predicate_evaluation_units: units,
       cursor,
@@ -1101,71 +1168,29 @@ fn composed_current_weight_covers_host_models_without_opening_double_charge() {
   };
   // Generated host models: total counts 1..4; the Oracle-heavy axis counts only observations.
   let expected = [
-    Weight::from_parts(67_812_758, 5_530),
-    Weight::from_parts(131_832_444, 7_220),
-    Weight::from_parts(192_147_664, 9_859),
-    Weight::from_parts(252_462_884, 12_697),
+    Weight::from_parts(68_099_666, 5_530),
+    Weight::from_parts(130_697_712, 7_220),
+    Weight::from_parts(190_769_296, 9_859),
+    Weight::from_parts(251_559_821, 12_697),
   ];
+  let limit = <Runtime as pallet_deos_actors::Config>::MaxPredicatesPerStep::get();
+  assert_eq!(limit as usize, expected.len());
+  for units in 0..=limit {
+    let _ = actual(units, StepControlPhase::Opening, 0);
+  }
   for (phase, cursor) in [
-    (StepControlPhase::Opening, 0),
     (StepControlPhase::Running, 1),
     (StepControlPhase::Suspended, 0),
     (StepControlPhase::Suspended, 1),
   ] {
     let baseline = actual(0, phase, cursor);
-    for units in 1..=8 {
+    for units in 1..=limit {
       let delta = actual(units, phase, cursor)
         .checked_sub(&baseline)
         .expect("predicate delta remains non-negative");
-      let host_model = expected[(units.min(4) - 1) as usize];
-      if matches!(phase, StepControlPhase::Opening) && cursor == 0 {
-        assert_eq!(delta, host_model);
-      } else {
-        assert!(delta.all_lte(host_model));
-      }
+      let host_model = expected[(units - 1) as usize];
+      assert!(delta.all_lte(host_model));
     }
-  }
-}
-
-#[test]
-fn opening_snapshot_weight_remains_constant_for_zero_geometry() {
-  use crate::configs::actor_config::ActorMaxOpeningSnapshotEntries;
-  let step = StepOf::<Runtime> {
-    precondition: all_preconditions(vec![pallet_deos_actors::Predicate::BlockNumberAbove {
-      threshold: u32::MAX,
-    }]),
-    task: TaskOf::<Runtime>::StopCycle,
-    on_error: StepErrorPolicy::AbortCycle,
-  };
-  let actual = |entries| {
-    let context = StepControlWeightContext {
-      cursor: 0,
-      steps_in_fragment: 1,
-      opening_tail_chunks: 1,
-      predicate_evaluation_units: 1,
-      opening_snapshot_entries: entries,
-    };
-    let maximum = RuntimeStepControlWeight::maximum_control_weight(context, &step).unwrap();
-    let actual = RuntimeStepControlWeight::actual_control_weight(
-      context,
-      &step,
-      maximum,
-      StepControlExecution {
-        task_effect: TaskEffectExecution::NotInvoked,
-        action_fee_collected: false,
-        phase: StepControlPhase::Opening,
-        outcome: StepControlOutcome::Continued,
-        placement: StepControlPlacement::Queue,
-      },
-    )
-    .unwrap();
-    assert!(actual.all_lte(maximum));
-    actual
-  };
-  let baseline = actual(0);
-  assert!(baseline.ref_time() > 0);
-  for count in 1..=ActorMaxOpeningSnapshotEntries::get() {
-    assert_eq!(actual(count), baseline);
   }
 }
 
@@ -1185,10 +1210,9 @@ fn system_transfer_steps(target_actor_id: ActorId) -> pallet_deos_actors::Contra
 
 #[test]
 fn deos_reference_actor_contract_bounds_are_structural_and_genesis_is_resource_admitted() {
-  use crate::configs::actor_config::{ActorMaxContractSteps, ActorMaxOpeningSnapshotEntries};
+  use crate::configs::actor_config::ActorMaxContractSteps;
 
   assert_eq!(ActorMaxContractSteps::get(), 12);
-  assert_eq!(ActorMaxOpeningSnapshotEntries::get(), 24);
   seeded_test_ext().execute_with(|| {
     let service = Actors::guaranteed_actor_service_weight().expect("reference service exists");
     let mut system_contracts = 0u32;
@@ -1265,133 +1289,6 @@ fn maximum_current_state_contract_is_selected_by_complete_contract_weight() {
   assert!(sparse_required.all_lte(dense_required));
   assert!(sparse_required != dense_required);
   assert!(dense_required.all_lte(service));
-}
-
-#[test]
-fn pre_g5_waiting_selector_is_finite_contained_and_genesis_fit() {
-  #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-  enum TransitionCell {
-    OpeningDirectWaiting,
-    RunningDirectWaiting,
-    SuspendedDirectWaiting,
-    TemporalDirectWaiting,
-    UnmatchedWakeup,
-    PopulatedTerminal,
-    QueueOrUnsignaled,
-  }
-
-  #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-  enum WaitingOwner {
-    InclusiveDirect,
-    Publication,
-    Removal,
-    None,
-  }
-
-  let owner = |cell| match cell {
-    TransitionCell::OpeningDirectWaiting
-    | TransitionCell::RunningDirectWaiting
-    | TransitionCell::SuspendedDirectWaiting
-    | TransitionCell::TemporalDirectWaiting => WaitingOwner::InclusiveDirect,
-    TransitionCell::UnmatchedWakeup => WaitingOwner::Publication,
-    TransitionCell::PopulatedTerminal => WaitingOwner::Removal,
-    TransitionCell::QueueOrUnsignaled => WaitingOwner::None,
-  };
-  let matrix = [
-    (
-      TransitionCell::OpeningDirectWaiting,
-      WaitingOwner::InclusiveDirect,
-    ),
-    (
-      TransitionCell::RunningDirectWaiting,
-      WaitingOwner::InclusiveDirect,
-    ),
-    (
-      TransitionCell::SuspendedDirectWaiting,
-      WaitingOwner::InclusiveDirect,
-    ),
-    (
-      TransitionCell::TemporalDirectWaiting,
-      WaitingOwner::InclusiveDirect,
-    ),
-    (TransitionCell::UnmatchedWakeup, WaitingOwner::Publication),
-    (TransitionCell::PopulatedTerminal, WaitingOwner::Removal),
-    (TransitionCell::QueueOrUnsignaled, WaitingOwner::None),
-  ];
-  for (cell, expected) in matrix {
-    assert_eq!(owner(cell), expected, "selector mismatch for {cell:?}");
-  }
-
-  let component_max = |left: Weight, right: Weight| {
-    Weight::from_parts(
-      left.ref_time().max(right.ref_time()),
-      left.proof_size().max(right.proof_size()),
-    )
-  };
-  let publication = Weight::from_parts(5_131_223_000, 76_618);
-  for actual in [
-    Weight::from_parts(5_083_590_000, 76_246),
-    Weight::from_parts(5_119_839_000, 76_618),
-    Weight::from_parts(5_123_540_000, 74_057),
-    Weight::from_parts(5_131_223_000, 74_993),
-  ] {
-    assert!(actual.all_lte(publication));
-  }
-  let removal = Weight::from_parts(8_078_069_000, 96_741);
-  for actual in [
-    Weight::from_parts(2_620_804_000, 18_665),
-    Weight::from_parts(2_891_826_000, 33_564),
-    Weight::from_parts(8_078_069_000, 96_741),
-    Weight::from_parts(6_846_035_000, 76_112),
-    Weight::from_parts(3_311_590_000, 21_030),
-  ] {
-    assert!(actual.all_lte(removal));
-  }
-
-  seeded_test_ext().execute_with(|| {
-    let service = Actors::guaranteed_actor_service_weight().expect("reference service exists");
-    let prefix = Actors::scheduler_admission_overhead();
-    let cleanup = Actors::close_dispatch_weight_upper();
-    let mut current_genesis_maximum = Weight::zero();
-    let mut selected_genesis_maximum = Weight::zero();
-    let mut system_contracts = 0u32;
-    for (actor_id, state) in pallet_deos_actors::ActorSemanticStates::<Runtime>::iter() {
-      let pallet_deos_actors::ActorSemanticState::Active(record) = state else {
-        continue;
-      };
-      if record.identity.actor_class.actor_type() != ActorType::System {
-        continue;
-      }
-      let contract = Actors::actor_contract(actor_id).expect("genesis System Contract exists");
-      assert_eq!(contract.steps.len(), 1, "requalify changed genesis geometry");
-      let direct = Actors::contract_steps_admission_weight_upper(ActorType::System, &contract.steps);
-      let step = direct
-        .checked_sub(&prefix.saturating_add(cleanup))
-        .expect("canonical admission envelope contains its scheduler owners");
-      let unmatched_publication = prefix
-        .saturating_add(publication)
-        .saturating_add(step)
-        .saturating_add(cleanup);
-      let selected = component_max(component_max(direct, unmatched_publication), removal);
-      current_genesis_maximum = component_max(current_genesis_maximum, direct);
-      selected_genesis_maximum = component_max(selected_genesis_maximum, selected);
-      assert!(selected.all_lte(service), "actor_id={actor_id}, selected={selected:?}");
-      system_contracts = system_contracts.saturating_add(1);
-    }
-    assert!(system_contracts > 0);
-    assert_eq!(
-      current_genesis_maximum,
-      Weight::from_parts(14_855_742_741, 148_943),
-    );
-    assert_eq!(
-      selected_genesis_maximum,
-      Weight::from_parts(19_986_965_741, 225_561),
-    );
-    assert!(selected_genesis_maximum.all_lte(service));
-    println!(
-      "ACTOR_PRE_G5_WAITING_SELECTOR_V1 current={current_genesis_maximum:?} selected={selected_genesis_maximum:?} service={service:?}"
-    );
-  });
 }
 
 #[test]
@@ -2000,7 +1897,7 @@ fn paid_user_long_cycle_preserves_fifo_under_queue_pressure_and_closes_insolvent
 #[derive(Clone)]
 pub(super) struct RuntimeSchedule {
   trigger: pallet_deos_actors::TriggerOf<Runtime>,
-  cooldown_blocks: u32,
+  pub(super) cooldown_blocks: u32,
 }
 type Schedule = RuntimeSchedule;
 type RuntimeSourceFilter = SourceFilterOf<Runtime>;
@@ -2349,7 +2246,7 @@ fn actor_0_7_storage_schema_is_a_fresh_genesis_baseline() {
   });
 }
 
-fn ensure_actor_prepass_context() {
+pub(super) fn ensure_actor_prepass_context() {
   if crate::Timestamp::get() == 0 {
     set_consensus_timestamp(1);
   }
@@ -2573,6 +2470,7 @@ fn user_active_contract(
     window,
     steps,
     completion: pallet_deos_actors::CompletionPolicy::Persistent,
+    parked_balance_activation: None,
     funding: pallet_deos_actors::FundingSourcePolicy::OwnerOnly,
     auto_close_at_cycle_nonce: None,
   })
@@ -2589,6 +2487,7 @@ fn system_active_contract(
     window,
     steps,
     completion: pallet_deos_actors::CompletionPolicy::Persistent,
+    parked_balance_activation: None,
     funding: pallet_deos_actors::FundingSourcePolicy::RuntimePolicy,
     auto_close_at_cycle_nonce: None,
   })
@@ -2840,6 +2739,7 @@ fn genesis_anchors_are_sealed_immutable_system_actors() {
         steps: plan.clone(),
         funding: FundingSourcePolicy::RuntimePolicy,
         completion: CompletionPolicy::Persistent,
+        parked_balance_activation: None,
         auto_close_at_cycle_nonce: None,
       };
       assert_noop!(
@@ -3370,10 +3270,9 @@ fn profile_contract_storage_footprint() {
         .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK) as usize
     );
     println!(
-      "CONTRACT_GEOMETRY_PROFILE steps={} funding={} opening={} short_head={} short_certificate={} short_tail_chunks={} short_tail_bytes={} max_head={} max_certificate={} max_tail_chunks={} max_tail_bytes={}",
+      "CONTRACT_GEOMETRY_PROFILE steps={} funding={} short_head={} short_certificate={} short_tail_chunks={} short_tail_bytes={} max_head={} max_certificate={} max_tail_chunks={} max_tail_bytes={}",
       step_count,
       <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(),
-      <Runtime as pallet_deos_actors::Config>::MaxOpeningSnapshotEntries::get(),
       short.0,
       short.1,
       short.2,
@@ -3399,6 +3298,7 @@ fn productive_run_completion_closes_runtime_actor_after_committed_transfer() {
       window: None,
       steps: transfer_contract_steps(BOB, AssetKind::Native, amount),
       completion: CompletionPolicy::CloseAfterProductiveCycle,
+      parked_balance_activation: None,
       funding: FundingSourcePolicy::RuntimePolicy,
       auto_close_at_cycle_nonce: None,
     };
@@ -3824,8 +3724,8 @@ fn system_actor_executes_native_staking_lp_donation_task() {
         usage.user_dispatch_used()
       ),
       (
-        Weight::from_parts(2_383_000_000, 35_230),
-        Weight::from_parts(1_207_428_000, 14_035),
+        Weight::from_parts(5_579_303_666, 76_022),
+        Weight::from_parts(1_204_565_000, 14_035),
         Weight::zero()
       ),
       "the successful donation keeps Control and liquidity effect ownership separate"
@@ -4320,7 +4220,7 @@ fn observation_change_single_user_binds_fanout_and_scheduled_service() {
         .saturating_add(Actors::observation_fanout_ordinary_weight_upper()),
       "one ordinary page owns base, branch selection and exactly one admitted branch unit"
     );
-    assert_eq!(fanout, Weight::from_parts(76_724_897_000, 308_926));
+    assert_eq!(fanout, Weight::from_parts(74_754_351_000, 330_558));
     let state = Actors::active_actor_state(actor_id).expect("ObservationChange Actor remains");
     assert!(state.hot.pending_signal);
     assert!(state.hot.queue_ticket.is_none());
@@ -4345,8 +4245,8 @@ fn observation_change_single_user_binds_fanout_and_scheduled_service() {
         usage.user_dispatch_used()
       ),
       (
-        Weight::from_parts(1_240_805_000, 18_893),
-        Weight::from_parts(1_456_340_000, 6_196),
+        Weight::from_parts(9_004_745_000, 115_008),
+        Weight::from_parts(1_463_533_000, 6_196),
         Weight::zero()
       )
     );
@@ -4425,7 +4325,7 @@ fn crossing_single_user_fire_binds_executed_detector_latch_control() {
     use pallet_deos_actors::WeightInfo as _;
     assert_eq!(
       consumed,
-      Weight::from_parts(15_615_014_000, 376_556)
+      Weight::from_parts(15_474_645_000, 376_556)
         .saturating_add(W::crossing_selection_probe().saturating_mul(3)),
       "the generated Crossing worker owners must settle the complete one-Actor detector/latch path"
     );
@@ -4463,12 +4363,12 @@ fn crossing_single_user_fire_binds_executed_detector_latch_control() {
       .usage();
     assert_eq!(
       usage.actor_control_used(),
-      Weight::from_parts(1_240_805_000, 18_893),
-      "the next-block prepass and one funded User service own the complete Control charge"
+      Weight::from_parts(9_004_745_000, 115_008),
+      "the next-block prepass includes mandatory Deadline and final Service discovery, genesis cadence initialization and full funded User Control"
     );
     assert_eq!(
       usage.actor_effect_used(),
-      Weight::from_parts(1_456_340_000, 6_196),
+      Weight::from_parts(1_463_533_000, 6_196),
       "the Transfer effect remains separate from detector and service Control"
     );
     assert_eq!(Balances::free_balance(BOB), recipient_before + 1);
@@ -4603,22 +4503,12 @@ fn crossing_prepass_materialization_rate_follows_the_materialization_family_rota
       "executed per-block materialization must stay within the transition candidate cap {cap}: {per_block:?}"
     );
     assert_eq!(
-      per_block[..3],
-      [5u32, 8, 8],
-      "the first two-family rotation must spend the released wakeup reservation on reachable Crossing work: {per_block:?}"
-    );
-    assert_eq!(
-      per_block[3..7],
-      [8u32, 8, 8, 3],
-      "the steady two-family rotation must alternate the aggregate and rotated Crossing grants: {per_block:?}"
-    );
-    assert_eq!(
-      per_block[7],
-      0,
-      "the completed cohort must stop on the next rotation phase: {per_block:?}"
+      per_block[..9],
+      [5u32, 6, 6, 6, 6, 6, 6, 6, 1],
+      "both families share only the remainder after mandatory Deadline work and finalization headroom: {per_block:?}"
     );
     assert!(
-      per_block[7..].iter().all(|materialized| *materialized == 0),
+      per_block[9..].iter().all(|materialized| *materialized == 0),
       "materialization stops exactly once the cohort is served: {per_block:?}"
     );
     assert!(
@@ -4641,11 +4531,9 @@ fn crossing_prepass_materialization_rate_follows_the_materialization_family_rota
 ///
 /// Establishes: one scalar candidate needs a generated reservation of
 /// `base + probe + selection + placed + fault` and settles `base + probe + selection + placed`;
-/// the executed richest rotation block settles the aggregate owner plus six classification probes
-/// and leaves less than one further work probe, so the component counter cap is not the operative
-/// stop; the first-served five-candidate block settles three generated pair envelopes plus nine
-/// bounded probes. Mandatory Service work may share later prepass phases once the first
-/// materialized ticket becomes eligible in B+1.
+/// the first-served five-candidate block settles three generated pair envelopes plus nine probes.
+/// Later whole-prepass usage also contains Deadline discovery and B+1 Service, so it cannot
+/// identify a Crossing-only grant or settlement by subtracting an idle baseline.
 #[test]
 fn crossing_materialization_reservation_boundaries_reconcile_executed_yield() {
   use pallet_deos_actors::WeightInfo as _;
@@ -4847,70 +4735,43 @@ fn crossing_materialization_reservation_boundaries_reconcile_executed_yield() {
   let yields: Vec<u32> = work_rows.iter().map(|row| row.0).collect();
   assert_eq!(
     yields,
-    vec![5, 8, 8, 8],
-    "the two-family coordinator must spend the released wakeup reservation through alternating Crossing grants"
+    vec![5, 6, 6, 6],
+    "mandatory Deadline service and finalization leave a bounded shared materialization remainder"
   );
 
   let control_limit = BlockResourceBudgetValue::get().limits().actor_control();
   let cutoff = ActorsWeight::scheduler_on_initialize_cutoff();
   let coordinator = ActorsWeight::materialization_coordinator_base();
+  let mandatory_overhead = cutoff
+    .saturating_add(coordinator)
+    .saturating_add(ActorsWeight::dependency_scan_source_probe())
+    .saturating_add(ActorsWeight::classify_due_block_deadline())
+    .saturating_add(ActorsWeight::classify_due_tick_deadline())
+    .saturating_add(ActorsWeight::scheduler_on_idle_base())
+    .saturating_add(ActorsWeight::block_resource_finalize());
   let materialization_budget = control_limit
-    .proof_size()
-    .saturating_sub(cutoff.proof_size())
-    .saturating_sub(coordinator.proof_size());
-
-  // Rotated-last Crossing: the eight-candidate aggregate owner settles, and the whole
-  // grant residue is below one further admission probe, so an unbounded component counter could
-  // not admit another candidate under the executed grant.
-  let phase_c_control = work_rows[2].1.proof_size();
-  let phase_c_family_total = phase_c_control
-    .saturating_sub(cutoff.proof_size())
-    .saturating_sub(coordinator.proof_size());
-  let phase_c_residue = materialization_budget.saturating_sub(phase_c_family_total);
-  let phase_c_increment = phase_c_control.saturating_sub(empty_rows[2].1.proof_size());
-  println!(
-    "CROSSING_RECONCILIATION_V1 phase_c budget={materialization_budget} family_total={phase_c_family_total} residue={phase_c_residue} increment={phase_c_increment}"
-  );
+    .saturating_sub(mandatory_overhead)
+    .proof_size();
+  let finalization =
+    ActorsWeight::scheduler_on_idle_base().saturating_add(ActorsWeight::block_resource_finalize());
   assert!(
-    phase_c_increment
-      >= placed_maximum
-        .proof_size()
-        .saturating_add(probe.proof_size() * 3),
-    "the aggregate owner and three bounded classification probes are the materialization floor; B+1 Service may add mandatory control work"
-  );
-  assert!(
-    phase_c_residue < probe.proof_size(),
-    "the executed rotated-last grant residue cannot fund one further admission probe"
+    work_rows
+      .iter()
+      .all(|row| row.1.saturating_add(finalization).all_lte(control_limit)),
+    "whole-prepass settlement preserves both finalization dimensions"
   );
 
-  // Fanout-first rotation reserves the Crossing minimum for the first family. Once quiescent
-  // fanout returns its grant, Crossing admits the aggregate batch with bounded probes.
+  // Independently test the smaller first-family grant. Whole-prepass usage is not a
+  // Crossing-only measurement once B+1 Service competes for the remaining Control.
   let phase_b_grant =
     materialization_budget.saturating_sub(Actors::materialization_family_minimum(0).proof_size());
-  let phase_b_increment = work_rows[1]
-    .1
-    .proof_size()
-    .saturating_sub(empty_rows[1].1.proof_size());
-  println!(
-    "CROSSING_RECONCILIATION_V1 phase_b grant={phase_b_grant} increment={phase_b_increment}"
-  );
+  println!("CROSSING_RECONCILIATION_V1 phase_b first_family_grant={phase_b_grant}");
   assert!(
     phase_b_grant
       < placed_maximum
         .proof_size()
         .saturating_add(fault.proof_size()),
     "the rotated-first grant cannot reach the aggregate owner's reservation"
-  );
-  assert!(
-    phase_b_increment
-      >= placed_maximum
-        .proof_size()
-        .saturating_add(probe.proof_size().saturating_mul(6))
-      && phase_b_increment
-        < placed_maximum
-          .proof_size()
-          .saturating_add(probe.proof_size().saturating_mul(7)),
-    "the released two-family grant settles one aggregate owner and six bounded probes"
   );
   seeded_test_ext().execute_with(|| {
     let _feed = install_fixture(8_107, 48, true);
@@ -4952,8 +4813,8 @@ fn crossing_materialization_reservation_boundaries_reconcile_executed_yield() {
     "the first cursor-zero block has no earlier ticket to execute"
   );
   assert!(
-    work_rows[1..].iter().all(|row| row.2 != Weight::zero()),
-    "each later phase must preserve B+1 Service progress alongside bounded materialization"
+    work_rows[1..].iter().all(|row| row.2 == Weight::zero()),
+    "this materialization-saturated horizon leaves no complete Service Control envelope; unused effect capacity cannot pay for Control"
   );
 }
 
@@ -5078,14 +4939,14 @@ fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
   println!(
     "ACTOR_REACTIVE_ENVELOPES_V1 base={base:?} branch_probe={branch_probe:?} unit={unit:?} fault={fault:?} units_per_block={units_per_block}"
   );
-  assert_eq!(base, Weight::from_parts(56_076_000, 1_629));
-  assert_eq!(branch_probe, Weight::from_parts(63_968_000, 3_587));
-  assert_eq!(unit, Weight::from_parts(76_604_853_000, 303_710));
-  assert_eq!(fault, Weight::from_parts(198_816_000, 4_106));
+  assert_eq!(base, Weight::from_parts(55_867_000, 1_629));
+  assert_eq!(branch_probe, Weight::from_parts(63_829_000, 3_587));
+  assert_eq!(unit, Weight::from_parts(74_634_655_000, 325_342));
+  assert_eq!(fault, Weight::from_parts(199_794_000, 4_106));
   assert_eq!(limit, Weight::from_parts(400_000_000_000, 1_000_000));
   assert_eq!(
-    units_per_block, 3,
-    "the generated ordinary fanout unit remains the active service limit"
+    units_per_block, 2,
+    "the generated ordinary fanout unit reaches the active ProofSize service limit"
   );
 
   let max_actors = u64::from(<Runtime as pallet_deos_actors::Config>::MaxActiveActors::get());
@@ -5099,49 +4960,36 @@ fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
 
   assert_eq!((max_actors, page_size, max_sources), (10_000, 64, 1));
   assert_eq!(subscription_pages, 157);
-  assert_eq!(dense_single_feed_units.div_ceil(units_per_block), 53);
+  assert_eq!(dense_single_feed_units.div_ceil(units_per_block), 79);
   assert_eq!(sparse_high_slot_units.div_ceil(units_per_block), 1);
-  assert_eq!(compact_four_feed_units.div_ceil(units_per_block), 53);
-  assert_eq!(quiescent_revision_race_units.div_ceil(units_per_block), 105);
+  assert_eq!(compact_four_feed_units.div_ceil(units_per_block), 79);
+  assert_eq!(quiescent_revision_race_units.div_ceil(units_per_block), 157);
 }
 
 #[test]
-fn sched_workers_static_envelope_leaves_one_actor_unit_inside_guaranteed_budget() {
+fn sched_workers_static_envelope_retains_admission_and_close_cleanup() {
   use crate::weights::pallet_deos_actors::SubstrateWeight;
   type W = SubstrateWeight<Runtime>;
   let base = W::scheduler_on_idle_base();
   let coordinator = W::materialization_coordinator_base();
   let complete_outer = crate::Actors::scheduler_complete_outer_weight_upper();
-  // Maximum fanout worker envelope: base plus one page per configured slot, capped by the limit.
-  let fanout_base = W::observation_fanout_base();
-  let fanout_page = Actors::observation_fanout_ordinary_weight_upper()
-    .saturating_add(W::record_observation_fanout_worker_fault());
+  // The complete first-page probe/unit/fault reserve is checked independently by
+  // observation_fanout_minimum_reserves_probe_page_and_fault_capacity.
   let fanout_ceiling = <Runtime as pallet_deos_actors::Config>::ObservationFanoutWeightLimit::get();
-  let fanout_per_block =
-    u64::from(<Runtime as pallet_deos_actors::Config>::MaxObservationFanoutPagesPerBlock::get());
-  let fanout_envelope = fanout_base
-    .saturating_add(fanout_page.saturating_mul(fanout_per_block))
-    .min(fanout_ceiling);
-  assert!(
-    fanout_envelope.all_lte(fanout_ceiling),
-    "fanout stays in its own envelope"
-  );
+  // Reserve the entire configured family ceiling, not a capped synthetic page multiplication.
+  let fanout_envelope = fanout_ceiling;
 
-  let crossing_base = W::crossing_worker_base();
-  let crossing_unit = W::crossing_transition_unit()
-    .saturating_add(W::crossing_leaf_unit())
-    .saturating_add(W::crossing_page_unit())
-    .saturating_add(W::crossing_actor_unit());
   let crossing_ceiling = <Runtime as pallet_deos_actors::Config>::CrossingWorkerWeightLimit::get();
-  let crossing_envelope = crossing_base
-    .saturating_add(crossing_unit)
-    .saturating_add(W::record_crossing_worker_fault());
+  let crossing_minimum = Actors::materialization_family_minimum(0);
   assert!(
-    crossing_envelope.all_lte(crossing_ceiling),
-    "one complete maximum Crossing worker unit must fit its two-dimensional envelope: base={crossing_base:?}, unit={crossing_unit:?}, combined={crossing_envelope:?}, ceiling={crossing_ceiling:?}"
+    crossing_minimum.all_lte(crossing_ceiling),
+    "Crossing minimum quantum must fit its two-dimensional family ceiling: minimum={crossing_minimum:?}, ceiling={crossing_ceiling:?}"
   );
+  // The complete family ceiling, not an arbitrary sum of alternative branch weights,
+  // participates in the on_idle reserve composition.
+  let crossing_envelope = crossing_ceiling;
 
-  // One maximum actor unit: admission overhead plus one full cycle admission plus pure cleanup.
+  // Admission/probe overhead plus pure close cleanup; a full Step and its effect are not included.
   let actor_unit = crate::Actors::scheduler_admission_overhead()
     .saturating_add(crate::Actors::close_dispatch_weight_upper())
     .max(complete_outer);
@@ -5156,7 +5004,7 @@ fn sched_workers_static_envelope_leaves_one_actor_unit_inside_guaranteed_budget(
     .saturating_add(crate::Actors::materialization_family_minimum(1));
   assert!(
     minimum_quanta.all_lte(shared_materialization),
-    "the shared envelope must admit one maximum unit from every family"
+    "the shared envelope must admit one minimum quantum from every family"
   );
   assert!(
     minimum_quanta.ref_time() < shared_materialization.ref_time()
@@ -5181,7 +5029,7 @@ fn sched_workers_static_envelope_leaves_one_actor_unit_inside_guaranteed_budget(
   );
   assert!(
     actor_unit.all_lte(actor_service),
-    "dense materialization must retain one maximum Actor service unit: actor={actor_unit:?}, floor={actor_service:?}"
+    "dense materialization must retain admission overhead plus pure close cleanup: actor={actor_unit:?}, floor={actor_service:?}"
   );
   let combined = base
     .saturating_add(coordinator)
@@ -5191,7 +5039,7 @@ fn sched_workers_static_envelope_leaves_one_actor_unit_inside_guaranteed_budget(
     .saturating_add(actor_unit);
   assert!(
     combined.all_lte(reserve),
-    "fixed base + coordinator + complete outer owner + one Crossing unit + max fanout worker + one max actor unit must fit ActorOnIdleReserve: base={base:?}, coordinator={coordinator:?}, outer={complete_outer:?}, crossing={crossing_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, combined={combined:?}, reserve={reserve:?}"
+    "fixed base + coordinator + complete outer owner + full Crossing and fanout family ceilings + admission/close unit must fit ActorOnIdleReserve: base={base:?}, coordinator={coordinator:?}, outer={complete_outer:?}, crossing={crossing_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, combined={combined:?}, reserve={reserve:?}"
   );
   println!(
     "SCHED-WORKERS: base={base:?}, coordinator={coordinator:?}, outer={complete_outer:?}, crossing={crossing_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, floor={actor_service:?}, combined={combined:?}, reserve={reserve:?}"
@@ -6337,6 +6185,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         window: None,
         steps: plan,
         completion: pallet_deos_actors::CompletionPolicy::Persistent,
+        parked_balance_activation: None,
         funding: FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: None,
       },
@@ -6359,8 +6208,8 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         first_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(4_856_797_000, 44_130),
-        Weight::from_parts(3_909_404_000, 19_253)
+        Weight::from_parts(9_537_426_000, 116_111),
+        Weight::from_parts(3_973_924_000, 19_253)
       )
     );
     let continuation = Actors::actor_run_state(actor_id).expect("deviation suspends");
@@ -6389,8 +6238,8 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         second_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(2_383_000_000, 35_230),
-        Weight::from_parts(3_909_404_000, 19_253)
+        Weight::from_parts(9_927_802_000, 129_111),
+        Weight::from_parts(3_973_924_000, 19_253)
       ),
       "the second failure owns long-Deadline placement rather than another Service turn"
     );
@@ -6427,7 +6276,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         return_usage.actor_control_used(),
         return_usage.actor_effect_used()
       ),
-      (Weight::from_parts(3_066_933_000, 26_776), Weight::zero()),
+      (Weight::from_parts(8_382_598_000, 85_343), Weight::zero()),
       "Deadline return is Control-only and cannot execute the retry in the same block"
     );
     System::set_block_number(6);
@@ -6442,8 +6291,8 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         resumed_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(2_383_000_000, 35_230),
-        Weight::from_parts(3_909_404_000, 19_253)
+        Weight::from_parts(17_971_025_000, 212_623),
+        Weight::from_parts(3_973_924_000, 19_253)
       ),
       "returned Service owns the third failed effect separately from Deadline return"
     );
@@ -7519,6 +7368,89 @@ fn foreign_asset_preflight_enforces_exact_minimum_boundary() {
 }
 
 #[test]
+fn cadenced_module_failure_reaches_current_run_encoding_bound() {
+  use codec::MaxEncodedLen;
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let recipient = AccountId::new([173u8; 32]);
+    assert!(crate::EXISTENTIAL_DEPOSIT > 1);
+    assert_eq!(native_balance(&recipient), 0);
+    let mut steps = contract_geometry_false_steps(2);
+    steps[1] = StepOf::<Runtime> {
+      precondition: None,
+      task: Task::SplitTransfer {
+        asset: AssetKind::Native,
+        amount: AmountResolution::Fixed(2),
+        legs: BoundedVec::try_from(vec![
+          SplitLeg {
+            to: BOB,
+            share: Perbill::from_percent(50),
+          },
+          SplitLeg {
+            to: recipient.clone(),
+            share: Perbill::from_percent(50),
+          },
+        ])
+        .unwrap(),
+      },
+      on_error: StepErrorPolicy::RetryLater { max_attempts: 2 },
+    };
+    let actor_id = create_user(ALICE, cadenced_schedule(1), None, steps);
+    fund_native(actor_id, 1_000_000_000_000_000);
+    for _ in 0..8 {
+      run_next_current_idle(Weight::MAX);
+      if Actors::actor_hot(actor_id)
+        .is_some_and(|hot| hot.cycle_state == pallet_deos_actors::CycleState::Suspended)
+      {
+        break;
+      }
+    }
+    let run =
+      Actors::actor_run_state(actor_id).expect("ordinary cadence and SplitTransfer retain a Run");
+    assert_eq!(run.cursor, 1);
+    assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+    assert!(
+      run.last_committed_step_block.is_some(),
+      "the skipped prefix is committed"
+    );
+    assert_eq!(
+      run.suspension,
+      Some(pallet_deos_actors::SuspensionReason::Temporary)
+    );
+    assert_eq!(
+      run.last_step_outcome,
+      Some(StepOutcome::Failed(
+        pallet_deos_actors::TaskFailure::temporary(Error::<Runtime>::RecipientDepositUnavailable),
+      ))
+    );
+    assert_eq!(native_balance(&recipient), 0);
+    assert!(!Actors::pending_signal(actor_id));
+    assert!(Actors::trigger_deadline_handles(actor_id).is_some());
+    assert_eq!(
+      Actors::actor_processes(actor_id).unwrap().residence,
+      Some(ProcessResidence::Service(
+        pallet_deos_actors::ServiceResidenceKind::Live
+      ))
+    );
+
+    // The reference runtime uses fixed-width counters and blocks. Every optional field is
+    // populated, including the maximum DispatchError variant from an actual host refusal.
+    assert_eq!(
+      run.encoded_size(),
+      pallet_deos_actors::ActorRunStateOf::<Runtime>::max_encoded_len()
+    );
+    // This counterfactual is in-memory size comparison only, never fabricated stored authority.
+    let mut funding = run.clone();
+    funding.last_step_outcome = Some(StepOutcome::FundingUnavailable);
+    funding.suspension = Some(pallet_deos_actors::SuspensionReason::FundingUnavailable);
+    assert!(
+      funding.encoded_size() < run.encoded_size(),
+      "funding-only busy fixtures do not cover the largest current Run encoding"
+    );
+  });
+}
+
+#[test]
 fn split_transfer_rejects_ed_ineligible_recipient_then_retries_atomically() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -7999,6 +7931,81 @@ fn split_transfer_legs_to_actor_sovereigns_notify_through_certified_ingress() {
       Actors::pending_signal(receiver_b),
       "second SplitTransfer leg to an Actors sovereign must latch readiness"
     );
+  });
+}
+
+#[test]
+fn four_leg_split_transfer_closes_expired_recipient_during_prepass_service() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let receivers = (0..4)
+      .map(|_| {
+        create_user(
+          ALICE,
+          on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+          Some(ScheduleWindow { start: 1, end: 101 }),
+          BoundedVec::try_from(vec![make_step(inert_task())]).expect("plan fits"),
+        )
+      })
+      .collect::<Vec<_>>();
+    let recipient_accounts = receivers.iter().map(|actor_id| actor_account(*actor_id)).collect::<Vec<_>>();
+    let legs = SplitTransferLegsOf::<Runtime>::try_from(
+      recipient_accounts
+        .iter()
+        .map(|recipient| SplitLeg {
+          to: recipient.clone(),
+          share: Perbill::from_percent(25),
+        })
+        .collect::<Vec<_>>(),
+    )
+    .expect("four recipient legs fit");
+    let sender = create_system(
+      CHARLIE,
+      manual_schedule(),
+      None,
+      BoundedVec::try_from(vec![make_step(Task::SplitTransfer {
+        asset: AssetKind::Native,
+        amount: AmountResolution::Fixed(40_000),
+        legs,
+      })])
+      .expect("sender plan fits"),
+    );
+    fund_native(sender, 100_000_000_000_000);
+    System::set_block_number(101);
+    assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), sender));
+    advance_idle_block();
+    ensure_current_resource_state();
+    assert!(
+      receivers.iter().all(|actor_id| Actors::active_actor_state(*actor_id).is_none()),
+      "complete Prepass and its Service turn settle all four expiries"
+    );
+    let events = crate::System::events();
+    let sender_account = actor_account(sender);
+    let closed_during_transfer = receivers
+      .iter()
+      .zip(recipient_accounts.iter())
+      .filter(|(actor_id, recipient)| {
+        let transfer_index = events.iter().position(|record| matches!(
+          &record.event,
+          RuntimeEvent::Balances(polkadot_sdk::pallet_balances::Event::Transfer { from, to, amount })
+            if from == &sender_account && to == *recipient && *amount == 10_000
+        ));
+        let close_index = events.iter().position(|record| matches!(
+          &record.event,
+          RuntimeEvent::Actors(pallet_deos_actors::Event::ActorClosed { actor_id: closed, reason: CloseReason::WindowExpired })
+            if closed == *actor_id
+        ));
+        transfer_index.zip(close_index).is_some_and(|(transfer, close)| transfer < close)
+      })
+      .count();
+    assert!(closed_during_transfer > 0, "one expired recipient must close after its Task ledger transfer inside the sender's admitted Prepass Service turn");
+    Actors::on_idle(System::block_number(), Weight::MAX);
+    assert!(crate::System::events().iter().any(|record| matches!(
+      &record.event,
+      RuntimeEvent::Actors(pallet_deos_actors::Event::SplitTransferExecuted { actor_id, legs: 4, .. })
+        if *actor_id == sender
+    )));
+    assert!(receivers.iter().all(|actor_id| Actors::active_actor_state(*actor_id).is_none()));
   });
 }
 
@@ -9088,17 +9095,88 @@ fn liquidity_tasks_use_separate_generated_runtime_weights() {
 }
 
 #[test]
-fn wakeup_registration_admission_uses_generated_runtime_weights() {
+fn mandatory_deadline_reservation_composes_both_clock_branch_maxima() {
+  type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+  let maximum = |branches: &[Weight]| {
+    branches
+      .iter()
+      .copied()
+      .fold(Weight::zero(), |acc, branch| acc.max(branch))
+  };
+  // The shared review ceiling conservatively includes separately serviced pending-event owners.
+  let review = maximum(&[
+    W::process_due_observation_availability_review(),
+    W::process_due_observation_availability_review_deep_index(),
+    W::process_due_observation_predicate_review(),
+    W::process_due_observation_predicate_review_deep_index(),
+    W::process_due_parked_balance_review(),
+    W::process_due_parked_balance_review_deep_index(),
+    W::process_pending_parked_balance_event(),
+    W::process_pending_observation_availability_event(),
+    W::process_pending_observation_predicate_event(),
+  ]);
+  let block = maximum(&[
+    W::return_due_block_deadline_to_service(),
+    W::return_due_block_deadline_to_service_deep_index(),
+    review,
+  ]);
+  let tick = maximum(&[
+    W::at_time_trigger_occurrence(),
+    W::cadenced_trigger_occurrence(),
+    W::cadenced_running_rearm(),
+    W::cadenced_suspended_service_rearm(),
+    W::cadenced_suspended_deadline_rearm(),
+    review,
+  ]);
+  let required = W::classify_due_block_deadline()
+    .saturating_add(block)
+    .saturating_add(W::classify_due_tick_deadline())
+    .saturating_add(tick);
+  assert_eq!(
+    Actors::deadline_service_weight_upper(),
+    required,
+    "mandatory Prepass must reserve each clock selector plus its independent branch maximum"
+  );
+  assert!(
+    required.all_lte(BlockResourceBudgetValue::get().limits().actor_control()),
+    "the two-clock reservation must fit Actor Control in both dimensions"
+  );
+}
+
+#[test]
+fn service_outer_and_mandatory_deadline_branches_fit_their_own_budgets() {
   seeded_test_ext().execute_with(|| {
-    let expected =
-      <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_append_new_page()
-        .saturating_add(
-          <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_cursor_insert(),
-        )
-        .saturating_add(
-          <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_cursor_remove_exact(),
-        );
-    assert_eq!(Actors::wakeup_registration_weight_upper(), expected);
+    type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    let service_outer = Actors::scheduler_complete_outer_weight_upper();
+    for branch in [
+      W::scheduler_service_retry_to_deadline(),
+      W::scheduler_service_retry_to_deadline_new_key(),
+      // Retained conservative Service selector entries; the live due return is Prepass-owned.
+      W::scheduler_due_deadline_to_service(),
+      W::scheduler_due_deadline_to_service_deep_index(),
+    ] {
+      assert!(
+        branch.all_lte(service_outer),
+        "Service selector must fit: {branch:?}"
+      );
+    }
+    let mandatory_deadline = Actors::deadline_service_weight_upper();
+    for branch in [
+      W::return_due_block_deadline_to_service(),
+      W::return_due_block_deadline_to_service_deep_index(),
+    ] {
+      assert!(
+        branch.all_lte(mandatory_deadline),
+        "Prepass branch must fit: {branch:?}"
+      );
+    }
+    let actor_control = <BlockResourceBudgetValue as polkadot_sdk::frame_support::traits::Get<
+      pallet_deos_actors::BlockResourceBudget,
+    >>::get()
+    .limits()
+    .actor_control();
+    assert!(service_outer.all_lte(actor_control));
+    assert!(mandatory_deadline.all_lte(actor_control));
   });
 }
 
@@ -9260,6 +9338,141 @@ fn oracle_dependency_adapter_covers_every_state_cause_without_subscriber_travers
 }
 
 #[test]
+fn manual_observation_profile_uses_production_oracle_revisions_and_current_due_comparison() {
+  use crate::configs::oracle_config::{deos_router_pool_feed, ensure_deos_router_pool_feeds};
+
+  synthetic_actor_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let asset_in = AssetKind::Native;
+    let asset_out = AssetKind::Local(1);
+    ensure_deos_router_pool_feeds(asset_in, asset_out).expect("reference feed is registered");
+    let feed = deos_router_pool_feed(asset_in, asset_out);
+    let producer = deos_router_account();
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer.clone()),
+      feed,
+      5,
+    ));
+    let precondition = Precondition {
+      clauses: BoundedVec::try_from(vec![
+        BoundedVec::try_from(vec![Predicate::ObservationAbove {
+          feed,
+          threshold: 10,
+          max_age_blocks: 100,
+        }])
+        .expect("one observation predicate fits"),
+      ])
+      .expect("one observation clause fits"),
+    };
+    let steps = BoundedVec::try_from(vec![StepOf::<Runtime> {
+      precondition: Some(precondition),
+      task: Task::StopCycle,
+      on_error: StepErrorPolicy::AbortCycle,
+    }])
+    .expect("one observation-gated Step fits");
+    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
+
+    let post = Actors::manual_trigger(RuntimeOrigin::root(), actor_id)
+      .expect("false current comparison enters observation Park");
+    assert_eq!(
+      post.actual_weight,
+      Some(<Runtime as pallet_deos_actors::Config>::WeightInfo::manual_observation_park())
+    );
+    assert!(matches!(
+      pallet_deos_actors::ActorProcesses::<Runtime>::get(actor_id)
+        .and_then(|process| process.residence),
+      Some(ProcessResidence::Parked(pallet_deos_actors::ParkEvidence {
+        reason: ParkNegativeReason::PredicateFalse,
+        review_at: Some(2),
+        ..
+      }))
+    ));
+    let source = pallet_deos_actors::ObservationDependencySources::<Runtime>::get(feed)
+      .expect("Manual Park binds the exact Oracle source");
+    let parked_revision = pallet_deos_actors::DependencyRevisions::<Runtime>::get(source).revision;
+    let scan_count_before_refresh =
+      pallet_deos_actors::DependencyScanSourceListState::<Runtime>::get().count;
+
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer.clone()),
+      feed,
+      5,
+    ));
+    assert_eq!(
+      pallet_deos_actors::DependencyRevisions::<Runtime>::get(source).revision,
+      parked_revision + 1,
+      "equal-value freshness is a causal revision"
+    );
+    System::set_block_number(2);
+    set_consensus_timestamp(
+      2 * primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS,
+    );
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer),
+      feed,
+      1_000_000,
+    ));
+    assert_eq!(
+      pallet_deos_actors::DependencyRevisions::<Runtime>::get(source).revision,
+      parked_revision + 2,
+      "changed value coalesces without losing the newer revision"
+    );
+    assert!(matches!(
+      <crate::configs::actor_config::TmctolObservationProvider as pallet_deos_actors::ObservationProvider<
+        primitives::OracleFeedId,
+        crate::BlockNumber,
+      >>::observe(&feed, 2, 100),
+      pallet_deos_actors::ScalarObservationState::Fresh {
+        value,
+        observed_at: 2,
+      } if value > 10
+    ));
+    assert_eq!(
+      pallet_deos_actors::DependencyScanSourceListState::<Runtime>::get().count,
+      scan_count_before_refresh,
+      "equal and changed publication retain one existing membership for this source"
+    );
+    assert!(pallet_deos_actors::DependencyScanSourceNodes::<Runtime>::contains_key(source));
+
+    run_current_idle(Weight::MAX);
+    for _ in 0..7 {
+      if matches!(
+        pallet_deos_actors::ActorProcesses::<Runtime>::get(actor_id)
+          .and_then(|process| process.residence),
+        Some(ProcessResidence::Service(
+          pallet_deos_actors::ServiceResidenceKind::Pending
+        ))
+      ) {
+        break;
+      }
+      run_next_current_idle(Weight::MAX);
+    }
+    assert_eq!(
+      pallet_deos_actors::ActorProcesses::<Runtime>::get(actor_id)
+        .and_then(|process| process.residence),
+      Some(ProcessResidence::Service(
+        pallet_deos_actors::ServiceResidenceKind::Pending
+      )),
+      "state={:?} scans={:?} deadline={:?}",
+      Actors::block_resource_state(),
+      pallet_deos_actors::DependencyScanSourceListState::<Runtime>::get(),
+      pallet_deos_actors::DeadlineHandles::<Runtime>::get(actor_id),
+    );
+    assert!(!pallet_deos_actors::DependencyTimedReviews::<Runtime>::contains_key(actor_id));
+    assert!(!pallet_deos_actors::DependencyPlans::<Runtime>::contains_key(actor_id));
+
+    run_next_current_idle(Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_state(actor_id)
+        .expect("Actor remains active")
+        .identity
+        .cycle_nonce,
+      1
+    );
+  });
+}
+
+#[test]
 fn oracle_dependency_carrier_capacity_refusal_rolls_back_registration_and_source_allocation() {
   seeded_test_ext().execute_with(|| {
     let feed = crate::configs::oracle_config::deos_router_pool_feed(
@@ -9333,6 +9546,15 @@ fn certified_ingress_inventory_is_closed_and_typed() {
       .collect::<alloc::collections::BTreeSet<_>>()
       .len();
     assert_eq!(ids.len(), unique, "producer ids must be unique");
+    let task_transfer = inventory
+      .iter()
+      .find(|producer| producer.id == "TmctolAssetOps::transfer")
+      .expect("task transfer is a certified ingress producer");
+    assert_eq!(
+      task_transfer.weight_owner,
+      "task_transfer/task_split_transfer generated weights",
+      "internal recipient ingress belongs to the invoking Task effect, not an extra source charge"
+    );
     // The runtime adapter implements the typed boundary: absent destinations are
     // balance-only no-ops for both preflight and notify.
     let event = pallet_deos_actors::AddressEvent {
@@ -10077,7 +10299,6 @@ fn running_inner_fixture_admission_frontier_is_class_neutral() {
               },
               opening_tail_chunks: if cursor == 0 { (count - 1).div_ceil(chunk) } else { 0 },
               predicate_evaluation_units: step.precondition.as_ref().map_or(0, |p| p.evaluation_units()),
-              opening_snapshot_entries: 0,
             };
             let control = RuntimeStepControlWeight::maximum_control_weight(context, step)
               .expect("authored context has a control owner");
@@ -10093,6 +10314,29 @@ fn running_inner_fixture_admission_frontier_is_class_neutral() {
             maximum_step = Weight::from_parts(maximum_step.ref_time().max(total.ref_time()), maximum_step.proof_size().max(total.proof_size()));
           }
           assert_eq!(required, overhead.checked_add(&maximum_step).and_then(|w| w.checked_add(&cleanup)).expect("admission sum fits"));
+          assert!(
+            required.all_lte(service) && full_geometry.all_lte(service),
+            "selected complete Step admission must fit both dimensions of the guaranteed Service floor: required={required:?}, full_geometry={full_geometry:?}, service={service:?}"
+          );
+          let selected_opening = overhead
+            .saturating_add(opening_control)
+            .saturating_add(opening_effect)
+            .saturating_add(cleanup);
+          assert_eq!(
+            full_geometry, selected_opening,
+            "the selected full-geometry maximum must be its effectful Opening, not an unexamined tail or outer comparator"
+          );
+          let max_split = <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as WeightInfo>::task_split_transfer(
+            <Runtime as pallet_deos_actors::Config>::MaxSplitTransferLegs::get(),
+          );
+          let split_opening = overhead
+            .saturating_add(opening_control)
+            .saturating_add(max_split)
+            .saturating_add(cleanup);
+          assert!(
+            split_opening.all_lte(service),
+            "the selected effectful Opening control plus maximum configured SplitTransfer effect and cleanup must fit Service: split={split_opening:?}, service={service:?}"
+          );
           println!("ACTOR_RUNNING_ADMISSION_V1 complete={complete} fragment={fragment} predicates={current_predicates} steps={count} target={target} opening_entries=0 funding_bound={funding} required={required:?} service={service:?} fits={} overhead={overhead:?} cleanup={cleanup:?} maximum_step={maximum_step:?} ref_cursor={ref_cursor} proof_cursor={proof_cursor} opening_control={opening_control:?} opening_effect={opening_effect:?} full_geometry={full_geometry:?}", required.all_lte(service));
         }
       }
@@ -10273,6 +10517,137 @@ fn actor_prepass_executes_mandatory_base_work_without_legacy_cutoff() {
 }
 
 #[test]
+fn mandatory_prepass_deadlines_survive_saturated_service_before_external_dispatch() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    set_consensus_timestamp(500);
+    ensure_actor_prepass_context();
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+    Actors::on_idle(1, Weight::MAX);
+    Actors::on_finalize(1);
+    let mut retry_step = make_step(Task::Transfer {
+      to: BOB,
+      asset: AssetKind::Native,
+      amount: AmountResolution::Fixed(1_000_000 * crate::EXISTENTIAL_DEPOSIT),
+    });
+    retry_step.on_error = StepErrorPolicy::RetryLater { max_attempts: 2 };
+    let mut schedule = manual_schedule();
+    schedule.cooldown_blocks = 2;
+    let sleeper = create_system(
+      ALICE,
+      schedule,
+      None,
+      BoundedVec::try_from(vec![retry_step]).unwrap(),
+    );
+    fund_native(sleeper, 1_000 * crate::EXISTENTIAL_DEPOSIT);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      sleeper
+    ));
+    System::set_block_number(2);
+    set_consensus_timestamp(1_000);
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+    assert_eq!(
+      Actors::deadline_handles(sleeper).unwrap().key,
+      WakeupKey::Block(4)
+    );
+    let run = Actors::actor_run_state(sleeper).unwrap();
+    let custody = native_balance(&actor_account(sleeper));
+    Actors::on_idle(2, Weight::MAX);
+    Actors::on_finalize(2);
+    let timer = create_system(ALICE, at_time_schedule(2), None, BoundedVec::default());
+    let residents = (0..128)
+      .map(|_| {
+        let id = create_system(
+          ALICE,
+          manual_schedule(),
+          None,
+          transfer_contract_steps(BOB, AssetKind::Native, crate::EXISTENTIAL_DEPOSIT),
+        );
+        fund_native(id, 100 * crate::EXISTENTIAL_DEPOSIT);
+        assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+        id
+      })
+      .collect::<Vec<_>>();
+    System::set_block_number(4);
+    set_consensus_timestamp(2_000);
+    let consumed = Actors::actor_prepass(RuntimeOrigin::none())
+      .unwrap()
+      .actual_weight
+      .unwrap();
+    assert!(Actors::deadline_handles(sleeper).is_none());
+    assert!(Actors::trigger_deadline_handles(timer).is_none());
+    assert_eq!(Actors::actor_run_state(sleeper), Some(run));
+    assert_eq!(native_balance(&actor_account(sleeper)), custody);
+    for id in [sleeper, timer] {
+      assert_eq!(Actors::service_nodes(id).unwrap().eligible_from, 5);
+      assert_eq!(Actors::actor_identity(id).unwrap().cycle_nonce, 0);
+    }
+    let completed = residents
+      .iter()
+      .filter(|id| Actors::actor_identity(**id).unwrap().cycle_nonce == 1)
+      .count();
+    assert!(
+      completed > 0 && completed < residents.len(),
+      "ordinary Service remains resource-saturated"
+    );
+    let state = Actors::block_resource_state().unwrap();
+    assert_eq!(
+      state.phase(),
+      pallet_deos_actors::BlockResourcePhase::ExternalPhase
+    );
+    assert_eq!(state.outstanding_reservations(), 0);
+    assert!(
+      !state.optional_actor_work_halted(),
+      "capacity exhaustion is not an accounting fault"
+    );
+    let prepass_used = state
+      .usage()
+      .actor_control_used()
+      .saturating_add(state.usage().actor_effect_used());
+    assert_eq!(
+      consumed, prepass_used,
+      "hook actual and owning domains reconcile before external dispatch"
+    );
+    assert!(
+      consumed.all_lte(
+        BlockResourceBudgetValue::get()
+          .limits()
+          .actor_control()
+          .saturating_add(BlockResourceBudgetValue::get().limits().actor_base_turn())
+      )
+    );
+    let finalization = <Runtime as pallet_deos_actors::Config>::WeightInfo::scheduler_on_idle_base(
+    )
+    .saturating_add(<Runtime as pallet_deos_actors::Config>::WeightInfo::block_resource_finalize());
+    assert!(
+      state
+        .usage()
+        .actor_control_used()
+        .saturating_add(finalization)
+        .all_lte(BlockResourceBudgetValue::get().limits().actor_control())
+    );
+    let drain_actual = Actors::on_idle(4, Weight::MAX);
+    let finalized = Actors::block_resource_state().unwrap();
+    assert_eq!(
+      finalized.phase(),
+      pallet_deos_actors::BlockResourcePhase::Finalizable
+    );
+    assert!(!finalized.optional_actor_work_halted());
+    assert_eq!(finalized.outstanding_reservations(), 0);
+    assert_eq!(
+      finalized
+        .usage()
+        .actor_control_used()
+        .saturating_add(finalized.usage().actor_effect_used()),
+      prepass_used.saturating_add(drain_actual),
+      "Drain preserves the same exact domain attribution"
+    );
+    Actors::on_finalize(4);
+  });
+}
+
+#[test]
 fn resource_meter_extension_uses_generated_production_owner() {
   use polkadot_sdk::sp_runtime::traits::TransactionExtension;
 
@@ -10282,6 +10657,194 @@ fn resource_meter_extension_uses_generated_production_owner() {
     extension.weight(&call),
     <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::block_resource_meter_extension()
   );
+}
+
+#[test]
+fn actor_control_uses_exact_one_third_of_schedulable_weight() {
+  let budget = BlockResourceBudgetValue::get();
+  let schedulable = crate::MAXIMUM_BLOCK_WEIGHT
+    .checked_sub(&budget.fixed_envelope())
+    .expect("configured fixed context fits maximum block");
+  let limits = budget.limits();
+  assert_eq!(
+    limits.actor_control(),
+    Weight::from_parts(schedulable.ref_time() / 3, schedulable.proof_size() / 3)
+  );
+  assert_eq!(
+    limits
+      .actor_control()
+      .saturating_add(limits.shared_economic()),
+    schedulable
+  );
+  type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+  let scan = W::dependency_scan_source_probe().saturating_add(
+    W::process_dependency_scan_unit().max(W::process_dependency_scan_completion_unit()),
+  );
+  let mandatory = W::scheduler_on_initialize_cutoff()
+    .saturating_add(Actors::deadline_service_weight_upper())
+    .saturating_add(W::materialization_coordinator_base())
+    .saturating_add(scan)
+    .saturating_add(W::scheduler_on_idle_base())
+    .saturating_add(W::block_resource_finalize());
+  assert!(mandatory.all_lte(limits.actor_control()));
+  let fanout_overhead = W::observation_fanout_base()
+    .saturating_add(W::observation_fanout_branch_probe())
+    .saturating_add(W::record_observation_fanout_worker_fault());
+  let ordinary_turn = W::observation_fanout_branch_probe()
+    .saturating_add(Actors::observation_fanout_ordinary_weight_upper());
+  let one_retained_turn = mandatory
+    .saturating_add(W::observation_fanout_base())
+    .saturating_add(ordinary_turn);
+  let two_retained_turns = one_retained_turn.saturating_add(ordinary_turn);
+  assert!(one_retained_turn.all_lte(limits.actor_control()));
+  assert!(
+    two_retained_turns.proof_size() > limits.actor_control().proof_size(),
+    "retained full-page unit pricing cannot co-admit two turns under one-third Control"
+  );
+  println!(
+    "ACTOR_CONTROL_THIRD_V1 limit={:?} mandatory={mandatory:?} fanout_overhead={fanout_overhead:?} available={:?}",
+    limits.actor_control(),
+    limits.actor_control().saturating_sub(mandatory),
+  );
+}
+
+#[test]
+fn current_control_cap_cannot_admit_a_placed_batch_larger_than_a_pair() {
+  type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+  let control = BlockResourceBudgetValue::get().limits().actor_control();
+  let minimum_batch = W::crossing_worker_base()
+    .saturating_add(W::crossing_work_probe())
+    .saturating_add(W::crossing_fire_pair_probe())
+    .saturating_add(W::crossing_placed_maximum_unit())
+    .saturating_add(W::record_crossing_worker_fault());
+  assert_eq!(control.proof_size(), 676_150);
+  assert_eq!(minimum_batch.proof_size(), 676_224);
+  assert!(
+    minimum_batch.proof_size() > control.proof_size(),
+    "even with zero mandatory/selection work and no Service, every >2 placed batch must downgrade before admission",
+  );
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn observation_quantum_resumes_in_runtime_prepass_under_one_third() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let producer = deos_router_account();
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(
+      AssetKind::Native,
+      AssetKind::Local(8_123),
+    );
+    assert_ok!(Oracle::register_feed(
+      RuntimeOrigin::root(),
+      feed,
+      producer.clone(),
+      feed.meaning(),
+      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
+      feed.scale,
+      pallet_oracle::Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      pallet_oracle::ZeroPolicy::Reject,
+      false,
+    ));
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer.clone()),
+      feed,
+      1_000_000_000_000,
+    ));
+    let actors = (0..40)
+      .map(|_| {
+        create_system(
+          ALICE,
+          RuntimeSchedule {
+            trigger: Trigger::observation_change(feed),
+            cooldown_blocks: 0,
+          },
+          None,
+          BoundedVec::try_from(vec![make_step(inert_task())]).expect("one Step fits"),
+        )
+      })
+      .collect::<Vec<_>>();
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer),
+      feed,
+      2_000_000_000_000,
+    ));
+    pallet_deos_actors::MaterializationFamilyCursor::<Runtime>::put(1);
+    assert_eq!(Actors::on_initialize(1), Weight::zero());
+    ensure_actor_prepass_context();
+    let actual = Actors::benchmark_mandatory_prepass_with_quantum(
+      1,
+      12,
+      Weight::from_parts(20_000_000_000, 185_000),
+    )
+    .expect("candidate Prepass admits two bounded turns");
+    let budget = BlockResourceBudgetValue::get().limits();
+    let usage = Actors::block_resource_state()
+      .expect("real runtime Prepass settles the resource ledger")
+      .usage();
+    assert_eq!(budget.actor_control(), Weight::from_parts(303_433_283_909, 676_150));
+    assert!(usage.actor_control_used().all_lte(budget.actor_control()));
+    assert_eq!(usage.shared_used(), Ok(Weight::zero()));
+    assert!(actual.all_lte(budget.actor_control()));
+    assert!(actors.iter().take(36).all(|id| Actors::pending_signal(*id)));
+    assert!(actors.iter().skip(36).all(|id| !Actors::pending_signal(*id)));
+    let dirty = Actors::dirty_observation_feeds(feed).expect("four subscribers remain dirty");
+    assert_eq!(dirty.next_subscriber_position, 36);
+    for id in actors.iter().take(36) {
+      assert_eq!(Actors::service_nodes(*id).expect("causal Service").eligible_from, 2);
+    }
+    assert_eq!(
+      pallet_deos_actors::MaterializationFamilyCursor::<Runtime>::get(),
+      0
+    );
+    println!(
+      "OBSERVATION_PREPASS_QUANTUM_V1 block=1 control={:?} actual={actual:?} control_used={:?} shared_used={:?} cursor=36",
+      budget.actor_control(),
+      usage.actor_control_used(),
+      usage.shared_used(),
+    );
+
+    Actors::on_idle(1, Weight::MAX);
+    Actors::on_finalize(1);
+    System::set_block_number(2);
+    set_consensus_timestamp(1_000);
+    assert_eq!(Actors::on_initialize(2), Weight::zero());
+    ensure_actor_prepass_context();
+    System::reset_events();
+    let second = Actors::benchmark_mandatory_prepass_with_quantum(
+      2,
+      12,
+      Weight::from_parts(20_000_000_000, 185_000),
+    )
+    .expect("next block resumes the remaining four positions");
+    assert!(second.all_lte(budget.actor_control().saturating_add(budget.actor_base_turn())));
+    assert!(Actors::dirty_observation_feeds(feed).is_none());
+    assert!(actors.iter().skip(36).all(|id| Actors::pending_signal(*id)));
+    for id in actors.iter().skip(36) {
+      assert_eq!(Actors::service_nodes(*id).expect("deferred Service").eligible_from, 3);
+    }
+    assert_eq!(
+      System::events()
+        .iter()
+        .filter(|record| matches!(
+          &record.event,
+          RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
+            actor_id,
+            trigger_family: TriggerFamily::ObservationChange,
+            ..
+          }) if actors.iter().skip(36).any(|id| id == actor_id)
+        ))
+        .count(),
+      4
+    );
+    println!(
+      "OBSERVATION_PREPASS_QUANTUM_V1 block=2 actual={second:?} control_used={:?} shared_used={:?} cursor=complete",
+      Actors::block_resource_state().expect("second Prepass ledger").usage().actor_control_used(),
+      Actors::block_resource_state().expect("second Prepass ledger").usage().shared_used(),
+    );
+  });
 }
 
 #[test]
@@ -11414,7 +11977,13 @@ fn run_blocks_with_queue_diagnostics(
     System::set_block_number(block);
     System::reset_events();
     Actors::on_initialize(block);
-    run_idle(weight);
+    run_current_idle(weight);
+    Actors::on_finalize(block);
+    assert_eq!(
+      System::block_number(),
+      block,
+      "one diagnostic row is one block"
+    );
     let mut block_executions = 0u32;
     for evt in System::events() {
       match &evt.event {
@@ -11608,9 +12177,14 @@ fn circular_chain_respects_execution_ceiling_and_remains_fair() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
     let chain_len = 100u64;
-    let num_blocks = 100u32;
     let initial_balance: u128 = 1_000_000 * crate::EXISTENTIAL_DEPOSIT;
     let (actor_ids, sovereign_accounts) = setup_circular_chain(chain_len, initial_balance);
+    // Bound both due-population traversal and a separate Service-ring traversal, then B+1.
+    // Empty retained members also consume Control; this is not a fixed-horizon release profile.
+    let num_blocks =
+      u32::try_from(pallet_deos_actors::TriggerDeadlineHandles::<Runtime>::iter().count()).unwrap()
+        + Actors::active_actor_count()
+        + 1;
     let total_before: u128 = sovereign_accounts
       .iter()
       .map(|s| Balances::free_balance(s))
@@ -11638,7 +12212,7 @@ fn circular_chain_respects_execution_ceiling_and_remains_fair() {
       "Per-block throughput must not exceed MaxExecutionsPerBlock={execution_ceiling} (got {})",
       diag.max_per_block,
     );
-    // No starvation: every chain actor must have executed multiple times
+    // The finite due population must complete one traversal.
     let min_count = *diag.actor_cycle_counts.values().min().unwrap();
     let zero_actors: alloc::vec::Vec<u64> = diag
       .actor_cycle_counts
@@ -11652,7 +12226,7 @@ fn circular_chain_respects_execution_ceiling_and_remains_fair() {
        zero_actors={:?}, active_actors_len={})",
       min_count,
       &zero_actors[..zero_actors.len().min(10)],
-      pallet_deos_actors::ActorControlLocators::<Runtime>::iter_keys().count(),
+      Actors::active_actor_count(),
     );
     // Fairness: examine cycle_nonce spread across chain actors.
     // With identical periodic actors, the queue scheduler should keep nonce spread minimal (≤ 2).
@@ -12157,13 +12731,22 @@ fn scheduler_512_mixed_clocks_survives_delayed_timestamp() {
       .chain(block_ids.iter())
       .map(|actor_id| (*actor_id, 0u32))
       .collect::<alloc::collections::BTreeMap<_, _>>();
-    let mut previous_actor = None;
+    let ordered = block_ids
+      .iter()
+      .chain(tick_ids.iter())
+      .copied()
+      .collect::<Vec<_>>();
+    let mut actual_order = Vec::new();
 
     for block in 10..=160 {
       System::set_block_number(block);
       System::reset_events();
       Actors::on_initialize(block);
-      run_idle(Weight::MAX);
+      ensure_current_resource_state();
+      Actors::on_idle(block, Weight::MAX);
+      Actors::on_finalize(block);
+      assert_eq!(System::block_number(), block);
+      assert_eq!(crate::Timestamp::get(), tick_millis.saturating_mul(100));
       let mut served_this_block = alloc::collections::BTreeSet::new();
       for record in System::events() {
         let RuntimeEvent::Actors(Event::CycleSummary { actor_id, .. }) = record.event else {
@@ -12178,22 +12761,18 @@ fn scheduler_512_mixed_clocks_survives_delayed_timestamp() {
         );
         *count = count.saturating_add(1);
         assert_eq!(*count, 1, "delayed cadence must not catch up in a burst");
-        assert!(
-          previous_actor.is_none_or(|previous| actor_id > previous),
-          "mixed-clock FIFO order regressed at actor {actor_id}",
+        actual_order.push(actor_id);
+        assert_eq!(
+          actual_order,
+          ordered[..actual_order.len()],
+          "existing Service residents precede later Tick publications"
         );
-        previous_actor = Some(actor_id);
       }
       if counts.values().all(|count| *count == 1) {
         break;
       }
     }
 
-    let ordered = block_ids
-      .iter()
-      .chain(tick_ids.iter())
-      .copied()
-      .collect::<alloc::vec::Vec<_>>();
     let served = ordered
       .iter()
       .copied()
@@ -13180,23 +13759,23 @@ fn cadenced_complete_path_isolates_reactive_control_delta() {
     assert_eq!(
       block_usage,
       vec![
-        (2, false, Weight::from_parts(4_224_655_000, 31_598), Weight::zero()),
+        (2, false, Weight::from_parts(6_190_722_000, 75_794), Weight::zero()),
         (
           3,
           true,
-          Weight::from_parts(2_383_000_000, 35_230),
-          Weight::from_parts(1_456_340_000, 6_196),
+          Weight::from_parts(4_560_286_000, 65_922),
+          Weight::from_parts(1_463_533_000, 6_196),
         ),
-        (4, false, Weight::from_parts(5_255_194_000, 47_680), Weight::zero()),
+        (4, false, Weight::from_parts(6_190_722_000, 75_794), Weight::zero()),
         (
           5,
           true,
-          Weight::from_parts(2_383_000_000, 35_230),
-          Weight::from_parts(1_456_340_000, 6_196),
+          Weight::from_parts(4_560_286_000, 65_922),
+          Weight::from_parts(1_463_533_000, 6_196),
         ),
       ]
     );
-    assert_eq!(empty_control, Weight::from_parts(1_750_858_000, 22_698));
+    assert_eq!(empty_control, Weight::from_parts(2_143_410_000, 29_293));
     type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
     let at_time = <W as WeightInfo>::at_time_trigger_occurrence();
     let cadenced = <W as WeightInfo>::cadenced_trigger_occurrence();
@@ -13205,7 +13784,7 @@ fn cadenced_complete_path_isolates_reactive_control_delta() {
       at_time.proof_size().max(cadenced.proof_size()),
     );
     let first_materialization_increment = block_usage[0].2.saturating_sub(empty_control);
-    assert_eq!(occurrence, Weight::from_parts(2_473_797_000, 8_900));
+    assert_eq!(occurrence, Weight::from_parts(4_047_312_000, 46_501));
     assert_eq!(
       first_materialization_increment, occurrence,
       "first due Cadenced occurrence adds only its canonical temporal owner above the stable baseline"
@@ -13214,10 +13793,7 @@ fn cadenced_complete_path_isolates_reactive_control_delta() {
     let recurring_baseline_delta = recurring_materialization_increment
       .checked_sub(&occurrence)
       .expect("recurring materialization contains the Cadenced occurrence owner");
-    assert_eq!(
-      recurring_baseline_delta,
-      Weight::from_parts(1_030_539_000, 16_082)
-    );
+    assert_eq!(recurring_baseline_delta, Weight::zero(), "Prepass detection precedes Service; the previous ring member adds no recurring discovery delta");
     assert_eq!(
       paused_controls[paused_controls.len() - 2].1,
       empty_control,
@@ -13291,6 +13867,7 @@ fn measure_manual_control_branch(close_after_productive_cycle: bool) -> (Weight,
       } else {
         CompletionPolicy::Persistent
       },
+      parked_balance_activation: None,
       funding: FundingSourcePolicy::RuntimePolicy,
       auto_close_at_cycle_nonce: None,
     };
@@ -13347,13 +13924,15 @@ fn zero_step_and_productive_cleanup_complete_path_matrix_is_exact() {
   let productive_cleanup = measure_manual_control_branch(true);
   assert_eq!(
     zero_step,
-    (Weight::from_parts(3_867_034_000, 49_070), Weight::zero())
+    (Weight::from_parts(4_182_903_000, 55_666), Weight::zero())
   );
+  // Close retains the admitted Step maximum plus lifecycle cleanup. This is a conservative
+  // resource charge, not evidence that a persistent-completion benchmark measured destruction.
   assert_eq!(
     productive_cleanup,
     (
-      Weight::from_parts(2_383_000_000, 35_230),
-      Weight::from_parts(1_456_340_000, 6_196),
+      Weight::from_parts(17_971_025_000, 212_623),
+      Weight::from_parts(1_463_533_000, 6_196),
     )
   );
   println!(
@@ -13419,7 +13998,7 @@ fn one_step_admission_envelope_identifies_control_fragmentation_owner() {
     .min(control_limit.proof_size() / fifo_attempt_control.proof_size());
   assert_eq!(fifo_attempt_control, lifecycle_control);
   assert!(Actors::scheduler_complete_outer_weight_upper().all_lte(lifecycle_control));
-  assert_eq!(admitted_per_block, 5);
+  assert_eq!(admitted_per_block, 3);
   println!(
     "ACTOR_ADMISSION_ENVELOPE_V1 fifo_attempt_control_ref_time={} fifo_attempt_control_proof_size={} lifecycle_control_ref_time={} lifecycle_control_proof_size={} transfer_effect_ref_time={} transfer_effect_proof_size={} admitted_per_block={admitted_per_block}",
     fifo_attempt_control.ref_time(),
@@ -13447,7 +14026,7 @@ fn transfer_complete_path_matrix_uses_canonical_service_envelope() {
     }
   }
   for (phase, predicates, control, effect) in &cells {
-    assert_eq!(*effect, Weight::from_parts(1_456_340_000, 6_196));
+    assert_eq!(*effect, Weight::from_parts(1_463_533_000, 6_196));
     println!(
       "ACTOR_TRANSFER_MATRIX_V1 phase={phase:?} predicates={predicates} control_ref_time={} control_proof_size={} effect_ref_time={} effect_proof_size={}",
       control.ref_time(),
@@ -13457,13 +14036,18 @@ fn transfer_complete_path_matrix_uses_canonical_service_envelope() {
     );
   }
   let canonical_control = cells[0].2;
-  assert_eq!(canonical_control, Weight::from_parts(2_383_000_000, 35_230));
+  assert_eq!(canonical_control, Weight::from_parts(4_560_286_000, 65_922));
   for phase_cells in cells.chunks_exact(3) {
     assert_eq!(
       phase_cells.iter().map(|cell| cell.1).collect::<Vec<_>>(),
       vec![0, 2, 4]
     );
-    assert!(phase_cells.iter().all(|cell| cell.2 == canonical_control));
+    assert!(
+      phase_cells
+        .windows(2)
+        .all(|pair| pair[0].2.all_lte(pair[1].2) && pair[0].2 != pair[1].2),
+      "current predicate work must remain visible in actual Control, not disappear with the nested reservation"
+    );
   }
 }
 
@@ -13521,8 +14105,8 @@ fn running_middle_complete_path_is_exact() {
     assert_eq!(
       measured,
       (
-        Weight::from_parts(2_383_000_000, 35_230),
-        Weight::from_parts(1_456_340_000, 6_196),
+        Weight::from_parts(4_527_520_603, 58_025),
+        Weight::from_parts(1_463_533_000, 6_196),
       )
     );
     println!(
@@ -13620,10 +14204,14 @@ fn swapout_success_complete_path_matrix_uses_canonical_service_envelope() {
     assert!(effect.all_lte(BlockResourceBudgetValue::get().limits().actor_base_turn()));
     cells.push((predicate_count, control, effect));
   }
-  let canonical_control = Weight::from_parts(2_383_000_000, 35_230);
+  assert_eq!(cells[0].1, Weight::from_parts(5_511_204_000, 70_492));
+  assert!(
+    cells
+      .windows(2)
+      .all(|pair| pair[0].1.all_lte(pair[1].1) && pair[0].1 != pair[1].1)
+  );
   for (predicates, control, effect) in cells {
-    assert_eq!(control, canonical_control);
-    assert_eq!(effect, Weight::from_parts(3_855_210_000, 19_253));
+    assert_eq!(effect, Weight::from_parts(3_933_418_000, 19_253));
     println!(
       "ACTOR_SWAPOUT_MATRIX_V1 outcome=Success predicates={predicates} control_ref_time={} control_proof_size={} effect_ref_time={} effect_proof_size={}",
       control.ref_time(),
@@ -13760,7 +14348,7 @@ fn measure_swapout_retry_cell(
       );
       assert!(
         retry_keys
-          .contains(&pallet_deos_actors::ActorRunPayloads::<Runtime>::hashed_key_for(actor_id))
+          .contains(&pallet_deos_actors::ActorRunStateStore::<Runtime>::hashed_key_for(actor_id))
       );
     }
     ext.execute_with(|| {
@@ -13773,7 +14361,7 @@ fn measure_swapout_retry_cell(
       assert_eq!(continuation.unsuccessful_attempts_at_cursor, block - 2);
       if let Some(prior) = prior_run {
         assert_eq!(continuation.cycle_nonce, prior.cycle_nonce);
-        assert_eq!(continuation.opening_snapshot, prior.opening_snapshot);
+        assert_eq!(continuation.contract_authority, prior.contract_authority);
       }
       if actor_type == ActorType::System || block == 4 {
         let fee = if actor_type == ActorType::User && !funding_unavailable {
@@ -13885,8 +14473,11 @@ fn swapout_temporary_failure_and_retry_matrix_uses_canonical_service_envelope() 
       measure_swapout_retry_cell(predicate_count, true, ActorType::User);
     assert_eq!(user_first, user_unfunded_first);
     assert_eq!(
-      user_retry.0, user_unfunded_retry.0,
-      "the canonical Service envelope conservatively reserves fee collection"
+      user_retry.0,
+      user_unfunded_retry
+        .0
+        .saturating_add(<Runtime as pallet_deos_actors::Config>::WeightInfo::fee_collection()),
+      "actual User Control charges collection only when the Action is invoked"
     );
     assert_eq!(user_unfunded_retry.1, Weight::zero());
     assert_ne!(user_retry.1, Weight::zero());
@@ -13920,10 +14511,21 @@ fn swapout_temporary_failure_and_retry_matrix_uses_canonical_service_envelope() 
       cells.push((outcome, predicate_count, control, effect));
     }
   }
-  let canonical_control = Weight::from_parts(2_383_000_000, 35_230);
+  for outcome in ["Temporary", "Retry"] {
+    let controls = cells
+      .iter()
+      .filter(|cell| cell.0 == outcome)
+      .map(|cell| cell.2)
+      .collect::<Vec<_>>();
+    assert!(
+      controls
+        .windows(2)
+        .all(|pair| pair[0].all_lte(pair[1]) && pair[0] != pair[1]),
+      "actual {outcome} Control includes the current predicate geometry"
+    );
+  }
   for (outcome, predicates, control, effect) in cells {
-    assert_eq!(control, canonical_control);
-    assert_eq!(effect, Weight::from_parts(3_855_210_000, 19_253));
+    assert_eq!(effect, Weight::from_parts(3_933_418_000, 19_253));
     println!(
       "ACTOR_SWAPOUT_MATRIX_V1 outcome={outcome} predicates={predicates} control_ref_time={} control_proof_size={} effect_ref_time={} effect_proof_size={}",
       control.ref_time(),
@@ -13932,6 +14534,122 @@ fn swapout_temporary_failure_and_retry_matrix_uses_canonical_service_envelope() 
       effect.proof_size(),
     );
   }
+}
+
+#[test]
+fn asset_ops_exposes_total_owned_native_and_non_native_balances() {
+  seeded_test_ext().execute_with(|| {
+    const OWNED_ASSET: u32 = 901_004;
+    let native_amount = crate::EXISTENTIAL_DEPOSIT.saturating_mul(1_000);
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(&CHARLIE, native_amount);
+    let native_total = TmctolAssetOps::total_balance(&CHARLIE, AssetKind::Native);
+    let native_available = TmctolAssetOps::balance(&CHARLIE, AssetKind::Native);
+    assert_ok!(<Balances as ReservableCurrency<AccountId>>::reserve(
+      &CHARLIE,
+      crate::EXISTENTIAL_DEPOSIT,
+    ));
+    assert_eq!(
+      TmctolAssetOps::total_balance(&CHARLIE, AssetKind::Native),
+      native_total,
+      "reserved native custody remains total-owned"
+    );
+    assert!(
+      TmctolAssetOps::balance(&CHARLIE, AssetKind::Native) < native_available,
+      "task-spendable native balance remains a separate surface"
+    );
+
+    assert_ok!(create_test_asset(OWNED_ASSET, &ALICE));
+    assert_ok!(mint_tokens(OWNED_ASSET, &ALICE, &CHARLIE, 10_000));
+    assert_eq!(
+      TmctolAssetOps::total_balance(&CHARLIE, AssetKind::Local(OWNED_ASSET)),
+      10_000,
+      "the supported non-native host uses fungibles total ownership"
+    );
+
+    let local = AssetKind::Local(OWNED_ASSET);
+    let local_minimum = TmctolAssetOps::minimum_balance(local);
+    let local_threshold = local_minimum.checked_mul(100).expect("test floor fits");
+    let watches = [
+      certify_parked_balance_watch(
+        AssetKind::Native,
+        native_amount,
+        TmctolAssetOps::minimum_balance(AssetKind::Native),
+        native_total,
+        0,
+      )
+      .expect("native watch certifies"),
+      certify_parked_balance_watch(local, 1, local_minimum, 10_000, 0)
+        .expect("non-native watch certifies"),
+    ];
+    assert_ok!(mint_tokens(OWNED_ASSET, &ALICE, &CHARLIE, local_threshold));
+    assert_eq!(
+      classify_parked_balance_plan(&watches, |asset| (
+        TmctolAssetOps::minimum_balance(asset),
+        TmctolAssetOps::total_balance(&CHARLIE, asset),
+      )),
+      Ok(ParkedBalanceQualification::Qualified),
+      "one bounded snapshot composes native and non-native total-owned classification"
+    );
+
+    let native_source = 999_001;
+    let local_source = 999_002;
+    pallet_deos_actors::BalanceDependencySources::<Runtime>::insert(
+      AssetKind::Native,
+      native_source,
+    );
+    pallet_deos_actors::DependencySourceBalances::<Runtime>::insert(
+      native_source,
+      AssetKind::Native,
+    );
+    pallet_deos_actors::BalanceDependencySources::<Runtime>::insert(local, local_source);
+    pallet_deos_actors::DependencySourceBalances::<Runtime>::insert(local_source, local);
+    assert_ok!(TmctolAssetOps::mint(
+      &CHARLIE,
+      AssetKind::Native,
+      crate::EXISTENTIAL_DEPOSIT,
+    ));
+    assert_ok!(TmctolAssetOps::mint(&CHARLIE, local, local_minimum));
+    assert_eq!(
+      pallet_deos_actors::DependencyRevisions::<Runtime>::get(native_source).revision,
+      1,
+      "native host mutation emits one causal revision"
+    );
+    assert_eq!(
+      pallet_deos_actors::DependencyRevisions::<Runtime>::get(local_source).revision,
+      1,
+      "supported non-native host mutation emits one causal revision"
+    );
+
+    const SATURATED_ASSET: u32 = 901_005;
+    let saturated = AssetKind::Local(SATURATED_ASSET);
+    let saturated_source = 999_003;
+    assert_ok!(create_test_asset(SATURATED_ASSET, &ALICE));
+    pallet_deos_actors::BalanceDependencySources::<Runtime>::insert(saturated, saturated_source);
+    pallet_deos_actors::DependencySourceBalances::<Runtime>::insert(saturated_source, saturated);
+    pallet_deos_actors::DependencyScanSourceListState::<Runtime>::mutate(|list| {
+      list.count = <<Runtime as pallet_deos_actors::Config>::MaxActiveActors as Get<u32>>::get()
+        .saturating_mul(
+          <<Runtime as pallet_deos_actors::Config>::MaxContractSteps as Get<u32>>::get(),
+        );
+    });
+    let before_saturation = TmctolAssetOps::total_balance(&CHARLIE, saturated);
+    let failure = TmctolAssetOps::mint(&CHARLIE, saturated, 1_000)
+      .expect_err("full causal selector rejects the host mutation atomically");
+    assert_eq!(
+      failure.error,
+      DispatchError::Other("dependency scan source capacity reached")
+    );
+    assert_eq!(
+      TmctolAssetOps::total_balance(&CHARLIE, saturated),
+      before_saturation,
+      "failed causal publication rolls back the supported fungibles mutation"
+    );
+    assert_eq!(
+      pallet_deos_actors::DependencyRevisions::<Runtime>::get(saturated_source).revision,
+      0,
+      "failed causal publication rolls back its tentative revision"
+    );
+  });
 }
 
 fn measure_funding_unavailable_retry(funding_tail: Option<u128>) -> [(Weight, Weight); 2] {
@@ -14028,9 +14746,15 @@ fn measure_funding_unavailable_retry(funding_tail: Option<u128>) -> [(Weight, We
 #[test]
 fn funding_unavailable_and_retry_use_canonical_service_envelope() {
   let [first, retry] = measure_funding_unavailable_retry(None);
-  let canonical_control = Weight::from_parts(2_383_000_000, 35_230);
-  assert_eq!(first, (canonical_control, Weight::zero()));
-  assert_eq!(retry, (canonical_control, Weight::zero()));
+  assert_eq!(
+    first,
+    (Weight::from_parts(4_534_866_000, 65_040), Weight::zero())
+  );
+  assert_eq!(retry.1, Weight::zero());
+  assert!(
+    first.0.all_lte(retry.0),
+    "the coupled Suspended-head bound contains the narrow Opening owner"
+  );
   println!(
     "ACTOR_FUNDING_RETRY_V1 phase=Opening control_ref_time={} control_proof_size={} effect_ref_time={} effect_proof_size={}",
     first.0.ref_time(),
@@ -14142,7 +14866,7 @@ fn minimal_pipeline_admission_apoptosis_complete_path_is_exact() {
     let measured = (usage.actor_control_used(), usage.actor_effect_used());
     assert_eq!(
       measured,
-      (Weight::from_parts(11_210_165_000, 117_116), Weight::zero()),
+      (Weight::from_parts(11_194_958_000, 118_650), Weight::zero()),
       "canonical Service owns the complete bounded minimal-apoptosis cleanup envelope"
     );
     println!(
@@ -14239,7 +14963,7 @@ fn saturated_prepass_preserves_drain_finalization_reachability() {
 }
 
 #[test]
-fn proof_size_heavy_user_frontier_halts_optional_actor_work_and_preserves_finalization() {
+fn proof_size_heavy_user_frontier_defers_without_accounting_fault_and_preserves_finalization() {
   seeded_synthetic_actor_test_ext().execute_with(|| {
     System::set_block_number(1);
     assert_synthetic_actor_genesis();
@@ -14292,8 +15016,8 @@ fn proof_size_heavy_user_frontier_halts_optional_actor_work_and_preserves_finali
     Actors::on_idle(block, Weight::MAX);
     let telemetry = Actors::finalized_block_resource_telemetry()
       .filter(|snapshot| snapshot.block_number() == block)
-      .expect("RefTime-heavy block finalizes resource telemetry");
-    assert!(telemetry.optional_actor_work_halted());
+      .expect("ProofSize-heavy block finalizes resource telemetry");
+    assert!(!telemetry.optional_actor_work_halted(), "ordinary capacity pressure is not an accounting fault");
     assert!(actor_ids.iter().any(|actor_id| {
       Actors::active_actor_state(*actor_id).is_some_and(|state| state.identity.cycle_nonce > 0)
     }));

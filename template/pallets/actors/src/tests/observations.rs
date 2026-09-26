@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-  ActorHotStateOf, ActorProcesses, ActorSemanticState, ActorSemanticStates, ProcessResidence,
-  ProcessStatus, ServiceHeader, ServiceResidenceKind,
+  ActorHotStateOf, ActorProcesses, ActorSemanticState, ActorSemanticStates, ParkEvidence,
+  ParkNegativeReason, ProcessResidence, ProcessStatus, ServiceHeader, ServiceResidenceKind,
 };
 
 fn observation_semantic_hot(actor_id: ActorId) -> ActorHotStateOf<Test> {
@@ -329,10 +329,10 @@ fn compact_observation_classification_matches_suspension_and_retry_exhaustion() 
       ActorExecutionPhase::Ready
     );
 
-    crate::ActorRunHeads::<Test>::mutate(actor_id, |maybe| {
+    crate::ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
       maybe
         .as_mut()
-        .expect("run head exists")
+        .expect("run state exists")
         .unsuccessful_attempts_at_cursor = 10;
     });
     assert_eq!(
@@ -420,7 +420,7 @@ fn compact_observation_classification_matches_failure_auto_close_pause_and_break
 }
 
 #[test]
-fn compact_observation_activation_loads_only_current_authority_tiers() {
+fn compact_observation_activation_loads_complete_current_run_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = inert_contract_steps()[0].clone();
@@ -439,17 +439,16 @@ fn compact_observation_activation_loads_only_current_authority_tiers() {
     frame_system::Pallet::<Test>::set_block_number(2);
     Actors::execute_cycle(Weight::MAX);
     assert_eq!(
-      crate::ActorRunHeads::<Test>::get(actor_id).map(|head| head.cursor),
+      crate::ActorRunStateStore::<Test>::get(actor_id).map(|run| run.cursor),
       Some(1)
     );
 
-    crate::ActorRunPayloads::<Test>::remove(actor_id);
     let compact = Actors::load_observation_activation_state(actor_id, 7)
-      .expect("compact activation ignores extended execution payload");
+      .expect("compact activation loads current run authority");
     assert_eq!(compact.identity.cycle_nonce, 0);
     assert_eq!(compact.hot.cycle_state, CycleState::Running);
     assert_eq!(compact.authority.feed, 7);
-    assert_eq!(compact.run_head.as_ref().map(|head| head.cursor), Some(1));
+    assert_eq!(compact.run_state.as_ref().map(|run| run.cursor), Some(1));
     assert_eq!(
       compact
         .loaded_step
@@ -459,13 +458,13 @@ fn compact_observation_activation_loads_only_current_authority_tiers() {
     );
     assert!(matches!(
       Actors::load_actor_state(actor_id),
-      crate::LoadedActorStateOf::Corrupt
+      crate::LoadedActorStateOf::Active(_)
     ));
 
-    crate::ActorRunHeads::<Test>::mutate(actor_id, |maybe| {
+    crate::ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
       maybe
         .as_mut()
-        .expect("run head exists")
+        .expect("run state exists")
         .contract_authority
         .body_commitment[0] ^= 1;
     });
@@ -565,6 +564,7 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
           window: None,
           steps: inert_contract_steps(),
           completion: crate::CompletionPolicy::Persistent,
+          parked_balance_activation: None,
           funding: FundingSourcePolicy::OwnerOnly,
           auto_close_at_cycle_nonce: None,
         }
@@ -603,6 +603,296 @@ fn resumed_observation_fanout_preserves_the_per_block_page_cap() {
       "a resumed family at its component cap must not probe or mutate again"
     );
   });
+}
+
+#[test]
+fn observation_fanout_quantum_can_resume_same_page_in_the_same_block() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let feed = 17;
+    let actors = (0..<Test as crate::Config>::ObservationPageSize::get())
+      .map(|_| {
+        create_system_with(
+          ALICE,
+          observation_schedule(vec![feed]),
+          None,
+          inert_contract_steps(),
+        )
+      })
+      .collect::<Vec<_>>();
+    assert_ok!(Actors::note_observation_changed(feed, 1));
+    assert_eq!(Actors::do_fanout_dirty_observation_quantum(12), Ok(true));
+    let dirty = Actors::dirty_observation_feeds(feed).expect("unfinished page remains dirty");
+    assert_eq!(dirty.next_subscriber_page, Some(0));
+    assert_eq!(dirty.next_subscriber_position, 12);
+    assert!(actors.iter().take(12).all(|id| Actors::pending_signal(*id)));
+    assert!(
+      actors
+        .iter()
+        .skip(12)
+        .all(|id| !Actors::pending_signal(*id))
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+
+    assert_eq!(Actors::do_fanout_dirty_observation_quantum(12), Ok(false));
+    assert!(Actors::dirty_observation_feeds(feed).is_none());
+    assert!(actors.iter().all(|id| Actors::pending_signal(*id)));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
+fn observation_fanout_worker_repeats_bounded_quanta_only_while_both_dimensions_fit() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let feed = 17;
+    let page_size: u32 = <Test as crate::Config>::ObservationPageSize::get();
+    let actors = (0..2 * page_size)
+      .map(|_| {
+        create_system_with(
+          ALICE,
+          observation_schedule(vec![feed]),
+          None,
+          inert_contract_steps(),
+        )
+      })
+      .collect::<Vec<_>>();
+    assert_ok!(Actors::note_observation_changed(feed, 1));
+
+    // Current runtime dimensions, but a diagnostic per-turn price, not production Weight.
+    let maximum = Weight::from_parts(2_000_000_000_000, 5_000_000);
+    let schedulable = Weight::from_parts(910_299_851_727, 2_028_450);
+    let budget = crate::BlockResourceBudget::new_with_control_ratio(
+      maximum,
+      maximum.saturating_sub(schedulable),
+      1,
+      3,
+    )
+    .expect("one-third resource budget");
+    let control = budget.limits().actor_control();
+    assert_eq!(control, Weight::from_parts(303_433_283_909, 676_150));
+    let mandatory = Weight::from_parts(26_089_135_000, 183_080);
+    let available = control
+      .checked_sub(&mandatory)
+      .expect("mandatory control fits");
+    let base = <TestWeightInfo as crate::WeightInfo>::observation_fanout_base();
+    let probe = <TestWeightInfo as crate::WeightInfo>::observation_fanout_branch_probe();
+    let candidate_turn = Weight::from_parts(17_584_990_000, 189_553);
+    let ordinary = candidate_turn
+      .checked_sub(&base.saturating_add(probe))
+      .expect("diagnostic price contains the worker overhead");
+
+    let mut ledger = crate::BlockResourceState::new(1u64);
+    assert_eq!(ledger.begin_prepass(), Ok(()));
+    let mut mandatory_reservation = ledger
+      .reserve(
+        budget.limits(),
+        crate::BlockResourceDomain::ActorControl,
+        mandatory,
+      )
+      .expect("mandatory control admission");
+    assert_eq!(ledger.settle(&mut mandatory_reservation, mandatory), Ok(()));
+    let mut materialization_reservation = ledger
+      .reserve(
+        budget.limits(),
+        crate::BlockResourceDomain::ActorControl,
+        available,
+      )
+      .expect("bounded materialization admission");
+    let (consumed, turns) =
+      Actors::fanout_dirty_observations_with_quanta(available, 0, 12, ordinary);
+    assert_eq!(turns, 2, "a third turn cannot be admitted on ProofSize");
+    assert_eq!(
+      ledger.settle(&mut materialization_reservation, consumed),
+      Ok(())
+    );
+    assert!(consumed.all_lte(available));
+    assert_eq!(
+      ledger.usage().actor_control_used(),
+      mandatory.saturating_add(consumed)
+    );
+    assert_eq!(ledger.usage().shared_used(), Ok(Weight::zero()));
+    assert!(ledger.usage().actor_control_used().all_lte(control));
+    assert_eq!(
+      budget.limits().shared_economic(),
+      schedulable.saturating_sub(control)
+    );
+    assert!(
+      actors
+        .iter()
+        .take(page_size as usize)
+        .all(|id| Actors::pending_signal(*id))
+    );
+    assert!(
+      actors
+        .iter()
+        .skip(page_size as usize)
+        .all(|id| !Actors::pending_signal(*id))
+    );
+    let dirty = Actors::dirty_observation_feeds(feed).expect("second page retains its cursor");
+    assert_eq!(
+      (dirty.next_subscriber_page, dirty.next_subscriber_position),
+      (Some(1), 0)
+    );
+    assert_eq!((dirty.fanout_revision, dirty.fanout_cause_block), (1, 1));
+    for id in actors.iter().take(page_size as usize) {
+      assert_eq!(
+        Actors::service_nodes(*id)
+          .expect("causal service node")
+          .eligible_from,
+        2
+      );
+    }
+    let (extra, still_two) = Actors::fanout_dirty_observations_with_quanta(
+      available.saturating_sub(consumed),
+      turns,
+      12,
+      ordinary,
+    );
+    assert_eq!(still_two, turns);
+    assert!(consumed.saturating_add(extra).all_lte(available));
+    assert_eq!(Actors::dirty_observation_feeds(feed), Some(dirty));
+    let ref_time_short = Weight::from_parts(
+      base
+        .ref_time()
+        .saturating_add(ordinary.ref_time())
+        .saturating_add(
+          <TestWeightInfo as crate::WeightInfo>::record_observation_fanout_worker_fault()
+            .ref_time(),
+        )
+        .saturating_sub(1),
+      available.proof_size(),
+    );
+    let (_, still_two) =
+      Actors::fanout_dirty_observations_with_quanta(ref_time_short, turns, 12, ordinary);
+    assert_eq!(
+      still_two, turns,
+      "RefTime independently rejects an unaffordable turn"
+    );
+    assert_eq!(Actors::dirty_observation_feeds(feed), Some(dirty));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
+fn observation_family_rotation_preserves_quantum_progress_under_one_third_control() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let feed = 17;
+    let page_size: u32 = <Test as crate::Config>::ObservationPageSize::get();
+    let actors = (0..2 * page_size)
+      .map(|_| {
+        create_system_with(
+          ALICE,
+          observation_schedule(vec![feed]),
+          None,
+          inert_contract_steps(),
+        )
+      })
+      .collect::<Vec<_>>();
+    assert_ok!(Actors::note_observation_changed(feed, 1));
+    crate::MaterializationFamilyCursor::<Test>::put(1);
+
+    // Diagnostic pricing and retained mandatory reservation; no production Weight override.
+    let maximum = Weight::from_parts(2_000_000_000_000, 5_000_000);
+    let schedulable = Weight::from_parts(910_299_851_727, 2_028_450);
+    let budget = crate::BlockResourceBudget::new_with_control_ratio(
+      maximum,
+      maximum.saturating_sub(schedulable),
+      1,
+      3,
+    )
+    .expect("exact one-third Control share");
+    let control = budget.limits().actor_control();
+    assert_eq!(control, Weight::from_parts(303_433_283_909, 676_150));
+    let mandatory = Weight::from_parts(26_089_135_000, 183_080);
+    let available = control
+      .checked_sub(&mandatory)
+      .expect("mandatory control fits");
+    let candidate_turn = Weight::from_parts(17_584_990_000, 189_553);
+    let ordinary = candidate_turn.saturating_sub(
+      <TestWeightInfo as crate::WeightInfo>::observation_fanout_base()
+        .saturating_add(<TestWeightInfo as crate::WeightInfo>::observation_fanout_branch_probe()),
+    );
+    let first = Actors::service_materialization_families_with_quantum(1, available, 12, ordinary)
+      .expect("valid family cursor");
+    assert!(first.all_lte(available));
+    assert!(mandatory.saturating_add(first).all_lte(control));
+    assert_eq!(crate::MaterializationFamilyCursor::<Test>::get(), 0);
+    let dirty = Actors::dirty_observation_feeds(feed).expect("remaining second page");
+    assert_eq!(
+      (dirty.next_subscriber_page, dirty.next_subscriber_position),
+      (Some(1), 0)
+    );
+    assert!(
+      actors
+        .iter()
+        .take(page_size as usize)
+        .all(|id| Actors::pending_signal(*id))
+    );
+    assert!(
+      actors
+        .iter()
+        .skip(page_size as usize)
+        .all(|id| !Actors::pending_signal(*id))
+    );
+    for id in actors.iter().take(page_size as usize) {
+      assert_eq!(
+        Actors::service_nodes(*id)
+          .expect("causal service node")
+          .eligible_from,
+        2
+      );
+    }
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let second = Actors::service_materialization_families_with_quantum(2, available, 12, ordinary)
+      .expect("rotated family cursor remains valid");
+    assert!(second.all_lte(available));
+    assert!(mandatory.saturating_add(second).all_lte(control));
+    assert_eq!(crate::MaterializationFamilyCursor::<Test>::get(), 1);
+    assert!(Actors::dirty_observation_feeds(feed).is_none());
+    assert!(actors.iter().all(|id| Actors::pending_signal(*id)));
+    for id in actors.iter().skip(page_size as usize) {
+      assert_eq!(
+        Actors::service_nodes(*id)
+          .expect("deferred service node")
+          .eligible_from,
+        3
+      );
+    }
+    assert!(
+      Actors::block_resource_state().is_none(),
+      "this is a family-scheduler diagnostic, not full Prepass"
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
+fn mock_deadline_owners_do_not_certify_the_deos_one_third_prepass() {
+  type W = TestWeightInfo;
+  let scan = <W as crate::WeightInfo>::dependency_scan_source_probe().saturating_add(
+    <W as crate::WeightInfo>::process_dependency_scan_unit()
+      .max(<W as crate::WeightInfo>::process_dependency_scan_completion_unit()),
+  );
+  let mandatory = <W as crate::WeightInfo>::scheduler_on_initialize_cutoff()
+    .saturating_add(Actors::deadline_service_weight_upper())
+    .saturating_add(<W as crate::WeightInfo>::materialization_coordinator_base())
+    .saturating_add(scan)
+    .saturating_add(<W as crate::WeightInfo>::scheduler_on_idle_base())
+    .saturating_add(<W as crate::WeightInfo>::block_resource_finalize());
+  let deos_control = Weight::from_parts(303_433_283_909, 676_150);
+  println!("MOCK_PREPASS_NONCERT_V1 mock_mandatory={mandatory:?} deos_control={deos_control:?}");
+  assert!(mandatory.ref_time() <= deos_control.ref_time());
+  assert!(
+    mandatory.proof_size() > deos_control.proof_size(),
+    "mock full Prepass owners cannot fit the DEOS one-third ProofSize cap"
+  );
 }
 
 #[test]
@@ -1342,9 +1632,9 @@ fn underfunded_observation_change_advances_without_fee_readiness_or_apoptosis() 
 }
 
 #[test]
-fn observation_change_collection_failure_advances_without_readiness() {
+fn observation_change_collection_failure_preserves_revision_and_faults_until_retry() {
   new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
+    System::set_block_number(1);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
@@ -1353,29 +1643,58 @@ fn observation_change_collection_failure_advances_without_readiness() {
       inert_contract_steps(),
     );
     let sovereign = sovereign_account(actor_id);
-    let before = native_balance(&sovereign);
-    set_fail_fee_sink_transfer(true);
-
-    assert_ok!(Actors::note_observation_changed(35, 1));
-    assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
-    set_fail_fee_sink_transfer(false);
-
-    assert_eq!(native_balance(&sovereign), before);
+    let balance = native_balance(&sovereign);
+    let sink_balance = native_balance(&TestFeeSink::get());
     let hot = observation_semantic_hot(actor_id);
-    assert!(!hot.pending_signal);
-    assert!(matches!(
-      ActorProcesses::<Test>::get(actor_id),
-      Some(crate::ActorProcess {
-        status: ProcessStatus::Disabled(_),
-        residence: None,
-        ..
-      })
-    ));
-    assert!(Actors::dirty_observation_feeds(35).is_none());
+    assert_ok!(Actors::note_observation_changed(35, 1));
+    let dirty = Actors::dirty_observation_feeds(35).unwrap();
+    set_fail_fee_sink_transfer(true);
+    assert_noop!(
+      Actors::do_fanout_dirty_observation_page(),
+      Error::<Test>::TriggerFeeCollectionFailed
+    );
+    assert_eq!(Actors::dirty_observation_feeds(35), Some(dirty));
+    assert_eq!(observation_semantic_hot(actor_id), hot);
+    Actors::fanout_dirty_observations(Weight::MAX);
+    let fault =
+      Actors::observation_fanout_worker_fault().expect("collector failure owns a bounded fault");
+    assert_eq!(
+      (fault.feed, fault.revision, fault.class),
+      (35, 1, crate::CrossingWorkerFaultClass::Other)
+    );
+    assert_eq!(Actors::dirty_observation_feeds(35), Some(dirty));
+    assert_eq!(observation_semantic_hot(actor_id), hot);
+    assert_eq!(native_balance(&sovereign), balance);
+    assert_eq!(native_balance(&TestFeeSink::get()), sink_balance);
     assert!(!has_actor_event(|event| matches!(
-      event,
-      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
+      event, Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
     )));
+    let attempts = fee_collections();
+    Actors::fanout_dirty_observations(Weight::MAX);
+    assert_eq!(
+      fee_collections(),
+      attempts,
+      "faulted work performs no repeated collection"
+    );
+    assert_eq!(Actors::dirty_observation_feeds(35), Some(dirty));
+    set_fail_fee_sink_transfer(false);
+    assert_ok!(Actors::clear_observation_fanout_worker_fault(
+      RuntimeOrigin::root()
+    ));
+    clear_fee_collections();
+    Actors::fanout_dirty_observations(Weight::MAX);
+    assert_eq!(fee_collections(), vec![observation_change_trigger_fee()]);
+    assert_eq!(
+      native_balance(&sovereign),
+      balance - observation_change_trigger_fee()
+    );
+    assert!(Actors::pending_signal(actor_id));
+    assert!(Actors::dirty_observation_feeds(35).is_none());
+    assert!(Actors::observation_fanout_worker_fault().is_none());
+    Actors::fanout_dirty_observations(Weight::MAX);
+    assert_eq!(fee_collections(), vec![observation_change_trigger_fee()]);
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
   });
 }
 
@@ -2231,7 +2550,7 @@ fn observation_conditions_compare_only_fresh_scalar_values() {
 }
 
 #[test]
-fn invalid_fresh_observation_fails_permanently_and_applies_step_policy() {
+fn invalid_manual_observation_profile_refuses_before_pipeline_admission() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(10);
     set_observation(
@@ -2268,31 +2587,12 @@ fn invalid_fresh_observation_fails_permanently_and_applies_step_policy() {
     );
     fund_native(actor_id, 100);
     let bob_before = native_balance(&BOB);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle(Weight::MAX);
-    run_next_idle(Weight::MAX);
-    assert_eq!(native_balance(&BOB), bob_before + 7);
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::StepFailed {
-        actor_id: id,
-        step_index: 0,
-        error,
-        ..
-      } if *id == actor_id && *error == Error::<Test>::InvalidPredicate.into()
-    )));
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::CycleSummary {
-        actor_id: id,
-        result: CycleResult::Completed,
-        outcomes: OutcomeTotals { failed_steps: 1, committed_effectful_tasks: 1, .. },
-        ..
-      } if *id == actor_id
-    )));
+    assert_noop!(
+      Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id),
+      Error::<Test>::InvalidPredicate
+    );
+    assert_eq!(native_balance(&BOB), bob_before);
+    assert!(Actors::actor_run_state(actor_id).is_none());
 
     set_observation(
       1,
@@ -2338,7 +2638,7 @@ fn zero_observation_max_age_is_rejected_during_plan_validation() {
 }
 
 #[test]
-fn unavailable_observation_skips_without_incrementing_failures() {
+fn unavailable_manual_observation_parks_without_incrementing_failures() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
@@ -2360,15 +2660,13 @@ fn unavailable_observation_skips_without_incrementing_failures() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::StepSkipped {
-        actor_id: id,
-        reason: StepSkippedReason::PreconditionFalse,
+    assert!(matches!(
+      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Parked(ParkEvidence {
+        reason: ParkNegativeReason::PredicateFalse,
         ..
-      } if *id == actor_id
-    )));
+      }))
+    ));
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("actor remains")

@@ -23,6 +23,46 @@ PALLETS=(
     "pallet_staking"
     "pallet_xcm"
 )
+ACTORS_REQUIRED_RUNTIME_BENCHMARKS=(
+    "scheduler_actor_state_probe"
+    "scheduler_service_successful_interior"
+    "scheduler_service_retry_to_deadline"
+    "scheduler_service_retry_to_deadline_new_key"
+    "scheduler_due_deadline_to_service"
+    "scheduler_due_deadline_to_service_deep_index"
+    "return_due_block_deadline_to_service"
+    "return_due_block_deadline_to_service_deep_index"
+    "scheduler_service_late_refusal_rollback"
+    "scheduler_service_terminal_retain_close"
+    "scheduler_service_minimal_apoptosis"
+    "service_member_publish_empty"
+    "service_member_publish_populated"
+    "service_member_retire_singleton"
+    "service_member_retire_pair_cursor"
+    "service_member_retire_interior"
+    "service_member_insert_populated"
+    "service_round_begin_populated"
+    "service_round_probe_eligible"
+    "service_round_admit_eligible"
+    "dependency_publication_begun_empty_source_list"
+    "dependency_publication_begun_populated_source_list"
+    "dependency_publication_coalesced_active_source"
+    "service_member_to_deadline_new_key"
+    "transaction_extension_ingress_base"
+    "transaction_extension_ingress_notify"
+    "run_suspend"
+    "record_crossing_worker_fault"
+    "record_observation_fanout_worker_fault"
+    "crossing_worker_base"
+    "crossing_transition_unit"
+    "crossing_leaf_unit"
+    "crossing_page_unit"
+    "crossing_actor_unit"
+    "predicate_set_evaluation"
+    "predicate_asset_evaluation"
+    "predicate_observation_heavy_evaluation"
+    "observation_fanout_blocked_page"
+)
 
 BENCHER_MODE=""
 ACTION=""
@@ -68,7 +108,7 @@ Examples:
   $(basename "$0") pallet_deos_router        # Benchmark one pallet
   $(basename "$0") --check                    # Verify compilation only
   $(basename "$0") --extra pallet_deos_actors         # Include Actors diagnostics
-  $(basename "$0") --extrinsic scheduler_wakeup_append_new_page --output /tmp/wakeup.rs pallet_deos_actors
+  $(basename "$0") --extrinsic service_member_to_deadline_new_key --output /tmp/deadline.rs pallet_deos_actors
   $(basename "$0") --steps 100 --repeat 50 --all  # Production-quality run
 
 Environment:
@@ -226,8 +266,25 @@ build_benchmarks() {
     fi
 }
 
+verify_actors_required_benchmark_source() {
+    local benchmark_file="$TEMPLATE_DIR/pallets/actors/src/benchmarking.rs"
+    local benchmark
+    local missing=()
+
+    for benchmark in "${ACTORS_REQUIRED_RUNTIME_BENCHMARKS[@]}"; do
+        if ! grep -Fq "fn ${benchmark}(" "$benchmark_file"; then
+            missing+=("$benchmark")
+        fi
+    done
+    if (( ${#missing[@]} > 0 )); then
+        log_error "Actors generated-Weight contract names benchmarks absent from source: ${missing[*]}"
+        return 1
+    fi
+}
+
 check_only() {
     phase_banner "Step 2: Benchmark compilation check"
+    verify_actors_required_benchmark_source
     local production_identity=""
     if [[ -f "$PRODUCTION_RUNTIME_WASM" ]]; then
         production_identity="$(sha256sum "$PRODUCTION_RUNTIME_WASM" | cut -d ' ' -f 1)"
@@ -395,46 +452,7 @@ verify_weight_file_contract() {
         fi
     done
 
-    local required_runtime_benchmarks=(
-        "scheduler_actor_state_probe"
-        "scheduler_service_successful_interior"
-        "scheduler_service_retry_to_deadline"
-        "scheduler_due_deadline_to_service"
-        "scheduler_service_late_refusal_rollback"
-        "scheduler_service_terminal_retain_close"
-        "scheduler_service_minimal_apoptosis"
-        "service_member_publish_empty"
-        "service_member_publish_populated"
-        "service_member_retire_singleton"
-        "service_member_retire_pair_cursor"
-        "service_member_retire_interior"
-        "service_member_insert_populated"
-        "service_round_begin_populated"
-        "service_round_probe_eligible"
-        "service_round_admit_eligible"
-        "dependency_publication_begun_empty_source_list"
-        "dependency_publication_begun_populated_source_list"
-        "dependency_publication_coalesced_active_source"
-        "scheduler_wakeup_append_new_page"
-        "scheduler_wakeup_cursor_insert"
-        "scheduler_wakeup_cursor_remove_exact"
-        "transaction_extension_ingress_base"
-        "transaction_extension_ingress_notify"
-        "run_suspend"
-        "record_crossing_worker_fault"
-        "record_observation_fanout_worker_fault"
-        "crossing_worker_base"
-        "crossing_transition_unit"
-        "crossing_leaf_unit"
-        "crossing_page_unit"
-        "crossing_actor_unit"
-        "predicate_set_evaluation"
-        "predicate_asset_evaluation"
-        "predicate_observation_heavy_evaluation"
-        "opening_snapshot_traversal"
-        "observation_fanout_blocked_page"
-    )
-    for benchmark in "${required_runtime_benchmarks[@]}"; do
+    for benchmark in "${ACTORS_REQUIRED_RUNTIME_BENCHMARKS[@]}"; do
         if ! grep -q "fn ${benchmark}" "$output_file"; then
             log_error "Weight file contract check failed for pallet_deos_actors: missing generated ${benchmark}"
             return 1
@@ -463,20 +481,89 @@ run_pallet_benchmark() {
     local output_file="${OUTPUT_OVERRIDE:-$WEIGHTS_DIR/${pallet_name}.rs}"
     local exclude_args=()
 
+    if [[ "$pallet_name" == "pallet_deos_actors" && "$EXTRINSIC_PATTERN" == "*" ]]; then
+        verify_actors_required_benchmark_source
+    fi
+
     if [[ "$pallet_name" == "pallet_deos_actors" ]]; then
         local diagnostic_benchmarks=(
             "scheduler_inner_zero_step_user_complete"
-            "scheduler_inner_zero_step_user_max_head"
+            "scheduler_inner_zero_step_user_manual_header"
+            "scheduler_inner_zero_step_user_immutable_manual_header_close"
+  "scheduler_inner_zero_step_user_manual_header_close"
+            "scheduler_inner_zero_step_system_manual_header"
+            "scheduler_inner_zero_step_system_manual_header_close"
+            "scheduler_inner_zero_step_user_address_event"
+            "scheduler_inner_zero_step_user_address_event_close"
+            "scheduler_inner_zero_step_system_address_event"
+            "scheduler_inner_zero_step_system_address_event_close"
             "scheduler_inner_zero_step_user_cadenced"
             "scheduler_inner_zero_step_user_cadenced_close"
             "scheduler_inner_zero_step_user_at_time"
             "scheduler_inner_zero_step_user_at_time_close"
-            "scheduler_wakeup_zero_step_user_expiry"
-            "scheduler_paged_zero_step_user_insolvency"
-            "scheduler_paged_zero_step_user_crossing_insolvency"
-            "scheduler_paged_user_crossing_insolvency_max_contract"
-            "scheduler_paged_user_crossing_insolvency_max_contract_window"
-            "pipeline_admission_apoptosis_crossing"
+            "scheduler_inner_zero_step_user_observation_change_head_relink_close"
+  "scheduler_inner_zero_step_system_observation_change_head_relink_close"
+  "scheduler_inner_zero_step_user_observation_change_pending_head_relink_close"
+  "scheduler_inner_zero_step_system_observation_change_pending_head_relink_close"
+  "scheduler_inner_zero_step_user_observation_change_pending_second_page_retain"
+  "scheduler_inner_zero_step_system_observation_change_pending_second_page_retain"
+  "scheduler_inner_zero_step_user_observation_change_pending_second_page_close"
+  "scheduler_inner_zero_step_system_observation_change_pending_second_page_close"
+  "scheduler_inner_zero_step_user_observation_change_two_page_fanout_close"
+  "scheduler_inner_zero_step_system_observation_change_two_page_fanout_close"
+  "scheduler_inner_zero_step_user_observation_change_two_pages_close"
+  "scheduler_inner_zero_step_system_observation_change_two_pages_close"
+  "scheduler_inner_zero_step_user_observation_change_full_free_page_close"
+  "scheduler_inner_zero_step_system_observation_change_full_free_page_close"
+  "scheduler_inner_zero_step_user_observation_change_shared_page_close"
+  "scheduler_inner_zero_step_system_observation_change_shared_page_close"
+  "scheduler_inner_zero_step_user_observation_change_header"
+  "scheduler_inner_zero_step_user_observation_change_header_close"
+  "scheduler_inner_zero_step_system_observation_change_header"
+  "scheduler_inner_zero_step_system_observation_change_header_close"
+  "scheduler_inner_zero_step_user_crossing_header_armed_full_page_close"
+  "scheduler_inner_zero_step_system_crossing_header_armed_full_page_close"
+  "scheduler_inner_zero_step_user_crossing_header_armed_vacancy"
+  "scheduler_inner_zero_step_system_crossing_header_armed_vacancy"
+  "scheduler_inner_zero_step_user_crossing_header_armed_new_page"
+  "scheduler_inner_zero_step_system_crossing_header_armed_new_page"
+  "scheduler_inner_zero_step_user_crossing_waiting_tail_close"
+  "scheduler_inner_zero_step_system_crossing_waiting_tail_close"
+  "scheduler_inner_zero_step_user_crossing_header_armed"
+            "scheduler_inner_zero_step_user_crossing_header_armed_close"
+            "scheduler_inner_zero_step_system_crossing_header_armed"
+            "scheduler_inner_zero_step_system_crossing_header_armed_close"
+            "scheduler_inner_zero_step_user_crossing_header_waiting"
+            "scheduler_inner_zero_step_user_crossing_header_waiting_close"
+            "scheduler_inner_zero_step_system_crossing_header_waiting"
+            "scheduler_inner_zero_step_system_crossing_header_waiting_close"
+            "scheduler_inner_zero_step_user_cadenced_header"
+            "scheduler_inner_opening_system_transfer_header_max"
+  "scheduler_inner_opening_system_burn_header_max"
+  "scheduler_inner_opening_user_transfer_terminal"
+  "scheduler_inner_opening_user_transfer_terminal_peers"
+  "scheduler_inner_opening_user_split_late_failure"
+  "scheduler_inner_running_user_transfer_burn_two"
+  "scheduler_inner_opening_user_transfer_progress_two"
+  "scheduler_inner_opening_user_split_header_max"
+  "scheduler_inner_opening_user_burn_header_max"
+  "scheduler_inner_opening_user_transfer_mixed_header_max"
+  "scheduler_inner_opening_user_transfer_observation_header_max"
+  "scheduler_inner_opening_user_transfer_predicated_header_max"
+  "scheduler_inner_opening_user_transfer_header_max"
+  "scheduler_inner_zero_step_user_immutable_cadenced_header_close"
+  "scheduler_inner_zero_step_user_cadenced_header_close"
+            "scheduler_inner_zero_step_system_cadenced_header"
+            "scheduler_inner_zero_step_system_cadenced_header_close"
+            "scheduler_inner_zero_step_user_at_time_header"
+            "scheduler_inner_zero_step_user_immutable_at_time_header_close"
+  "scheduler_inner_zero_step_user_at_time_header_close"
+            "scheduler_inner_zero_step_system_at_time_header"
+            "scheduler_inner_zero_step_system_at_time_header_close"
+            "scheduler_inner_zero_step_user_at_time_preserved_latch"
+            "scheduler_inner_zero_step_user_at_time_preserved_latch_close"
+            "scheduler_inner_zero_step_system_at_time_preserved_latch"
+            "scheduler_inner_zero_step_system_at_time_preserved_latch_close"
             "scheduler_inner_zero_step_user_crossing_armed"
             "scheduler_inner_zero_step_user_crossing_armed_pages"
             "scheduler_inner_zero_step_user_crossing_armed_new_page"
@@ -496,7 +583,6 @@ run_pallet_benchmark() {
             "scheduler_inner_zero_step_user_observation_unlink"
             "scheduler_inner_zero_step_user_observation_feed_close"
             "pipeline_zero_step_opening_collection"
-            "pipeline_large_head_opening_collection"
             "process_remove_liquidity_indexed"
             "scheduler_on_idle_healthy_empty"
             "scheduler_cooldown_ineligible_idle"

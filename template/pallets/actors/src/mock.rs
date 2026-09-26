@@ -60,6 +60,10 @@ construct_runtime!(
   }
 );
 
+polkadot_sdk::frame_support::parameter_types! {
+  pub static TestMaxQueueEntriesScannedPerBlock: u32 = 1024;
+}
+
 impl polkadot_sdk::frame_system::Config for Test {
   type BaseCallFilter = polkadot_sdk::frame_support::traits::Everything;
   type BlockWeights = ();
@@ -150,6 +154,8 @@ thread_local! {
 
   static GUARANTEED_ON_IDLE_WEIGHT: RefCell<polkadot_sdk::sp_weights::Weight> =
     RefCell::new(polkadot_sdk::sp_weights::Weight::MAX);
+  static BLOCK_RESOURCE_BUDGET_OVERRIDE: RefCell<Option<crate::BlockResourceBudget>> =
+    const { RefCell::new(None) };
   static STEP_CONTROL_ACTUAL_WEIGHT_OVERRIDE: RefCell<Option<polkadot_sdk::sp_weights::Weight>> =
     RefCell::new(None);
   static LAST_STEP_CONTROL_EXECUTION: RefCell<Option<crate::StepControlExecution>> =
@@ -161,6 +167,7 @@ thread_local! {
   static FEE_COLLECTIONS: RefCell<alloc::vec::Vec<Balance>> = RefCell::new(alloc::vec::Vec::new());
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
+  static FAIL_FEE_SINK_TRANSFER_FROM: RefCell<Option<AccountId>> = RefCell::new(None);
   static FAIL_TRANSFER_TO: RefCell<Option<AccountId>> = RefCell::new(None);
   static ASSET_MINIMUM_BALANCE: RefCell<Balance> = RefCell::new(1);
   static OBSERVATIONS: RefCell<
@@ -243,6 +250,7 @@ pub fn reset_mock_adapters() {
   UNSTAKED.with(|b| b.borrow_mut().clear());
   DONATED_LIQUIDITY.with(|b| b.borrow_mut().clear());
   GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow_mut() = polkadot_sdk::sp_weights::Weight::MAX);
+  BLOCK_RESOURCE_BUDGET_OVERRIDE.with(|v| *v.borrow_mut() = None);
   STEP_CONTROL_ACTUAL_WEIGHT_OVERRIDE.with(|v| *v.borrow_mut() = None);
   LAST_STEP_CONTROL_EXECUTION.with(|v| *v.borrow_mut() = None);
   MISSING_STEP_CONTROL_ACTUAL_WEIGHT.with(|v| *v.borrow_mut() = false);
@@ -251,6 +259,7 @@ pub fn reset_mock_adapters() {
   FEE_COLLECTIONS.with(|v| v.borrow_mut().clear());
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
+  FAIL_FEE_SINK_TRANSFER_FROM.with(|v| *v.borrow_mut() = None);
   FAIL_TRANSFER_TO.with(|v| *v.borrow_mut() = None);
   ASSET_MINIMUM_BALANCE.with(|v| *v.borrow_mut() = 1);
   OBSERVATIONS.with(|values| values.borrow_mut().clear());
@@ -339,6 +348,10 @@ impl MockAssetOps {
     (b"mock-asset-account-freeze", who, asset).encode()
   }
 
+  fn minimum_balance_key(asset: TestAsset) -> alloc::vec::Vec<u8> {
+    (b"mock-asset-minimum-balance", asset).encode()
+  }
+
   fn account_is_frozen(who: &AccountId, asset: TestAsset) -> bool {
     polkadot_sdk::sp_io::storage::exists(&Self::frozen_account_key(who, asset))
   }
@@ -360,7 +373,10 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
     }
     match asset {
       TestAsset::Native => {
-        if *to == TestFeeSink::get() && FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow()) {
+        if *to == TestFeeSink::get()
+          && (FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow())
+            || FAIL_FEE_SINK_TRANSFER_FROM.with(|v| *v.borrow() == Some(*from)))
+        {
           return Err(DispatchError::Other("MockFeeSinkTransferFailed").into());
         }
         use polkadot_sdk::frame_support::traits::Currency;
@@ -478,7 +494,21 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
     }
   }
 
+  fn total_balance(who: &AccountId, asset: TestAsset) -> Balance {
+    match asset {
+      TestAsset::Native => {
+        use polkadot_sdk::frame_support::traits::fungible::Inspect as NativeInspect;
+        <Balances as NativeInspect<AccountId>>::total_balance(who)
+      }
+      _ => ASSET_BALANCES.with(|b| b.borrow().get(&(*who, asset)).copied().unwrap_or(0)),
+    }
+  }
+
   fn minimum_balance(_asset: TestAsset) -> Balance {
+    #[cfg(feature = "runtime-benchmarks")]
+    if let Some(encoded) = polkadot_sdk::sp_io::storage::get(&Self::minimum_balance_key(_asset)) {
+      return Balance::decode(&mut &encoded[..]).expect("mock asset minimum is encoded Balance");
+    }
     ASSET_MINIMUM_BALANCE.with(|value| *value.borrow())
   }
 
@@ -971,21 +1001,6 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
     Ok((asset, shares))
   }
 
-  fn setup_max_encoded_staking_positions(
-    owner: &AccountId,
-    max: u32,
-  ) -> Result<alloc::vec::Vec<(TestAsset, Balance)>, DispatchError> {
-    set_staking_share_asset_available(true);
-    (1..=max)
-      .map(|index| {
-        let asset = TestAsset::Local(index);
-        let shares = 1_000_000;
-        MockAssetOps::mint(owner, asset, shares).map_err(|failure| failure.error)?;
-        Ok((asset, MockStakingOps::share_balance(owner, asset)))
-      })
-      .collect()
-  }
-
   fn remove_empty_staking_receipt(_owner: &AccountId, asset: TestAsset) -> DispatchResult {
     if MockStakingOps::share_asset(asset).is_none() {
       return Err(DispatchError::Other("BenchmarkReceiptMissing"));
@@ -1030,6 +1045,22 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
         }
       })
       .collect()
+  }
+
+  fn setup_temporary_split_transfer(
+    owner: &AccountId,
+    actor: &AccountId,
+  ) -> Result<(TestAsset, Balance, AccountId), DispatchError> {
+    let asset = TestAsset::Local(1);
+    let recipient = polkadot_sdk::frame_benchmarking::account("temporary-split-recipient", 0, 0);
+    polkadot_sdk::sp_io::storage::set(&MockAssetOps::minimum_balance_key(asset), &2u128.encode());
+    MockAssetOps::mint(owner, asset, 4).map_err(|failure| failure.error)?;
+    MockAssetOps::mint(actor, asset, 4).map_err(|failure| failure.error)?;
+    ensure!(
+      MockAssetOps::balance(&recipient, asset) == 0,
+      DispatchError::Other("RecipientNotEmpty")
+    );
+    Ok((asset, 2, recipient))
   }
 
   fn setup_predicate_assets(
@@ -1298,9 +1329,16 @@ impl Get<Balance> for TestMinUserBalance {
   }
 }
 
+pub fn set_block_resource_budget(budget: crate::BlockResourceBudget) {
+  BLOCK_RESOURCE_BUDGET_OVERRIDE.with(|value| *value.borrow_mut() = Some(budget));
+}
+
 pub struct TestBlockResourceBudget;
 impl Get<crate::BlockResourceBudget> for TestBlockResourceBudget {
   fn get() -> crate::BlockResourceBudget {
+    if let Some(budget) = BLOCK_RESOURCE_BUDGET_OVERRIDE.with(|value| *value.borrow()) {
+      return budget;
+    }
     crate::BlockResourceBudget::new(
       // Synthetic tests admit the fixed hook plus both mandatory deadline frontiers and one
       // maximum canonical Step; production runtimes derive their own measured budget.
@@ -1361,11 +1399,6 @@ pub struct MockAdmissionCertificateAuthority;
 
 const ADMISSION_SEMANTICS_VERSION_KEY: &[u8] = b"mock-admission-semantics-version";
 
-#[cfg(feature = "runtime-benchmarks")]
-pub fn set_admission_semantics_version(version: u32) {
-  polkadot_sdk::sp_io::storage::set(ADMISSION_SEMANTICS_VERSION_KEY, &version.encode());
-}
-
 impl crate::AdmissionCertificateAuthorityProvider for MockAdmissionCertificateAuthority {
   fn current() -> Option<crate::AdmissionCertificateAuthority> {
     let runtime_actor_semantics_version =
@@ -1410,8 +1443,7 @@ impl crate::StepControlWeightProvider<crate::StepOf<Test>> for MockStepControlWe
       100_000_011u64
         .saturating_add(u64::from(context.cursor))
         .saturating_add(u64::from(context.opening_tail_chunks))
-        .saturating_add(u64::from(context.predicate_evaluation_units))
-        .saturating_add(u64::from(context.opening_snapshot_entries)),
+        .saturating_add(u64::from(context.predicate_evaluation_units)),
       100_022u64.saturating_add(u64::from(context.steps_in_fragment)),
     ))
   }
@@ -1502,7 +1534,6 @@ impl pallet_deos_actors::Config for Test {
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
   type MaxContractSteps = ConstU32<12>;
   type MaxFundingTrackedAssets = ConstU32<10>;
-  type MaxOpeningSnapshotEntries = ConstU32<24>;
   type MaxPreconditionClauses = ConstU32<4>;
   type MaxPredicatesPerClause = ConstU32<4>;
   type MaxPredicatesPerStep = ConstU32<4>;
@@ -1536,14 +1567,14 @@ impl pallet_deos_actors::Config for Test {
   #[cfg(feature = "runtime-benchmarks")]
   type MaxCrossingActorsPerBlock = ConstU32<128>;
   type CrossingWorkerWeightLimit = TestCrossingWorkerWeightLimit;
-  type MaxQueueEntriesScannedPerBlock = ConstU32<1024>;
+  type MaxQueueEntriesScannedPerBlock = TestMaxQueueEntriesScannedPerBlock;
   type MaxObservationFanoutPagesPerBlock = ConstU32<64>;
   type ObservationFanoutWeightLimit = TestObservationFanoutWeightLimit;
   type WakeupWeightLimit = TestWakeupWeightLimit;
   type MaxWakeupsPerBlock = ConstU32<64>;
   type MaxSweepBatch = TestMaxSweepBatch;
   type MaxWhitelistSize = ConstU32<16>;
-  type MaxSplitTransferLegs = ConstU32<8>;
+  type MaxSplitTransferLegs = ConstU32<4>;
   type TargetBlockTime = ConstU64<63_116>;
   type MaxExecutionDelayBlocks = TestMaxExecutionDelayBlocks;
   type MaxTemporalDelayTicks = TestMaxTemporalDelayTicks;
@@ -1576,6 +1607,7 @@ impl pallet_deos_actors::Config for Test {
 pub const TEST_INITIAL_BALANCE: Balance = 10_000_000_000_000;
 
 pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
+  TestMaxQueueEntriesScannedPerBlock::set(1024);
   let mut t = polkadot_sdk::frame_system::GenesisConfig::<Test>::default()
     .build_storage()
     .unwrap();
@@ -1619,6 +1651,10 @@ pub fn clear_fee_collections() {
 
 pub fn set_fail_fee_sink_transfer(value: bool) {
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = value);
+}
+
+pub fn set_fail_fee_sink_transfer_from(value: Option<AccountId>) {
+  FAIL_FEE_SINK_TRANSFER_FROM.with(|v| *v.borrow_mut() = value);
 }
 
 pub(crate) fn control_atomicity_checkpoint(_actor_id: u64) -> DispatchResult {

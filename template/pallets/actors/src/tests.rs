@@ -7,14 +7,13 @@ use crate::{
   CrossingMemberships, CrossingPhase, CrossingTransition, CycleResult, CycleState, Error, Event,
   FeeChargeKind, FeeEnvelopeError, FeeEnvelopeInput, FundingSourcePolicy, GlobalCircuitBreaker,
   IdleStarvationPhase, IdleStarvationState, InitialLifecycle, InputLimit, LoadedActorStateOf,
-  Mutability, NextActorId, ObservationCrossing, ObservationSubscriberPageList, OpeningSurface,
-  OutcomeTotals, OwnerSlotBitmaps, Precondition, Predicate, RetryClass, ScheduleWindow,
-  SimulationError, SimulationMode, SimulationStepRecord, SourceFilter, SourceFilterOf,
-  SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf, StepOutcome,
-  StepSkippedReason, SuspensionReason, SystemSovereignState, Task, TaskFailure, TaskOf, Trigger,
-  TriggerFamily, TriggerRuntimeState, WakeupClock, WakeupKey, WakeupPage, WakeupPointer,
-  adapters::AssetOps, compose_attempt_fee_envelope, fee_native_protected_minimum, mock::*,
-  settle_attempt_fee_step,
+  Mutability, NextActorId, ObservationCrossing, ObservationSubscriberPageList, OutcomeTotals,
+  OwnerSlotBitmaps, Precondition, Predicate, RetryClass, ScheduleWindow, SimulationError,
+  SimulationMode, SimulationStepRecord, SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg,
+  SplitTransferLegsOf, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, SuspensionReason,
+  SystemSovereignState, Task, TaskFailure, TaskOf, Trigger, TriggerFamily, TriggerRuntimeState,
+  WakeupClock, WakeupKey, WakeupPage, WakeupPointer, adapters::AssetOps,
+  compose_attempt_fee_envelope, fee_native_protected_minimum, mock::*, settle_attempt_fee_step,
 };
 use alloc::collections::BTreeSet;
 
@@ -138,7 +137,7 @@ use polkadot_sdk::frame_support::{
   __private::metadata_ir::{
     StorageEntryMetadataIR, StorageEntryModifierIR, StorageEntryTypeIR, StorageHasherIR,
   },
-  BoundedBTreeMap, BoundedVec, assert_noop, assert_ok,
+  BoundedVec, assert_noop, assert_ok,
   traits::{Currency, Get, Hooks, LockableCurrency, StorageInfoTrait, WithdrawReasons},
 };
 use polkadot_sdk::sp_runtime::StateVersion;
@@ -538,6 +537,7 @@ fn user_active_contract(
     window,
     steps,
     completion: crate::CompletionPolicy::Persistent,
+    parked_balance_activation: None,
     funding: FundingSourcePolicy::OwnerOnly,
     auto_close_at_cycle_nonce: None,
   })
@@ -652,6 +652,7 @@ fn system_active_contract_with_completion(
     window,
     steps,
     completion,
+    parked_balance_activation: None,
     funding: FundingSourcePolicy::RuntimePolicy,
     auto_close_at_cycle_nonce: None,
   })
@@ -873,8 +874,8 @@ fn run_next_idle(weight: Weight) {
   run_idle(weight);
 }
 
-/// Drives one canonical temporal deadline frontier at `now`, mirroring the production `on_idle`
-/// housekeeping call. Canonically published Actors register temporal triggers in the `Deadline*`
+/// Drives one canonical temporal deadline frontier at `now`, isolating the mandatory prepass
+/// deadline quantum. Canonically published Actors register temporal triggers in the `Deadline*`
 /// carrier, which the retired paged Waiting substrate never observes.
 fn service_canonical_temporal_frontiers(now: MockBlockNumber) {
   let mut meter = WeightMeter::with_limit(Weight::MAX);
@@ -886,6 +887,15 @@ fn service_canonical_temporal_frontiers(now: MockBlockNumber) {
     Some(WakeupKey::Block(now.saturating_add(1))),
     Some(WakeupKey::Tick(now.saturating_add(1))),
   );
+}
+
+/// Executes the complete block protocol without the multi-block convenience loop in `run_idle`.
+fn run_canonical_block_at(block: MockBlockNumber, weight: Weight) {
+  System::set_block_number(block);
+  Actors::on_initialize(block);
+  run_prepass();
+  Actors::on_idle(block, weight);
+  Actors::on_finalize(block);
 }
 
 /// Advances to the absolute `block` and drives exactly one canonical Service round there:
@@ -1071,8 +1081,9 @@ mod proptest_actor {
   use super::Schedule;
   use super::{
     RETRY_LATER, all_conditions, asset_balance, create_system_with, fund_native, make_step,
-    manual_schedule, native_balance, prefund_active_user_creation, run_idle, run_next_idle,
-    run_prepass, set_asset_balance, setup_pool, setup_temporary_retry_pool, sovereign_account,
+    manual_schedule, native_balance, prefund_active_user_creation, run_canonical_block_at,
+    run_idle, run_next_idle, run_prepass, set_asset_balance, setup_pool,
+    setup_temporary_retry_pool, sovereign_account,
   };
   use crate::{
     ActorControlLocators, ActorIdentities, ActorRunStateStore, AmountResolution, AssetFilter,
@@ -1185,6 +1196,7 @@ mod proptest_actor {
           window: None,
           steps: plan,
           completion: crate::CompletionPolicy::Persistent,
+          parked_balance_activation: None,
           funding: crate::FundingSourcePolicy::OwnerOnly,
           auto_close_at_cycle_nonce: None,
         })
@@ -1447,6 +1459,7 @@ mod proptest_actor {
       window: None,
       steps: inert_contract_steps(),
       completion: crate::CompletionPolicy::Persistent,
+      parked_balance_activation: None,
       funding: FundingSourcePolicy::AnyVerifiedIngress,
       auto_close_at_cycle_nonce: None,
     })
@@ -1500,13 +1513,6 @@ mod proptest_actor {
       ActorControlLocators::<Test>::iter_keys().next().is_none(),
       "canonical publication never recreates a legacy control locator"
     );
-    let run_payload_ids: std::collections::BTreeSet<_> =
-      crate::ActorRunPayloads::<Test>::iter_keys().collect();
-    assert_eq!(
-      run_ids, run_payload_ids,
-      "canonical Run head and payload tiers agree"
-    );
-
     for actor_id in &active_ids {
       let crate::ActorSemanticState::Active(record) = semantic_records
         .get(actor_id)
@@ -1684,8 +1690,7 @@ mod proptest_actor {
         let max_blocks = (actor_count * 3) as u64;
         let mut executed: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
         for block in 1..=max_blocks {
-          frame_system::Pallet::<Test>::set_block_number(block);
-          Actors::on_idle(block, Weight::MAX);
+          run_canonical_block_at(block, Weight::MAX);
           for &actor_id in &actor_ids {
             if let Some(instance) = Actors::active_actor_view(actor_id) {
               if instance.cycle_nonce > 0 {

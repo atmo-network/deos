@@ -1,13 +1,130 @@
 use super::{
-  contract::{
-    CrossingDirection, CrossingPhase, OpeningSurface, ScheduleWindow, Trigger, TriggerFamily,
-  },
+  contract::{CrossingDirection, CrossingPhase, ScheduleWindow, Trigger, TriggerFamily},
   scheduler::{TriggerWakeupPointer, WakeupKey, WakeupPointer},
 };
 use frame::prelude::*;
 
 pub type ActorId = u64;
 pub type ActorGeneration = u64;
+
+/// One certified fixed-anchor balance dependency for a parked activation episode. The host's
+/// current minimum remains an input to every classification so a changed asset definition cannot
+/// silently reuse stale threshold authority.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ParkedBalanceWatch<AssetId, Balance> {
+  pub asset: AssetId,
+  pub authored_min_delta: Balance,
+  pub certified_minimum_balance: Balance,
+  pub anchor: Balance,
+  pub acknowledged_revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParkedBalanceCertificationError {
+  ZeroMinimumBalance,
+  ThresholdOverflow,
+  PlanCapacityExceeded,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParkedBalanceClassificationError {
+  MinimumBalanceChanged,
+  ThresholdOverflow,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParkedBalanceQualification {
+  BelowThreshold,
+  Qualified,
+}
+
+/// Certifies one watch without saturating the protocol floor of 100 asset minima.
+pub fn certify_parked_balance_watch<AssetId, Balance>(
+  asset: AssetId,
+  authored_min_delta: Balance,
+  minimum_balance: Balance,
+  anchor: Balance,
+  acknowledged_revision: u64,
+) -> Result<ParkedBalanceWatch<AssetId, Balance>, ParkedBalanceCertificationError>
+where
+  Balance: Copy + CheckedMul + From<u8> + Ord + Zero,
+{
+  if minimum_balance.is_zero() {
+    return Err(ParkedBalanceCertificationError::ZeroMinimumBalance);
+  }
+  minimum_balance
+    .checked_mul(&Balance::from(100u8))
+    .ok_or(ParkedBalanceCertificationError::ThresholdOverflow)?;
+  Ok(ParkedBalanceWatch {
+    asset,
+    authored_min_delta,
+    certified_minimum_balance: minimum_balance,
+    anchor,
+    acknowledged_revision,
+  })
+}
+
+/// Classifies current total ownership against the immutable episode anchor. A negative check never
+/// returns a replacement watch, which makes moving the anchor through sampling impossible.
+pub fn classify_parked_balance<AssetId, Balance>(
+  watch: &ParkedBalanceWatch<AssetId, Balance>,
+  current_minimum_balance: Balance,
+  current_total_balance: Balance,
+) -> Result<ParkedBalanceQualification, ParkedBalanceClassificationError>
+where
+  Balance: Copy + CheckedMul + CheckedSub + From<u8> + Ord,
+{
+  if current_minimum_balance != watch.certified_minimum_balance {
+    return Err(ParkedBalanceClassificationError::MinimumBalanceChanged);
+  }
+  let floor = current_minimum_balance
+    .checked_mul(&Balance::from(100u8))
+    .ok_or(ParkedBalanceClassificationError::ThresholdOverflow)?;
+  let threshold = watch.authored_min_delta.max(floor);
+  let delta = if current_total_balance >= watch.anchor {
+    current_total_balance
+      .checked_sub(&watch.anchor)
+      .ok_or(ParkedBalanceClassificationError::ThresholdOverflow)?
+  } else {
+    watch
+      .anchor
+      .checked_sub(&current_total_balance)
+      .ok_or(ParkedBalanceClassificationError::ThresholdOverflow)?
+  };
+  Ok(if delta >= threshold {
+    ParkedBalanceQualification::Qualified
+  } else {
+    ParkedBalanceQualification::BelowThreshold
+  })
+}
+
+/// Classifies one complete bounded watch plan from a single current host snapshot per asset. Every
+/// certified minimum is checked even after one asset qualifies, so configuration drift cannot be
+/// hidden by watch ordering.
+pub fn classify_parked_balance_plan<AssetId, Balance, Observe>(
+  watches: &[ParkedBalanceWatch<AssetId, Balance>],
+  mut observe: Observe,
+) -> Result<ParkedBalanceQualification, ParkedBalanceClassificationError>
+where
+  AssetId: Copy,
+  Balance: Copy + CheckedMul + CheckedSub + From<u8> + Ord,
+  Observe: FnMut(AssetId) -> (Balance, Balance),
+{
+  let mut qualification = ParkedBalanceQualification::BelowThreshold;
+  for watch in watches
+    .iter(/* deos-bypass: bounded-iter -- caller supplies a MaxAssets-bounded authored watch plan. */)
+  {
+    let (current_minimum_balance, current_total_balance) = observe(watch.asset);
+    if classify_parked_balance(watch, current_minimum_balance, current_total_balance)?
+      == ParkedBalanceQualification::Qualified
+    {
+      qualification = ParkedBalanceQualification::Qualified;
+    }
+  }
+  Ok(qualification)
+}
 
 /// Generation-bound identity used by every future process-residence index.
 #[derive(
@@ -33,6 +150,7 @@ pub enum ServiceResidenceKind {
 )]
 pub enum ParkNegativeReason {
   PredicateFalse,
+  ParkedBalanceBelowThreshold,
   SourceUnavailable,
   MonotonicBoundaryPassed,
 }
@@ -385,7 +503,6 @@ pub fn plan_legacy_process_transition<BlockNumber: Copy>(
   }
 }
 
-pub const ACTOR_RUN_PAYLOAD_HASH_DOMAIN: &[u8] = b"DEOS_ACTOR_RUN_PAYLOAD";
 pub const PIPELINE_SERVICE_IDENTITY_HASH_DOMAIN: &[u8] = b"DEOS_PIPELINE_SERVICE_IDENTITY";
 
 pub fn pipeline_service_identity(admission_identity: [u8; 32]) -> [u8; 32] {
@@ -800,11 +917,10 @@ pub struct ActorRunAuthority<Hash> {
 }
 
 #[derive(
-  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
 )]
-pub struct ActorRunHead<BlockNumber> {
+pub struct ActorRunState<BlockNumber> {
   pub contract_authority: ActorRunAuthority<[u8; 32]>,
-  pub payload_commitment: [u8; 32],
   pub cycle_nonce: u64,
   pub cursor: u32,
   pub unsuccessful_attempts_at_cursor: u32,
@@ -816,148 +932,7 @@ pub struct ActorRunHead<BlockNumber> {
   pub suspension: Option<SuspensionReason>,
 }
 
-impl<BlockNumber> ActorRunHead<BlockNumber> {
-  pub fn has_contract_authority(
-    &self,
-    semantic_contract_id: [u8; 32],
-    body_commitment: [u8; 32],
-    admission_identity: [u8; 32],
-  ) -> bool {
-    self.contract_authority
-      == ActorRunAuthority {
-        semantic_contract_id,
-        body_commitment,
-        admission_identity,
-        pipeline_service_identity: pipeline_service_identity(admission_identity),
-      }
-  }
-
-  pub fn running_is_coherent(&self) -> bool
-  where
-    BlockNumber: PartialOrd,
-  {
-    self.suspension.is_none()
-      && self
-        .last_committed_step_block
-        .as_ref()
-        .is_some_and(|last_committed| last_committed < &self.eligible_at)
-  }
-
-  pub fn suspension_is_coherent(&self) -> bool {
-    matches!(
-      (&self.last_step_outcome, self.suspension),
-      (
-        Some(StepOutcome::FundingUnavailable),
-        Some(SuspensionReason::FundingUnavailable)
-      ) | (
-        Some(StepOutcome::Failed(crate::TaskFailure {
-          retry: crate::RetryClass::Temporary,
-          ..
-        })),
-        Some(SuspensionReason::Temporary)
-      )
-    )
-  }
-}
-
-#[derive(Debug, Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(MaxSnapshotEntries))]
-pub struct ActorRunPayload<AssetId, Balance, MaxSnapshotEntries: Get<u32>> {
-  pub opening_snapshot: BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>,
-}
-
-#[derive(Debug, Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(MaxSnapshotEntries))]
-pub struct ActorRunState<AssetId, Balance, BlockNumber, MaxSnapshotEntries: Get<u32>> {
-  pub contract_authority: ActorRunAuthority<[u8; 32]>,
-  pub cycle_nonce: u64,
-  pub cursor: u32,
-  pub unsuccessful_attempts_at_cursor: u32,
-  pub last_attempt_block: BlockNumber,
-  pub last_committed_step_block: Option<BlockNumber>,
-  pub eligible_at: BlockNumber,
-  pub opening_snapshot: BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>,
-  pub cumulative_outcomes: OutcomeTotals,
-  pub last_step_outcome: Option<StepOutcome>,
-  pub suspension: Option<SuspensionReason>,
-}
-
-impl<AssetId: Clone + Ord, Balance: Clone, BlockNumber: Clone, MaxSnapshotEntries: Get<u32>> Clone
-  for ActorRunState<AssetId, Balance, BlockNumber, MaxSnapshotEntries>
-{
-  fn clone(&self) -> Self {
-    Self {
-      contract_authority: self.contract_authority,
-      cycle_nonce: self.cycle_nonce,
-      cursor: self.cursor,
-      unsuccessful_attempts_at_cursor: self.unsuccessful_attempts_at_cursor,
-      last_attempt_block: self.last_attempt_block.clone(),
-      last_committed_step_block: self.last_committed_step_block.clone(),
-      eligible_at: self.eligible_at.clone(),
-      opening_snapshot: self.opening_snapshot.clone(),
-      cumulative_outcomes: self.cumulative_outcomes,
-      last_step_outcome: self.last_step_outcome.clone(),
-      suspension: self.suspension,
-    }
-  }
-}
-
-impl<AssetId: Encode, Balance: Encode, BlockNumber, MaxSnapshotEntries: Get<u32>>
-  ActorRunState<AssetId, Balance, BlockNumber, MaxSnapshotEntries>
-{
-  pub fn into_tiers(
-    self,
-  ) -> (
-    ActorRunHead<BlockNumber>,
-    ActorRunPayload<AssetId, Balance, MaxSnapshotEntries>,
-  ) {
-    let payload = ActorRunPayload {
-      opening_snapshot: self.opening_snapshot,
-    };
-    let payload_commitment =
-      (ACTOR_RUN_PAYLOAD_HASH_DOMAIN, &payload).using_encoded(frame::hashing::blake2_256);
-    (
-      ActorRunHead {
-        contract_authority: self.contract_authority,
-        payload_commitment,
-        cycle_nonce: self.cycle_nonce,
-        cursor: self.cursor,
-        unsuccessful_attempts_at_cursor: self.unsuccessful_attempts_at_cursor,
-        last_attempt_block: self.last_attempt_block,
-        last_committed_step_block: self.last_committed_step_block,
-        eligible_at: self.eligible_at,
-        cumulative_outcomes: self.cumulative_outcomes,
-        last_step_outcome: self.last_step_outcome,
-        suspension: self.suspension,
-      },
-      payload,
-    )
-  }
-
-  pub fn from_tiers(
-    head: ActorRunHead<BlockNumber>,
-    payload: ActorRunPayload<AssetId, Balance, MaxSnapshotEntries>,
-  ) -> Option<Self> {
-    if (ACTOR_RUN_PAYLOAD_HASH_DOMAIN, &payload).using_encoded(frame::hashing::blake2_256)
-      != head.payload_commitment
-    {
-      return None;
-    }
-    Some(Self {
-      contract_authority: head.contract_authority,
-      cycle_nonce: head.cycle_nonce,
-      cursor: head.cursor,
-      unsuccessful_attempts_at_cursor: head.unsuccessful_attempts_at_cursor,
-      last_attempt_block: head.last_attempt_block,
-      last_committed_step_block: head.last_committed_step_block,
-      eligible_at: head.eligible_at,
-      opening_snapshot: payload.opening_snapshot,
-      cumulative_outcomes: head.cumulative_outcomes,
-      last_step_outcome: head.last_step_outcome,
-      suspension: head.suspension,
-    })
-  }
-
+impl<BlockNumber> ActorRunState<BlockNumber> {
   pub(crate) fn has_contract_authority(
     &self,
     semantic_contract_id: [u8; 32],

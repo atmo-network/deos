@@ -268,24 +268,24 @@ fn split_transfer_executes_and_remainder_is_retained() {
 }
 
 #[test]
-fn split_transfer_rejects_five_ineligible_legs_atomically_then_retries() {
+fn split_transfer_rejects_four_ineligible_legs_atomically_then_retries() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     set_asset_minimum_balance(11);
     let asset = TestAsset::Local(11);
-    let recipients = [ALICE, BOB, CHARLIE, 4, 5, 6, 7, 8];
+    let recipients = [ALICE, BOB, CHARLIE, 4];
     let legs = recipients
       .iter()
       .map(|to| SplitLeg {
         to: *to,
-        share: Perbill::from_parts(125_000_000),
+        share: Perbill::from_percent(25),
       })
       .collect::<Vec<_>>()
       .try_into()
-      .expect("eight legs fit");
+      .expect("four legs fit");
     let mut step = make_step(Task::SplitTransfer {
       asset,
-      amount: AmountResolution::Fixed(80),
+      amount: AmountResolution::Fixed(40),
       legs,
     });
     step.on_error = StepErrorPolicy::RetryLater { max_attempts: 2 };
@@ -329,7 +329,7 @@ fn split_transfer_rejects_five_ineligible_legs_atomically_then_retries() {
     frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
 
-    assert_eq!(asset_balance(&actor, asset), actor_before - 80);
+    assert_eq!(asset_balance(&actor, asset), actor_before - 40);
     for (recipient, before) in recipients.iter().zip(retry_balances) {
       assert_eq!(asset_balance(recipient, asset), before + 10);
     }
@@ -338,11 +338,11 @@ fn split_transfer_rejects_five_ineligible_legs_atomically_then_retries() {
       event,
       Event::SplitTransferExecuted {
         actor_id: id,
-        total: 80,
-        distributed: 80,
+        total: 40,
+        distributed: 40,
         retained: 0,
-        legs: 8,
-        effective_legs: 8,
+        legs: 4,
+        effective_legs: 4,
         ..
       } if *id == actor_id
     )));

@@ -288,9 +288,7 @@ fn test_weight_fallback_equals_reference_interface_for_all_classes() {
     current_step_plan_opening_head,
     current_step_plan_suspended_head,
     scheduler_on_idle_base,
-    scheduler_wakeup_append_new_page,
-    scheduler_wakeup_cursor_insert,
-    scheduler_wakeup_cursor_remove_exact,
+    service_member_to_deadline_new_key,
     scheduler_inner_zero_step_complete,
     scheduler_paged_zero_step_user_crossing_unavailable,
     scheduler_actor_state_probe,
@@ -300,7 +298,6 @@ fn test_weight_fallback_equals_reference_interface_for_all_classes() {
     run_suspend,
     run_complete,
     run_cancel,
-    opening_snapshot_traversal,
     update_contract,
     set_global_circuit_breaker,
     set_active_actor_limit,
@@ -321,7 +318,7 @@ fn test_weight_fallback_equals_reference_interface_for_all_classes() {
   same_at!(current_step_load_tail, 1, 2, 4);
   same_at!(current_step_plan_running_tail, 1, 2, 4);
   same_at!(predicate_set_evaluation, 0, 1, 8);
-  same_at!(task_split_transfer, 0, 1, 8);
+  same_at!(task_split_transfer, 0, 1, 4);
   same_at!(permissionless_sweep_many, 0, 1, 5);
 }
 
@@ -2098,9 +2095,7 @@ fn timer_always_executes_on_interval() {
     let mut last_cycle_nonce = 0u64;
     let mut execution_count = 0usize;
     for block in 2..22 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      Actors::on_initialize(block);
-      Actors::on_idle(block, Weight::MAX);
+      run_canonical_block_at(block, Weight::MAX);
       if let Some(inst) = Actors::active_actor_view(actor_id) {
         if inst.cycle_nonce > last_cycle_nonce {
           execution_count += 1;
@@ -2154,9 +2149,7 @@ fn user_copybook_savings() {
     let initial_savings = native_balance(&savings);
     // Execute multiple cycles
     for block in 2..32 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      Actors::on_initialize(block);
-      Actors::on_idle(block, Weight::MAX);
+      run_canonical_block_at(block, Weight::MAX);
     }
     assert!(
       native_balance(&savings) > initial_savings,

@@ -446,7 +446,7 @@ export class BlockchainAdapter implements Adapter {
       return await Promise.all(
         KNOWN_SYSTEM_ACTORS.map(async (actor) => {
           const runtimeActorId = BigInt(actor.actorId);
-          const [control, contractHead, runHead] = await Promise.all([
+          const [control, contractHead, runState] = await Promise.all([
             readActorControlProjection(
               snapshot.typedApi,
               snapshot.at,
@@ -456,7 +456,7 @@ export class BlockchainAdapter implements Adapter {
               runtimeActorId,
               { at: snapshot.at },
             ),
-            snapshot.typedApi.query.Actors.ActorRunHead.getValue(
+            snapshot.typedApi.query.Actors.ActorRunState.getValue(
               runtimeActorId,
               { at: snapshot.at },
             ),
@@ -478,7 +478,7 @@ export class BlockchainAdapter implements Adapter {
           }
           if (
             control.status !== 'Active' &&
-            (contractHead != null || runHead != null)
+            (contractHead != null || runState != null)
           ) {
             throw new Error('Inactive Actor retains orphan active state');
           }
@@ -510,7 +510,7 @@ export class BlockchainAdapter implements Adapter {
             paused: automationActorPaused(hot),
             runState: automationActorRunState(hot),
             cycleNonce: identity?.cycle_nonce ?? 0n,
-            continuation: automationContinuationSnapshot(runHead),
+            continuation: automationContinuationSnapshot(runState),
             lastCycleBlock: hot?.last_cycle_block ?? null,
             completionPolicy: contractHead?.header.completion.type ?? null,
             triggerLabel: automationTriggerLabel(contractHead?.header.trigger),

@@ -13,8 +13,8 @@ The current kernel/runtime slice provides:
 
 - User and System Actor creation with deterministic sovereign accounts
 - Bounded Actor Contracts whose Steps own an optional canonical `Precondition` DNF of current-state Predicates and one typed Task (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, or adapter-free `StopCycle`, etc.); absence is the sole unconditional form
-- One scheduler over a canonical paged FIFO with monotonic `NextQueueTicket`, common block cutoff, exact physical occupancy, one actor-local live ticket, strict global ticket order across actor types, and shared time-ordered wakeup storage
-- Exactly one `Manual`, `AddressEvent`, `ObservationChange`, or timestamp-tick `Cadenced` trigger per Actor; one-feed subscriptions and latest revisions stay bounded in reusable paged state while independently metered deferred fanout coalesces into the existing readiness latch and scheduler
+- One scheduler over an actor-keyed persistent Service ring with one authoritative head/cursor, generation-bound process residence, B+1 eligibility, cyclic cross-class encounter order, and canonical C32 Block/Tick Deadline carriers
+- Exactly one `Manual`, `AddressEvent`, `ObservationChange`, `ObservationCrossing`, `AtTime`, or `Cadenced` Trigger per Actor; bounded indexed detection and materialization may publish the existing readiness latch only while Idle
 - Bounded `on_idle` execution with sparse Healthy/Starving/Alerted state and one-time detection/recovery events
 - Fee admission, lifecycle controls, pause/resume, and pure prechecked terminal cleanup
 - Sparse progress-preserving `ActorRunState` for Mutable suspension, with an open nonce separate from finalized identity, one scalar cursor, exact eligibility, current-state reevaluation, exact outcomes, Temporary-only retry, deterministic cancellation, and no prefix replay
@@ -27,13 +27,13 @@ The current kernel/runtime slice provides:
 ## Key rule
 
 DEOS Actors is a **bounded deterministic actor runtime**, not a general-purpose smart-contract VM.
-Actors execute declarative plans against runtime adapters under explicit queue, scheduler, fee, weight, and lifecycle limits. Event-driven triggers such as matched asset ingress are one important part of that model, but they live alongside deterministic scheduling and bounded execution rather than replacing them.
+Actors execute declarative plans against runtime adapters under explicit Service, Deadline, fee, Weight, and lifecycle limits. Event-driven triggers such as matched asset ingress are one important part of that model, but they live alongside deterministic scheduling and bounded execution rather than replacing them.
 
 `Percent` reads the applicable live balance or share surface at every execution attempt. `Fixed` preserves its authored debit and fails rather than silently shrinking when current capacity is insufficient.
 
 Active Actor Contracts choose `Persistent` or `CloseAfterProductiveCycle`. Productive closure requires successful logical-cycle completion with at least one committed effectful task; false Precondition results, skipped Steps, rollback, suspension, abort, retry exhaustion, and bare `StopCycle` do not qualify.
 
-`StopCycle` provides one fieldless successful terminal control. It emits `CycleStopped`, completes through normal summary, funding, and auto-close handling, and cannot select a cursor or mutate actor lifecycle.
+`StopCycle` provides one fieldless successful terminal control. It emits `CycleStopped`, completes through normal summary and auto-close handling, and cannot select a cursor or mutate Actor lifecycle.
 
 ## Reconfiguration rule
 
@@ -44,11 +44,11 @@ Runtime upgrades are reserved for extending primitives, adapter surfaces, or saf
 
 Readiness and execution must stay deterministic and bounded:
 
-- Future eligibility goes through the wakeup layer rather than ad hoc scans
+- Future eligibility uses generation-bound Deadline residence rather than ad hoc scans
 - Hot-path execution happens only under configured per-block limits
 - Timer readiness uses exact deterministic cadence with no actor-specific phase, probability, or entropy contract
 - `on_idle` does useful work only with remaining block budget
-- Suspended-run retries reuse the same FIFO/wakeup substrate and admit only the unresolved suffix; they create no second scheduler, inbox, or off-chain correctness dependency
+- Suspended retries reuse Service/Deadline authority and admit only the unresolved suffix; they create no second scheduler, inbox, or off-chain correctness dependency
 
 ## Runtime-as-Config rule
 
@@ -67,12 +67,12 @@ A runtime can reuse `pallet-deos-actors` without adopting the full DEOS/TMCTOL t
 Minimal checklist:
 
 - Implement asset, optional domain, fee-collection, direct-ingress, benchmarking, and task-weight adapters for local runtime types.
-- Bind governance/system origins, owner-slot limits, queue/wakeup bounds, fee constants, task weight classes, and native asset identity.
+- Bind governance/system origins, owner-slot, Service, Deadline, identity, and sweep bounds, fee constants, Task Weight classes, and native asset identity.
 - Decide which tasks are allowed for User vs System actors and keep any chain-specific policy in adapters or genesis actor configuration, not in pallet core.
 - Provide deterministic genesis System Actor definitions only for actor roles the runtime actually wants to ship.
 - Treat example Actor Contracts as reusable Task-language patterns; treat the DEOS/TMCTOL System Actor catalog as one runtime's topology, not as the pallet's required deployment shape.
 - Classify adapter mutation failures explicitly as Permanent or Temporary; unknown and unsupported failures stay Permanent.
-- Bind `MaxOpeningSnapshotEntries`, fixed `MaxRetryAttempts`, and generated suspension, retry, completion, cancellation, and suffix-admission weights when Mutable plans expose `RetryLater { max_attempts: 2..=MaxRetryAttempts }`.
+- Bind fixed `MaxRetryAttempts` plus generated suspension, retry, completion, cancellation, and suffix-admission Weight when Mutable plans expose `RetryLater { max_attempts: 2..=MaxRetryAttempts }`.
 - Validate adapter failure atomicity and Mutable User/System run suspension with runtime-local tests when adapters perform multi-step mutations.
 
 ## Fee-envelope evidence example

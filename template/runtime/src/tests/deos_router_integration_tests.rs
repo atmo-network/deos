@@ -806,6 +806,7 @@ fn router_oracle_capacity_failure_rolls_back_the_exact_composed_state() {
         steps: contract_steps,
         funding: FundingSourcePolicy::RuntimePolicy,
         completion: CompletionPolicy::Persistent,
+        parked_balance_activation: None,
         auto_close_at_cycle_nonce: None,
       }),
     ));
