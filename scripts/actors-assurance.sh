@@ -73,7 +73,7 @@ Options:
   --exact-heavy-profile NAME Run one declared runtime/package heavy profile
   --production-reference-replay
                              Run the current pinned production-Wasm block/proof replay
-  --integrated-w0-w1              Run only EXP-0066's full-Executive W0/W1 preparation gate
+  --integrated-w0-w1              Run only the full-Executive W0/W1 preparation gate
   --integrated-w1-actor-only      Run the exact-Wasm 100-block Actor-only W1 campaign
   --integrated-w1-continuous-user Run the exact-Wasm 100-block continuous-user W1 campaign
   --integrated-w2-schedules       Run exact-Wasm 100-block Manual-only and Cadenced-only W2 campaigns
@@ -96,7 +96,7 @@ Options:
                                   Run native and exact-Wasm schedule-Control phase attribution
   --integrated-funded-user-action
                                   Run native and exact-Wasm funded User Action fee evidence
-  --backpressure-audit            Run EXP-0100 existing-path atomicity/retry falsifiers
+  --backpressure-audit            Run existing-path atomicity/retry falsifiers
 
 The preparation gate authors real ordered inherents, finalizes actor-only and
 continuous-valid-user-demand blocks, then independently replays the exact production Wasm.
@@ -242,7 +242,7 @@ parse_args() {
     done
     local integrated_count=$((INTEGRATED_W0_W1 + INTEGRATED_W1_ACTOR_ONLY + INTEGRATED_W1_CONTINUOUS_USER + INTEGRATED_W2_SCHEDULES + INTEGRATED_W3_OPENING_MATRIX + INTEGRATED_W4_HETEROGENEOUS_EFFECTS + INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP + INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE + INTEGRATED_CURRENT_W7_DEADLINES + INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER + INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE + INTEGRATED_W9_RESOURCE_INDEPENDENCE + INTEGRATED_CONTROL_ATTRIBUTION + INTEGRATED_FUNDED_USER_ACTION))
     if [[ "$integrated_count" -gt 1 ]]; then
-        log_error "Select exactly one integrated EXP-0066 cohort"
+        log_error "Select exactly one integrated workload cohort"
         exit 2
     fi
     if [[ "$QUICK_MODE" == "1" && ( "$integrated_count" -gt 0 || "$BACKPRESSURE_AUDIT" == "1" ) ]]; then
@@ -514,11 +514,11 @@ run_integrated_w0_w1_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native full-Executive W0/W1 fixture" \
+        "Workload gate: native full-Executive W0/W1 fixture" \
         "" \
         "cd \"$TEMPLATE_DIR\" && cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W0/W1 replay" \
+        "Workload gate: exact production-Wasm W0/W1 replay" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -536,7 +536,7 @@ run_integrated_w1_campaign_gate() {
             label="continuous valid-user"
             ;;
         *)
-            log_error "Unknown EXP-0066 W1 campaign: $demand"
+            log_error "Unknown W1 campaign: $demand"
             return 2
             ;;
     esac
@@ -548,7 +548,7 @@ run_integrated_w1_campaign_gate() {
         return 1
     fi
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm ${label} W1 campaign" \
+        "Workload gate: exact production-Wasm ${label} W1 campaign" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
 }
@@ -563,7 +563,7 @@ run_integrated_w2_schedule_gate() {
         return 1
     fi
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm Manual-only and Cadenced-only W2 campaigns" \
+        "Workload gate: exact production-Wasm Manual-only and Cadenced-only W2 campaigns" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
 }
@@ -578,7 +578,7 @@ run_integrated_w3_opening_matrix_gate() {
         return 1
     fi
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W3 Opening-predicate and mixed-length matrix" \
+        "Workload gate: exact production-Wasm W3 Opening-predicate and mixed-length matrix" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
 }
@@ -593,7 +593,7 @@ run_integrated_w4_heterogeneous_effects_gate() {
         return 1
     fi
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W4 heterogeneous effect campaigns" \
+        "Workload gate: exact production-Wasm W4 heterogeneous effect campaigns" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
 }
@@ -611,11 +611,11 @@ run_integrated_w5_lifecycle_retry_cleanup_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native full-Executive W5 lifecycle/retry/cleanup fixture" \
+        "Workload gate: native full-Executive W5 lifecycle/retry/cleanup fixture" \
         "" \
         "cd \"$TEMPLATE_DIR\" && cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W5 lifecycle/retry/cleanup campaign" \
+        "Workload gate: exact production-Wasm W5 lifecycle/retry/cleanup campaign" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -633,11 +633,11 @@ run_integrated_funded_user_action_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0097 gate: native funded User Action monetary/resource witness" \
+        "Funded-User gate: native funded User Action monetary/resource witness" \
         "" \
         "cd \"$TEMPLATE_DIR\" && cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0097 gate: exact production-Wasm funded User Action replay" \
+        "Funded-User gate: exact production-Wasm funded User Action replay" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -655,11 +655,11 @@ run_integrated_w6_mixed_arrival_lifecycle_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native full-Executive W6 clocks/Triggers/lifecycle fixture" \
+        "Workload gate: native full-Executive W6 clocks/Triggers/lifecycle fixture" \
         "" \
         "cd \"$TEMPLATE_DIR\" && cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W6 clocks/Triggers/lifecycle campaign" \
+        "Workload gate: exact production-Wasm W6 clocks/Triggers/lifecycle campaign" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -699,11 +699,11 @@ run_integrated_w7_due_only_active_frontier_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native full-Executive W7 due-only active-frontier fixture" \
+        "Workload gate: native full-Executive W7 due-only active-frontier fixture" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W7 due-only active-frontier campaign" \
+        "Workload gate: exact production-Wasm W7 due-only active-frontier campaign" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -721,11 +721,11 @@ run_integrated_w8_tombstone_prefix_chunk_pressure_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native full-Executive W8 tombstone-prefix/chunk pressure" \
+        "Workload gate: native full-Executive W8 tombstone-prefix/chunk pressure" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W8 tombstone-prefix/chunk pressure" \
+        "Workload gate: exact production-Wasm W8 tombstone-prefix/chunk pressure" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -743,11 +743,11 @@ run_integrated_w9_resource_independence_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native full-Executive W9 resource independence" \
+        "Workload gate: native full-Executive W9 resource independence" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W9 resource independence" \
+        "Workload gate: exact production-Wasm W9 resource independence" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -765,11 +765,11 @@ run_integrated_control_attribution_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native schedule-Control phase attribution" \
+        "Workload gate: native schedule-Control phase attribution" \
         "" \
         "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 RUST_TEST_THREADS=1 cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm schedule-Control phase attribution" \
+        "Workload gate: exact production-Wasm schedule-Control phase attribution" \
         "" \
         "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 RUST_TEST_THREADS=1 DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -893,13 +893,13 @@ run_backpressure_audit() {
     local profile
     for profile in "${runtime_profiles[@]}"; do
         run_shell_step \
-            "EXP-0100 runtime falsifier: ${profile}" \
+            "Backpressure runtime falsifier: ${profile}" \
             "" \
             "cd \"$TEMPLATE_DIR\" && cargo test -p deos-runtime --locked '$profile'"
     done
     for profile in "${package_profiles[@]}"; do
         run_shell_step \
-            "EXP-0100 package falsifier: ${profile}" \
+            "Backpressure package falsifier: ${profile}" \
             "" \
             "cd \"$TEMPLATE_DIR\" && cargo test -p pallet-deos-actors --locked '$profile'"
     done
