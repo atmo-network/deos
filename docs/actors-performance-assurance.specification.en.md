@@ -290,7 +290,38 @@ Ordinary idle consensus work MUST use the same bounded probe/read topology as th
 
 TryRuntime or offline integrity cost for constructing/checking the full stress state MUST be reported separately from consensus idle Weight.
 
-## 6. Claim Boundary
+## 6. Current-State Workload Matrix
+
+Every current-state Actors comparison and the final production binding MUST use this fixed matrix, horizons, censoring and materiality rule, declared before any result. A workload whose mechanism the runtime does not ship is omitted and reported as such; it MUST NOT be replaced after results are known.
+
+| Workload | Geometry | Purpose |
+| --- | --- | --- |
+| W1 — long Live economic flow | 32 Actors (8 Fee Sink splitters, 8 Burn, 8 liquidity, 8 Users), 8 Steps each over 64 blocks, every Step `Percent` of current Available | Useful work, current amount, multi-Step residency, heterogeneous goals |
+| W2 — funded adjacent retry | 32 three-Step Actors; Step 2 fails temporarily twice, then succeeds after funding or market recovery; 16 blocks | Same-cursor retry, committed prefix, fresh inputs, no second Cycle |
+| W3 — recurrence matrix | 8 each level-sensitive `Cadenced`-plus-predicate, coalesced `AddressEvent`, one-shot `AtTime` and `Manual` Actors; 32 blocks | Recurrence counts, no same-block restart, no busy future-start latch |
+| W4 — true/false churn | 64 idle Actors alternate start truth each block for 64 blocks; half parked-balance episodes, half timed review | Park/Pending/Live churn and negative-check ownership |
+| W5 — sparse Park | 10,000 identities: 32 Live, 32 Pending, 64 timed review, 9,872 parked-balance episodes; 64 blocks | Population independence |
+| W6 — revision storm | 1,024 parked-balance Actors across 32 pages; one watched asset receives 4 qualifying updates per block for 32 blocks under capacity-limited Pending | Coalescing, revision acknowledgment, saturation and wake delay |
+| W7 — Sleep and reentry | 1,024 Sleepers across 32 C32 slots and 32 deadline keys; 32 due per block for 32 blocks | Deadline order, B+1 eligibility, no range scan |
+| W8 — owner mutation | 64 Actors; 8 head/interior/tail/singleton mutations per block across Live, Pending, Sleep and Park; 16 blocks | Arbitrary unlink, round integrity, replacement isolation |
+| W9 — heavy effects under demand | 96 Actors (32 Transfer, 16 Burn, 16 Router swap, 16 liquidity, 16 staking); 32 blocks plus valid User/Router demand | Contention, effect settlement, capacity-first stop |
+| W10 — close under demand | Close 256 maximum-state Actors at block 1 while W1 runs 64 blocks; recreate 32 identities | Close cost, retained bytes, generation isolation |
+| W11 — resource-blocked head | 32 Live Actors whose first transition is just above remaining per-pass resources, followers below; RefTime-only and ProofSize-only boundaries | Head priority, refusal retention, component separation |
+| W12 — bridge goals | One Fee Sink cycle, one foreign-fee Burn, one liquidity provision, one User three-Step transfer/retry; 32-Actor replicated cohort | Economic-goal bridge without semantic or order equivalence |
+
+| Rule | Contract |
+| --- | --- |
+| Demand modes | Actor-only; mixed valid demand alternating ProofSize-heavy remarks and RefTime-heavy Router/User calls up to the first component refusal; maintenance burst at a declared block |
+| Horizon | 64 blocks for W1, W4, W5 and W10; other workloads use their table horizon plus 32 drain blocks when work remains |
+| Censoring | Classify every intended workflow at horizon end as complete, Live, Pending, Sleeping, Parked, Disabled, closed or faulted with cursor/deadline and reason; unfinished work MUST NOT leave the denominator |
+| Order | Equal-semantics comparisons MUST produce identical encounter and Q1 digests; bridges report order differences beside outcomes |
+| Capacity | Exact final component budgets and generated owners; a supported transition that cannot fit a full block is an admission defect, not censoring |
+| Timing | Deterministic counts reproduce bit-for-bit; native timing uses A/B/A/B with one warmup pair and at least five measured pairs; a RefTime delta inside the matched baseline envelope is inconclusive |
+| Materiality | A useful-benefit claim requires one additional complete W1 workflow under the same budget, or removal of at least one persistent scheduler key mutation per successful interior Step with lower total scheduler write bytes and no regression in completed workflows, p95 delay, ProofSize, retained state or debt |
+
+W4–W10 pass their maintenance criterion when unserved work does not grow over the declared drain horizon; complete recovery inside the horizon is reported separately and is not implied by that pass.
+
+## 7. Claim Boundary
 
 Passing these profiles supports only the exact populations, Tasks, runtime constants, state geometry, production Weight, and source tree measured. It does not establish:
 

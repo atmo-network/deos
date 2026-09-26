@@ -6447,7 +6447,7 @@ fn full_executive_w0_w1_replays_exact_production_wasm() {
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
     ACCEPTED_PRODUCTION_WASM_SHA256,
-    "EXP-0066 preparation must remain bound to the accepted production Wasm"
+    "Workload preparation must remain bound to the accepted production Wasm"
   );
   assert_prepared_w0_w1(&wasm, true);
 }
@@ -6461,7 +6461,7 @@ fn full_executive_w1_actor_only_100_block_campaign_replays_exact_production_wasm
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
     ACCEPTED_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W1 must remain bound to the accepted production Wasm"
+    "Workload W1 must remain bound to the accepted production Wasm"
   );
   run_schedule_campaign(
     &wasm,
@@ -6480,7 +6480,7 @@ fn full_executive_w1_continuous_valid_user_100_block_campaign_replays_exact_prod
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
     ACCEPTED_PRODUCTION_WASM_SHA256,
-    "EXP-0085 signed-demand linkage must use the accepted production Wasm"
+    "Signed-demand linkage must use the accepted production Wasm"
   );
   run_schedule_campaign(
     &wasm,
@@ -6499,7 +6499,7 @@ fn full_executive_w2_manual_and_cadenced_only_100_block_campaigns_replay_exact_p
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
     ACCEPTED_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W2 must remain bound to the accepted production Wasm"
+    "Workload W2 must remain bound to the accepted production Wasm"
   );
   for schedule in [WorkloadSchedule::ManualOnly, WorkloadSchedule::CadencedOnly] {
     run_schedule_campaign(&wasm, "W2", UserDemand::ActorOnly, schedule);
@@ -6515,7 +6515,7 @@ fn full_executive_w3_opening_predicate_mixed_length_campaign_replays_exact_produ
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
     ACCEPTED_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W3 must remain bound to the accepted production Wasm"
+    "Workload W3 must remain bound to the accepted production Wasm"
   );
   run_w3_opening_predicate_mixed_length_campaign(&wasm);
 }
@@ -6529,7 +6529,7 @@ fn full_executive_w4_heterogeneous_effect_campaigns_replay_exact_production_wasm
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
     ACCEPTED_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W4 must remain bound to the accepted production Wasm"
+    "Workload W4 must remain bound to the accepted production Wasm"
   );
   for demand in [UserDemand::ActorOnly, UserDemand::ContinuousValid] {
     run_w4_heterogeneous_effect_campaign(&wasm, demand);
@@ -6580,7 +6580,7 @@ fn full_executive_w5_lifecycle_retry_cleanup_campaign_replays_exact_production_w
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
     ACCEPTED_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W5 must remain bound to the accepted production Wasm"
+    "Workload W5 must remain bound to the accepted production Wasm"
   );
   run_w5_lifecycle_retry_cleanup_campaign(&wasm, true);
 }
@@ -6599,7 +6599,7 @@ fn full_executive_w6_mixed_arrival_lifecycle_campaign_replays_exact_production_w
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
     ACCEPTED_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W6 must remain bound to the accepted production Wasm"
+    "Workload W6 must remain bound to the accepted production Wasm"
   );
   run_w6_mixed_arrival_lifecycle_campaign(&wasm, true);
 }
@@ -6618,7 +6618,7 @@ fn full_executive_w7_due_only_active_frontier_campaign_replays_exact_production_
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
     ACCEPTED_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W7 must remain bound to the accepted production Wasm"
+    "Workload W7 must remain bound to the accepted production Wasm"
   );
   assert_w7_due_only_active_frontier_campaign(&wasm, true);
 }
@@ -6637,7 +6637,7 @@ fn full_executive_w8_tombstone_prefix_chunk_pressure_campaign_replays_exact_prod
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
     ACCEPTED_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W8 must remain bound to the accepted production Wasm"
+    "Workload W8 must remain bound to the accepted production Wasm"
   );
   run_w8_tombstone_prefix_chunk_pressure_campaign(&wasm, true);
 }
@@ -6661,7 +6661,7 @@ fn full_executive_control_phase_attribution_replays_exact_production_wasm() {
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
     ACCEPTED_PRODUCTION_WASM_SHA256,
-    "EXP-0066 Control attribution must remain bound to the accepted production Wasm"
+    "Workload Control attribution must remain bound to the accepted production Wasm"
   );
   assert_control_phase_attribution_campaign(&wasm, true);
 }
@@ -6675,7 +6675,7 @@ fn full_executive_w9_resource_independence_campaign_replays_exact_production_was
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
     ACCEPTED_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W9 must remain bound to the accepted production Wasm"
+    "Workload W9 must remain bound to the accepted production Wasm"
   );
   run_w9_resource_independence_campaign(&wasm, true);
 }

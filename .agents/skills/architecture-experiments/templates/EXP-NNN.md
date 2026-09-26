@@ -1,19 +1,17 @@
-# EXP-NNNN — Short Decision Title
+# EXP-NNN — Short Decision Title
 
 | Field | Value |
 | --- | --- |
 | Status | Proposed / Prepared / Measuring / Measured / Interpreted / Accepted / Rejected / Inconclusive / Superseded / Invalidated |
-| Record kind | Leaf / Consolidated |
-| Absorbs | None, or archived IDs whose decisions this record carries forward |
 | Release | X.Y.Z |
 | Date | YYYY-MM-DD |
-| Physical mechanism | Stable cross-release mechanism name |
+| Physical mechanism | Stable mechanism family name, unique across all records |
 | Primary track | Replace with a link to sibling `./experiments.md` |
 | Governing specification | Path and section |
 
 ## Decision Question
 
-The single physical choice or bounded comparison this evidence decides. A Consolidated record states one umbrella question whose obligations share one mechanism family.
+The physical design question for one mechanism family. Later questions about the same mechanism become new obligation rows here, not new records.
 
 ## Context and Candidates
 
@@ -38,7 +36,7 @@ The single physical choice or bounded comparison this evidence decides. A Consol
 
 ## Artifact Identity
 
-Source commit/tree, toolchain, benchmark and production Wasm, generated Weight, command and parameters, database backend. A Consolidated record may cite its archived source records for full identities.
+Source commit/tree, toolchain, benchmark and production Wasm, generated Weight, command and parameters, database backend. Keep only identities that stay resolvable after the release squash: content hashes, release tags, file paths.
 
 ## Proof Obligations
 
@@ -48,7 +46,7 @@ Source commit/tree, toolchain, benchmark and production Wasm, generated Weight, 
 | --- | --- | --- | --- | --- | --- |
 | O1 | One falsifiable claim | Smallest deciding witness | Exact class | Open / Satisfied / Rejected / Inconclusive / Accepted / Requires refresh | Backlog owner, record, or None |
 
-A Leaf owns exactly one obligation. A Consolidated record owns two or more obligations of one mechanism family, each with its own status.
+Each obligation is one design choice between named candidates, with its own status. Weight-coverage questions (does owner X bound geometry Y?) never become obligations: they belong to benchmarks and backlog exit criteria.
 
 ## Measurements
 

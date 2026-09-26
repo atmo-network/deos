@@ -4,19 +4,18 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const statuses = new Set(['Proposed', 'Prepared', 'Measuring', 'Measured', 'Interpreted', 'Accepted', 'Rejected', 'Inconclusive', 'Superseded', 'Invalidated']);
-const kinds = new Set(['Leaf', 'Consolidated']);
 const proofFields = ['Obligation ID', 'Claim', 'Smallest falsifier', 'Evidence class', 'Status', 'Consumer'];
 const dispositionFields = ['Benchmark Evidence Status', 'Reassessment Trigger', 'Compared Observation IDs', 'Noise / Stability Evidence', 'Current Authority'];
 const dispositionStatuses = ['Authoritative', 'Qualified', 'Historical', 'Superseded', 'Invalidated', 'Inconclusive', 'Not applicable'];
-const currentFields = ['ID', 'Status', 'Kind', 'Decision', 'Consumers'];
-const archiveFields = ['ID', 'Release', 'Status', 'Title', 'Current owner'];
+const currentFields = ['ID', 'Status', 'Decision', 'Consumers'];
+const liveRecordBudget = 6;
 const cells = (line) => line.split(/(?<!\\)\|/).slice(1, -1).map((s) => s.trim());
 const fields = (s) => [...(s.match(/^\| Field \| Value \|\n\| --- \| --- \|\n((?:\|.*\n)+)/m)?.[1] ?? '').matchAll(/^\| ([^|]+) \| (.*) \|$/gm)].map((m) => [m[1].trim(), m[2].trim()]);
 const section = (s, h) => s.split(`\n## ${h}\n`)[1]?.split(/\n## /)[0]?.trim() ?? '';
 const relations = (s) => [...section(s, 'Relations').matchAll(/^- `([^`]+)`: *(.*)$/gm)].map((m) => [m[1], m[2].trim()]);
 const headings = (s) => [...s.matchAll(/^## ([^#].*)$/gm)].map((m) => m[1].trim());
 const note = (s, name) => s.split('\n').find((l) => l.startsWith(`- \`${name}\`:`))?.split('`:').slice(1).join('`:').trim() ?? '';
-const ids = (value) => new Set((value ?? '').match(/EXP-\d{4}/g) ?? []);
+const ids = (value) => new Set((value ?? '').match(/EXP-\d{3,4}/g) ?? []);
 const table = (source, heading, columns) => {
   const body = section(source, heading).split('\n').filter((l) => l.startsWith('|'));
   if (!body.length) return null;
@@ -31,36 +30,28 @@ function walk(dir) {
 }
 
 export function validate(skillDir) {
-  const errors = [], warnings = [], records = new Map(), archived = new Map(), owners = new Map();
+  const errors = [], warnings = [], records = new Map(), owners = new Map(), mechanisms = new Map();
   const fail = (key, message) => errors.push(`${key}: ${message}`);
-  const template = fs.readFileSync(path.join(skillDir, 'templates/EXP-NNNN.md'), 'utf8');
+  const template = fs.readFileSync(path.join(skillDir, 'templates/EXP-NNN.md'), 'utf8');
   const root = path.resolve(skillDir, '../../..');
   const backlogPath = path.join(root, 'BACKLOG.md');
   const backlog = fs.existsSync(backlogPath) ? fs.readFileSync(backlogPath, 'utf8') : '';
   const backlogOwners = new Set([...backlog.matchAll(/^- \[ \] `([^`]+)`: /gm)].map((m) => m[1]));
   const files = walk(path.join(skillDir, 'tracks'));
-  for (const file of files) if (/\.(csv|tsv)$/i.test(file)) fail(file, 'CSV/TSV evidence belongs inline as a Markdown table');
+  for (const file of files) {
+    if (/\.(csv|tsv)$/i.test(file)) fail(file, 'CSV/TSV evidence belongs inline as a Markdown table');
+    else if (/\.md$/.test(file) && /\bEXP-\d{4}\b/.test(fs.readFileSync(file, 'utf8'))) fail(file, 'cites a pre-restart four-digit experiment ID; restate the finding instead');
+  }
 
   const indexes = new Map();
   for (const file of files.filter((p) => path.basename(p) === 'experiments.md')) {
     const track = path.basename(path.dirname(file)), source = fs.readFileSync(file, 'utf8');
-    const current = table(source, 'Current Records', currentFields), archive = table(source, 'Archive', archiveFields);
+    const current = table(source, 'Current Records', currentFields);
     if (current && !current.ok) fail(file, `Current Records columns must be ${currentFields.join(' | ')}`);
-    if (archive && !archive.ok) fail(file, `Archive columns must be ${archiveFields.join(' | ')}`);
-    indexes.set(track, { file, source, current: current?.ok ? current.rows : [], archive: archive?.ok ? archive.rows : [] });
-    for (const row of archive?.ok ? archive.rows : []) {
-      const [id, , status, title, owner] = row;
-      if (row.length !== archiveFields.length || row.some((v) => !v)) { fail(file, 'incomplete archive row'); continue; }
-      if (!/^EXP-\d{4}$/.test(id)) fail(file, `invalid archive ID ${id}`);
-      if (!statuses.has(status)) fail(file, `${id} has invalid archived status ${status}`);
-      if (!title) fail(file, `${id} lacks a title`);
-      if (archived.has(id) || owners.has(id)) fail(file, `global experiment ID ${id} is duplicated`);
-      archived.set(id, { track, file, owner: [...ids(owner)][0] ?? null });
-      owners.set(id, `${track}/archive`);
-    }
+    indexes.set(track, { file, source, current: current?.ok ? current.rows : [] });
   }
 
-  for (const file of files.filter((p) => /\/[^/]+\/EXP-\d{4}\.md$/.test(p))) {
+  for (const file of files.filter((p) => /\/[^/]+\/EXP-\d{3}\.md$/.test(p))) {
     const source = fs.readFileSync(file, 'utf8'), track = path.basename(path.dirname(file)), id = path.basename(file, '.md'), key = `${track}/${id}`;
     const meta = new Map(fields(source)), rel = new Map(relations(source));
     if (owners.has(id)) fail(key, `global experiment ID ${id} already owned by ${owners.get(id)}`);
@@ -72,26 +63,21 @@ export function validate(skillDir) {
     compare('sections', headings(template), headings(source));
     compare('relation fields', relations(template).map(([k]) => k), [...rel.keys()]);
     if (meta.get('Primary track') !== `[${track}](./experiments.md)`) fail(key, 'Primary track must link its sibling index');
-    const status = meta.get('Status'), kind = meta.get('Record kind');
+    const status = meta.get('Status'), mechanism = meta.get('Physical mechanism') ?? '';
     if (!statuses.has(status)) fail(key, 'invalid Status');
-    if (!kinds.has(kind)) fail(key, 'Record kind must be Leaf or Consolidated');
+    if (!mechanism) fail(key, 'Physical mechanism is required');
+    else if (mechanisms.has(mechanism.toLowerCase())) fail(key, `mechanism family already owned by ${mechanisms.get(mechanism.toLowerCase())}; add an obligation row there instead`);
+    else mechanisms.set(mechanism.toLowerCase(), key);
     const proofs = section(source, 'Proof Obligations'), rows = proofs.split('\n').filter((l) => l.startsWith('|'));
     const obligations = rows.slice(2).map(cells);
     if (JSON.stringify(rows.length ? cells(rows[0]) : []) !== JSON.stringify(proofFields)) fail(key, `proof columns must be ${proofFields.join(' | ')}`);
     if (!obligations.length) fail(key, 'finite Proof Obligations required');
-    if (kind === 'Leaf' && obligations.length !== 1) fail(key, 'Leaf must own exactly one obligation');
-    if (kind === 'Consolidated' && obligations.length < 2) fail(key, 'Consolidated must own at least two obligations');
     if (new Set(obligations.map((r) => r[0])).size !== obligations.length) fail(key, 'duplicate obligation ID');
     for (const row of obligations) {
       if (row.length !== proofFields.length || row.some((v) => !v)) fail(key, 'incomplete proof obligation');
       if (!/^O\d+$/.test(row[0] ?? '')) fail(key, `invalid obligation ID ${row[0]}`);
     }
     if (!['Proposed', 'Prepared'].includes(status) && !/^Frozen\b/.test(note(proofs, 'Freeze'))) fail(key, 'Measuring-or-later obligations must be frozen');
-    const absorbs = ids(meta.get('Absorbs'));
-    if (kind === 'Consolidated' && !absorbs.size) fail(key, 'Consolidated must name the archived records it absorbs');
-    for (const absorbed of absorbs) {
-      if (archived.get(absorbed)?.owner !== id) fail(key, `absorbed ${absorbed} must be archived with current owner ${id}`);
-    }
     const disposition = source.split(/^### Benchmark Evidence Disposition\s*$/m)[1]?.split(/^#{2,3} /m)[0];
     if (disposition === undefined) fail(key, 'missing Benchmark Evidence Disposition');
     else {
@@ -103,28 +89,23 @@ export function validate(skillDir) {
     records.set(key, { key, id, track, file, source, meta, rel });
   }
 
-  for (const [id, entry] of archived) {
-    if (entry.owner && !records.has(`${entry.track}/${entry.owner}`)) fail(entry.file, `${id} names missing current owner ${entry.owner}`);
-    if (entry.owner && !ids(records.get(`${entry.track}/${entry.owner}`)?.meta.get('Absorbs')).has(id)) fail(entry.file, `${id} current owner ${entry.owner} does not absorb it`);
-  }
-
   for (const [track, index] of indexes) {
     const listed = new Set();
     for (const row of index.current) {
-      const [cell, status, kind, decision, consumers] = row;
+      const [cell, status, decision, consumers] = row;
       const id = [...ids(cell)][0], key = `${track}/${id}`, record = records.get(key);
       if (row.length !== currentFields.length || row.some((v) => !v)) { fail(index.file, 'incomplete current-record row'); continue; }
       listed.add(key);
       if (!record) { fail(index.file, `current row ${id} has no record file`); continue; }
       if (status !== record.meta.get('Status')) fail(key, 'index status mismatch');
-      if (kind !== record.meta.get('Record kind')) fail(key, 'index kind mismatch');
       if (!decision) fail(key, 'index decision missing');
       const named = [...consumers.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
       const baseline = /\bBaseline\b/.test(consumers);
-      if (!named.length && !baseline) fail(key, 'a live record needs a current backlog consumer or the Baseline role; archive it otherwise');
+      if (!named.length && !baseline) fail(key, 'a live record needs a current backlog consumer or the Baseline role; delete it otherwise');
       for (const owner of named) if (!backlogOwners.has(owner)) fail(key, `dangling backlog consumer ${owner}`);
     }
     for (const record of records.values()) if (record.track === track && !listed.has(record.key)) fail(record.key, 'missing Current Records row');
+    if (listed.size > liveRecordBudget) warnings.push(`${track}: ${listed.size} live records exceed the budget of ${liveRecordBudget}; consolidate by mechanism family or delete unconsumed records`);
   }
 
   const known = (id) => owners.has(id);
@@ -132,7 +113,7 @@ export function validate(skillDir) {
   for (const record of records.values()) {
     for (const [relation, value] of record.rel) {
       if (!value) fail(record.key, `empty ${relation}; use None`);
-      for (const target of ids(value)) if (!known(target)) fail(record.key, `${relation} references unknown ${target}`);
+      for (const target of ids(value)) if (!known(target)) fail(record.key, `${relation} references unknown or retired ${target}`);
     }
     hard.set(record.id, [...ids(record.rel.get('Depends on'))].filter((id) => records.has(`${record.track}/${id}`)));
     for (const m of record.source.matchAll(/\[[^\]]+\]\((\.{1,2}\/[^)]+)\)/g)) {
@@ -154,7 +135,7 @@ export function validate(skillDir) {
   };
   for (const id of hard.keys()) visit(id, []);
 
-  return { errors: [...new Set(errors)], warnings: [...new Set(warnings)], recordCount: records.size, archivedCount: archived.size };
+  return { errors: [...new Set(errors)], warnings: [...new Set(warnings)], recordCount: records.size };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -166,6 +147,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     for (const w of result.warnings) console.error(`warning: ${w}`);
     for (const e of result.errors) console.error(`error: ${e}`);
     if (result.errors.length) process.exitCode = 1;
-    else console.log(`Experiment records valid: ${result.recordCount} live, ${result.archivedCount} archived`);
+    else console.log(`Experiment records valid: ${result.recordCount} live`);
   }
 }

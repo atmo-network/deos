@@ -1,6 +1,6 @@
 ---
 name: architecture-experiments
-description: Preserves evidence-driven physical architecture decisions, bounded comparisons against exact baselines, negative results and the next optimization gradient without letting benchmarks redefine semantics. Keeps only decision records that current work consumes and archives the rest in Git. Owns the Benchmark Reassessment Protocol — observations stay permanent while their evidence authority is reassessed.
+description: Preserves evidence-driven physical architecture decisions, bounded comparisons against exact baselines, negative results and the next optimization gradient without letting benchmarks redefine semantics. Keeps only decision records that current work consumes; release tags preserve earlier research. Owns the Benchmark Reassessment Protocol — observations stay permanent while their evidence authority is reassessed.
 ---
 
 # Architecture Experiments
@@ -11,7 +11,7 @@ Experiments are decision instruments, not output. Open one only when a real impl
 
 ## Ownership Boundary
 
-This skill owns falsifiable physical hypotheses, exact baseline and controlled-comparison contracts, live Experiment Records, track indexes and their archive tables, interpretation and decisions, benchmark evidence authority, and next-gradient selection.
+This skill owns falsifiable physical hypotheses, exact baseline and controlled-comparison contracts, live Experiment Records, track indexes, interpretation and decisions, benchmark evidence authority, and next-gradient selection.
 
 It does not own protocol semantics, benchmark command implementations, generated Weight, tests, architecture-document truth or open work. `BACKLOG.md` owns remaining work; specifications own semantics; code, tests and generated artifacts own implementation truth. Project documentation may cite a live Experiment ID as compact provenance. Deleting this skill must not affect builds, tests, CI, release validation or runtime behavior.
 
@@ -29,33 +29,37 @@ An experiment MUST NOT silently redefine semantics. If evidence shows the specif
 .agents/skills/architecture-experiments/
 ├ SKILL.md
 ├ scripts/validate-record-normalization.sh
-├ templates/EXP-NNNN.md
+├ templates/EXP-NNN.md
 └ tracks/<track>/
-   ├ experiments.md      charter, Current Records, principles, Archive
-   └ EXP-NNNN.md         live records only
+   ├ experiments.md      charter, Current Records, hazards, principles, history
+   └ EXP-NNN.md          live records only
 ```
 
-- `Identity`: IDs are `EXP-NNNN`, globally unique across tracks and never reused; allocate one plus the highest live or archived ID. An archived ID stays reserved forever.
+- `Identity`: IDs are `EXP-NNN`, globally unique across tracks and never reused within the current numbering; allocate one plus the highest live ID or the highest ID deleted since the restart.
 - `Live set`: A record stays in the tree only while it is a track's accepted physical baseline or a current `BACKLOG.md` owner consumes it. Each live record has one `Current Records` row naming its consumers (`Baseline` or backticked backlog owners).
-- `Archive`: Every other record is removed from the tree and keeps one `Archive` row (ID, release, status, title, current owner). The index names the Git ref holding the full archived records; that ref must stay reachable (a tag, or a commit contained in `main`). Git owns archived evidence; a later record may cite it as `<ref>:<path>`.
-- `Record kinds`: A `Leaf` owns exactly one falsifiable claim with its bounded witnesses. A `Consolidated` record carries two or more decisions of one mechanism family forward, names the archived records it `Absorbs`, and gives each obligation its own status. The record status is the least mature open obligation, or the umbrella decision when all are sealed.
-- `Shape`: Copy [`templates/EXP-NNNN.md`](./templates/EXP-NNNN.md); metadata fields, second-level sections and relation fields must match it. Keep evidence inline as Markdown tables; CSV/TSV files are forbidden. A sibling `EXP-NNNN/` directory is allowed only for non-tabular raw evidence that cannot be retained faithfully inline.
+- `Deletion`: A record without a consumer is deleted at the next release boundary; the release tag that contained it preserves its text. Never cite a deleted record by ID — restate a still-useful general finding in `Retained Principles` without numbers. Records must not cite commits of an unreleased branch, which release squashing erases; cite content hashes, release tags or file paths.
+- `One record per mechanism family`: Each record owns one physical mechanism family (unique `Physical mechanism`). A new design question about that mechanism becomes a new obligation row in its record, never a new record; open a new record only for a mechanism family no record owns. A track should hold a handful of live records; the validator warns above six.
+- `Shape`: Copy [`templates/EXP-NNN.md`](./templates/EXP-NNN.md); metadata fields, second-level sections and relation fields must match it. Keep evidence inline as Markdown tables; CSV/TSV files are forbidden. A sibling `EXP-NNN/` directory is allowed only for non-tabular raw evidence that cannot be retained faithfully inline.
 - `Size`: Keep only decision-relevant numbers, identities and limitations. Chronology, repaired probes and superseded diagnostics belong to Git history, not the record.
 
-## Archival and Consolidation
+## Release-Boundary Consolidation
 
-Run archival at every release boundary and whenever a mechanism is deleted:
+At every release boundary and whenever a mechanism is deleted:
 
-1. Remove every record without a current consumer from the tree and add its Archive row.
-2. Merge live records of one mechanism family into one `Consolidated` record when their decisions are consumed together; carry forward decisions, binding numbers, open falsifiers and limitations, and set each absorbed Archive row's current owner.
-3. Move reusable general findings from archived records into the index's `Retained Principles` with their archived IDs; numbers are never imported without an exact-identity bridge.
+1. Delete every record without a current consumer.
+2. Merge records that share a mechanism family into one record, carrying forward decisions, binding numbers, open falsifiers and limitations.
+3. Restate reusable general findings from deleted records in the index's `Retained Principles`, without IDs or numbers.
 4. Repoint repository references to live IDs, then run the validator.
 
-When the source tree deletes a mechanism a record measured, archive the record with current owner `Retired mechanism`. Reintroducing the mechanism requires a new record. Records that only used a retired workload to witness a surviving owner stay qualified, and a current consumer must re-witness that owner on the current tree.
+When the source tree deletes a mechanism a record measured, delete the record; reintroducing the mechanism requires a new record. A record that only used a retired workload to witness a surviving owner stays, and its consumer must re-witness that owner on the current tree.
+
+## What Is Not an Experiment
+
+These never become records or obligation rows: whether a generated Weight owner bounds a selected geometry (benchmark coverage; witnesses go to the owning `BACKLOG.md` item and then to the benchmark suite), workload and measurement contracts (the performance-assurance specification), fixture defects, diagnostics, regression checks and production Weight generation. A record is justified only by a physical design choice between named candidates whose outcome changes the architecture.
 
 ## Proof Obligations
 
-Before Prepared, enumerate a finite `Proof Obligations` table (ID, claim, smallest falsifier, evidence class, status, consumer) and freeze it at Measuring. A materially independent claim discovered later gets its own record; do not extend one notebook indefinitely. Satisfied is an evidence decision with scope, not a passing fixture. An ordinary correctness bug does not earn a record unless it exposes a physical choice or invalidates a load-bearing assumption.
+Before Prepared, enumerate a finite `Proof Obligations` table (ID, claim, smallest falsifier, evidence class, status, consumer) and freeze it at Measuring. A later question about the same mechanism becomes a new obligation row; do not extend one notebook with diagnostics. Satisfied is an evidence decision with scope, not a passing fixture. An ordinary correctness bug earns nothing unless it exposes a physical choice or invalidates a load-bearing assumption.
 
 ## Correction Boundary
 
@@ -63,11 +67,11 @@ Experiments preserve causal decision evidence; Git owns implementation chronolog
 
 ## Validation
 
-Run `./.agents/skills/architecture-experiments/scripts/validate-record-normalization.sh` after changing any record, index or the template, and `--self-test` after changing the validator. It checks template shape, record kinds and obligations, freeze, disposition fields, Current Records rows with live backlog consumers, archive reciprocity and ID uniqueness, relation targets, the hard-dependency DAG and links. It proves reference integrity only, never semantic equivalence or Weight sufficiency. It is Skill-private and never a project build or completion-gate dependency.
+Run `./.agents/skills/architecture-experiments/scripts/validate-record-normalization.sh` after changing any record, index or the template, and `--self-test` after changing the validator. It checks template shape, one record per mechanism family, obligations, freeze, disposition fields, Current Records rows with live backlog consumers, ID uniqueness, the absence of pre-restart four-digit IDs, relation targets, the hard-dependency DAG and links. It proves reference integrity only, never semantic equivalence or Weight sufficiency. It is Skill-private and never a project build or completion-gate dependency.
 
 ## Experiment Tracks
 
-A track is a stable physical research domain with its own scope, invariants, baseline and entry/exit rule; it is not a release phase or a second backlog. Each `tracks/<track>/experiments.md` owns only the charter, current baseline, Current Records, Retained Principles, research portfolio and Archive. Cross-track hard dependencies stay directional and acyclic.
+A track is a stable physical research domain with its own scope, invariants, baseline and entry/exit rule; it is not a release phase or a second backlog. Each `tracks/<track>/experiments.md` owns only the charter, current baseline, Current Records, Retained Principles, research portfolio and a one-paragraph history. Cross-track hard dependencies stay directional and acyclic.
 
 | Track | Scope | Index |
 | --- | --- | --- |
@@ -94,7 +98,7 @@ Status is evidence maturity, not code completion. Never jump from Measured to Ac
 
 ## When to Open an Experiment
 
-Open one only when a conforming physical choice could materially change a release objective, resource bound, dispatchability, state footprint or scaling dependency; at least two candidates, or one candidate plus an exact baseline, can be compared under control; the result can change an implementation decision; and the smallest falsifying workload and materiality are statable. Do not open one for semantic choices, routine regression or profiling, generation of already-selected Weight, cosmetic refactors, or ideas rejected under still-valid conditions. Search live records, Retained Principles and the Archive first, and reuse a prior result only while workload, semantics, resource policy, host, artifact identity and method still apply.
+Open one only when a conforming physical choice could materially change a release objective, resource bound, dispatchability, state footprint or scaling dependency; at least two candidates, or one candidate plus an exact baseline, can be compared under control; the result can change an implementation decision; and the smallest falsifying workload and materiality are statable. Do not open one for semantic choices, routine regression or profiling, generation of already-selected Weight, cosmetic refactors, or ideas rejected under still-valid conditions. Search live records and Retained Principles first (and earlier release tags when needed), and reuse a prior result only while workload, semantics, resource policy, host, artifact identity and method still apply.
 
 ## Bounded Comparative Research
 
@@ -125,12 +129,12 @@ Protocol semantics, storage topology, counters, ProofSize and database shapes ma
 
 Review affected records when storage layout, population geometry, database or cache assumptions, block limits or resource policy, toolchain or benchmark method, Task semantics, adapters, Weight implementation, or workload/fairness/lifecycle contracts change. Use Superseded for stronger replacement evidence and Invalidated when assumptions no longer hold.
 
-Stop when the objective or materiality is met, the obligation is satisfied, a new independent question appears (open its own record), the next work belongs to another owner, no candidate has a plausible advantage, the frozen candidate set is exhausted, the remaining delta is below materiality, the bottleneck moved, progress needs a semantic change, evidence is insufficient (mark Inconclusive and name the missing evidence), or the user says stop. "There might be another corner case" is insufficient; name the uncovered owner or domain. Performance never outranks correctness, determinism, atomicity, FIFO, causal speed, ownership, rollback, runtime safety or production Weight soundness.
+Stop when the objective or materiality is met, the obligation is satisfied, a new question appears (add an obligation row to its mechanism record, or a new record only for an unowned mechanism family), the next work belongs to another owner, no candidate has a plausible advantage, the frozen candidate set is exhausted, the remaining delta is below materiality, the bottleneck moved, progress needs a semantic change, evidence is insufficient (mark Inconclusive and name the missing evidence), or the user says stop. "There might be another corner case" is insufficient; name the uncovered owner or domain. Performance never outranks correctness, determinism, atomicity, FIFO, causal speed, ownership, rollback, runtime safety or production Weight soundness.
 
 ## Closure Gates
 
-- `Experimental closure`: Every architecture-affecting alternative is decided or explicitly deferred in `BACKLOG.md`; every accepted benchmark-sensitive choice has a live or archived record; every retained production Weight owner is sound for the segment it charges; no decision exists only in chat, temporary output or commit messages.
-- `Architecture provenance`: Every significant physical decision traces to a specification section, a live or archived Experiment Record, a production benchmark or a correctness invariant; architecture cites provenance compactly and never becomes an experiment log.
+- `Experimental closure`: Every architecture-affecting alternative is decided or explicitly deferred in `BACKLOG.md`; every accepted benchmark-sensitive choice has a live record or a Retained Principle; every retained production Weight owner is sound for the segment it charges; no decision exists only in chat, temporary output or commit messages.
+- `Architecture provenance`: Every significant physical decision traces to a specification section, a live Experiment Record, a production benchmark or a correctness invariant; architecture cites provenance compactly and never becomes an experiment log.
 
 ## Handoff
 

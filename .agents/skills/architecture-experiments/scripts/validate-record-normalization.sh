@@ -8,7 +8,7 @@ fi
 case "${1:-}" in
   ''|--self-test) ;;
   --help)
-    printf 'Usage: %s [--self-test]\nValidates live Experiment Records, current-consumer rows, the archive table, relations and links.\n--self-test exercises isolated positive and negative fixtures.\nSkill-private; never a project build dependency.\n' "${0##*/}"
+    printf 'Usage: %s [--self-test]\nValidates live Experiment Records, current-consumer rows, relations and links.\n--self-test exercises isolated positive and negative fixtures.\nSkill-private; never a project build dependency.\n' "${0##*/}"
     exit 0 ;;
   *) printf 'error: unknown argument: %s\n' "$1" >&2; exit 1 ;;
 esac
