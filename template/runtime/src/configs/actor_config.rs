@@ -3996,6 +3996,8 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
       polkadot_sdk::frame_support::storage::storage_prefix(b"PolkadotXcm", b"CurrentMigration");
     polkadot_sdk::sp_io::storage::set(&queue_key, &queue.encode());
     polkadot_sdk::sp_io::storage::clear(&migration_key);
+    // The complete hook owner includes the queue excluded by pallet-xcm's global whitelist.
+    polkadot_sdk::frame_benchmarking::benchmarking::remove_from_whitelist(queue_key.to_vec());
   }
 
   fn execute_maximum_xcm_version_discovery() {
@@ -4010,6 +4012,11 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
       b"PolkadotXcm",
       b"VersionDiscoveryQueue",
     );
+    assert!(
+      !polkadot_sdk::frame_benchmarking::benchmarking::get_whitelist()
+        .iter()
+        .any(|key| key.key == queue_key)
+    );
     let encoded = polkadot_sdk::sp_io::storage::get(&queue_key)
       .expect("XCM discovery queue must be rewritten after traversal"); // deos-bypass: panic-owner — benchmark setup writes the exact storage key and on_initialize always rewrites the taken queue.
     let remaining = Vec::<(xcm::VersionedLocation, u32)>::decode(&mut &encoded[..])
@@ -4023,7 +4030,7 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
     let measured_block = crate::System::block_number().saturating_add(One::one());
     let mut state = pallet_deos_actors::BlockResourceState::new(measured_block);
     state
-      .begin_prepass()
+      .begin_prepass(BlockResourceBudgetValue::get())
       .and_then(|()| state.open_external_phase())
       .expect("benchmark state must enter ExternalPhase"); // deos-bypass: panic-owner — fresh state has no reservations and follows the canonical transition.
     pallet_deos_actors::CurrentBlockResourceState::<Runtime>::put(state);

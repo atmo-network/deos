@@ -89,7 +89,7 @@ Options:
   --integrated-w7-due-only-active-frontier
                                   Run native and exact-Wasm W7 active-frontier scaling
   --integrated-w8-tombstone-prefix-chunk-pressure
-                                  Run native and exact-Wasm W8 queue-prefix pressure
+                                  Run native and exact-Wasm W8 Service after closed-prefix setup
   --integrated-w9-resource-independence
                                   Run native and exact-Wasm W9 User-resource isolation
   --integrated-control-attribution
@@ -118,10 +118,9 @@ The W5 campaign completes one five-Actor Manual matrix across zero-Step,
 Opening/middle/final Running, retry exhaustion, productive cleanup, minimal
 admission apoptosis, and uncompensated committed-prefix durability.
 The W6 campaign combines dense Manual readiness, sparse block windows, AtTime
-tick deadlines and seeded Cadenced periods with pause/resume and close-created
-tombstones without stale execution. Its timeline distinguishes deadline and
-service: distinct short tick periods can become due together in the same
-produced block.
+tick deadlines and seeded Cadenced periods with pause/resume and owner close.
+It checks Q1, window timing, retained readiness and no closed-Actor execution.
+Distinct short tick periods can become due together in the same produced block.
 The current W7 deadline campaign creates 1,024 real User retries through signed
 Manual readiness and ordinary funding-unavailable Attempts, with 16 Actors per
 owner across 64 owners. Its 32 C32 deadline pages become due 32 Actors/block for
@@ -132,24 +131,24 @@ The 64 setup blocks remain separate from the 64-block measurement horizon; every
 block is replayed against the pinned Wasm. A false completion target is retained.
 The W7 campaign compares one 100-due-Actor control with the same due frontier at
 10,000 total identities: 4,943 future, 4,942 unsignaled, and 15 retained reference
-identities form the 9,900 non-due population. Both profiles must preserve exact
-FIFO/Q1 throughput and the complete-attempt Control frontier.
-The W8 campaign measures legal closed-Actor tombstone prefixes of
-1/4/8/16/32/64/128 entries ahead of the same 100 due Manual Actors. Each complete
-block must reclaim the exact prefix, preserve the live FIFO/Q1 committed prefix,
-and stop remaining live work only at the Actor Control frontier without opening a
-page-layout comparison.
-The W9 campaign compares the same 100-due-Actor FIFO frontier under Actor-only,
-proof-saturated remarks, and RefTime-heavy valid Router demand. It requires equal
-Actor service/accounting and records the explicit fallback when production-valid
-business calls still reach User ProofSize before the RefTime frontier.
-The Control-attribution campaign compares matched 100-Actor Manual and cadence-one
-fixtures for nine linked blocks, records mandatory-Prepass versus final Control,
-and proves temporal occurrence materialization is Prepass-owned and cannot service
-newly materialized work past that block's captured FIFO cutoff. It also pins the
-production-Weight read/write ledger for fixed coordination, dual-clock probes,
-retained/removed wakeup consumption, Cadenced rearm topology, and close/fault
-admission contingencies without treating additive envelopes as actual block proof.
+identities form the 9,900 non-due population. Both profiles must preserve equal
+Steps per block, Service order and Q1; Control deltas are reported separately.
+The W8 campaign retains its historical command name but closes
+1/4/8/16/32/64/128 Actors during setup and verifies canonical Service removal
+before measuring a block with 100 due Manual Actors. It checks the live Service
+prefix, Q1, cursor preservation and Control refusal, not runtime reclamation of
+physical Ready tombstones.
+The W9 campaign compares the same 100-due-Actor Service frontier under Actor-only,
+proof-saturated remarks, and RefTime-heavy valid Router demand. Assertions require
+separate ProofSize/RefTime user refusal and nonempty canonical Actor prefixes,
+not equal throughput. The comparison summary names each user refusal component;
+per-profile booleans and next-call weights retain the supporting evidence.
+The Control-attribution campaign compares 100-Actor Manual and cadence-one
+fixtures for nine linked blocks and records mandatory-Prepass versus final Control.
+Deadline materialization may run in on_idle; B+1 eligibility defers newly
+materialized service, not a legacy FIFO cutoff. Its generated-Weight I/O check
+covers AtTime/Cadenced occurrence selectors and the rearm delta, not measured
+marginal accesses or complete block proof.
 The wall-clock matrix remains diagnostic and does not run in this contract.
   -h, --help                 Show this help message
 
@@ -721,11 +720,11 @@ run_integrated_w8_tombstone_prefix_chunk_pressure_gate() {
         fi
     done
     run_shell_step \
-        "Workload gate: native full-Executive W8 tombstone-prefix/chunk pressure" \
+        "Workload gate: native full-Executive W8 Service after closed-prefix setup" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "Workload gate: exact production-Wasm W8 tombstone-prefix/chunk pressure" \
+        "Workload gate: exact production-Wasm W8 Service after closed-prefix setup" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }

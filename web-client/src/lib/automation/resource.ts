@@ -41,13 +41,13 @@ export type CurrentActorResourceView = {
   phase: ActorResourcePhase;
   usage: ActorResourceUsageView;
   outstandingReservations: number;
-  finalizedFixedReserved: ActorResourceWeight | null;
+  budget: ActorResourceBudgetView | null;
   optionalActorWorkHalted: boolean;
 };
 
 export type FinalizedActorResourceView = {
   blockNumber: number;
-  fixedReserved: ActorResourceWeight;
+  budget: ActorResourceBudgetView;
   usage: ActorResourceUsageView;
   optionalActorWorkHalted: boolean;
 };

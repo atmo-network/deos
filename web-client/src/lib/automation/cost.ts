@@ -27,7 +27,6 @@ export type ActorTriggerFeeView = {
 
 export type ActorPipelineFeeView = {
   machineFee: bigint;
-  cleanupFee: bigint;
   totalFee: bigint;
   strategy: 'UpfrontBounded';
   admissionIdentity: string;
@@ -173,14 +172,15 @@ function projectPipeline(value: unknown): ActorPipelineFeeView {
     pipeline.pipeline_machine_fee,
     'Pipeline Machine fee',
   );
-  const cleanupFee = asUnsigned(pipeline.cleanup_fee, 'Pipeline cleanup fee');
+  if ('cleanup_fee' in pipeline) {
+    throw new Error('Pipeline quote contains a retired cleanup fee');
+  }
   const totalFee = asUnsigned(pipeline.total_fee, 'Pipeline total fee');
-  if (machineFee + cleanupFee !== totalFee) {
-    throw new Error('Pipeline total must equal Machine plus cleanup fees');
+  if (machineFee !== totalFee) {
+    throw new Error('Pipeline total must equal the Machine fee');
   }
   return {
     machineFee,
-    cleanupFee,
     totalFee,
     strategy,
     admissionIdentity: asHash(

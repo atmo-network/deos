@@ -3676,7 +3676,13 @@ fn user_retry_insolvency_closes_before_effect_capacity_deferral() {
         .checked_limits()
         .expect("independent component limits fit");
         let mut resources = crate::BlockResourceState::new(run.eligible_at);
-        assert_ok!(resources.begin_prepass());
+        assert_ok!(
+          resources.begin_prepass(
+            limits
+              .into_budget()
+              .expect("synthetic limits define one budget")
+          )
+        );
         assert_ok!(resources.open_external_phase());
         assert_ok!(resources.begin_drain());
         let pass = Actors::execute_cycle_to_cutoff_with_resources(
@@ -5210,6 +5216,11 @@ fn user_dca_complete_lifecycle() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     });
+    let cycle_fees = cadenced_trigger_fee()
+      + pipeline_opening_fee(&contract_steps)
+      + Actors::maximum_contract_step_fee(ActorType::User, &contract_steps, 0)
+        .expect("DCA Action fee fits")
+        .total_fee;
     let actor_id = Actors::next_actor_id();
     prefund_active_user_creation(ALICE, &contract_steps);
     assert_ok!(Actors::create_user_actor(
@@ -5227,7 +5238,7 @@ fn user_dca_complete_lifecycle() {
     // Step 2: Fund sovereign
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, foreign, 500);
-    fund_native(actor_id, 500); // For fees
+    fund_native(actor_id, TestMinUserBalance::get() + cycle_fees * 8);
     // Step 3-4: Advance blocks and verify execution
     for block in 2..8 {
       run_canonical_block_at(block, Weight::MAX);
@@ -5241,9 +5252,12 @@ fn user_dca_complete_lifecycle() {
     );
     // Step 5: Multiple cycles
     let bob_before = asset_balance(&BOB, foreign);
-    for block in 8..27 {
+    for block in 8..30 {
       run_canonical_block_at(block, Weight::MAX);
     }
+    let settled = Actors::active_actor_view(actor_id).expect("funded DCA remains active");
+    assert_eq!(settled.cycle_state, CycleState::Idle);
+    assert!(!settled.pending_signal);
     let bob_after = asset_balance(&BOB, foreign);
     assert!(bob_after > bob_before, "Bob should receive transfers");
     // Step 6-7: Drain native below MinUserBalance; automatic cadence underfunding preserves process authority

@@ -508,8 +508,8 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                   valueClass="tabnum text-(--mono-text)"
                 />
                 <DetailRow
-                  label="Fixed reserved"
-                  value={weightLabel(resource.finalized.fixedReserved)}
+                  label="Finalized fixed envelope"
+                  value={weightLabel(resource.finalized.budget.fixedEnvelope)}
                   valueClass="tabnum text-(--mono-text)"
                 />
               {/if}

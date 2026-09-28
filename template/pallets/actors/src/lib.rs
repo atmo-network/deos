@@ -10,6 +10,18 @@ use polkadot_sdk::{
 
 pub use pallet::*;
 
+/// Keeps configured guarantees separate from the one block-bound allocation consumed by Prepass.
+/// Dynamic hosts must use complete, non-overlapping settled-prefix and outstanding-tail owners.
+/// The default explicitly retains the configured conservative fixed envelope; errors never fall back.
+pub trait BlockResourceBudgetProvider<BlockNumber>: Get<BlockResourceBudget> {
+  fn for_prepass(
+    _now: BlockNumber,
+    configured: BlockResourceBudget,
+  ) -> Result<BlockResourceBudget, BlockResourceError> {
+    Ok(configured)
+  }
+}
+
 pub trait ActorPrepassContext {
   fn context_ready() -> bool;
 }
@@ -288,7 +300,6 @@ pub struct TriggerFeeBreakdown<Balance> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PipelineFeeBreakdown<Balance> {
   pub pipeline_machine_fee: Balance,
-  pub cleanup_fee: Balance,
   pub total_fee: Balance,
 }
 
@@ -486,9 +497,10 @@ sp_api::decl_runtime_apis! {
 pub mod pallet {
   use super::{
     ACTOR_PREPASS_INHERENT_VERSION, ActorPrepassContext, ActorPrepassInherentData,
-    AdmissionCertificateAuthorityProvider, AssetOps, AttemptFeeEnvelope, DexOps, FeeCollector,
-    FeeEnvelopeError, FeeEnvelopeInput, FundingAuthority, LiquidityOps, ObservationProvider,
-    PipelineFeeBreakdown, StepControlWeightContext, StepControlWeightProvider, StepFeeBreakdown,
+    AdmissionCertificateAuthorityProvider, AssetOps, AttemptFeeEnvelope,
+    BlockResourceBudgetProvider, DexOps, FeeCollector, FeeEnvelopeError, FeeEnvelopeInput,
+    FundingAuthority, LiquidityOps, ObservationProvider, PipelineFeeBreakdown,
+    StepControlWeightContext, StepControlWeightProvider, StepFeeBreakdown,
     TaskEffectWeightProvider, TriggerFeeBreakdown, WeightInfo, compose_attempt_fee_envelope,
     contract_steps_bound_is_valid,
   };
@@ -667,8 +679,8 @@ pub mod pallet {
 
     type WeightInfo: WeightInfo;
 
-    /// Runtime-owned immutable block-resource budget derived from the fixed envelope.
-    type BlockResourceBudget: Get<BlockResourceBudget>;
+    /// Configured guarantees plus the one host allocation requested after Prepass context validation.
+    type BlockResourceBudget: BlockResourceBudgetProvider<BlockNumberFor<Self>>;
 
     type PrepassContext: ActorPrepassContext;
 
@@ -1117,6 +1129,11 @@ pub mod pallet {
     Corrupt,
   }
 
+  pub(crate) enum CheckedCloseAuthorityOf<T: Config> {
+    Active(ActiveActorViewOf<T>),
+    Dormant(ActorIdentityOf<T>),
+  }
+
   #[pallet::pallet]
   #[pallet::storage_version(STORAGE_VERSION)]
   pub struct Pallet<T>(_);
@@ -1193,8 +1210,7 @@ pub mod pallet {
               .ok_or(ActorCostQuoteError::ActorInvariant)?
               .header
               .pipeline_machine_envelope;
-            let pipeline_fee = Self::pipeline_fee_breakdown(actor_type, machine_envelope)
-              .map_err(|_| ActorCostQuoteError::ComputationOverflow)?;
+            let pipeline_fee = Self::pipeline_fee_breakdown(actor_type, machine_envelope);
             let cursor = state.run_state.as_ref().map_or(0, |run| run.cursor);
             let action = if state.contract.steps.is_empty() {
               zero_action
@@ -1223,7 +1239,6 @@ pub mod pallet {
               }),
               Some(ActorPipelineFeeQuote {
                 pipeline_machine_fee: pipeline_fee.pipeline_machine_fee,
-                cleanup_fee: pipeline_fee.cleanup_fee,
                 total_fee: pipeline_fee.total_fee,
                 strategy: PipelineMachineFeeStrategy::UpfrontBounded,
                 admission_identity: admission.admission_identity,
@@ -1385,6 +1400,9 @@ pub mod pallet {
       certificate: &ActorAdmissionCertificateOf<T>,
     ) -> Option<ActorContractOf<T>> {
       let head = ActorContractHeads::<T>::get(actor_id)?;
+      if head.header.step_count > T::MaxContractSteps::get() {
+        return None;
+      }
       if !certificate.has_valid_identity()
         || certificate.semantic_contract_id != head.header.semantic_contract_id
         || certificate.body_commitment != head.header.body_commitment
@@ -1719,23 +1737,16 @@ pub mod pallet {
     pub(crate) fn pipeline_fee_breakdown(
       actor_type: ActorType,
       envelope: PipelineMachineEnvelope<T::Balance>,
-    ) -> Result<PipelineFeeBreakdown<T::Balance>, Error<T>> {
-      if actor_type == ActorType::System {
-        return Ok(PipelineFeeBreakdown {
-          pipeline_machine_fee: Zero::zero(),
-          cleanup_fee: Zero::zero(),
-          total_fee: Zero::zero(),
-        });
+    ) -> PipelineFeeBreakdown<T::Balance> {
+      let fee = if actor_type == ActorType::System {
+        Zero::zero()
+      } else {
+        envelope.pipeline_machine_fee_upper
+      };
+      PipelineFeeBreakdown {
+        pipeline_machine_fee: fee,
+        total_fee: fee,
       }
-      let total_fee = envelope
-        .pipeline_machine_fee_upper
-        .checked_add(&envelope.cleanup_fee_upper)
-        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
-      Ok(PipelineFeeBreakdown {
-        pipeline_machine_fee: envelope.pipeline_machine_fee_upper,
-        cleanup_fee: envelope.cleanup_fee_upper,
-        total_fee,
-      })
     }
 
     pub(crate) fn step_fee_for_resources(
@@ -1799,7 +1810,6 @@ pub mod pallet {
       if actor_type == ActorType::System {
         return Ok(PipelineMachineEnvelope {
           pipeline_machine_fee_upper: Zero::zero(),
-          cleanup_fee_upper: Zero::zero(),
         });
       }
       let mut pipeline_machine_fee_upper: T::Balance = if contract_steps.is_empty() {
@@ -1831,13 +1841,8 @@ pub mod pallet {
             .ok_or(Error::<T>::AdmissionBoundOverflow)?;
         }
       }
-      let cleanup_fee_upper = T::WeightToFee::weight_to_fee(&T::WeightInfo::close_actor());
-      pipeline_machine_fee_upper
-        .checked_add(&cleanup_fee_upper)
-        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
       Ok(PipelineMachineEnvelope {
         pipeline_machine_fee_upper,
-        cleanup_fee_upper,
       })
     }
 
@@ -5020,6 +5025,16 @@ pub mod pallet {
       head: ActorContractHeadOf<T>,
       chunks: &[(u32, ActorStepChunkOf<T>)],
     ) -> Option<ActorContractOf<T>> {
+      if head.header.step_count > T::MaxContractSteps::get()
+        || chunks.len()
+          != head
+            .header
+            .step_count
+            .saturating_sub(1)
+            .div_ceil(MAX_STEPS_PER_TAIL_CHUNK) as usize
+      {
+        return None;
+      }
       let mut steps = Vec::with_capacity(head.header.step_count as usize);
       match (head.first_step, head.first_step_resources) {
         (Some(first_step), Some(_)) if head.header.step_count > 0 => steps.push(first_step),
@@ -8846,7 +8861,14 @@ pub mod pallet {
         return Err(Error::<T>::PrepassDuplicateOrStale);
       }
 
-      let budget = T::BlockResourceBudget::get();
+      let configured = T::BlockResourceBudget::get();
+      let budget = T::BlockResourceBudget::for_prepass(now, configured)
+        .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+      ensure!(
+        budget.maximum_block() == configured.maximum_block()
+          && budget.fixed_envelope().all_lte(configured.fixed_envelope()),
+        Error::<T>::ResourceProtocolFailed
+      );
       let deadline_maximum = Self::deadline_service_weight_upper();
       let dependency_scan_envelope = T::WeightInfo::dependency_scan_source_probe().saturating_add(
         T::WeightInfo::process_dependency_scan_unit()
@@ -8867,7 +8889,7 @@ pub mod pallet {
       let now_tick =
         Self::current_scheduler_tick().map_err(|_| Error::<T>::ResourceProtocolFailed)?;
       let mut state = BlockResourceState::new(now);
-      if state.begin_prepass().is_err() {
+      if state.begin_prepass(budget).is_err() {
         state.halt_optional_actor_work();
         CurrentBlockResourceState::<T>::put(state);
         return Err(Error::<T>::ResourceProtocolFailed);
@@ -9045,10 +9067,15 @@ pub mod pallet {
             && state.phase() == BlockResourcePhase::ExternalPhase =>
         {
           (
-            T::BlockResourceBudget::get()
-              .limits()
-              .actor_control()
-              .checked_sub(&state.usage().actor_control_used())
+            state
+              .budget()
+              .ok()
+              .and_then(|budget| {
+                budget
+                  .limits()
+                  .actor_control()
+                  .checked_sub(&state.usage().actor_control_used())
+              })
               .map(|remaining| {
                 Weight::from_parts(
                   available.ref_time().min(remaining.ref_time()),
@@ -9069,10 +9096,9 @@ pub mod pallet {
         return Weight::zero();
       }
       let mut control_authority = match resource_state {
-        Some(mut state) => match state.reserve_mandatory_actor_control(
-          T::BlockResourceBudget::get().limits(),
-          control_available,
-        ) {
+        Some(mut state) => match state.budget().and_then(|budget| {
+          state.reserve_mandatory_actor_control(budget.limits(), control_available)
+        }) {
           Ok(reservation) => Some((state, reservation)),
           Err(_) => {
             state.halt_optional_actor_work();
@@ -9091,7 +9117,14 @@ pub mod pallet {
           if state.ensure_block(now).is_ok()
             && state.phase() == BlockResourcePhase::ExternalPhase =>
         {
-          let budget = T::BlockResourceBudget::get();
+          let budget = match state.budget() {
+            Ok(budget) => budget,
+            Err(_) => {
+              state.halt_optional_actor_work();
+              CurrentBlockResourceState::<T>::put(state);
+              return housekeeping_weight;
+            }
+          };
           if state.begin_drain().is_err() {
             state.halt_optional_actor_work();
             CurrentBlockResourceState::<T>::put(state);
@@ -9122,7 +9155,7 @@ pub mod pallet {
               control_maximum,
             )
           };
-          if state.finish_drain(budget, budget.fixed_envelope()).is_err() {
+          if state.finish_drain().is_err() {
             state.halt_optional_actor_work();
           } else if let Ok(snapshot) = state.finalized_snapshot() {
             FinalizedBlockResourceTelemetry::<T>::put(snapshot);
@@ -9729,26 +9762,13 @@ pub mod pallet {
     #[pallet::call_index(8)]
     #[pallet::weight(Pallet::<T>::close_dispatch_weight_upper())]
     pub fn close_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      match Self::load_actor_state_for_frame_control(actor_id) {
-        LoadedActorStateOf::Active(state) => {
-          let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
-          Self::ensure_control_origin(origin, &instance)?;
-          ensure!(
-            instance.mutability == Mutability::Mutable,
-            Error::<T>::ImmutableActor
-          );
+      match Self::load_close_authority(origin, actor_id)? {
+        CheckedCloseAuthorityOf::Active(instance) => {
           Self::finalize_actor(actor_id, &instance, CloseReason::OwnerInitiated)
         }
-        LoadedActorStateOf::Dormant(identity) => {
-          Self::ensure_identity_control_origin(origin, &identity)?;
-          ensure!(
-            identity.mutability == Mutability::Mutable,
-            Error::<T>::ImmutableActor
-          );
+        CheckedCloseAuthorityOf::Dormant(identity) => {
           Self::close_inactive_actor(actor_id, &identity, CloseReason::OwnerInitiated)
         }
-        LoadedActorStateOf::NotRegistered => Err(Error::<T>::ActorNotFound.into()),
-        LoadedActorStateOf::Corrupt => Err(Error::<T>::ActorInvariant.into()),
       }
     }
 
@@ -10029,11 +10049,10 @@ pub mod pallet {
     }
 
     #[pallet::call_index(23)]
+    // The declared bound must cover quiet allocations, not only the configured fixed envelope.
+    // Actual execution still uses the frozen domains and returns its charged Weight for reclaim.
     #[pallet::weight((
-      T::BlockResourceBudget::get()
-        .limits()
-        .actor_control()
-        .saturating_add(T::BlockResourceBudget::get().limits().actor_base_turn()),
+      T::BlockResourceBudget::get().maximum_block(),
       DispatchClass::Mandatory,
       Pays::No,
     ))]
@@ -10846,7 +10865,10 @@ pub mod pallet {
       actor_type: ActorType,
     ) -> Result<PipelineFeeBreakdown<T::Balance>, Error<T>> {
       let head = ActorContractHeads::<T>::get(actor_id).ok_or(Error::<T>::ActorInvariant)?;
-      Self::pipeline_fee_breakdown(actor_type, head.header.pipeline_machine_envelope)
+      Ok(Self::pipeline_fee_breakdown(
+        actor_type,
+        head.header.pipeline_machine_envelope,
+      ))
     }
 
     pub(crate) fn pipeline_capacity_sufficient(
@@ -10873,7 +10895,7 @@ pub mod pallet {
       if actor_type == ActorType::System {
         return Ok(true);
       }
-      let breakdown = Self::pipeline_fee_breakdown(actor_type, envelope)?;
+      let breakdown = Self::pipeline_fee_breakdown(actor_type, envelope);
       let required = T::MinUserBalance::get()
         .checked_add(&breakdown.total_fee)
         .ok_or(Error::<T>::AdmissionBoundOverflow)?;
@@ -10947,7 +10969,8 @@ pub mod pallet {
       Self::maximum_current_action_fee(actor_type, step, resources)
     }
 
-    /// Returns ledger minimum plus the generated Pipeline Machine and cleanup charge.
+    /// Returns ledger minimum plus the generated Pipeline Machine charge.
+    /// Final Actor-state destruction is economically backed by creation.
     /// Trigger-family pricing is composed separately at ready Opening.
     pub fn user_pipeline_machine_capacity_requirement(
       contract_steps: &ContractSteps<T>,
@@ -10966,10 +10989,8 @@ pub mod pallet {
         Self::derive_step_resource_envelopes(&contract).ok_or(Error::<T>::ActorRunInvariant)?;
       let envelope =
         Self::derive_pipeline_machine_envelope(ActorType::User, contract_steps, &resources)?;
-      envelope
-        .pipeline_machine_fee_upper
-        .checked_add(&envelope.cleanup_fee_upper)
-        .and_then(|cycle_requirement| T::MinUserBalance::get().checked_add(&cycle_requirement))
+      T::MinUserBalance::get()
+        .checked_add(&envelope.pipeline_machine_fee_upper)
         .ok_or(Error::<T>::AdmissionBoundOverflow)
     }
 
@@ -12274,16 +12295,39 @@ pub mod pallet {
       SovereignIndex::<T>::remove(sovereign);
     }
 
-    /// Performs a runtime-owned terminal transition.
-    ///
-    /// Callers at extrinsic boundaries must enforce control immutability before
-    /// reaching this function. Mandatory protocol closure remains available for
-    /// System Immutable actors after terminal execution outcomes.
-    pub(crate) fn finalize_actor(
+    /// Loads public Close authority without mutating lifecycle or custody.
+    pub(crate) fn load_close_authority(
+      origin: OriginFor<T>,
+      actor_id: ActorId,
+    ) -> Result<CheckedCloseAuthorityOf<T>, DispatchError> {
+      match Self::load_actor_state_for_frame_control(actor_id) {
+        LoadedActorStateOf::Active(state) => {
+          let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
+          Self::ensure_control_origin(origin, &instance)?;
+          ensure!(
+            instance.mutability == Mutability::Mutable,
+            Error::<T>::ImmutableActor
+          );
+          Ok(CheckedCloseAuthorityOf::Active(instance))
+        }
+        LoadedActorStateOf::Dormant(identity) => {
+          Self::ensure_identity_control_origin(origin, &identity)?;
+          ensure!(
+            identity.mutability == Mutability::Mutable,
+            Error::<T>::ImmutableActor
+          );
+          Ok(CheckedCloseAuthorityOf::Dormant(identity))
+        }
+        LoadedActorStateOf::NotRegistered => Err(Error::<T>::ActorNotFound.into()),
+        LoadedActorStateOf::Corrupt => Err(Error::<T>::ActorInvariant.into()),
+      }
+    }
+
+    /// Reloads finalization authority and identifies canonical publication without removing it.
+    pub(crate) fn load_finalization_authority(
       actor_id: ActorId,
       instance: &ActiveActorViewOf<T>,
-      reason: CloseReason,
-    ) -> DispatchResult {
+    ) -> Result<(ActiveActorStateOf<T>, Option<ActorRef>), DispatchError> {
       let state = Self::active_actor_state_for_frame_control(actor_id)?;
       let current = Self::derive_active_actor_view(
         state.identity.clone(),
@@ -12291,9 +12335,7 @@ pub mod pallet {
         state.contract.clone(),
       );
       ensure!(current == *instance, Error::<T>::ActorNotFound);
-      // A canonically published Actor owns its terminal residence in the generation-bound process
-      // carrier instead of a legacy primary cell. Route it through the atomic canonical removal so
-      // close releases the Service/Deadline residence and the process publication exactly once.
+      // Canonical publication is generation-bound; a legacy primary uses its retained owner.
       if !ActorControlLocators::<T>::contains_key(actor_id)
         && !ActorUnsignaledControlCells::<T>::contains_key(actor_id)
       {
@@ -12301,12 +12343,29 @@ pub mod pallet {
         else {
           return Err(Error::<T>::ActorNotFound.into());
         };
-        let supplied_run = state.run_state.clone();
-        return Self::remove_actor_publication_and_finalize(
-          ActorRef {
+        return Ok((
+          state,
+          Some(ActorRef {
             actor_id,
             generation: record.generation,
-          },
+          }),
+        ));
+      }
+      Ok((state, None))
+    }
+
+    /// Performs a runtime-owned terminal transition. Public callers enforce origin/mutability;
+    /// mandatory terminal outcomes remain effective for Immutable Actors.
+    pub(crate) fn finalize_actor(
+      actor_id: ActorId,
+      instance: &ActiveActorViewOf<T>,
+      reason: CloseReason,
+    ) -> DispatchResult {
+      let (state, canonical_actor) = Self::load_finalization_authority(actor_id, instance)?;
+      if let Some(actor) = canonical_actor {
+        let supplied_run = state.run_state.clone();
+        return Self::remove_actor_publication_and_finalize(
+          actor,
           state,
           supplied_run.as_ref(),
           reason,

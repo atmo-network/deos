@@ -665,6 +665,8 @@ impl Get<pallet_deos_actors::BlockResourceBudget> for EmbeddingBlockResourceBudg
   }
 }
 
+impl pallet_deos_actors::BlockResourceBudgetProvider<BlockNumber> for EmbeddingBlockResourceBudget {}
+
 impl pallet_deos_actors::Config for Runtime {
   type AssetId = AssetId;
   type Balance = Balance;

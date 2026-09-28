@@ -38,7 +38,7 @@ use polkadot_sdk::{staging_parachain_info as parachain_info, staging_xcm as xcm,
 #[cfg(not(feature = "runtime-benchmarks"))]
 use polkadot_sdk::{staging_xcm_builder as xcm_builder, staging_xcm_executor as xcm_executor};
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
-use sp_runtime::{Perbill, traits::Zero};
+use sp_runtime::traits::Zero;
 use sp_staking::SessionIndex;
 use sp_std::{collections::btree_map::BTreeMap, vec::Vec};
 use sp_version::RuntimeVersion;
@@ -84,19 +84,16 @@ parameter_types! {
           *length = NORMAL_DISPATCH_RATIO * 5 * 1024 * 1024;
       })
       .build();
-  pub MaxDispatchableExtrinsicWeight: Weight =
-      MAXIMUM_BLOCK_WEIGHT.saturating_sub(MIN_ON_IDLE_RESERVE_RATIO * MAXIMUM_BLOCK_WEIGHT);
   pub RuntimeBlockWeights: BlockWeights = BlockWeights::builder()
       .base_block(BlockExecutionWeight::get())
       .for_class(DispatchClass::all(), |weights| {
           weights.base_extrinsic = ExtrinsicBaseWeight::get();
       })
-      .for_class(DispatchClass::Normal, |weights| {
-          weights.max_total = Some(NORMAL_DISPATCH_RATIO * MAXIMUM_BLOCK_WEIGHT);
-      })
-      .for_class(DispatchClass::Operational, |weights| {
-          weights.max_total = Some(MaxDispatchableExtrinsicWeight::get());
-          weights.reserved = None;
+      .for_class(DispatchClass::non_mandatory(), |weights| {
+          // The frozen economic meter partitions dispatch; FRAME owns the common ceiling.
+          weights.max_total = Some(MAXIMUM_BLOCK_WEIGHT);
+          // None permits total-block overrun; zero denies it without disabling the class.
+          weights.reserved = Some(Weight::zero());
       })
       .avg_block_initialization(AVERAGE_ON_INITIALIZE_RATIO)
       .build_or_panic();
@@ -279,7 +276,8 @@ impl cumulus_pallet_parachain_system::Config for Runtime {
 impl parachain_info::Config for Runtime {}
 
 parameter_types! {
-    pub MessageQueueServiceWeight: Weight = Perbill::from_percent(35) * RuntimeBlockWeights::get().max_block;
+    // Independent service cap: changing FRAME must not silently multiply this reservation.
+    pub const MessageQueueServiceWeight: Weight = Weight::from_parts(350_000_000_000, 875_000);
 }
 
 impl pallet_message_queue::Config for Runtime {
@@ -400,6 +398,17 @@ parameter_types! {
     <crate::weights::pallet_session_rotation::SubstrateWeight<Runtime> as pallet_session_rotation::WeightInfo>::rotate_session();
 }
 
+// Keep the conservative envelope until complete system owners permit settled-prefix credits.
+impl pallet_deos_actors::BlockResourceBudgetProvider<BlockNumber> for BlockResourceBudgetValue {
+  #[cfg(test)]
+  fn for_prepass(
+    now: BlockNumber,
+    configured: pallet_deos_actors::BlockResourceBudget,
+  ) -> Result<pallet_deos_actors::BlockResourceBudget, pallet_deos_actors::BlockResourceError> {
+    crate::tests::actors_design_comparison::prepass_budget(now, configured)
+  }
+}
+
 pub struct NeverEndSession;
 impl pallet_session::ShouldEndSession<BlockNumber> for NeverEndSession {
   fn should_end_session(_: BlockNumber) -> bool {
@@ -425,11 +434,19 @@ impl pallet_session_rotation::BenchmarkHelper for RuntimeSessionRotation {
   fn prepare_rotation() {
     use polkadot_sdk::frame_support::traits::Get;
 
-    let max_candidates: u32 = <Runtime as pallet_collator_selection::Config>::MaxCandidates::get();
-    let max_invulnerables: u32 =
-      <Runtime as pallet_collator_selection::Config>::MaxInvulnerables::get();
-    let active_bound = max_candidates.saturating_add(max_invulnerables);
+    staking_config::prepare_benchmark_native_security_mode(
+      pallet_staking::NativeSecurityMode::TrustedSet,
+    );
+    let active_bound: u32 = <Runtime as pallet_collator_selection::Config>::MaxInvulnerables::get();
     let mut queued = Vec::with_capacity(active_bound as usize);
+    let mut previous_authorities = frame_support::BoundedVec::<
+      AuraId,
+      <Runtime as pallet_aura::Config>::MaxAuthorities,
+    >::default();
+    let mut invulnerables = frame_support::BoundedVec::<
+      AccountId,
+      <Runtime as pallet_collator_selection::Config>::MaxInvulnerables,
+    >::default();
     for index in 0..active_bound {
       let mut raw = [0u8; 32];
       raw[..4].copy_from_slice(&index.to_le_bytes());
@@ -439,18 +456,49 @@ impl pallet_session_rotation::BenchmarkHelper for RuntimeSessionRotation {
         aura: AuraId::from(sp_core::sr25519::Public::from_raw(raw)),
       };
       pallet_session::NextKeys::<Runtime>::insert(&account, &keys);
+      assert!(invulnerables.try_push(account.clone()).is_ok());
       queued.push((account, keys));
+      // Force replacement after comparing the maximum shared authority-key prefix.
+      if index + 1 == active_bound {
+        raw[31] = 2;
+      }
+      assert!(
+        previous_authorities
+          .try_push(AuraId::from(sp_core::sr25519::Public::from_raw(raw)))
+          .is_ok()
+      );
     }
+    pallet_session::Validators::<Runtime>::put(invulnerables.to_vec());
+    pallet_aura::Authorities::<Runtime>::put(previous_authorities);
+    pallet_collator_selection::Invulnerables::<Runtime>::put(invulnerables);
     pallet_session::QueuedKeys::<Runtime>::put(queued);
+    pallet_session::QueuedChanged::<Runtime>::put(true);
   }
 
   fn verify_rotation() {
-    let max_candidates: u32 = <Runtime as pallet_collator_selection::Config>::MaxCandidates::get();
-    let max_invulnerables: u32 =
-      <Runtime as pallet_collator_selection::Config>::MaxInvulnerables::get();
+    let maximum: u32 = <Runtime as pallet_collator_selection::Config>::MaxInvulnerables::get();
+    assert_eq!(
+      crate::Staking::native_security_mode(),
+      pallet_staking::NativeSecurityMode::TrustedSet
+    );
     assert_eq!(
       pallet_session::QueuedKeys::<Runtime>::decode_len(),
-      Some(max_candidates.saturating_add(max_invulnerables) as usize)
+      Some(maximum as usize)
+    );
+    assert_eq!(
+      pallet_session::Validators::<Runtime>::decode_len(),
+      Some(maximum as usize)
+    );
+    assert_eq!(
+      pallet_aura::Authorities::<Runtime>::decode_len(),
+      Some(maximum as usize)
+    );
+    assert_eq!(
+      pallet_aura::Authorities::<Runtime>::get().into_inner(),
+      pallet_session::QueuedKeys::<Runtime>::get()
+        .into_iter()
+        .map(|(_, keys)| keys.aura)
+        .collect::<Vec<_>>(),
     );
     assert_eq!(pallet_session::CurrentIndex::<Runtime>::get(), 1);
   }
@@ -787,7 +835,7 @@ impl pallet_session::Config for Runtime {
 impl pallet_aura::Config for Runtime {
   type AuthorityId = AuraId;
   type DisabledValidators = Session;
-  type MaxAuthorities = ConstU32<100_000>;
+  type MaxAuthorities = <Runtime as pallet_collator_selection::Config>::MaxInvulnerables;
   type AllowMultipleBlocksPerSlot = ConstBool<true>;
   type SlotDuration = ConstU64<SLOT_DURATION>;
 }

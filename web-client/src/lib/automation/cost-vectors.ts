@@ -124,22 +124,22 @@ function quote(value: unknown, label: string): ActorCostView {
             candidate.machineFee,
             `${label}.prospectivePipelineFee.machineFee`,
           );
-          const cleanupFee = decimal(
-            candidate.cleanupFee,
-            `${label}.prospectivePipelineFee.cleanupFee`,
-          );
+          if ('cleanupFee' in candidate) {
+            throw new Error(
+              `${label}.prospectivePipelineFee contains a retired cleanup fee`,
+            );
+          }
           const totalFee = decimal(
             candidate.totalFee,
             `${label}.prospectivePipelineFee.totalFee`,
           );
-          if (machineFee + cleanupFee !== totalFee) {
+          if (machineFee !== totalFee) {
             throw new Error(
               `${label}.prospectivePipelineFee total is inconsistent`,
             );
           }
           return {
             machineFee,
-            cleanupFee,
             totalFee,
             strategy: 'UpfrontBounded' as const,
             admissionIdentity: identity(

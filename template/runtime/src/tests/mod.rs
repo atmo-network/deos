@@ -1,6 +1,8 @@
 //! Runtime integration tests for the parachain.
 
 #[cfg(test)]
+pub(crate) mod actors_design_comparison;
+#[cfg(test)]
 pub mod actors_integration_tests;
 #[cfg(test)]
 pub mod asset_conversion_integration_tests;

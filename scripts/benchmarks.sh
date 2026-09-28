@@ -62,6 +62,7 @@ TARGET_PALLET=""
 EXTRINSIC_PATTERN="*"
 OUTPUT_OVERRIDE=""
 JSON_OUTPUT=""
+RAW_ONLY=0
 COMPONENT_LOW=""
 COMPONENT_HIGH=""
 SKIP_BUILD=0
@@ -79,16 +80,19 @@ Options:
                   Minimum seconds per benchmark (bencher default: 10; 0 uses --repeat)
   --all           Benchmark all custom pallets
   --list          List available pallets
-  --check         Verify benchmark compilation and generated storage names (no execution)
+  --check         Run self-tests, verify benchmark compilation and generated storage names
+  --self-test     Test raw-sample/build/reuse routing without Cargo or artifact changes
   --extra         Include diagnostic benchmarks excluded from production weights
   --extrinsic NAME
                   Benchmark one extrinsic (requires one PALLET_NAME)
   --output FILE   Write generated weights to FILE (requires --extrinsic)
   --json-file FILE
                   Save raw component samples (requires one exact --extrinsic)
-  --low VALUES    Comma-separated component minima (requires --high and --output)
-  --high VALUES   Comma-separated component maxima (requires --low and --output)
-  --skip-build    Reuse an already-built benchmark runtime
+  --raw-only      Collect JSON without regression/weight generation (requires --json-file;
+                  incompatible with --output; useful for branch selectors/fixed corners)
+  --low VALUES    Component minima (requires --high and --output or --raw-only)
+  --high VALUES   Component maxima (requires --low and --output or --raw-only)
+  --skip-build    Explicitly reuse an already-built, applicable benchmark runtime
   -h, --help      Show this help message
 
 Arguments:
@@ -98,12 +102,14 @@ Arguments:
 Examples:
   $(basename "$0") --all                      # Benchmark all pallets
   $(basename "$0") pallet_deos_router        # Benchmark one pallet
-  $(basename "$0") --check                    # Verify compilation only
+  $(basename "$0") --check                    # Compile and audit generated storage names
   $(basename "$0") --extra pallet_deos_actors         # Include Actors diagnostics
   $(basename "$0") --extrinsic service_member_to_deadline_new_key --output /tmp/deadline.rs pallet_deos_actors
   $(basename "$0") --steps 100 --repeat 50 --all  # Production-quality run
 
 Environment:
+  SKIP_WASM_BUILD              Must be unset for fresh Wasm builds (even 0/empty skips upstream);
+                              allowed for --check and explicit --skip-build reuse
   INCLUDE_EXTRA_BENCHMARKS=0|1
   DEOS_VERBOSE=0|1              Stream full command and benchmark output (default: 0)
   DEOS_FAILURE_TAIL_LINES=N     Failure excerpt length in compact mode (default: 80)
@@ -145,6 +151,10 @@ parse_args() {
                 ACTION="check"
                 shift
                 ;;
+            --self-test)
+                ACTION="self-test"
+                shift
+                ;;
             --extra)
                 INCLUDE_EXTRA_BENCHMARKS=1
                 shift
@@ -156,6 +166,10 @@ parse_args() {
             --output)
                 OUTPUT_OVERRIDE="$2"
                 shift 2
+                ;;
+            --raw-only)
+                RAW_ONLY=1
+                shift
                 ;;
             --json-file)
                 if [[ $# -lt 2 || -z "$2" || "$2" == --* ]]; then
@@ -207,10 +221,15 @@ parse_args() {
         log_error "--json-file requires one exact --extrinsic and PALLET_NAME"
         exit 2
     fi
+    if [[ "$RAW_ONLY" == "1" && ( -z "$JSON_OUTPUT" || -n "$OUTPUT_OVERRIDE" ) ]]; then
+        log_error "--raw-only requires --json-file and excludes --output"
+        exit 2
+    fi
     if [[ -n "$COMPONENT_LOW$COMPONENT_HIGH" \
-        && ( -z "$COMPONENT_LOW" || -z "$COMPONENT_HIGH" || -z "$OUTPUT_OVERRIDE" \
+        && ( -z "$COMPONENT_LOW" || -z "$COMPONENT_HIGH" \
+            || ( -z "$OUTPUT_OVERRIDE" && "$RAW_ONLY" != "1" ) \
             || "$EXTRINSIC_PATTERN" == "*" || -n "$ACTION" ) ]]; then
-        log_error "Component bounds require --low, --high, --output and one exact --extrinsic"
+        log_error "Component bounds require --low, --high, --output or --raw-only, and one exact --extrinsic"
         exit 2
     fi
 }
@@ -242,6 +261,10 @@ check_prerequisites() {
 }
 
 build_benchmarks() {
+    if [[ "${SKIP_WASM_BUILD+x}" == "x" ]]; then
+        log_error "Fresh benchmark Wasm requires SKIP_WASM_BUILD to be unset, including value 0 or empty. Unset it or explicitly select --skip-build for an applicable artifact."
+        return 1
+    fi
     phase_banner "Step 2: Build benchmark runtime"
     local production_identity=""
     if [[ -f "$PRODUCTION_RUNTIME_WASM" ]]; then
@@ -250,7 +273,7 @@ build_benchmarks() {
     run_shell_step \
         "Build deos-runtime with runtime-benchmarks" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && CARGO_TARGET_DIR='$BENCHMARK_TARGET_DIR' cargo build --release --locked --features runtime-benchmarks -p deos-runtime"
+        "cd \"$TEMPLATE_DIR\" && CARGO_TARGET_DIR='$BENCHMARK_TARGET_DIR' cargo build --release --locked --features runtime-benchmarks -p deos-runtime" || return $?
     if [[ -n "$production_identity" \
         && "$(sha256sum "$PRODUCTION_RUNTIME_WASM" | cut -d ' ' -f 1)" != "$production_identity" ]]; then
         log_error "Benchmark build mutated the canonical production runtime Wasm"
@@ -274,7 +297,97 @@ verify_actors_required_benchmark_source() {
     fi
 }
 
+run_self_test() (
+    local fixture value build_status=0
+    require_commands mktemp rm grep
+    fixture="$(mktemp -d "${TMPDIR:-/tmp}/deos-benchmark-routing.XXXXXX")"
+    trap 'rm -rf -- "$fixture"' EXIT
+    PRODUCTION_RUNTIME_WASM="$fixture/absent-production.wasm"
+    SKIP_BUILD=0
+    EXTRINSIC_PATTERN="*"
+    OUTPUT_OVERRIDE=""
+    JSON_OUTPUT=""
+    RAW_ONLY=0
+    COMPONENT_LOW=""
+    COMPONENT_HIGH=""
+
+    # Exercise actual raw-sample argument construction and publication without a bencher.
+    (
+        BENCHER_MODE="omni"
+        resolve_runtime_wasm_path() { printf '%s\n' "$fixture/runtime.wasm"; }
+        normalize_weight_file() { return 99; }
+        run_command_step() {
+            shift 2
+            printf '%s\n' "$@" > "$fixture/raw-args"
+            local json=""
+            while [[ $# -gt 0 ]]; do
+                if [[ "$1" == "--output" ]]; then return 98; fi
+                if [[ "$1" == "--json-file" ]]; then json="$2"; shift; fi
+                shift
+            done
+            [[ -n "$json" ]] || return 97
+            [[ "$raw_behavior" != failure ]] || return 42
+            if [[ "$raw_behavior" == success ]]; then printf '[{"samples":1}]\n' > "$json"; fi
+        }
+        parse_args --raw-only --json-file "$fixture/samples.json" \
+            --extrinsic close_detach_user --low 2 --high 2 pallet_deos_actors
+        local raw_behavior status
+        for raw_behavior in failure empty success; do
+            status=0
+            run_pallet_benchmark pallet_deos_actors > "$fixture/raw-log" 2>&1 || status=$?
+            if [[ "$raw_behavior" == success ]]; then
+                [[ "$status" == 0 && -s "$fixture/samples.json" ]] || return 1
+                grep -Fxq -- '--no-median-slopes' "$fixture/raw-args"
+                grep -Fxq -- '--no-min-squares' "$fixture/raw-args"
+            else
+                [[ "$status" != 0 && ! -e "$fixture/samples.json" ]] || return 1
+            fi
+        done
+    )
+
+    # Exercise the real main/build routing; replace only external work with trace markers.
+    check_prerequisites() { BENCHER_MODE="omni"; }
+    run_shell_step() { printf 'build\n' >> "$fixture/trace"; return "$build_status"; }
+    run_pallet_benchmark() { printf 'benchmark\n' >> "$fixture/trace"; }
+    check_only() { printf 'check\n' >> "$fixture/trace"; }
+
+    assert_route() {
+        local expected_status="$1" expected_trace="$2" status=0
+        shift 2
+        : > "$fixture/trace"
+        (main "$@") > "$fixture/log" 2>&1 || status=$?
+        if [[ "$status" != "$expected_status" || "$(<"$fixture/trace")" != "$expected_trace" ]]; then
+            log_error "Benchmark route failed: $* (status $status, expected $expected_status)"
+            return 1
+        fi
+        if [[ "$expected_status" == "1" ]] && ! grep -Fq 'SKIP_WASM_BUILD' "$fixture/log"; then
+            log_error "Build refusal did not identify the inherited Wasm skip variable"
+            return 1
+        fi
+    }
+
+    unset SKIP_WASM_BUILD
+    assert_route 0 $'build\nbenchmark' pallet_deos_actors
+    assert_route 0 benchmark --skip-build pallet_deos_actors
+    assert_route 0 check --check
+    assert_route 2 '' --raw-only --extrinsic close_detach_user pallet_deos_actors
+    assert_route 2 '' --raw-only --json-file "$fixture/samples.json" --output "$fixture/weights.rs" --extrinsic close_detach_user pallet_deos_actors
+    assert_route 2 '' --raw-only --json-file "$fixture/samples.json" pallet_deos_actors
+    assert_route 0 benchmark --skip-build --raw-only --json-file "$fixture/samples.json" --extrinsic close_detach_user --low 2 --high 2 pallet_deos_actors
+    build_status=42
+    assert_route 42 build pallet_deos_actors
+    build_status=0
+    for value in '' 0 1 false; do
+        export SKIP_WASM_BUILD="$value"
+        assert_route 1 '' pallet_deos_actors
+        assert_route 0 benchmark --skip-build pallet_deos_actors
+        assert_route 0 check --check
+    done
+    log_success "Benchmark raw-sample/build/reuse routing self-test passed"
+)
+
 check_only() {
+    run_self_test
     phase_banner "Step 2: Benchmark compilation check"
     verify_actors_required_benchmark_source
     local production_identity=""
@@ -531,6 +644,8 @@ run_pallet_benchmark() {
             "scheduler_inner_zero_step_system_crossing_header_waiting_close"
             "scheduler_inner_zero_step_user_cadenced_header"
             "scheduler_inner_opening_system_transfer_header_max"
+            "scheduler_service_system_transfer_header_max"
+            "scheduler_service_system_transfer_native_fixed"
   "scheduler_inner_opening_system_burn_header_max"
   "scheduler_inner_opening_user_transfer_terminal"
   "scheduler_inner_opening_user_transfer_terminal_peers"
@@ -651,7 +766,8 @@ run_pallet_benchmark() {
     fi
 
     local template_file="$TEMPLATE_DIR/.maintain/frame-weight-template.hbs"
-    local runtime_wasm output_dir staged_output
+    local runtime_wasm output_dir staged_output="" staged_json=""
+    local step_label="Generate $pallet_name weights"
     runtime_wasm="$(resolve_runtime_wasm_path)" || return 1
     output_dir="$(dirname "$output_file")"
     require_directory "$output_dir" "Weight output directory"
@@ -664,7 +780,6 @@ run_pallet_benchmark() {
             return 1
         fi
     fi
-    staged_output="$(mktemp "$output_dir/.${pallet_name}.weights.XXXXXX")"
     local bencher_args=(
         --runtime "$runtime_wasm"
         --pallet "$pallet_name"
@@ -673,10 +788,17 @@ run_pallet_benchmark() {
         --steps "$STEPS"
         --repeat "$REPEAT"
         --heap-pages "$HEAP_PAGES"
-        --output "$staged_output"
     )
 
-    if [[ -n "$JSON_OUTPUT" ]]; then
+    if [[ "$RAW_ONLY" == "1" ]]; then
+        staged_json="$(mktemp "$(dirname "$JSON_OUTPUT")/.${pallet_name}.samples.XXXXXX")"
+        bencher_args+=(--json-file "$staged_json" --no-median-slopes --no-min-squares)
+        step_label="Measure $pallet_name raw samples"
+    else
+        staged_output="$(mktemp "$output_dir/.${pallet_name}.weights.XXXXXX")"
+        bencher_args+=(--output "$staged_output")
+    fi
+    if [[ -n "$JSON_OUTPUT" && "$RAW_ONLY" != "1" ]]; then
         bencher_args+=(--json-file "$JSON_OUTPUT")
     fi
     if [[ -n "$COMPONENT_LOW" ]]; then
@@ -690,16 +812,26 @@ run_pallet_benchmark() {
         bencher_args+=(--extra)
     fi
 
-    if [[ -f "$template_file" ]]; then
+    if [[ "$RAW_ONLY" != "1" && -f "$template_file" ]]; then
         bencher_args+=(--template "$template_file")
     fi
 
     if ! run_command_step \
-        "Generate $pallet_name weights" \
+        "$step_label" \
         "" \
         frame-omni-bencher v1 benchmark pallet "${bencher_args[@]}"; then
-        rm -f "$staged_output"
+        rm -f "$staged_output" "$staged_json"
         return 1
+    fi
+    if [[ "$RAW_ONLY" == "1" ]]; then
+        if [[ ! -s "$staged_json" ]]; then
+            log_error "Raw benchmark samples not generated for $pallet_name"
+            rm -f "$staged_json"
+            return 1
+        fi
+        mv -f "$staged_json" "$JSON_OUTPUT"
+        log_success "$pallet_name raw samples -> $JSON_OUTPUT (no weight generation)"
+        return 0
     fi
     if [[ ! -s "$staged_output" ]]; then
         log_error "Weight file not generated for $pallet_name"
@@ -789,6 +921,11 @@ main() {
     parse_args "$@"
     phase_banner "DEOS benchmark workflow"
 
+    if [[ "$ACTION" == "self-test" ]]; then
+        run_self_test
+        return
+    fi
+
     if [[ "$ACTION" == "list" ]]; then
         list_pallets
         exit 0
@@ -802,7 +939,7 @@ main() {
     check_prerequisites
 
     if [[ "$BENCHER_MODE" == "omni" && "$SKIP_BUILD" != "1" ]]; then
-        build_benchmarks
+        build_benchmarks || return $?
     fi
 
     if [[ -n "$TARGET_PALLET" ]]; then

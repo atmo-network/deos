@@ -469,7 +469,7 @@ fn user_active_creation_requires_no_sovereign_activation_prefunding() {
 }
 
 #[test]
-fn zero_step_user_opening_charges_pipeline_but_no_action_fee() {
+fn persistent_pipelines_pay_only_cycle_control_before_fee_free_close() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_user_with(
@@ -479,35 +479,159 @@ fn zero_step_user_opening_charges_pipeline_but_no_action_fee() {
       None,
       BoundedVec::default(),
     );
+    let pipeline_fee = TestWeightToFee::weight_to_fee(
+      &<TestWeightInfo as crate::WeightInfo>::scheduler_inner_zero_step_complete(),
+    );
+    assert!(pipeline_fee > 0);
+    let _ = Balances::deposit_creating(
+      &sovereign_account(actor_id),
+      pipeline_fee + manual_trigger_fee(),
+    );
+    for cycle_nonce in 1..=2 {
+      let now = frame_system::Pallet::<Test>::block_number();
+      frame_system::Pallet::<Test>::set_block_number(now + 1);
+      assert_ok!(Actors::manual_trigger(
+        RuntimeOrigin::signed(ALICE),
+        actor_id
+      ));
+      clear_fee_collections();
+      let fee_sink_before = native_balance(&TestFeeSink::get());
+      run_idle(Weight::MAX);
+      assert_eq!(fee_collections(), vec![pipeline_fee]);
+      assert_eq!(
+        native_balance(&TestFeeSink::get()),
+        fee_sink_before.saturating_add(pipeline_fee)
+      );
+      assert!(has_actor_event(|event| matches!(
+        event,
+        Event::PipelineFeeCharged { actor_id: id, fee }
+          if *id == actor_id && *fee == pipeline_fee
+      )));
+      assert_eq!(
+        Actors::actor_identity(actor_id)
+          .expect("persistent zero-Step User remains")
+          .cycle_nonce,
+        cycle_nonce
+      );
+      assert!(ActorRunStateStore::<Test>::get(actor_id).is_none());
+    }
+    let sovereign = sovereign_account(actor_id);
+    let custody_before = native_balance(&sovereign);
+    clear_fee_collections();
+    assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
+    assert!(fee_collections().is_empty());
+    assert_eq!(native_balance(&sovereign), custody_before);
+    assert!(Actors::actor_identity(actor_id).is_none());
+    assert!(crate::ActorStateHolds::<Test>::get(actor_id).is_none());
+  });
+}
+
+#[test]
+fn creation_payment_survives_activation_replacement_and_unfunded_removal() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    clear_fee_collections();
+    let owner_before = native_balance(&ALICE);
+    let sink_before = native_balance(&TestFeeSink::get());
+    let actor_id = Actors::next_actor_id();
+    assert_ok!(Actors::create_user_actor(
+      RuntimeOrigin::signed(ALICE),
+      Mutability::Mutable,
+      None,
+    ));
+    let creation_fee = TestActorCreationFee::get();
+    assert!(creation_fee > 0);
+    assert_eq!(fee_collections(), vec![creation_fee]);
+    let dormant_hold = Actors::actor_state_hold(actor_id).expect("Dormant state is backed");
+    let sovereign = Actors::actor_identity(actor_id)
+      .expect("Dormant identity owns custody")
+      .sovereign_account;
+    let foreign = TestAsset::Local(1);
+    set_asset_balance(&sovereign, foreign, 37);
+    let custody_before = native_balance(&sovereign);
+    let contract = user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1))
+      .expect("one-Step Contract fits");
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    assert_ok!(Actors::activate_actor(
+      RuntimeOrigin::signed(ALICE),
+      actor_id,
+      contract.clone(),
+    ));
+    let compact_hold = Actors::actor_state_hold(actor_id).expect("Active state is backed");
+    assert!(compact_hold.breakdown.contract_head > 0);
+    assert_eq!(compact_hold.breakdown.contract_body, 0);
+    let mut expanded = contract;
+    expanded.steps = BoundedVec::try_from(vec![expanded.steps[0].clone(); 5])
+      .expect("one retained tail chunk fits");
+    frame_system::Pallet::<Test>::set_block_number(3);
+    assert_ok!(Actors::update_contract(
+      RuntimeOrigin::signed(ALICE),
+      actor_id,
+      expanded.clone(),
+    ));
+    let expanded_hold = Actors::actor_state_hold(actor_id).expect("Expanded state is backed");
+    assert!(expanded_hold.breakdown.contract_body > 0);
+    assert_eq!(fee_collections(), vec![creation_fee]);
+
+    frame_system::Pallet::<Test>::set_block_number(4);
+    assert_ok!(Actors::deactivate_actor(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    assert_eq!(Actors::actor_state_hold(actor_id), Some(dormant_hold));
+    frame_system::Pallet::<Test>::set_block_number(5);
+    assert_ok!(Actors::activate_actor(
+      RuntimeOrigin::signed(ALICE),
+      actor_id,
+      expanded,
+    ));
+    assert_eq!(Actors::actor_state_hold(actor_id), Some(expanded_hold));
+    assert_eq!(fee_collections(), vec![creation_fee]);
+    assert_eq!(native_balance(&sovereign), custody_before);
+    assert_eq!(asset_balance(&sovereign, foreign), 37);
+
+    frame_system::Pallet::<Test>::set_block_number(6);
+    let trigger_fee = manual_trigger_fee();
+    fund_native(actor_id, TestMinUserBalance::get() + trigger_fee);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    clear_fee_collections();
-    let fee_sink_before = native_balance(&TestFeeSink::get());
-
+    assert_eq!(native_balance(&sovereign), TestMinUserBalance::get());
+    let recipient_before = native_balance(&BOB);
     run_idle(Weight::MAX);
-
-    let pipeline_fee = pipeline_opening_fee(&BoundedVec::default());
-    assert_eq!(fee_collections(), vec![pipeline_fee]);
-    assert_eq!(
-      native_balance(&TestFeeSink::get()),
-      fee_sink_before.saturating_add(pipeline_fee)
-    );
     assert!(has_actor_event(|event| matches!(
       event,
-      Event::PipelineFeeCharged {
-        actor_id: id,
-        fee,
-      } if *id == actor_id && *fee == pipeline_fee
+      Event::ActorClosed { actor_id: id, reason: CloseReason::CycleAdmissionInsufficient, .. }
+        if *id == actor_id
     )));
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::PipelineFeeCharged { actor_id: id, .. }
+        | Event::ActionFeeCharged { actor_id: id, .. } if *id == actor_id
+    )));
+    assert_eq!(fee_collections(), vec![creation_fee, trigger_fee]);
+    assert_eq!(native_balance(&ALICE), owner_before - creation_fee);
     assert_eq!(
-      Actors::actor_identity(actor_id)
-        .expect("persistent zero-Step User remains")
-        .cycle_nonce,
-      1
+      native_balance(&TestFeeSink::get()),
+      sink_before + creation_fee + trigger_fee
     );
-    assert!(ActorRunStateStore::<Test>::get(actor_id).is_none());
+    assert_eq!(native_balance(&sovereign), TestMinUserBalance::get());
+    assert_eq!(asset_balance(&sovereign, foreign), 37);
+    assert_eq!(native_balance(&BOB), recipient_before);
+    let usage = Actors::block_resource_state()
+      .expect("automatic removal remains metered")
+      .usage();
+    assert!(usage.actor_control_used().ref_time() > 0);
+    assert!(usage.actor_control_used().proof_size() > 0);
+    assert_eq!(usage.actor_effect_used(), Weight::zero());
+    assert!(Actors::actor_identity(actor_id).is_none());
+    assert!(Actors::actor_contract(actor_id).is_none());
+    assert!(Actors::actor_state_hold(actor_id).is_none());
+    assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(OwnerSlotBitmaps::<Test>::get(ALICE), [0; 32]);
   });
 }
 
@@ -2043,7 +2167,7 @@ fn non_invoked_task_releases_effect_weight_after_maximum_admission() {
     let bob_before = native_balance(&BOB);
     let budget = TestBlockResourceBudget::get();
     let mut resource_state = crate::BlockResourceState::new(2);
-    assert_eq!(resource_state.begin_prepass(), Ok(()));
+    assert_eq!(resource_state.begin_prepass(budget), Ok(()));
     assert_eq!(resource_state.open_external_phase(), Ok(()));
     assert_eq!(resource_state.begin_drain(), Ok(()));
     let pass = Actors::execute_cycle_to_cutoff_with_resources(
@@ -2116,7 +2240,7 @@ fn successful_actor_pass_separates_actual_effect_from_control() {
 
     let budget = TestBlockResourceBudget::get();
     let mut resource_state = crate::BlockResourceState::new(2);
-    assert_eq!(resource_state.begin_prepass(), Ok(()));
+    assert_eq!(resource_state.begin_prepass(budget), Ok(()));
     assert_eq!(resource_state.open_external_phase(), Ok(()));
     assert_eq!(resource_state.begin_drain(), Ok(()));
     let pass = Actors::execute_cycle_to_cutoff_with_resources(
@@ -2353,7 +2477,7 @@ fn assert_missing_actual_weight_rolls_back_without_fee_collection(missing_contro
 
     let budget = TestBlockResourceBudget::get();
     let mut resource_state = crate::BlockResourceState::new(2);
-    assert_eq!(resource_state.begin_prepass(), Ok(()));
+    assert_eq!(resource_state.begin_prepass(budget), Ok(()));
     assert_eq!(resource_state.open_external_phase(), Ok(()));
     assert_eq!(resource_state.begin_drain(), Ok(()));
     let pass = Actors::execute_cycle_to_cutoff_with_resources(
@@ -2540,7 +2664,7 @@ fn invalid_actual_domains_retain_admission_in_each_component() {
           set_task_effect_actual_weight_override(Some(resources.effect.saturating_add(excess)));
         }
         let mut state = crate::BlockResourceState::new(2);
-        assert_ok!(state.begin_prepass());
+        assert_ok!(state.begin_prepass(TestBlockResourceBudget::get()));
         let limits = TestBlockResourceBudget::get().limits();
         let pass = Actors::execute_cycle_to_cutoff_with_resources(
           Weight::MAX,
@@ -2659,7 +2783,7 @@ fn late_fee_rollback_retains_work_and_preserves_committed_prefixes() {
       set_task_effect_actual_weight_override(Some(known_effect));
       let limits = TestBlockResourceBudget::get().limits();
       let mut state = crate::BlockResourceState::new(3);
-      assert_ok!(state.begin_prepass());
+      assert_ok!(state.begin_prepass(TestBlockResourceBudget::get()));
       let mut prefix_meter =
         polkadot_sdk::frame_support::weights::WeightMeter::with_limit(Weight::MAX);
       assert_ok!(Actors::service_canonical_round_head_with_resources(
@@ -2793,7 +2917,7 @@ fn failed_zero_step_opening_retains_control_only_and_source_authority() {
       let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
       let limits = TestBlockResourceBudget::get().limits();
       let mut state = crate::BlockResourceState::new(2);
-      assert_ok!(state.begin_prepass());
+      assert_ok!(state.begin_prepass(TestBlockResourceBudget::get()));
       let consumed = if pass_owned {
         Actors::execute_cycle_to_cutoff_with_resources(
           Weight::MAX,

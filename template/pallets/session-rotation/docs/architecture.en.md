@@ -14,4 +14,4 @@ The package has no storage, calls, events, origins, or cleanup path. Rotation be
 
 ## 4. Weight Boundary
 
-The package's `WeightInfo` has one owner, `rotate_session`. The benchmark helper can establish host-specific maximum validator/key geometry without moving that policy into the reusable pallet. Database reads and writes performed by the host rotation are captured by generated benchmark evidence.
+The package's `WeightInfo` has one owner, `rotate_session`. The benchmark helper can establish host-specific maximum validator/key geometry without moving that policy into the reusable pallet. Database reads and writes performed by the host rotation, including nested callbacks, are captured by generated benchmark evidence. The pallet returns its configured owner without undoing any internal host registration; satisfying the specification's single-owner accounting rule remains a host-composition obligation.

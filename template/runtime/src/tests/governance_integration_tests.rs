@@ -1541,7 +1541,7 @@ fn maximum_signed_governance_proposal_passes_real_check_weight_validation() {
     let validation_block = now.saturating_add(1);
     let mut validation_state = pallet_deos_actors::BlockResourceState::new(validation_block);
     validation_state
-      .begin_prepass()
+      .begin_prepass(crate::configs::BlockResourceBudgetValue::get())
       .expect("validation phase opens");
     validation_state
       .open_external_phase()

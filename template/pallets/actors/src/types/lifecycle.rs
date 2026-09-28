@@ -996,9 +996,7 @@ pub enum PipelineMachineFeeStrategy {
   UpfrontBounded,
 }
 
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
+#[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct ActorTriggerFeeQuote<Balance> {
   pub trigger_family: TriggerFamily,
   pub maximum_weight: Weight,
@@ -1011,20 +1009,33 @@ pub struct ActorTriggerFeeQuote<Balance> {
 )]
 pub struct ActorPipelineFeeQuote<Balance> {
   pub pipeline_machine_fee: Balance,
-  pub cleanup_fee: Balance,
   pub total_fee: Balance,
   pub strategy: PipelineMachineFeeStrategy,
   pub admission_identity: [u8; 32],
   pub production_weight_identity: [u8; 32],
 }
 
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
+impl<Balance: MaxEncodedLen> MaxEncodedLen for ActorTriggerFeeQuote<Balance> {
+  fn max_encoded_len() -> usize {
+    (TriggerFamily::max_encoded_len()
+      + super::resource::weight_max_encoded_len()
+      + <[u8; 32]>::max_encoded_len())
+    .saturating_add(Balance::max_encoded_len())
+  }
+}
+
+#[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct ActorActionFeeQuote<Balance> {
   pub maximum_effect_weight: Weight,
   pub maximum_effect_fee: Balance,
   pub production_weight_identity: [u8; 32],
+}
+
+impl<Balance: MaxEncodedLen> MaxEncodedLen for ActorActionFeeQuote<Balance> {
+  fn max_encoded_len() -> usize {
+    (super::resource::weight_max_encoded_len() + <[u8; 32]>::max_encoded_len())
+      .saturating_add(Balance::max_encoded_len())
+  }
 }
 
 #[derive(

@@ -417,6 +417,7 @@ parameter_types! {
     polkadot_sdk::sp_runtime::Perbill::from_percent(50);
   pub ProposalVetoMinimumVetoTurnout: polkadot_sdk::sp_runtime::Perbill =
     polkadot_sdk::sp_runtime::Perbill::from_percent(1);
+  pub static MaxEpochCatchUpPerBlock: u32 = 1;
   pub static ProposalLeadInPeriod: Epoch = 0;
   pub static ProposalProtectionPeriod: Epoch = 2;
   pub static ProposalUrgentVotingPeriod: Epoch = 1;
@@ -452,7 +453,7 @@ impl pallet_governance::Config for Test {
   type WinningVoteItemId = u32;
   type Epoch = Epoch;
   type EpochProvider = MockEpochProvider;
-  type MaxEpochCatchUpPerBlock = ConstU32<1>;
+  type MaxEpochCatchUpPerBlock = MaxEpochCatchUpPerBlock;
   type MaxMaturingProposalsPerBlock = ConstU32<3>;
   type MaxPendingEnactmentsPerBlock = ConstU32<4>;
   type MaxFinalizedProposalOutcomesPerBlock = ConstU32<1024>;
@@ -591,6 +592,7 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
     AUTHORIZED_RUNTIME_UPGRADE.with(|authorization| authorization.borrow_mut().take());
     PAYLOAD_EXECUTOR_ENABLED.with(|enabled| *enabled.borrow_mut() = false);
     PAYLOAD_EXECUTION_RESULTS.with(|results| results.borrow_mut().clear());
+    MaxEpochCatchUpPerBlock::set(1);
     ProposalLeadInPeriod::set(0);
     ProposalProtectionPeriod::set(2);
     ProposalUrgentVotingPeriod::set(1);

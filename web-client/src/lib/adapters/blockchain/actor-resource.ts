@@ -21,6 +21,9 @@ type ActorResourceAt = NonNullable<
   >[0]
 >['at'];
 
+type RuntimeBudget = Awaited<
+  ReturnType<DeosTypedApi['apis']['ActorResourceApi']['block_resource_budget']>
+>;
 type RuntimeWeight = { ref_time: bigint; proof_size: bigint };
 type RuntimeUsage = {
   actor_control: RuntimeWeight;
@@ -40,6 +43,19 @@ function usage(value: RuntimeUsage): ActorResourceUsageView {
   };
 }
 
+function projectBudget(value: RuntimeBudget): ActorResourceBudgetView {
+  return {
+    maximumBlock: weight(value.maximum_block),
+    fixedEnvelope: weight(value.fixed_envelope),
+    limits: {
+      actorControl: weight(value.limits.actor_control),
+      sharedEconomic: weight(value.limits.shared_economic),
+      actorBaseTurn: weight(value.limits.actor_base_turn),
+      userBaseTurn: weight(value.limits.user_base_turn),
+    },
+  };
+}
+
 export async function readActorResourceProjection(
   typedApi: DeosTypedApi,
   at: ActorResourceAt,
@@ -50,24 +66,15 @@ export async function readActorResourceProjection(
     typedApi.apis.ActorResourceApi.finalized_block_resource_snapshot({ at }),
   ]);
 
-  const budget: ActorResourceBudgetView = {
-    maximumBlock: weight(runtimeBudget.maximum_block),
-    fixedEnvelope: weight(runtimeBudget.fixed_envelope),
-    limits: {
-      actorControl: weight(runtimeBudget.limits.actor_control),
-      sharedEconomic: weight(runtimeBudget.limits.shared_economic),
-      actorBaseTurn: weight(runtimeBudget.limits.actor_base_turn),
-      userBaseTurn: weight(runtimeBudget.limits.user_base_turn),
-    },
-  };
+  const budget = projectBudget(runtimeBudget);
   const current: CurrentActorResourceView | null = runtimeCurrent
     ? {
         blockNumber: runtimeCurrent.block_number,
         phase: runtimeCurrent.phase.type,
         usage: usage(runtimeCurrent.usage),
         outstandingReservations: runtimeCurrent.outstanding_reservations,
-        finalizedFixedReserved: runtimeCurrent.finalized_fixed_reserved
-          ? weight(runtimeCurrent.finalized_fixed_reserved)
+        budget: runtimeCurrent.budget
+          ? projectBudget(runtimeCurrent.budget)
           : null,
         optionalActorWorkHalted: runtimeCurrent.optional_actor_work_halted,
       }
@@ -75,7 +82,7 @@ export async function readActorResourceProjection(
   const finalized: FinalizedActorResourceView | null = runtimeFinalized
     ? {
         blockNumber: runtimeFinalized.block_number,
-        fixedReserved: weight(runtimeFinalized.fixed_reserved),
+        budget: projectBudget(runtimeFinalized.budget),
         usage: usage(runtimeFinalized.usage),
         optionalActorWorkHalted: runtimeFinalized.optional_actor_work_halted,
       }

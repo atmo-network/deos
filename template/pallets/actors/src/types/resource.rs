@@ -1,13 +1,22 @@
 use frame::prelude::*;
 use polkadot_sdk::frame_support::weights::Weight;
 
+/// Weight encodes two compact u64 fields; its pinned SDK derive counts ordinary u64s.
+pub(crate) fn weight_max_encoded_len() -> usize {
+  2 * codec::Compact::<u64>::max_encoded_len()
+}
+
 /// Explicit independent resource ceilings for one rollback-only Actor preview.
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
-)]
+#[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct SimulationBudget {
   pub actor_control: Weight,
   pub shared_economic: Weight,
+}
+
+impl MaxEncodedLen for SimulationBudget {
+  fn max_encoded_len() -> usize {
+    2 * weight_max_encoded_len()
+  }
 }
 
 impl SimulationBudget {
@@ -56,16 +65,14 @@ pub enum BlockResourcePhase {
 pub struct BlockResourceState<BlockNumber> {
   block_number: BlockNumber,
   phase: BlockResourcePhase,
+  budget: Option<BlockResourceBudget>,
   usage: BlockResourceUsage,
   outstanding_reservations: u32,
-  finalized_fixed_reserved: Option<Weight>,
   optional_actor_work_halted: bool,
 }
 
 /// Checked reference-runtime limits for Actor control and shared economic work.
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
-)]
+#[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct BlockResourceLimits {
   actor_control: Weight,
   shared_economic: Weight,
@@ -73,28 +80,42 @@ pub struct BlockResourceLimits {
   user_base_turn: Weight,
 }
 
+impl MaxEncodedLen for BlockResourceLimits {
+  fn max_encoded_len() -> usize {
+    4 * weight_max_encoded_len()
+  }
+}
+
 /// Immutable relationship between FRAME maximum, fixed/context reserve, and schedulable limits.
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
-)]
+#[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct BlockResourceBudget {
   maximum_block: Weight,
   fixed_envelope: Weight,
   limits: BlockResourceLimits,
 }
 
+impl MaxEncodedLen for BlockResourceBudget {
+  fn max_encoded_len() -> usize {
+    2 * weight_max_encoded_len() + BlockResourceLimits::max_encoded_len()
+  }
+}
+
 /// Independently evidenced owners of the fixed/context envelope. The first component owns FRAME
 /// overhead, every non-Actor initialization/finalization hook not already owned by the four
 /// explicit components, and bounded non-economic maintenance such as XCMP lazy-migration `on_idle`.
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
-)]
+#[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct FixedBlockWeightComponents {
   other_runtime_hooks_and_frame_base: Weight,
   timestamp: Weight,
   parachain_validation: Weight,
   downward_messages: Weight,
   horizontal_messages: Weight,
+}
+
+impl MaxEncodedLen for FixedBlockWeightComponents {
+  fn max_encoded_len() -> usize {
+    5 * weight_max_encoded_len()
+  }
 }
 
 /// Finite pre-execution bounds for variable-size parachain context messages.
@@ -125,24 +146,14 @@ pub struct ContextMessageGeometry {
 )]
 pub struct FinalizedBlockResourceSnapshot<BlockNumber> {
   block_number: BlockNumber,
-  fixed_reserved: Weight,
+  budget: BlockResourceBudget,
   usage: BlockResourceUsage,
   optional_actor_work_halted: bool,
 }
 
 /// Current authoritative usage. Actor base and Drain effects share one counter.
 #[derive(
-  Clone,
-  Copy,
-  Debug,
-  Decode,
-  DecodeWithMemTracking,
-  Default,
-  Encode,
-  Eq,
-  MaxEncodedLen,
-  PartialEq,
-  TypeInfo,
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Default, Encode, Eq, PartialEq, TypeInfo,
 )]
 pub struct BlockResourceUsage {
   actor_control: Weight,
@@ -150,13 +161,28 @@ pub struct BlockResourceUsage {
   user_dispatch: Weight,
 }
 
+impl MaxEncodedLen for BlockResourceUsage {
+  fn max_encoded_len() -> usize {
+    3 * weight_max_encoded_len()
+  }
+}
+
 /// A pre-mutation maximum reservation that can be settled only in its owning domain.
-#[derive(Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo)]
+#[derive(Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct BlockResourceReservation {
   domain: BlockResourceDomain,
   maximum: Weight,
   phase: BlockResourcePhase,
   settled: bool,
+}
+
+impl MaxEncodedLen for BlockResourceReservation {
+  fn max_encoded_len() -> usize {
+    BlockResourceDomain::max_encoded_len()
+      + weight_max_encoded_len()
+      + BlockResourcePhase::max_encoded_len()
+      + bool::max_encoded_len()
+  }
 }
 
 /// Atomic paired reservation for one Actor Step's control and Task-effect maxima.
@@ -236,8 +262,12 @@ impl<BlockNumber: Copy> FinalizedBlockResourceSnapshot<BlockNumber> {
     self.block_number
   }
 
+  pub fn budget(&self) -> BlockResourceBudget {
+    self.budget
+  }
+
   pub fn fixed_reserved(&self) -> Weight {
-    self.fixed_reserved
+    self.budget.fixed_envelope()
   }
 
   pub fn usage(&self) -> BlockResourceUsage {
@@ -254,9 +284,9 @@ impl<BlockNumber: Copy + PartialEq> BlockResourceState<BlockNumber> {
     Self {
       block_number,
       phase: BlockResourcePhase::ContextIncomplete,
+      budget: None,
       usage: BlockResourceUsage::default(),
       outstanding_reservations: 0,
-      finalized_fixed_reserved: None,
       optional_actor_work_halted: false,
     }
   }
@@ -267,6 +297,10 @@ impl<BlockNumber: Copy + PartialEq> BlockResourceState<BlockNumber> {
 
   pub fn phase(&self) -> BlockResourcePhase {
     self.phase
+  }
+
+  pub fn budget(&self) -> Result<BlockResourceBudget, BlockResourceError> {
+    self.budget.ok_or(BlockResourceError::InvalidPhase)
   }
 
   pub fn usage(&self) -> BlockResourceUsage {
@@ -288,11 +322,16 @@ impl<BlockNumber: Copy + PartialEq> BlockResourceState<BlockNumber> {
     Ok(())
   }
 
-  pub fn begin_prepass(&mut self) -> Result<(), BlockResourceError> {
+  pub fn begin_prepass(&mut self, budget: BlockResourceBudget) -> Result<(), BlockResourceError> {
+    if self.budget.is_some() {
+      return Err(BlockResourceError::InvalidPhase);
+    }
     self.advance(
       BlockResourcePhase::ContextIncomplete,
       BlockResourcePhase::PrepassExecuting,
-    )
+    )?;
+    self.budget = Some(budget);
+    Ok(())
   }
 
   pub fn open_external_phase(&mut self) -> Result<(), BlockResourceError> {
@@ -309,19 +348,17 @@ impl<BlockNumber: Copy + PartialEq> BlockResourceState<BlockNumber> {
     )
   }
 
-  pub fn finish_drain(
-    &mut self,
-    budget: BlockResourceBudget,
-    fixed_reserved: Weight,
-  ) -> Result<(), BlockResourceError> {
+  pub fn finish_drain(&mut self) -> Result<(), BlockResourceError> {
     if self.phase != BlockResourcePhase::FreshDrain {
       return Err(BlockResourceError::InvalidPhase);
     }
     if self.outstanding_reservations != 0 {
       return Err(BlockResourceError::ReservationOutstanding);
     }
-    self.usage.reconcile_with_block(budget, fixed_reserved)?;
-    self.finalized_fixed_reserved = Some(fixed_reserved);
+    let budget = self.budget()?;
+    self
+      .usage
+      .reconcile_with_block(budget, budget.fixed_envelope())?;
     self.phase = BlockResourcePhase::Finalizable;
     Ok(())
   }
@@ -332,12 +369,9 @@ impl<BlockNumber: Copy + PartialEq> BlockResourceState<BlockNumber> {
     if self.phase != BlockResourcePhase::Finalizable {
       return Err(BlockResourceError::InvalidPhase);
     }
-    let fixed_reserved = self
-      .finalized_fixed_reserved
-      .ok_or(BlockResourceError::ReconciliationMismatch)?;
     Ok(FinalizedBlockResourceSnapshot {
       block_number: self.block_number,
-      fixed_reserved,
+      budget: self.budget()?,
       usage: self.usage,
       optional_actor_work_halted: self.optional_actor_work_halted,
     })
@@ -370,6 +404,9 @@ impl<BlockNumber: Copy + PartialEq> BlockResourceState<BlockNumber> {
     };
     if !phase_allows {
       return Err(BlockResourceError::InvalidPhase);
+    }
+    if limits != self.budget()?.limits() {
+      return Err(BlockResourceError::InconsistentReservation);
     }
     let outstanding = match self.outstanding_reservations.checked_add(1) {
       Some(outstanding) => outstanding,
@@ -565,16 +602,45 @@ impl BlockResourceBudget {
     Self::new_with_control_ratio(maximum_block, fixed_envelope, 1, 5)
   }
 
-  /// Constructs one fixed candidate allocation without changing resource-domain semantics.
+  /// Constructs one allocation while all fixed work remains reserved.
   pub fn new_with_control_ratio(
     maximum_block: Weight,
     fixed_envelope: Weight,
     control_numerator: u64,
     control_denominator: u64,
   ) -> Result<Self, BlockResourceError> {
+    Self::from_settled_prefix(
+      maximum_block,
+      fixed_envelope,
+      Weight::zero(),
+      fixed_envelope,
+      control_numerator,
+      control_denominator,
+    )
+  }
+
+  /// Derives an allocation within the host's fixed-work ceiling. The caller owns evidence that
+  /// prefix and tail costs are complete, non-overlapping and admitted before execution.
+  pub fn from_settled_prefix(
+    maximum_block: Weight,
+    maximum_fixed: Weight,
+    settled_prefix: Weight,
+    remaining_fixed_reserve: Weight,
+    control_numerator: u64,
+    control_denominator: u64,
+  ) -> Result<Self, BlockResourceError> {
+    if maximum_fixed.any_gt(maximum_block) {
+      return Err(BlockResourceError::InvalidLimits);
+    }
+    let fixed_envelope = settled_prefix
+      .checked_add(&remaining_fixed_reserve)
+      .ok_or(BlockResourceError::ArithmeticOverflow)?;
     let schedulable = maximum_block
       .checked_sub(&fixed_envelope)
       .ok_or(BlockResourceError::InvalidLimits)?;
+    if fixed_envelope.any_gt(maximum_fixed) {
+      return Err(BlockResourceError::FixedEnvelopeExceeded);
+    }
     Ok(Self {
       maximum_block,
       fixed_envelope,
@@ -645,6 +711,18 @@ impl BlockResourceLimits {
       shared_economic,
       actor_base_turn,
       user_base_turn,
+    })
+  }
+
+  /// Builds a zero-fixed-work budget for an explicitly synthetic resource domain.
+  pub fn into_budget(self) -> Result<BlockResourceBudget, BlockResourceError> {
+    Ok(BlockResourceBudget {
+      maximum_block: self
+        .actor_control
+        .checked_add(&self.shared_economic)
+        .ok_or(BlockResourceError::ArithmeticOverflow)?,
+      fixed_envelope: Weight::zero(),
+      limits: self,
     })
   }
 
@@ -827,6 +905,104 @@ mod tests {
   use super::*;
 
   #[test]
+  fn resource_metadata_bounds_cover_compact_weight_records() {
+    fn exact<T: Encode + MaxEncodedLen>(value: T) {
+      assert_eq!(value.encoded_size(), T::max_encoded_len());
+    }
+    // Codec-only extrema, not installed state or a consensus execution witness.
+    let limits = BlockResourceLimits {
+      actor_control: Weight::MAX,
+      shared_economic: Weight::MAX,
+      actor_base_turn: Weight::MAX,
+      user_base_turn: Weight::MAX,
+    };
+    let budget = BlockResourceBudget {
+      maximum_block: Weight::MAX,
+      fixed_envelope: Weight::MAX,
+      limits,
+    };
+    let usage = BlockResourceUsage {
+      actor_control: Weight::MAX,
+      actor_effect: Weight::MAX,
+      user_dispatch: Weight::MAX,
+    };
+    let reservation = || BlockResourceReservation {
+      domain: BlockResourceDomain::ActorControl,
+      maximum: Weight::MAX,
+      phase: BlockResourcePhase::PrepassExecuting,
+      settled: false,
+    };
+    exact(SimulationBudget {
+      actor_control: Weight::MAX,
+      shared_economic: Weight::MAX,
+    });
+    exact(limits);
+    exact(budget);
+    exact(usage);
+    exact(reservation());
+    exact(ActorStepResourceReservation {
+      control: reservation(),
+      effect: reservation(),
+    });
+    exact(FixedBlockWeightComponents::new(
+      Weight::MAX,
+      Weight::MAX,
+      Weight::MAX,
+      Weight::MAX,
+      Weight::MAX,
+    ));
+    exact(BlockResourceState {
+      block_number: 1u64,
+      phase: BlockResourcePhase::Finalizable,
+      budget: Some(budget),
+      usage,
+      outstanding_reservations: 0,
+      optional_actor_work_halted: false,
+    });
+    exact(FinalizedBlockResourceSnapshot {
+      block_number: 1u64,
+      budget,
+      usage,
+      optional_actor_work_halted: false,
+    });
+  }
+
+  #[test]
+  fn resource_metadata_bound_is_attained_by_checked_large_budget() -> Result<(), BlockResourceError>
+  {
+    // Legal primitive limits, not the DEOS reference's configured block maximum.
+    let budget =
+      BlockResourceBudget::new(Weight::MAX, Weight::from_parts(u64::MAX / 4, u64::MAX / 4))?;
+    let limits = budget.limits();
+    let mut state = BlockResourceState::new(1u64);
+    state.begin_prepass(budget)?;
+    for (domain, maximum) in [
+      (BlockResourceDomain::ActorControl, limits.actor_control()),
+      (
+        BlockResourceDomain::ActorBaseEffect,
+        limits.actor_base_turn(),
+      ),
+    ] {
+      let mut reservation = state.reserve(limits, domain, maximum)?;
+      state.settle(&mut reservation, maximum)?;
+    }
+    state.open_external_phase()?;
+    let mut reservation = state.reserve(
+      limits,
+      BlockResourceDomain::UserDispatch,
+      limits.user_base_turn(),
+    )?;
+    state.settle(&mut reservation, limits.user_base_turn())?;
+    state.begin_drain()?;
+    state.finish_drain()?;
+    assert_eq!(
+      state.encoded_size(),
+      BlockResourceState::<u64>::max_encoded_len()
+    );
+    Ok(())
+  }
+
+  #[test]
   fn simulation_budget_preserves_domain_ceilings_and_checked_sum() -> Result<(), BlockResourceError>
   {
     for (actor_control, shared_economic) in [
@@ -882,6 +1058,14 @@ mod tests {
     }
   }
 
+  fn test_budget() -> BlockResourceBudget {
+    BlockResourceBudget {
+      maximum_block: weight(110, 110),
+      fixed_envelope: weight(10, 10),
+      limits: limits(),
+    }
+  }
+
   fn retained_reservation(
     result: Result<BlockResourceReservation, BlockResourceError>,
     domain: BlockResourceDomain,
@@ -899,7 +1083,7 @@ mod tests {
   #[test]
   fn actor_step_pair_reserves_and_settles_atomically_in_base_phase() {
     let mut state = BlockResourceState::new(1u32);
-    assert_eq!(state.begin_prepass(), Ok(()));
+    assert_eq!(state.begin_prepass(test_budget()), Ok(()));
     let mut reservation = state
       .reserve_actor_step(
         limits(),
@@ -923,7 +1107,7 @@ mod tests {
   #[test]
   fn actor_step_pair_rolls_back_partial_reserve_and_failed_settlement() {
     let mut state = BlockResourceState::new(1u32);
-    assert_eq!(state.begin_prepass(), Ok(()));
+    assert_eq!(state.begin_prepass(test_budget()), Ok(()));
     let before = state;
     assert_eq!(
       state.reserve_actor_step(
@@ -960,7 +1144,7 @@ mod tests {
   #[test]
   fn actor_step_pair_uses_drain_effect_only_in_fresh_drain() {
     let mut state = BlockResourceState::new(1u32);
-    assert_eq!(state.begin_prepass(), Ok(()));
+    assert_eq!(state.begin_prepass(test_budget()), Ok(()));
     assert_eq!(state.open_external_phase(), Ok(()));
     assert_eq!(state.begin_drain(), Ok(()));
     assert!(
@@ -999,13 +1183,56 @@ mod tests {
   }
 
   #[test]
+  fn frozen_budget_rejects_replacement_and_foreign_limits_without_mutation()
+  -> Result<(), BlockResourceError> {
+    let budget = test_budget();
+    let replacement = BlockResourceBudget::new(weight(220, 220), weight(10, 10))?;
+    let mut state = BlockResourceState::new(1u32);
+    assert_eq!(state.budget(), Err(BlockResourceError::InvalidPhase));
+    state.begin_prepass(budget)?;
+    for phase in [
+      BlockResourcePhase::PrepassExecuting,
+      BlockResourcePhase::ExternalPhase,
+      BlockResourcePhase::FreshDrain,
+    ] {
+      assert_eq!(state.phase(), phase);
+      let before = state;
+      assert_eq!(
+        state.begin_prepass(replacement),
+        Err(BlockResourceError::InvalidPhase)
+      );
+      assert_eq!(
+        state.reserve(
+          replacement.limits(),
+          BlockResourceDomain::ActorControl,
+          weight(1, 1)
+        ),
+        Err(BlockResourceError::InconsistentReservation)
+      );
+      assert_eq!(state, before);
+      assert_eq!(state.budget(), Ok(budget));
+      match phase {
+        BlockResourcePhase::PrepassExecuting => state.open_external_phase()?,
+        BlockResourcePhase::ExternalPhase => state.begin_drain()?,
+        BlockResourcePhase::FreshDrain => state.finish_drain()?,
+        _ => return Err(BlockResourceError::InvalidPhase),
+      }
+    }
+    assert_eq!(state.finalized_snapshot()?.budget(), budget);
+    Ok(())
+  }
+
+  #[test]
   fn block_phase_is_block_tagged_one_way_and_duplicate_safe() {
     let mut state = BlockResourceState::new(7u64);
     assert_eq!(state.block_number(), 7);
     assert_eq!(state.phase(), BlockResourcePhase::ContextIncomplete);
     assert_eq!(state.ensure_block(8), Err(BlockResourceError::WrongBlock));
-    assert_eq!(state.begin_prepass(), Ok(()));
-    assert_eq!(state.begin_prepass(), Err(BlockResourceError::InvalidPhase));
+    assert_eq!(state.begin_prepass(test_budget()), Ok(()));
+    assert_eq!(
+      state.begin_prepass(test_budget()),
+      Err(BlockResourceError::InvalidPhase)
+    );
     assert_eq!(state.begin_drain(), Err(BlockResourceError::InvalidPhase));
     assert_eq!(state.open_external_phase(), Ok(()));
     assert_eq!(state.begin_drain(), Ok(()));
@@ -1022,23 +1249,20 @@ mod tests {
       state.finalized_snapshot(),
       Err(BlockResourceError::InvalidPhase)
     );
-    assert_eq!(state.finish_drain(budget, weight(10, 10)), Ok(()));
+    assert_eq!(state.finish_drain(), Ok(()));
     assert_eq!(state.phase(), BlockResourcePhase::Finalizable);
     let snapshot = state.finalized_snapshot();
     assert!(snapshot.is_ok());
     let snapshot = snapshot.unwrap_or(FinalizedBlockResourceSnapshot {
       block_number: 0,
-      fixed_reserved: Weight::zero(),
+      budget,
       usage: BlockResourceUsage::default(),
       optional_actor_work_halted: false,
     });
     assert_eq!(snapshot.block_number(), 7);
     assert_eq!(snapshot.fixed_reserved(), weight(10, 10));
     assert!(snapshot.optional_actor_work_halted());
-    assert_eq!(
-      state.finish_drain(budget, weight(10, 10)),
-      Err(BlockResourceError::InvalidPhase)
-    );
+    assert_eq!(state.finish_drain(), Err(BlockResourceError::InvalidPhase));
   }
 
   #[test]
@@ -1052,9 +1276,10 @@ mod tests {
     });
     let mut state = BlockResourceState::new(1u64);
     state.phase = BlockResourcePhase::FreshDrain;
+    state.budget = Some(budget);
     state.usage.actor_control = weight(21, 1);
     assert_eq!(
-      state.finish_drain(budget, weight(1, 1)),
+      state.finish_drain(),
       Err(BlockResourceError::ReconciliationMismatch)
     );
     assert_eq!(state.phase(), BlockResourcePhase::FreshDrain);
@@ -1067,7 +1292,7 @@ mod tests {
       state.reserve(limits(), BlockResourceDomain::UserDispatch, weight(1, 1)),
       Err(BlockResourceError::InvalidPhase)
     );
-    assert_eq!(state.begin_prepass(), Ok(()));
+    assert_eq!(state.begin_prepass(test_budget()), Ok(()));
     let base = state.reserve(limits(), BlockResourceDomain::ActorBaseEffect, weight(1, 1));
     assert!(base.is_ok());
     let mut base = base.unwrap_or(BlockResourceReservation {
@@ -1431,7 +1656,7 @@ mod tests {
   #[test]
   fn untrustworthy_actor_actual_halts_actor_work_but_user_failure_does_not() {
     let mut actor_state = BlockResourceState::new(1u64);
-    assert_eq!(actor_state.begin_prepass(), Ok(()));
+    assert_eq!(actor_state.begin_prepass(test_budget()), Ok(()));
     let actor = actor_state.reserve(limits(), BlockResourceDomain::ActorControl, weight(1, 1));
     assert!(actor.is_ok());
     let mut actor = actor.unwrap_or(BlockResourceReservation {
@@ -1447,7 +1672,7 @@ mod tests {
     assert!(actor_state.optional_actor_work_halted());
 
     let mut user_state = BlockResourceState::new(1u64);
-    assert_eq!(user_state.begin_prepass(), Ok(()));
+    assert_eq!(user_state.begin_prepass(test_budget()), Ok(()));
     assert_eq!(user_state.open_external_phase(), Ok(()));
     let user = user_state.reserve(limits(), BlockResourceDomain::UserDispatch, weight(1, 1));
     assert!(user.is_ok());
@@ -1473,7 +1698,7 @@ mod tests {
             let maximum = weight(maximum_ref, maximum_proof);
             let actual = weight(actual_ref, actual_proof);
             let mut state = BlockResourceState::new(1u64);
-            assert_eq!(state.begin_prepass(), Ok(()));
+            assert_eq!(state.begin_prepass(test_budget()), Ok(()));
             let reservation = state.reserve(limits(), BlockResourceDomain::ActorControl, maximum);
             assert!(reservation.is_ok());
             let mut reservation = reservation.unwrap_or(BlockResourceReservation {
@@ -1542,7 +1767,7 @@ mod tests {
     });
     assert_eq!(budget.limits().actor_control(), Weight::zero());
     let mut state = BlockResourceState::new(1u64);
-    assert_eq!(state.begin_prepass(), Ok(()));
+    assert_eq!(state.begin_prepass(budget), Ok(()));
     assert_eq!(
       state.reserve(
         budget.limits(),
@@ -1551,6 +1776,196 @@ mod tests {
       ),
       Err(BlockResourceError::LimitExceeded)
     );
+  }
+
+  #[test]
+  fn settled_prefix_allocation_uses_the_existing_exact_thirds_partition()
+  -> Result<(), BlockResourceError> {
+    let maximum = weight(111, 211);
+    let tail = weight(7, 11);
+    for prefix in [Weight::zero(), weight(14, 20), weight(95, 197)] {
+      let budget = BlockResourceBudget::from_settled_prefix(maximum, maximum, prefix, tail, 1, 3)?;
+      let fixed = prefix
+        .checked_add(&tail)
+        .ok_or(BlockResourceError::ArithmeticOverflow)?;
+      let available = maximum
+        .checked_sub(&fixed)
+        .ok_or(BlockResourceError::InvalidLimits)?;
+      let limits = budget.limits();
+      assert_eq!(budget.fixed_envelope(), fixed);
+      assert_eq!(limits.actor_control(), weight_floor_div(available, 3));
+      assert_eq!(
+        limits
+          .actor_control()
+          .checked_add(&limits.shared_economic()),
+        Some(available)
+      );
+      assert_eq!(
+        limits
+          .actor_base_turn()
+          .checked_add(&limits.user_base_turn()),
+        Some(limits.shared_economic())
+      );
+      assert_eq!(
+        Ok(budget),
+        BlockResourceBudget::new_with_control_ratio(maximum, fixed, 1, 3),
+        "reserved and settled input paths use the same allocator"
+      );
+    }
+    Ok(())
+  }
+
+  #[test]
+  fn settled_prefix_allocation_rejects_overflow_and_independent_exhaustion()
+  -> Result<(), BlockResourceError> {
+    let maximum = weight(100, 100);
+    for (prefix, tail, expected) in [
+      (
+        weight(u64::MAX, 0),
+        weight(1, 0),
+        BlockResourceError::ArithmeticOverflow,
+      ),
+      (
+        weight(0, u64::MAX),
+        weight(0, 1),
+        BlockResourceError::ArithmeticOverflow,
+      ),
+      (
+        weight(99, 0),
+        weight(2, 0),
+        BlockResourceError::InvalidLimits,
+      ),
+      (
+        weight(0, 99),
+        weight(0, 2),
+        BlockResourceError::InvalidLimits,
+      ),
+    ] {
+      assert_eq!(
+        BlockResourceBudget::from_settled_prefix(maximum, maximum, prefix, tail, 1, 3),
+        Err(expected)
+      );
+    }
+    for prefix in [maximum, weight(100, 0), weight(0, 100)] {
+      let budget =
+        BlockResourceBudget::from_settled_prefix(maximum, maximum, prefix, Weight::zero(), 1, 3)?;
+      let mut usage = BlockResourceUsage::default();
+      assert_eq!(
+        usage.reserve(
+          budget.limits(),
+          BlockResourceDomain::ActorControl,
+          weight(1, 1)
+        ),
+        Err(BlockResourceError::LimitExceeded)
+      );
+    }
+    assert_eq!(
+      BlockResourceBudget::from_settled_prefix(
+        maximum,
+        maximum,
+        Weight::zero(),
+        Weight::zero(),
+        1,
+        0,
+      ),
+      Err(BlockResourceError::InvalidLimits)
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn system_quarter_preserves_thirds_and_forward_borrowing_across_block_phases()
+  -> Result<(), BlockResourceError> {
+    let maximum = weight(1200, 2400);
+    let system_ceiling = weight_floor_div(maximum, 4);
+    for (prefix, tail) in [
+      (Weight::zero(), Weight::zero()),
+      (weight(60, 120), weight(60, 120)),
+      (weight(240, 480), weight(60, 120)),
+      (weight(300, 0), Weight::zero()),
+      (weight(0, 600), Weight::zero()),
+    ] {
+      let budget =
+        BlockResourceBudget::from_settled_prefix(maximum, system_ceiling, prefix, tail, 1, 3)?;
+      let limits = budget.limits();
+      let third = weight_floor_div(maximum.saturating_sub(prefix).saturating_sub(tail), 3);
+      assert_eq!(limits.actor_control(), third);
+      assert_eq!(limits.actor_base_turn(), third);
+      assert_eq!(limits.user_base_turn(), third);
+      for (actors_active, users_active) in [(true, true), (true, false), (false, true)] {
+        let mut state = BlockResourceState::new(1u64);
+        state.begin_prepass(budget)?;
+        let actor_base = if actors_active { third } else { Weight::zero() };
+        let mut actor = state.reserve(limits, BlockResourceDomain::ActorBaseEffect, third)?;
+        state.settle(&mut actor, actor_base)?;
+        state.open_external_phase()?;
+        let user_available = limits.shared_economic().saturating_sub(actor_base);
+        let user_actual = if users_active {
+          user_available
+        } else {
+          Weight::zero()
+        };
+        let mut user = state.reserve(limits, BlockResourceDomain::UserDispatch, user_available)?;
+        state.settle(&mut user, user_actual)?;
+        state.begin_drain()?;
+        let drain = limits
+          .shared_economic()
+          .saturating_sub(actor_base)
+          .saturating_sub(user_actual);
+        let mut actor = state.reserve(limits, BlockResourceDomain::ActorDrainEffect, drain)?;
+        state.settle(&mut actor, drain)?;
+        assert_eq!(
+          state.usage().actor_effect_used(),
+          actor_base.saturating_add(drain)
+        );
+        assert_eq!(state.usage().user_dispatch_used(), user_actual);
+        assert_eq!(
+          state
+            .usage()
+            .actor_effect_used()
+            .saturating_add(user_actual),
+          limits.shared_economic(),
+        );
+        assert_eq!(
+          state.reserve(limits, BlockResourceDomain::ActorDrainEffect, weight(1, 1)),
+          Err(BlockResourceError::LimitExceeded),
+        );
+        state.finish_drain()?;
+        assert_eq!(state.budget()?, budget);
+      }
+    }
+    Ok(())
+  }
+
+  #[test]
+  fn system_quarter_rejects_prefix_or_outstanding_reserve_overrun_in_either_dimension() {
+    let maximum = weight(1200, 2400);
+    let system_ceiling = weight_floor_div(maximum, 4);
+    for (prefix, tail) in [
+      (weight(301, 0), Weight::zero()),
+      (weight(0, 601), Weight::zero()),
+      (weight(300, 0), weight(1, 0)),
+      (weight(0, 600), weight(0, 1)),
+      (Weight::zero(), weight(301, 601)),
+    ] {
+      assert_eq!(
+        BlockResourceBudget::from_settled_prefix(maximum, system_ceiling, prefix, tail, 1, 3),
+        Err(BlockResourceError::FixedEnvelopeExceeded),
+      );
+    }
+    for invalid_ceiling in [weight(1201, 0), weight(0, 2401)] {
+      assert_eq!(
+        BlockResourceBudget::from_settled_prefix(
+          maximum,
+          invalid_ceiling,
+          Weight::zero(),
+          Weight::zero(),
+          1,
+          3,
+        ),
+        Err(BlockResourceError::InvalidLimits),
+      );
+    }
   }
 
   #[test]

@@ -547,13 +547,95 @@ mod benches {
     ))
   }
 
-  fn assert_max_contract_geometry<T: Config>(actor_id: ActorId) {
-    let expected_tail_chunks = T::MaxContractSteps::get()
-      .saturating_sub(1)
-      .div_ceil(MAX_STEPS_PER_TAIL_CHUNK) as usize;
+  fn step_resource_encoding_bound() -> usize {
+    // Two Weight values, each encoding two compact u64 components. The pinned SDK's
+    // derived Weight::max_encoded_len() instead counts two ordinary u64 fields.
+    2 * 2 * codec::Compact::<u64>::max_encoded_len()
+  }
+
+  fn assert_contract_geometry_encoding<T: Config>(actor_id: ActorId) -> u32 {
+    let head = ActorContractHeads::<T>::get(actor_id).expect("admitted Contract head exists");
+    let contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("body reconstructs coherently");
+    let count = head.header.step_count;
+    assert!(count <= T::MaxContractSteps::get());
+    assert_eq!(contract.steps.len(), count as usize);
+    assert_eq!(head.first_step.is_some(), count > 0);
+    assert_eq!(head.first_step_resources.is_some(), count > 0);
+    let tail_steps = count.saturating_sub(1);
+    let chunks = tail_steps.div_ceil(MAX_STEPS_PER_TAIL_CHUNK);
     assert_eq!(
       ActorContractTailChunks::<T>::iter_prefix(actor_id).count(),
-      expected_tail_chunks
+      chunks as usize
+    );
+    let step = StepOf::<T>::max_encoded_len();
+    let resource = step_resource_encoding_bound();
+    let element = step
+      .checked_add(resource)
+      .expect("element encoding bound fits");
+    let header = ActorContractHeaderOf::<T>::max_encoded_len();
+    let fixed_chunk = ActorBodyAuthority::<ActorId, [u8; 32]>::max_encoded_len()
+      .checked_add(u32::max_encoded_len())
+      .and_then(|value| {
+        value.checked_add(2 * codec::Compact(MAX_STEPS_PER_TAIL_CHUNK).encoded_size())
+      })
+      .expect("chunk encoding bound fits");
+    // Independently check the package metadata against the explicit compact-Weight
+    // byte ceiling, rather than trusting the SDK Weight bound.
+    assert_eq!(ActorStepResourceEnvelope::max_encoded_len(), resource);
+    let declared_element = step
+      .checked_add(ActorStepResourceEnvelope::max_encoded_len())
+      .expect("declared element length fits");
+    let declared_head = header
+      .checked_add(2)
+      .and_then(|value| value.checked_add(declared_element))
+      .expect("declared head length fits");
+    let declared_chunk = (MAX_STEPS_PER_TAIL_CHUNK as usize)
+      .checked_mul(declared_element)
+      .and_then(|value| value.checked_add(fixed_chunk))
+      .expect("declared chunk length fits");
+    assert_eq!(ActorContractHeadOf::<T>::max_encoded_len(), declared_head);
+    assert_eq!(ActorStepChunkOf::<T>::max_encoded_len(), declared_chunk);
+    // These are conservative encoded-value bounds, not trie proof or execution Weight.
+    let head_bound = header
+      .checked_add(2)
+      .and_then(|value| value.checked_add(usize::from(count > 0) * element))
+      .expect("head encoding bound fits");
+    let total_bound = (chunks as usize)
+      .checked_mul(fixed_chunk)
+      .and_then(|value| value.checked_add((tail_steps as usize).checked_mul(element)?))
+      .and_then(|value| value.checked_add(head_bound))
+      .expect("complete body encoding bound fits");
+    let mut actual_bytes = head.encoded_size();
+    assert!(actual_bytes <= head_bound);
+    assert_eq!(
+      ActorContractHeads::<T>::hashed_key_for(actor_id).len(),
+      32 + 16 + ActorId::max_encoded_len()
+    );
+    for index in 0..chunks {
+      let chunk = ActorContractTailChunks::<T>::get(actor_id, index).unwrap();
+      let first = 1 + index * MAX_STEPS_PER_TAIL_CHUNK;
+      let elements = (count - first).min(MAX_STEPS_PER_TAIL_CHUNK) as usize;
+      assert_eq!(chunk.first_step_index, first);
+      assert_eq!(chunk.steps.len(), elements);
+      assert_eq!(chunk.step_resources.len(), elements);
+      assert!(chunk.encoded_size() <= fixed_chunk + elements * element);
+      actual_bytes = actual_bytes
+        .checked_add(chunk.encoded_size())
+        .expect("stored body size fits");
+      assert_eq!(
+        ActorContractTailChunks::<T>::hashed_key_for(actor_id, index).len(),
+        32 + 32 + ActorId::max_encoded_len() + u32::max_encoded_len()
+      );
+    }
+    assert!(actual_bytes <= total_bound);
+    count
+  }
+
+  fn assert_max_contract_geometry<T: Config>(actor_id: ActorId) {
+    assert_eq!(
+      assert_contract_geometry_encoding::<T>(actor_id),
+      T::MaxContractSteps::get()
     );
   }
 
@@ -1329,33 +1411,388 @@ mod benches {
     assert!(!Pallet::<T>::active_actor_exists(actor_id));
   }
 
-  #[benchmark]
-  fn close_actor() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    // Automatic cleanup reuses this Weight, including the owner's state-hold ledger access.
-    let owner: T::AccountId = account("close-owner", 0, 0);
-    ensure_creation_balance::<T>(&owner);
-    let owner_slot = prefill_reachable_owner_slots::<T>(&owner);
+  struct CloseDestructionFixture<T: Config> {
+    actor_id: ActorId,
+    identity: ActorIdentityOf<T>,
+    balances: Vec<(T::AssetId, T::Balance)>,
+    owner_hold_after: T::Balance,
+    owner_slots_after: [u8; 32],
+    active_count_after: u32,
+    identity_count_after: u32,
+    sink_balance: T::Balance,
+    committed_credit: Option<(T::AccountId, T::AssetId, T::Balance)>,
+  }
+
+  fn prepare_close_shape<T: Config>(
+    actor_type: ActorType,
+    shape: u32,
+  ) -> Result<CloseDestructionFixture<T>, BenchmarkError> {
+    match shape {
+      0 | 1 => prepare_retry_close_header::<T>(actor_type, shape == 1),
+      2 => prepare_temporal_close::<T>(actor_type, false, CycleState::Idle),
+      3 => prepare_temporal_close::<T>(actor_type, true, CycleState::Idle),
+      4 => prepare_temporal_close::<T>(actor_type, false, CycleState::Running),
+      5 => prepare_temporal_close::<T>(actor_type, false, CycleState::Suspended),
+      _ => Err(BenchmarkError::Stop("unsupported Close authority shape")),
+    }
+  }
+
+  fn prepare_full_header_retry_close<T: Config>(
+    actor_type: ActorType,
+  ) -> Result<CloseDestructionFixture<T>, BenchmarkError> {
+    prepare_retry_close_header::<T>(actor_type, false)
+  }
+
+  fn prepare_retry_close_header<T: Config>(
+    actor_type: ActorType,
+    address_event: bool,
+  ) -> Result<CloseDestructionFixture<T>, BenchmarkError> {
+    let (owner, address_asset, address_trigger, funding) = large_header_fields::<T>();
+    let owner_slot = if actor_type == ActorType::User {
+      prefill_reachable_owner_slots::<T>(&owner)
+    } else {
+      0
+    };
+    let owner_slots_after = OwnerSlotBitmaps::<T>::get(&owner);
+    let trigger = if address_event {
+      address_trigger
+    } else {
+      Trigger::manual()
+    };
+    let trigger_width = trigger.encoded_size();
     let schedule = Schedule {
-      trigger: Trigger::manual(),
+      trigger,
       cooldown_blocks: 100,
     };
     let (contract_steps, retry_funding) = reachable_retry_contract::<T>()?;
-    prefund_user_sovereign::<T>(&owner, owner_slot, &contract_steps);
-    Pallet::<T>::create_user_actor_at_slot(
-      RawOrigin::Signed(owner.clone()).into(),
-      owner_slot,
-      Mutability::Mutable,
-      user_contract::<T>(schedule, contract_steps),
-    )
-    .expect("create_user_actor_at_slot must succeed in close_actor benchmark setup");
+    if actor_type == ActorType::User {
+      prefund_user_sovereign::<T>(&owner, owner_slot, &contract_steps);
+    }
+    let mut contract = user_contract::<T>(schedule, contract_steps).unwrap();
+    contract.funding = funding;
+    contract.window = Some(ScheduleWindow {
+      start: 1u32.into(),
+      end: T::MinWindowLength::get().saturating_add(1_000u32.into()),
+    });
+    let activation = maximum_parked_balance_activation::<T>(&owner)?;
+    let activation_width = activation.encoded_size();
+    contract.parked_balance_activation = Some(activation);
+    // Balance activation requires Persistent completion and excludes an auto-close nonce.
+    assert!(contract.auto_close_at_cycle_nonce.is_none());
+    let hold_reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
+    let owner_hold_before = T::StateHoldCurrency::balance_on_hold(&hold_reason, &owner);
+    match actor_type {
+      ActorType::User => Pallet::<T>::create_user_actor_at_slot(
+        RawOrigin::Signed(owner.clone()).into(),
+        owner_slot,
+        Mutability::Mutable,
+        Some(contract),
+      )?,
+      ActorType::System => Pallet::<T>::create_system_actor(
+        RawOrigin::Root.into(),
+        owner.clone(),
+        Mutability::Mutable,
+        Some(contract),
+      )?,
+    }
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     open_reachable_retry::<T>(actor_id, retry_funding);
     assert_reachable_retry::<T>(actor_id);
+    let head = ActorContractHeads::<T>::get(actor_id).unwrap();
+    assert_eq!(
+      head.header.encoded_size(),
+      ActorContractHeaderOf::<T>::max_encoded_len() - TriggerOf::<T>::max_encoded_len()
+        + trigger_width
+        - ParkedBalanceActivationOf::<T>::max_encoded_len()
+        + activation_width
+        - u64::max_encoded_len()
+    );
+    assert!(DependencyPlans::<T>::get(actor_id).is_empty());
+    assert!(!ParkedBalanceEpisodes::<T>::contains_key(actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    assert_eq!(
+      ActorStateHolds::<T>::contains_key(actor_id),
+      actor_type == ActorType::User
+    );
+    if actor_type == ActorType::User {
+      assert!(T::StateHoldCurrency::balance_on_hold(&hold_reason, &owner) > owner_hold_before);
+    }
+    let identity = Pallet::<T>::actor_identity(actor_id).unwrap();
+    let mut assets = vec![retry_funding.0, retry_funding.1, T::FeeNativeAssetId::get()];
+    if address_event && !assets.contains(&address_asset) {
+      assets.push(address_asset);
+    }
+    let balances = assets
+      .into_iter()
+      .map(|asset| {
+        (
+          asset,
+          T::AssetOps::balance(&identity.sovereign_account, asset),
+        )
+      })
+      .collect();
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("reachable close premeasurement state is valid");
-    #[extrinsic_call]
-    close_actor(RawOrigin::Signed(owner), actor_id);
-    assert!(!Pallet::<T>::active_actor_exists(actor_id));
+    Ok(CloseDestructionFixture {
+      actor_id,
+      identity,
+      balances,
+      owner_hold_after: owner_hold_before,
+      owner_slots_after,
+      active_count_after: ActiveActorCount::<T>::get() - 1,
+      identity_count_after: ActorIdentityCount::<T>::get() - 1,
+      sink_balance: T::AssetOps::balance(&T::FeeSink::get(), T::FeeNativeAssetId::get()),
+      committed_credit: None,
+    })
+  }
+
+  fn prepare_temporal_close<T: Config>(
+    actor_type: ActorType,
+    one_shot: bool,
+    phase: CycleState,
+  ) -> Result<CloseDestructionFixture<T>, BenchmarkError> {
+    let (owner, _, _, funding) = large_header_fields::<T>();
+    T::BenchmarkHelper::advance_to_scheduler_tick(2)?;
+    let owner_slot = if actor_type == ActorType::User {
+      prefill_reachable_owner_slots::<T>(&owner)
+    } else {
+      0
+    };
+    let owner_slots_after = OwnerSlotBitmaps::<T>::get(&owner);
+    let hold_reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
+    let owner_hold_after = T::StateHoldCurrency::balance_on_hold(&hold_reason, &owner);
+    let native = T::FeeNativeAssetId::get();
+    let recipient = measured_account::<T>("close-committed-prefix", 0);
+    let amount = T::AssetOps::minimum_balance(native).max(One::one());
+    T::AssetOps::mint(&recipient, native, amount).expect("prefix recipient is pre-endowed");
+    let recipient_before = T::AssetOps::balance(&recipient, native);
+    let (mut steps, retry_funding) = reachable_retry_contract::<T>()?;
+    let required_steps = if phase == CycleState::Running { 3 } else { 2 };
+    if steps.len() < required_steps {
+      return Err(BenchmarkError::Stop(
+        "temporal Close witness needs its retained authored suffix",
+      ));
+    }
+    let mut retry_step = steps[0].clone();
+    if phase == CycleState::Running {
+      retry_step.on_error = StepErrorPolicy::ContinueNextStep;
+    }
+    steps[0] = Step {
+      precondition: None,
+      task: ActorTask::Transfer {
+        to: recipient.clone(),
+        asset: native,
+        amount: AmountResolution::Fixed(amount),
+      },
+      on_error: StepErrorPolicy::AbortCycle,
+    };
+    steps[1] = if phase == CycleState::Idle {
+      make_inert_contract_steps::<T>()[0].clone()
+    } else {
+      retry_step
+    };
+    retain_admitted_contract_geometry::<T>(actor_type, &mut steps, &[0, 1])?;
+    let reserve = full_attempt_fee::<T>(&steps)
+      .checked_add(
+        &Pallet::<T>::trigger_fee_for_weight(
+          actor_type,
+          if one_shot {
+            TriggerFamily::AtTime
+          } else {
+            TriggerFamily::Cadenced
+          },
+          if one_shot {
+            T::WeightInfo::at_time_trigger_occurrence()
+          } else {
+            T::WeightInfo::cadenced_trigger_occurrence()
+          },
+        )
+        .trigger_fee,
+      )
+      .and_then(|value| value.checked_add(&amount))
+      .and_then(|value| value.checked_add(&amount))
+      .ok_or(BenchmarkError::Stop("completed Close prefunding overflow"))?;
+    if actor_type == ActorType::User {
+      prefund_user_sovereign::<T>(&owner, owner_slot, &steps);
+    }
+    let mut contract = system_contract::<T>(
+      Schedule {
+        trigger: if one_shot {
+          Trigger::AtTime { after_ticks: 1_000 }
+        } else {
+          Trigger::cadenced(1_000)
+        },
+        cooldown_blocks: 0,
+      },
+      steps,
+    )
+    .unwrap();
+    contract.funding = funding;
+    if T::MaxAutoCloseNonceHorizon::get() < 2 {
+      return Err(BenchmarkError::Stop(
+        "completed Close witness needs a retained future nonce",
+      ));
+    }
+    contract.auto_close_at_cycle_nonce = Some(T::MaxAutoCloseNonceHorizon::get());
+    match actor_type {
+      ActorType::User => Pallet::<T>::create_user_actor_at_slot(
+        RawOrigin::Signed(owner.clone()).into(),
+        owner_slot,
+        Mutability::Mutable,
+        Some(contract),
+      )?,
+      ActorType::System => Pallet::<T>::create_system_actor(
+        RawOrigin::Root.into(),
+        owner.clone(),
+        Mutability::Mutable,
+        Some(contract),
+      )?,
+    }
+    let actor_id = NextActorId::<T>::get() - 1;
+    let actor = Pallet::<T>::load_actor_ref(actor_id).unwrap();
+    let sovereign = Pallet::<T>::actor_identity(actor_id)
+      .unwrap()
+      .sovereign_account;
+    T::AssetOps::mint(&sovereign, native, reserve).expect("both authored Steps are funded");
+    if phase != CycleState::Idle {
+      T::AssetOps::mint(&sovereign, retry_funding.0, retry_funding.2)
+        .map_err(|failure| failure.error)?;
+      T::AssetOps::mint(&sovereign, retry_funding.1, retry_funding.3)
+        .map_err(|failure| failure.error)?;
+    }
+    let WakeupKey::Tick(due) = TriggerDeadlineHandles::<T>::get(actor_id).unwrap().key else {
+      panic!("temporal authority initially owns a Tick source")
+    };
+    T::BenchmarkHelper::finalize_scheduler_clock()?;
+    T::BenchmarkHelper::advance_to_scheduler_tick(due)?;
+    prepare_temporal_deadline_frontier::<T>(actor, due);
+    Pallet::<T>::process_due_temporal_deadline(actor, due).unwrap();
+    for _ in 0..2 {
+      let eligible = ServiceNodes::<T>::get(actor_id).unwrap().eligible_from;
+      let eligible = ActorRunStateStore::<T>::get(actor_id)
+        .map_or(eligible, |run| eligible.max(run.eligible_at));
+      frame_system::Pallet::<T>::set_block_number(
+        frame_system::Pallet::<T>::block_number().max(eligible),
+      );
+      Pallet::<T>::execute_cycle(Weight::MAX);
+    }
+    if one_shot {
+      let now = frame_system::Pallet::<T>::block_number();
+      frame_system::Pallet::<T>::set_block_number(now.saturating_add(One::one()));
+      Pallet::<T>::pause_actor(RawOrigin::Signed(owner.clone()).into(), actor_id)?;
+      let process = ActorProcesses::<T>::get(actor_id).unwrap();
+      assert!(process.residence.is_none());
+      assert!(matches!(
+        process.status,
+        ProcessStatus::Disabled(ProcessDisablement {
+          cause: ProcessDisableCause::OwnerPaused,
+          basis: SuspendedProcessBasis::Idle,
+          ..
+        })
+      ));
+      assert!(!ServiceNodes::<T>::contains_key(actor_id));
+      assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    }
+    let record = benchmark_fixture_semantic_record::<T>(actor_id).unwrap();
+    assert_eq!(
+      record.identity.cycle_nonce,
+      u64::from(phase == CycleState::Idle)
+    );
+    assert_eq!(record.hot.cycle_state, phase);
+    if phase == CycleState::Idle {
+      assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+      assert_completed_temporal_authority_width::<T>(&record);
+    } else {
+      let run = ActorRunStateStore::<T>::get(actor_id).unwrap();
+      assert_eq!(run.cycle_nonce, 1);
+      assert_eq!(run.cursor, if phase == CycleState::Running { 2 } else { 1 });
+      assert!(run.last_committed_step_block.is_some());
+      let Some(StepOutcome::Failed(ref failure)) = run.last_step_outcome else {
+        panic!("the second actual attempt must retain its typed failure")
+      };
+      assert_eq!(failure.retry, RetryClass::Temporary);
+      assert_eq!(
+        run.suspension,
+        (phase == CycleState::Suspended).then_some(SuspensionReason::Temporary)
+      );
+      let absent_suspension =
+        Option::<SuspensionReason>::max_encoded_len() - run.suspension.encoded_size();
+      let host_error_gap = DispatchError::max_encoded_len() - failure.error.encoded_size();
+      assert_eq!(
+        run.encoded_size(),
+        ActorRunStateOf::<T>::max_encoded_len() - absent_suspension - host_error_gap
+      );
+      assert_eq!(run.cumulative_outcomes.committed_effectful_tasks, 1);
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).unwrap().residence,
+        Some(ProcessResidence::Service(ServiceResidenceKind::Live))
+      );
+      assert!(TriggerDeadlineHandles::<T>::contains_key(actor_id));
+      assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    }
+    assert_max_contract_geometry::<T>(actor_id);
+    assert_eq!(
+      T::AssetOps::balance(&recipient, native),
+      recipient_before + amount
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("temporal Close authority is coherent");
+    let assets = if phase == CycleState::Idle {
+      vec![native]
+    } else {
+      vec![native, retry_funding.0, retry_funding.1]
+    };
+    let balances = assets
+      .into_iter()
+      .map(|asset| (asset, T::AssetOps::balance(&sovereign, asset)))
+      .collect();
+    Ok(CloseDestructionFixture {
+      actor_id,
+      identity: record.identity,
+      balances,
+      owner_hold_after,
+      owner_slots_after,
+      active_count_after: ActiveActorCount::<T>::get() - 1,
+      identity_count_after: ActorIdentityCount::<T>::get() - 1,
+      sink_balance: T::AssetOps::balance(&T::FeeSink::get(), native),
+      committed_credit: Some((recipient, native, recipient_before + amount)),
+    })
+  }
+
+  fn leave_last_close_owner_slot<T: Config>(
+    fixture: &mut CloseDestructionFixture<T>,
+  ) -> Result<(), BenchmarkError> {
+    let ActorClass::User { owner_slot } = fixture.identity.actor_class else {
+      panic!("last owner-slot release belongs to User destruction")
+    };
+    for slot in 0..T::MaxOwnerSlots::get() {
+      if slot == owner_slot {
+        continue;
+      }
+      let sovereign = Pallet::<T>::sovereign_account_id(&fixture.identity.owner, slot);
+      let peer = SovereignIndex::<T>::get(sovereign).expect("ordinary Dormant peer exists");
+      Pallet::<T>::close_actor(
+        RawOrigin::Signed(fixture.identity.owner.clone()).into(),
+        peer,
+      )?;
+    }
+    fixture.owner_slots_after = [0; 32];
+    fixture.owner_hold_after = Zero::zero();
+    fixture.identity_count_after = ActorIdentityCount::<T>::get() - 1;
+    let bitmap = OwnerSlotBitmaps::<T>::get(&fixture.identity.owner);
+    assert_eq!(bitmap.iter().map(|byte| byte.count_ones()).sum::<u32>(), 1);
+    assert!(ActorStateHolds::<T>::contains_key(fixture.actor_id));
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("peer retirement preserves the target and last owner slot");
+    Ok(())
+  }
+
+  fn assert_close_destruction<T: Config>(fixture: &CloseDestructionFixture<T>) {
+    let actor_id = fixture.actor_id;
+    assert!(Pallet::<T>::actor_identity(actor_id).is_none());
+    assert!(!ActorSemanticStates::<T>::contains_key(actor_id));
+    assert!(!ActorIdentities::<T>::contains_key(actor_id));
+    assert!(!ActorContractHeads::<T>::contains_key(actor_id));
     assert!(
       ActorContractTailChunks::<T>::iter_prefix(actor_id)
         .next()
@@ -1363,13 +1800,327 @@ mod benches {
     );
     assert!(!ActorRunStateStore::<T>::contains_key(actor_id));
     assert!(!ActorControlLocators::<T>::contains_key(actor_id));
-    assert!(
-      ActorContractTailChunks::<T>::iter_prefix(actor_id)
-        .next()
-        .is_none()
+    assert!(!ActorProcesses::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    let hold_reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
+    assert_eq!(
+      T::StateHoldCurrency::balance_on_hold(&hold_reason, &fixture.identity.owner),
+      fixture.owner_hold_after
     );
+    assert_eq!(
+      OwnerSlotBitmaps::<T>::get(&fixture.identity.owner),
+      fixture.owner_slots_after
+    );
+    assert_eq!(
+      OwnerSlotBitmaps::<T>::contains_key(&fixture.identity.owner),
+      fixture.owner_slots_after.iter().any(|byte| *byte != 0)
+    );
+    assert_eq!(ActiveActorCount::<T>::get(), fixture.active_count_after);
+    assert_eq!(ActorIdentityCount::<T>::get(), fixture.identity_count_after);
+    assert!(!SovereignIndex::<T>::contains_key(
+      &fixture.identity.sovereign_account
+    ));
+    if let ActorClass::System { sovereign_id } = fixture.identity.actor_class {
+      assert_eq!(
+        SystemSovereigns::<T>::get(sovereign_id),
+        Some(SystemSovereignState::Vacant)
+      );
+    }
+    for &(asset, balance) in &fixture.balances {
+      assert_eq!(
+        T::AssetOps::balance(&fixture.identity.sovereign_account, asset),
+        balance
+      );
+    }
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), T::FeeNativeAssetId::get()),
+      fixture.sink_balance
+    );
+    if let Some((recipient, asset, balance)) = &fixture.committed_credit {
+      assert_eq!(T::AssetOps::balance(recipient, *asset), *balance);
+    }
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("close leaves no orphan state");
+  }
+
+  #[benchmark]
+  fn close_actor() -> Result<(), BenchmarkError> {
+    // This complete Manual retry witness is not the Parked/temporal/residence union.
+    let fixture = prepare_full_header_retry_close::<T>(ActorType::User)?;
+    let actor_id = fixture.actor_id;
+    let owner = fixture.identity.owner.clone();
+    #[extrinsic_call]
+    close_actor(RawOrigin::Signed(owner), actor_id);
+    assert_close_destruction::<T>(&fixture);
+    Ok(())
+  }
+
+  fn detach_close_destruction<T: Config>(
+    actor_id: ActorId,
+  ) -> Result<(ActiveActorStateOf<T>, ActorAdmissionCertificateOf<T>), BenchmarkError> {
+    let (LoadedActorStateOf::Active(state), Some(admission)) =
+      Pallet::<T>::load_actor_state_with_admission(actor_id)
+    else {
+      panic!("finalization starts from complete Active authority")
+    };
+    let generation = benchmark_fixture_semantic_record::<T>(actor_id)
+      .unwrap()
+      .generation;
+    let terminal = Pallet::<T>::detach_actor_publication(
+      ActorRef {
+        actor_id,
+        generation,
+      },
+      state.clone(),
+      state.run_state.as_ref(),
+    )?;
+    assert!(!ActorProcesses::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    assert_eq!(
+      ActorRunStateStore::<T>::get(actor_id).encode(),
+      state.run_state.encode()
+    );
+    assert_eq!(terminal.run_state.encode(), state.run_state.encode());
+    Ok((terminal, admission))
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_finalize_user(a: Linear<0, 5>, r: Linear<0, 1>) -> Result<(), BenchmarkError> {
+    let mut fixture = prepare_close_shape::<T>(ActorType::User, a)?;
+    if r == 1 {
+      leave_last_close_owner_slot::<T>(&mut fixture)?;
+    }
+    let (state, admission) = detach_close_destruction::<T>(fixture.actor_id)?;
+    #[block]
+    {
+      Pallet::<T>::finalize_actor_from_consumed_state(
+        fixture.actor_id,
+        state,
+        &admission,
+        CloseReason::OwnerInitiated,
+      )?;
+    }
+    assert_close_destruction::<T>(&fixture);
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_finalize_system(a: Linear<0, 5>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_shape::<T>(ActorType::System, a)?;
+    let (state, admission) = detach_close_destruction::<T>(fixture.actor_id)?;
+    #[block]
+    {
+      Pallet::<T>::finalize_actor_from_consumed_state(
+        fixture.actor_id,
+        state,
+        &admission,
+        CloseReason::OwnerInitiated,
+      )?;
+    }
+    assert_close_destruction::<T>(&fixture);
+    Ok(())
+  }
+
+  fn prepare_dormant_close<T: Config>(
+    actor_type: ActorType,
+  ) -> Result<CloseDestructionFixture<T>, BenchmarkError> {
+    let mut fixture = prepare_full_header_retry_close::<T>(actor_type)?;
+    Pallet::<T>::deactivate_actor(
+      RawOrigin::Signed(fixture.identity.owner.clone()).into(),
+      fixture.actor_id,
+    )?;
+    fixture.identity = Pallet::<T>::actor_identity(fixture.actor_id).unwrap();
+    fixture.active_count_after = ActiveActorCount::<T>::get();
+    assert!(matches!(
+      ActorSemanticStates::<T>::get(fixture.actor_id),
+      Some(ActorSemanticState::Dormant(_))
+    ));
+    assert!(!ActorRunStateStore::<T>::contains_key(fixture.actor_id));
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("ordinary deactivation leaves valid Dormant authority");
+    Ok(fixture)
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_dormant_user(r: Linear<0, 1>) -> Result<(), BenchmarkError> {
+    let mut fixture = prepare_dormant_close::<T>(ActorType::User)?;
+    if r == 1 {
+      leave_last_close_owner_slot::<T>(&mut fixture)?;
+    }
+    #[block]
+    {
+      Pallet::<T>::close_actor(
+        RawOrigin::Signed(fixture.identity.owner.clone()).into(),
+        fixture.actor_id,
+      )?;
+    }
+    assert_close_destruction::<T>(&fixture);
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_dormant_system() -> Result<(), BenchmarkError> {
+    let fixture = prepare_dormant_close::<T>(ActorType::System)?;
+    #[block]
+    {
+      Pallet::<T>::close_actor(RawOrigin::Root.into(), fixture.actor_id)?;
+    }
+    assert_close_destruction::<T>(&fixture);
+    Ok(())
+  }
+
+  fn finish_close_authority_load<T: Config>(
+    fixture: &CloseDestructionFixture<T>,
+    root: &[u8],
+  ) -> Result<(), BenchmarkError> {
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root
+    );
+    Pallet::<T>::close_actor(
+      RawOrigin::Signed(fixture.identity.owner.clone()).into(),
+      fixture.actor_id,
+    )?;
+    assert_close_destruction::<T>(fixture);
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_load_user(a: Linear<0, 5>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_shape::<T>(ActorType::User, a)?;
+    let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    #[block]
+    {
+      let CheckedCloseAuthorityOf::Active(instance) = Pallet::<T>::load_close_authority(
+        RawOrigin::Signed(fixture.identity.owner.clone()).into(),
+        fixture.actor_id,
+      )?
+      else {
+        panic!("public Close returns Active authority")
+      };
+      Pallet::<T>::load_finalization_authority(fixture.actor_id, &instance)?;
+    }
+    finish_close_authority_load::<T>(&fixture, &root)?;
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_load_system(a: Linear<0, 5>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_shape::<T>(ActorType::System, a)?;
+    let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    #[block]
+    {
+      let CheckedCloseAuthorityOf::Active(instance) =
+        Pallet::<T>::load_close_authority(RawOrigin::Root.into(), fixture.actor_id)?
+      else {
+        panic!("public Close returns Active authority")
+      };
+      Pallet::<T>::load_finalization_authority(fixture.actor_id, &instance)?;
+    }
+    finish_close_authority_load::<T>(&fixture, &root)?;
+    Ok(())
+  }
+
+  fn retained_close_destruction<T: Config>(actor_id: ActorId) -> Vec<u8> {
+    let mut semantic = ActorSemanticStates::<T>::get(actor_id);
+    if let Some(ActorSemanticState::Active(record)) = &mut semantic {
+      record.hot.trigger_wakeup_pointer = None;
+      record.hot.wakeup_pointer = None;
+    }
+    (
+      semantic,
+      ActorContractHeads::<T>::get(actor_id),
+      ActorContractTailChunks::<T>::iter_prefix(actor_id).collect::<Vec<_>>(),
+      ActorRunStateStore::<T>::get(actor_id),
+      ActorStateHolds::<T>::get(actor_id),
+      ActiveActorCount::<T>::get(),
+      ActorIdentityCount::<T>::get(),
+      frame_system::Pallet::<T>::events(),
+    )
+      .encode()
+  }
+
+  fn finish_close_detachment<T: Config>(
+    fixture: &CloseDestructionFixture<T>,
+    mut state: ActiveActorStateOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    retained: &[u8],
+  ) -> Result<(), BenchmarkError> {
+    assert_eq!(retained_close_destruction::<T>(fixture.actor_id), retained);
+    let semantic = benchmark_fixture_semantic_record::<T>(fixture.actor_id).unwrap();
+    assert!(semantic.hot.trigger_wakeup_pointer.is_none());
+    assert!(semantic.hot.wakeup_pointer.is_none());
+    state.hot.trigger_wakeup_pointer = None;
+    state.hot.wakeup_pointer = None;
+    assert!(!ActorProcesses::<T>::contains_key(fixture.actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(fixture.actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(fixture.actor_id));
+    for &(asset, balance) in &fixture.balances {
+      assert_eq!(
+        T::AssetOps::balance(&fixture.identity.sovereign_account, asset),
+        balance
+      );
+    }
+    // Only the detached placement pointers differ from the pre-captured authority.
+    Pallet::<T>::finalize_actor_from_consumed_state(
+      fixture.actor_id,
+      state,
+      admission,
+      CloseReason::OwnerInitiated,
+    )?;
+    assert_close_destruction::<T>(fixture);
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_detach_user(a: Linear<0, 5>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_shape::<T>(ActorType::User, a)?;
+    let (LoadedActorStateOf::Active(state), Some(admission)) =
+      Pallet::<T>::load_actor_state_with_admission(fixture.actor_id)
+    else {
+      panic!("detachment starts with complete Active authority")
+    };
+    let actor = ActorRef {
+      actor_id: fixture.actor_id,
+      generation: benchmark_fixture_semantic_record::<T>(fixture.actor_id)
+        .unwrap()
+        .generation,
+    };
+    let supplied_run = state.run_state.clone();
+    let terminal = state.clone();
+    let retained = retained_close_destruction::<T>(fixture.actor_id);
+    #[block]
+    {
+      Pallet::<T>::detach_actor_publication(actor, state, supplied_run.as_ref())?;
+    }
+    finish_close_detachment::<T>(&fixture, terminal, &admission, &retained)?;
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_detach_system(a: Linear<0, 5>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_shape::<T>(ActorType::System, a)?;
+    let (LoadedActorStateOf::Active(state), Some(admission)) =
+      Pallet::<T>::load_actor_state_with_admission(fixture.actor_id)
+    else {
+      panic!("detachment starts with complete Active authority")
+    };
+    let actor = ActorRef {
+      actor_id: fixture.actor_id,
+      generation: benchmark_fixture_semantic_record::<T>(fixture.actor_id)
+        .unwrap()
+        .generation,
+    };
+    let supplied_run = state.run_state.clone();
+    let terminal = state.clone();
+    let retained = retained_close_destruction::<T>(fixture.actor_id);
+    #[block]
+    {
+      Pallet::<T>::detach_actor_publication(actor, state, supplied_run.as_ref())?;
+    }
+    finish_close_detachment::<T>(&fixture, terminal, &admission, &retained)?;
     Ok(())
   }
 
@@ -1537,7 +2288,7 @@ mod benches {
     assert_full_waiting_heap_close::<T>(&fixture);
   }
 
-  // Diagnostic counterpart for the System branch; production close pricing uses the heavier User path.
+  // Diagnostic System counterpart; class dominance is not an established close bound.
   #[benchmark]
   fn close_actor_system_pure() {
     let owner = measured_account::<T>("system-close-owner", 0);
@@ -2219,6 +2970,1290 @@ mod benches {
         .count,
       96
     );
+    Ok(())
+  }
+
+  #[derive(Clone, Copy, PartialEq, Eq)]
+  enum CloseDeadlineOwner {
+    Process,
+    Trigger,
+  }
+
+  #[derive(Clone, Copy, PartialEq, Eq)]
+  enum CloseDeadlinePageGeometry {
+    Unlink,
+    RetainFull,
+    #[cfg(test)]
+    RetainVacant,
+  }
+
+  fn close_deadline_handle<T: Config>(
+    actor_id: ActorId,
+    owner: CloseDeadlineOwner,
+  ) -> Option<DeadlineHandleOf<T>> {
+    match owner {
+      CloseDeadlineOwner::Process => DeadlineHandles::<T>::get(actor_id),
+      CloseDeadlineOwner::Trigger => TriggerDeadlineHandles::<T>::get(actor_id),
+    }
+  }
+
+  struct CloseDeadlinePageFixture<T: Config> {
+    owner: CloseDeadlineOwner,
+    actor: ActorRef,
+    handle: DeadlineHandleOf<T>,
+    expected_header: Option<DeadlineHeader>,
+    expected_pages: Vec<(u64, DeadlinePage)>,
+    expected_index: Vec<u8>,
+    peers: Vec<(ActorRef, DeadlineHandleOf<T>)>,
+    state: ActiveActorStateOf<T>,
+    record: ActorSemanticRecordOf<T>,
+    process: ActorProcessOf<T>,
+    service_before: ServiceHeaderRecord<BlockNumberFor<T>>,
+    node_before: Option<ServiceNode<BlockNumberFor<T>>>,
+    balance: T::Balance,
+  }
+
+  fn create_close_deadline_guard<T: Config>(
+    seed: u32,
+    key: WakeupKey<BlockNumberFor<T>>,
+  ) -> Result<ActorId, BenchmarkError> {
+    match key {
+      WakeupKey::Block(due) => Ok(create_canonical_deadline_guard::<T>(seed, due)),
+      WakeupKey::Tick(due) => {
+        let now = Pallet::<T>::current_scheduler_tick().unwrap();
+        assert!(due > now);
+        Pallet::<T>::create_system_actor(
+          RawOrigin::Root.into(),
+          account("close-trigger-page-guard", seed, 0),
+          Mutability::Mutable,
+          system_contract::<T>(
+            Schedule {
+              trigger: Trigger::cadenced(due - now),
+              cooldown_blocks: 0,
+            },
+            make_inert_contract_steps::<T>(),
+          ),
+        )?;
+        Ok(NextActorId::<T>::get() - 1)
+      }
+    }
+  }
+
+  fn next_close_deadline_key<T: Config>(
+    key: WakeupKey<BlockNumberFor<T>>,
+  ) -> Result<WakeupKey<BlockNumberFor<T>>, BenchmarkError> {
+    let next = match key {
+      WakeupKey::Block(due) => WakeupKey::Block(due.saturating_add(1u32.into())),
+      WakeupKey::Tick(due) => WakeupKey::Tick(due.saturating_add(1)),
+    };
+    if next > key {
+      Ok(next)
+    } else {
+      Err(BenchmarkError::Stop(
+        "fixture needs future Deadline key space",
+      ))
+    }
+  }
+
+  fn close_deadline_index_snapshot<T: Config>(clock: WakeupClock) -> Vec<u8> {
+    (
+      DeadlineIndexLen::<T>::get(clock),
+      DeadlineIndexPages::<T>::iter_prefix(clock).collect::<Vec<_>>(),
+    )
+      .encode()
+  }
+
+  fn assert_close_deadline_page_width(page: &DeadlinePage, live: u8, absent_links: usize) {
+    assert_eq!(page.entries.len(), 32);
+    assert_eq!(page.live_entries, live);
+    assert_eq!(page.entries.iter().flatten().count(), usize::from(live));
+    assert_eq!(
+      [
+        page.previous_page,
+        page.next_page,
+        page.previous_vacant_page,
+        page.next_vacant_page
+      ]
+      .iter()
+      .filter(|link| link.is_none())
+      .count(),
+      absent_links
+    );
+    assert_eq!(
+      page.encoded_size(),
+      DeadlinePage::max_encoded_len()
+        - (32 - usize::from(live)) * ActorRef::max_encoded_len()
+        - absent_links * u64::max_encoded_len()
+    );
+  }
+
+  fn prepare_close_deadline_page_unlink<T: Config>(
+    owner: CloseDeadlineOwner,
+  ) -> Result<CloseDeadlinePageFixture<T>, BenchmarkError> {
+    let population = 288;
+    let clock = match owner {
+      CloseDeadlineOwner::Process => WakeupClock::Block,
+      CloseDeadlineOwner::Trigger => WakeupClock::Tick,
+    };
+    let initial_keys = DeadlineIndexLen::<T>::get(clock);
+    if initial_keys > 47 {
+      return Err(BenchmarkError::Stop(
+        "host occupies the target index position",
+      ));
+    }
+    let room = Pallet::<T>::effective_active_actor_limit()
+      .saturating_sub(ActiveActorCount::<T>::get())
+      .min(T::MaxActorIdentities::get().saturating_sub(ActorIdentityCount::<T>::get()))
+      .min(T::MaxSystemSovereigns::get().saturating_sub(SystemSovereignCount::<T>::get()));
+    if room < population + 127 - initial_keys {
+      return Err(BenchmarkError::Stop(
+        "host cannot fill Deadline member and index pages",
+      ));
+    }
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    if owner == CloseDeadlineOwner::Trigger {
+      T::BenchmarkHelper::advance_to_scheduler_tick(2)?;
+    }
+    let floor = match clock {
+      WakeupClock::Block => WakeupKey::Block(1_000u32.into()),
+      WakeupClock::Tick => WakeupKey::Tick(1_000),
+    };
+    let mut key = DeadlineIndexPages::<T>::iter_prefix(clock)
+      .flat_map(|(_, page)| page.into_iter())
+      .max()
+      .unwrap_or(floor)
+      .max(floor);
+    // Increasing keys append without heap swaps; reserve index 47 for the measured source.
+    for index in initial_keys..47 {
+      key = next_close_deadline_key::<T>(key)?;
+      create_close_deadline_guard::<T>(1_000 + index, key)?;
+    }
+    key = next_close_deadline_key::<T>(key)?;
+    let guards: Vec<_> = (0..population)
+      .map(|seed| create_close_deadline_guard::<T>(seed, key))
+      .collect::<Result<_, _>>()?;
+    assert_eq!(DeadlineIndexPositions::<T>::get(key), Some(47));
+    let mut later = key;
+    for index in 48..128 {
+      later = next_close_deadline_key::<T>(later)?;
+      create_close_deadline_guard::<T>(1_000 + index, later)?;
+    }
+    assert_eq!(DeadlineIndexLen::<T>::get(clock), 128);
+    // Own slot, parent and both children occupy four distinct, full index pages.
+    let index = DeadlineIndexPositions::<T>::get(key).unwrap();
+    assert_eq!(index, 47);
+    let inspected = [index, (index - 1) / 2, index * 2 + 1, index * 2 + 2];
+    assert_eq!(inspected.map(|position| position / 32), [1, 0, 2, 3]);
+    for page_id in 0..4 {
+      assert_eq!(
+        DeadlineIndexPages::<T>::get(clock, page_id).unwrap().len(),
+        32
+      );
+    }
+    let actor_id = guards[96];
+    let actor = Pallet::<T>::load_actor_ref(actor_id).unwrap();
+    frame_system::Pallet::<T>::set_block_number(2u32.into());
+    if owner == CloseDeadlineOwner::Trigger {
+      T::BenchmarkHelper::finalize_scheduler_clock()?;
+      T::BenchmarkHelper::advance_to_scheduler_tick(3)?;
+    }
+    // Vacancy order is independent of physical page order.
+    let closed: Vec<usize> = [32, 160]
+      .into_iter()
+      .chain(97..128)
+      .chain([192, 224])
+      .collect();
+    for index in &closed {
+      Pallet::<T>::close_actor(RawOrigin::Root.into(), guards[*index])?;
+    }
+    let handle = close_deadline_handle::<T>(actor_id, owner).unwrap();
+    assert_eq!((handle.key, handle.page, handle.slot), (key, 3, 0));
+    capture_close_deadline_page_geometry::<T>(
+      owner,
+      actor,
+      CloseDeadlinePageGeometry::Unlink,
+      population,
+      closed.len() as u32,
+    )
+  }
+
+  fn capture_close_deadline_page_geometry<T: Config>(
+    owner: CloseDeadlineOwner,
+    actor: ActorRef,
+    geometry: CloseDeadlinePageGeometry,
+    population: u32,
+    removed: u32,
+  ) -> Result<CloseDeadlinePageFixture<T>, BenchmarkError> {
+    let handle = close_deadline_handle::<T>(actor.actor_id, owner).unwrap();
+    let key = handle.key;
+    let clock = key.clock();
+    let page = DeadlinePages::<T>::get(handle.key, handle.page).unwrap();
+    let (live_entries, vacant_neighbors, first_vacant) = match geometry {
+      CloseDeadlinePageGeometry::Unlink => (1, (Some(6), Some(5)), Some(7)),
+      CloseDeadlinePageGeometry::RetainFull => (32, (None, None), Some(3)),
+      #[cfg(test)]
+      CloseDeadlinePageGeometry::RetainVacant => (31, (Some(2), None), Some(3)),
+    };
+    assert_eq!(
+      (page.live_entries, page.entries[0]),
+      (live_entries, Some(actor))
+    );
+    assert_eq!(
+      (page.previous_page, page.next_page),
+      (Some(handle.page - 1), Some(handle.page + 1))
+    );
+    assert_eq!(
+      (page.previous_vacant_page, page.next_vacant_page),
+      vacant_neighbors
+    );
+    let absent_links = match geometry {
+      CloseDeadlinePageGeometry::Unlink => 0,
+      CloseDeadlinePageGeometry::RetainFull => 2,
+      #[cfg(test)]
+      CloseDeadlinePageGeometry::RetainVacant => 1,
+    };
+    assert_close_deadline_page_width(&page, live_entries, absent_links);
+    // A full physical page competes with a 31-member page carrying two vacancy links.
+    let interior_width = (DeadlinePage::max_encoded_len() - 2 * u64::max_encoded_len())
+      .max(DeadlinePage::max_encoded_len() - ActorRef::max_encoded_len());
+    let boundary_width = interior_width - u64::max_encoded_len();
+    for page_id in [0, u64::from(population / 32 - 1)] {
+      let boundary = DeadlinePages::<T>::get(key, page_id).unwrap();
+      assert_close_deadline_page_width(&boundary, 32, 3);
+      assert_eq!(boundary.encoded_size(), boundary_width);
+    }
+    if geometry == CloseDeadlinePageGeometry::Unlink {
+      for page_id in [2, 4] {
+        let neighbor = DeadlinePages::<T>::get(key, page_id).unwrap();
+        assert_close_deadline_page_width(&neighbor, 32, 2);
+        assert_eq!(neighbor.encoded_size(), interior_width);
+      }
+      for page_id in [5, 6] {
+        assert_close_deadline_page_width(&DeadlinePages::<T>::get(key, page_id).unwrap(), 31, 0);
+      }
+    } else if geometry == CloseDeadlinePageGeometry::RetainFull {
+      assert_eq!(page.encoded_size(), interior_width);
+      assert_close_deadline_page_width(&DeadlinePages::<T>::get(key, 3).unwrap(), 31, 1);
+    }
+    let mut expected_header = DeadlineHeaders::<T>::get(handle.key).unwrap();
+    assert_eq!(
+      (expected_header.first_page, expected_header.last_page),
+      (0, u64::from(population / 32 - 1))
+    );
+    assert_eq!(
+      (
+        expected_header.count,
+        expected_header.page_count,
+        expected_header.first_vacant_page
+      ),
+      (population - removed, population / 32, first_vacant)
+    );
+    expected_header.count -= 1;
+    match geometry {
+      CloseDeadlinePageGeometry::Unlink => expected_header.page_count -= 1,
+      CloseDeadlinePageGeometry::RetainFull => expected_header.first_vacant_page = Some(1),
+      #[cfg(test)]
+      CloseDeadlinePageGeometry::RetainVacant => {}
+    }
+    let mut expected_pages: Vec<_> = DeadlinePages::<T>::iter_prefix(handle.key)
+      .filter(|(page_id, _)| {
+        geometry != CloseDeadlinePageGeometry::Unlink || *page_id != handle.page
+      })
+      .collect();
+    assert_eq!(expected_pages.len(), expected_header.page_count as usize);
+    for (page_id, page) in &mut expected_pages {
+      match geometry {
+        CloseDeadlinePageGeometry::Unlink => match *page_id {
+          2 => page.next_page = Some(4),
+          4 => page.previous_page = Some(2),
+          6 => page.next_vacant_page = Some(5),
+          5 => page.previous_vacant_page = Some(6),
+          0 | 1 | 7 | 8 => {}
+          _ => panic!("four neighbors and untouched boundary pages"),
+        },
+        _ => {
+          if *page_id == 1 {
+            page.entries[0] = None;
+            page.live_entries -= 1;
+            if geometry == CloseDeadlinePageGeometry::RetainFull {
+              page.next_vacant_page = Some(3);
+            }
+          } else if *page_id == 3 && geometry == CloseDeadlinePageGeometry::RetainFull {
+            page.previous_vacant_page = Some(1);
+          }
+        }
+      }
+    }
+    let peers: Vec<_> = expected_pages
+      .iter()
+      .flat_map(|(_, page)| page.entries.iter().flatten())
+      .map(|peer| {
+        (
+          *peer,
+          close_deadline_handle::<T>(peer.actor_id, owner).unwrap(),
+        )
+      })
+      .collect();
+    assert_eq!(peers.len(), expected_header.count as usize);
+    Ok(capture_close_deadline_fixture::<T>(
+      owner,
+      actor,
+      Some(expected_header),
+      expected_pages,
+      close_deadline_index_snapshot::<T>(clock),
+      peers,
+    ))
+  }
+
+  fn capture_close_deadline_fixture<T: Config>(
+    owner: CloseDeadlineOwner,
+    actor: ActorRef,
+    expected_header: Option<DeadlineHeader>,
+    expected_pages: Vec<(u64, DeadlinePage)>,
+    expected_index: Vec<u8>,
+    peers: Vec<(ActorRef, DeadlineHandleOf<T>)>,
+  ) -> CloseDeadlinePageFixture<T> {
+    let actor_id = actor.actor_id;
+    let handle = close_deadline_handle::<T>(actor_id, owner).unwrap();
+    let header = DeadlineHeaders::<T>::get(handle.key).unwrap();
+    assert_eq!(header.encoded_size(), DeadlineHeader::max_encoded_len());
+    if header.count == 1 {
+      // A last-member page has no physical or vacancy neighbors, but all 32 slots remain.
+      assert_close_deadline_page_width(
+        &DeadlinePages::<T>::get(handle.key, handle.page).unwrap(),
+        1,
+        4,
+      );
+    }
+    let state = Pallet::<T>::active_actor_state(actor_id).unwrap();
+    let Some(ActorSemanticState::Active(record)) = ActorSemanticStates::<T>::get(actor_id) else {
+      panic!("target owns canonical semantic state")
+    };
+    let process = ActorProcesses::<T>::get(actor_id).unwrap();
+    let service_before = ServiceHeader::<T>::get();
+    let node_before = ServiceNodes::<T>::get(actor_id);
+    let balance = T::AssetOps::balance(
+      &state.identity.sovereign_account,
+      T::FeeNativeAssetId::get(),
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("pure removal starts from ordinary admitted Actors");
+    CloseDeadlinePageFixture {
+      owner,
+      actor,
+      handle,
+      expected_header,
+      expected_pages,
+      expected_index,
+      peers,
+      state,
+      record,
+      process,
+      service_before,
+      node_before,
+      balance,
+    }
+  }
+
+  #[derive(Clone, Copy, PartialEq, Eq)]
+  enum CloseDeadlineKeyGeometry {
+    Root,
+    RootWide,
+    InteriorWide,
+    Upward,
+  }
+
+  // Address geometry only. An independent tail page permits a conservative population bound;
+  // executable fixtures pass the actual popped page, not the bound's fresh-page sentinel.
+  fn close_deadline_descent_pages(
+    path: &[u32],
+    remaining: u32,
+    tail_page: u32,
+  ) -> (Vec<u32>, Vec<u32>) {
+    let mut reads = vec![tail_page];
+    let mut writes = reads.clone();
+    for &index in path {
+      reads.push(index / 32);
+      writes.push(index / 32);
+      if index > 0 {
+        reads.push(((index - 1) / 2) / 32);
+      }
+      let left = index.saturating_mul(2).saturating_add(1);
+      for child in [left, left.saturating_add(1)] {
+        if child < remaining {
+          reads.push(child / 32);
+        }
+      }
+    }
+    for pages in [&mut reads, &mut writes] {
+      pages.sort_unstable();
+      pages.dedup();
+    }
+    (reads, writes)
+  }
+
+  fn widest_close_deadline_descent(
+    full_prefix: u32,
+    minimum_interior: Option<u32>,
+  ) -> Result<Vec<u32>, BenchmarkError> {
+    let last = full_prefix + 31;
+    let mut best = None;
+    let mut best_score = (0, 0, 0);
+    // These leaves survive and stay leaves throughout the tail-occupancy component.
+    for leaf in last / 2..full_prefix {
+      let mut path = vec![leaf];
+      let mut index = leaf;
+      while index > 0 {
+        index = (index - 1) / 2;
+        path.push(index);
+      }
+      path.reverse();
+      let starts = if minimum_interior.is_some() {
+        1..path.len() - 1
+      } else {
+        0..1
+      };
+      for start in starts {
+        if minimum_interior.is_some_and(|minimum| path[start] < minimum) {
+          continue;
+        }
+        let suffix = &path[start..];
+        let (reads, writes) = close_deadline_descent_pages(suffix, last, last / 32);
+        let score = (writes.len(), reads.len(), suffix.len());
+        if score > best_score {
+          best_score = score;
+          best = Some(suffix.to_vec());
+        }
+      }
+    }
+    best.ok_or(BenchmarkError::Stop(
+      "host lacks a stable downward-repair leaf",
+    ))
+  }
+
+  fn prepare_key_removal_authority<T: Config>(
+    owner: CloseDeadlineOwner,
+    spacing: u32,
+  ) -> Result<CloseDeadlineAuthority<T>, BenchmarkError> {
+    if owner == CloseDeadlineOwner::Process {
+      return prepare_retry_authority::<T>(spacing);
+    }
+    let (actor, _) = prepare_completed_temporal_authority::<T>(false, u64::from(spacing))?;
+    let key = TriggerDeadlineHandles::<T>::get(actor.actor_id)
+      .unwrap()
+      .key;
+    let now = frame_system::Pallet::<T>::block_number();
+    frame_system::Pallet::<T>::set_block_number(now.saturating_add(1u32.into()));
+    Pallet::<T>::pause_actor(RawOrigin::Root.into(), actor.actor_id)?;
+    // Settle surviving host timers through their ordinary latching transition, without
+    // clearing genesis or executing their next Pipeline while building the heap.
+    for _ in 0..ActiveActorCount::<T>::get() {
+      if DeadlineIndexLen::<T>::get(WakeupClock::Tick) == 0 {
+        break;
+      }
+      let WakeupKey::Tick(due) = DeadlineIndexPages::<T>::get(WakeupClock::Tick, 0).unwrap()[0]
+      else {
+        panic!("Tick heap contains Tick keys")
+      };
+      let tick = Pallet::<T>::current_scheduler_tick().unwrap().max(due);
+      if WakeupKey::Tick(tick) >= key {
+        return Err(BenchmarkError::Stop(
+          "host timer exceeds staged temporal authority",
+        ));
+      }
+      T::BenchmarkHelper::finalize_scheduler_clock()?;
+      T::BenchmarkHelper::advance_to_scheduler_tick(tick)?;
+      let source = match Pallet::<T>::classify_next_due_tick_deadline(tick)
+        .map_err(|_| BenchmarkError::Stop("host Tick frontier classification failed"))?
+      {
+        DueBlockDeadlineBranch::TemporalTrigger(source)
+        | DueBlockDeadlineBranch::TemporalTriggerBusy(source) => source,
+        _ => return Err(BenchmarkError::Stop("host Tick frontier is not temporal")),
+      };
+      let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+      assert_eq!(
+        Pallet::<T>::process_next_due_tick_deadline(&mut meter, tick),
+        Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(source))
+      );
+    }
+    assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Tick), 0);
+    Ok(CloseDeadlineAuthority {
+      actor,
+      key,
+      publish_at: frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()),
+    })
+  }
+
+  fn prepare_close_deadline_key_remove<T: Config>(
+    owner: CloseDeadlineOwner,
+    tail_entries: u32,
+    geometry: CloseDeadlineKeyGeometry,
+  ) -> Result<CloseDeadlinePageFixture<T>, BenchmarkError> {
+    assert!((1..=32).contains(&tail_entries));
+    let spacing = if geometry == CloseDeadlineKeyGeometry::Upward {
+      Pallet::<T>::max_configurable_active_actor_limit()
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(1_000))
+        .ok_or(BenchmarkError::Stop(
+          "fixture needs bounded deadline spacing",
+        ))?
+    } else {
+      1_000
+    };
+    let authority = prepare_key_removal_authority::<T>(owner, spacing)?;
+    let key = authority.key;
+    let clock = key.clock();
+    let initial_keys = DeadlineIndexLen::<T>::get(clock);
+    let room = Pallet::<T>::effective_active_actor_limit()
+      .saturating_sub(ActiveActorCount::<T>::get())
+      .min(T::MaxActorIdentities::get().saturating_sub(ActorIdentityCount::<T>::get()))
+      .min(T::MaxSystemSovereigns::get().saturating_sub(SystemSovereignCount::<T>::get()));
+    // The staged target already owns its identity/slot, but not its final Deadline key.
+    let maximum_keys = initial_keys + room + 1;
+    if initial_keys > 31 || maximum_keys <= 64 {
+      return Err(BenchmarkError::Stop(
+        "host cannot admit the deep key-removal fixture",
+      ));
+    }
+    // Hold the full prefix constant while varying only the tail's occupied slots.
+    let full_prefix = (maximum_keys - 32) / 32 * 32;
+    let keys = full_prefix + tail_entries;
+    let initial: Vec<_> = DeadlineIndexPages::<T>::iter_prefix(clock)
+      .flat_map(|(_, page)| page.into_iter())
+      .collect();
+    if matches!(
+      geometry,
+      CloseDeadlineKeyGeometry::Root | CloseDeadlineKeyGeometry::RootWide
+    ) && initial.iter().any(|existing| *existing <= key)
+    {
+      return Err(BenchmarkError::Stop(
+        "host owns an earlier or matching Deadline key",
+      ));
+    }
+    let floor = match key {
+      WakeupKey::Block(due) => WakeupKey::Block(due.saturating_add(1_000u32.into())),
+      WakeupKey::Tick(due) => WakeupKey::Tick(due.saturating_add(1_000)),
+    };
+    let initial_max = initial.into_iter().max();
+    let mut later = initial_max.unwrap_or(floor).max(floor);
+    let before_target = |rank: u32| {
+      let base = match key {
+        WakeupKey::Block(due) => WakeupKey::Block(due.saturating_sub(rank.into())),
+        WakeupKey::Tick(due) => WakeupKey::Tick(due.saturating_sub(u64::from(rank))),
+      };
+      let future_floor = match clock {
+        WakeupClock::Block => WakeupKey::Block(authority.publish_at.saturating_add(4u32.into())),
+        WakeupClock::Tick => WakeupKey::Tick(
+          Pallet::<T>::current_scheduler_tick()
+            .unwrap()
+            .saturating_add(4),
+        ),
+      };
+      if base <= future_floor || initial_max.is_some_and(|existing| base <= existing) {
+        return Err(BenchmarkError::Stop(
+          "host leaves no room below the retained authority",
+        ));
+      }
+      Ok(base)
+    };
+    let mut descent_path = None;
+    let (actor, target_index, expected_page_writes) = match geometry {
+      CloseDeadlineKeyGeometry::Root => {
+        for index in initial_keys..31 {
+          later = next_close_deadline_key::<T>(later)?;
+          create_close_deadline_guard::<T>(1_000 + index, later)?;
+        }
+        // Inserting the minimum at slot 31 shifts the old left spine down. Increasing suffix
+        // keys then make root removal sink the maximum down a complete leftmost path.
+        let actor = publish_close_deadline_authority::<T>(&authority)?;
+        for index in 32..keys {
+          later = next_close_deadline_key::<T>(later)?;
+          create_close_deadline_guard::<T>(1_000 + index, later)?;
+        }
+        (actor, 0, None)
+      }
+      CloseDeadlineKeyGeometry::RootWide => {
+        let path = widest_close_deadline_descent(full_prefix, None)?;
+        let insertion = path.iter().position(|index| *index >= 31).unwrap();
+        let source_index = path[insertion];
+        let key_at = |index| {
+          let offset = if path.contains(&index) {
+            index + 1
+          } else {
+            full_prefix + 32 + index + 1
+          };
+          match later {
+            WakeupKey::Block(base) => WakeupKey::Block(base.saturating_add(offset.into())),
+            WakeupKey::Tick(base) => WakeupKey::Tick(base.saturating_add(u64::from(offset))),
+          }
+        };
+        // Invert the minimum insertion's ancestor shift, retaining host-owned keys.
+        // Rank the selected path below its siblings without writing heap storage directly.
+        for index in initial_keys..source_index {
+          let final_index = path[..insertion]
+            .iter()
+            .position(|ancestor| *ancestor == index)
+            .map_or(index, |position| path[position + 1]);
+          let guard_key = key_at(final_index);
+          create_close_deadline_guard::<T>(1_000 + index, guard_key)?;
+          assert_eq!(DeadlineIndexPositions::<T>::get(guard_key), Some(index));
+        }
+        let actor = publish_close_deadline_authority::<T>(&authority)?;
+        for index in source_index + 1..keys {
+          let guard_key = key_at(index);
+          create_close_deadline_guard::<T>(1_000 + index, guard_key)?;
+          assert_eq!(DeadlineIndexPositions::<T>::get(guard_key), Some(index));
+        }
+        let (_, pages) = close_deadline_descent_pages(&path, keys - 1, (keys - 1) / 32);
+        let expected = (pages.len(), path.len() as u32 - 1);
+        descent_path = Some(path);
+        (actor, 0, Some(expected))
+      }
+      CloseDeadlineKeyGeometry::InteriorWide => {
+        let path = widest_close_deadline_descent(full_prefix, Some(initial_keys.max(1)))?;
+        let target = path[0];
+        later = before_target(target + 1)?;
+        let mut ancestry = path.clone();
+        let mut parent = target;
+        while parent > 0 {
+          parent = (parent - 1) / 2;
+          ancestry.push(parent);
+        }
+        let mut actor = None;
+        // Ancestors and the selected descent rank below their siblings. Every insertion
+        // already satisfies heap order, including the untouched host-owned prefix.
+        for index in initial_keys..keys {
+          let offset = if ancestry.contains(&index) {
+            index + 1
+          } else {
+            full_prefix + 32 + index + 1
+          };
+          let guard_key = match later {
+            WakeupKey::Block(base) => WakeupKey::Block(base.saturating_add(offset.into())),
+            WakeupKey::Tick(base) => WakeupKey::Tick(base.saturating_add(u64::from(offset))),
+          };
+          if index == target {
+            assert_eq!(guard_key, key);
+            actor = Some(publish_close_deadline_authority::<T>(&authority)?);
+          } else {
+            create_close_deadline_guard::<T>(1_000 + index, guard_key)?;
+          }
+          assert_eq!(DeadlineIndexPositions::<T>::get(guard_key), Some(index));
+        }
+        let (_, writes) = close_deadline_descent_pages(&path, keys - 1, (keys - 1) / 32);
+        let expected = (writes.len(), path.len() as u32 - 1);
+        descent_path = Some(path);
+        (actor.unwrap(), target, Some(expected))
+      }
+      CloseDeadlineKeyGeometry::Upward => {
+        let full_keys = full_prefix + 32;
+        let mut low = vec![false; full_keys as usize];
+        // Keep every possible tail and its ancestors below all other keys. This blueprint
+        // stays fixed across tail occupancy, and insertion order already satisfies heap order.
+        for tail in full_prefix..full_keys {
+          let mut current = tail;
+          loop {
+            if low[current as usize] {
+              break;
+            }
+            low[current as usize] = true;
+            if current == 0 {
+              break;
+            }
+            current = (current - 1) / 2;
+          }
+        }
+        let mut best = None;
+        for candidate in (full_keys / 2).max(initial_keys)..full_prefix {
+          if low[candidate as usize] {
+            continue;
+          }
+          let mut current = candidate;
+          let mut pages = vec![full_prefix / 32];
+          let mut steps = 0;
+          loop {
+            pages.push(current / 32);
+            let parent = (current - 1) / 2;
+            if parent < initial_keys || low[parent as usize] {
+              break;
+            }
+            current = parent;
+            steps += 1;
+          }
+          pages.sort_unstable();
+          pages.dedup();
+          let score = (pages.len(), steps);
+          if best.is_none_or(|(_, previous)| score > previous) {
+            best = Some((candidate, score));
+          }
+        }
+        let (target, (page_writes, steps)) = best.ok_or(BenchmarkError::Stop(
+          "host lacks a distinct upward-repair subtree",
+        ))?;
+        assert!(steps > 0);
+        later = before_target(full_keys + target + 1)?;
+        let mut actor = None;
+        for index in initial_keys..keys {
+          let offset = if low[index as usize] {
+            index + 1
+          } else {
+            full_keys + index + 1
+          };
+          let guard_key = match later {
+            WakeupKey::Block(base) => WakeupKey::Block(base.saturating_add(offset.into())),
+            WakeupKey::Tick(base) => WakeupKey::Tick(base.saturating_add(u64::from(offset))),
+          };
+          if index == target {
+            assert_eq!(guard_key, key);
+            actor = Some(publish_close_deadline_authority::<T>(&authority)?);
+          } else {
+            create_close_deadline_guard::<T>(1_000 + index, guard_key)?;
+          }
+          assert_eq!(DeadlineIndexPositions::<T>::get(guard_key), Some(index));
+        }
+        (actor.unwrap(), target, Some((page_writes, steps)))
+      }
+    };
+    assert_eq!(DeadlineIndexPositions::<T>::get(key), Some(target_index));
+    assert_eq!(DeadlineIndexLen::<T>::get(clock), keys);
+    let header = DeadlineHeaders::<T>::get(key).unwrap();
+    assert_eq!(
+      (
+        header.count,
+        header.page_count,
+        header.first_page,
+        header.last_page
+      ),
+      (1, 1, 0, 0)
+    );
+    assert_eq!(
+      DeadlineIndexPages::<T>::get(clock, u64::from(full_prefix / 32))
+        .unwrap()
+        .len(),
+      tail_entries as usize
+    );
+    let mut expected_heap: Vec<_> = (0..keys.div_ceil(32))
+      .flat_map(|page_id| {
+        DeadlineIndexPages::<T>::get(clock, u64::from(page_id))
+          .unwrap()
+          .into_iter()
+      })
+      .collect();
+    assert_eq!(expected_heap.len(), keys as usize);
+    assert_eq!(expected_heap[target_index as usize], key);
+    let tail = expected_heap.pop().unwrap();
+    expected_heap[target_index as usize] = tail;
+    let mut position = target_index as usize;
+    let mut depth = 0;
+    match geometry {
+      CloseDeadlineKeyGeometry::Root
+      | CloseDeadlineKeyGeometry::RootWide
+      | CloseDeadlineKeyGeometry::InteriorWide => {
+        assert!(
+          expected_heap
+            .iter()
+            .enumerate()
+            .all(|(index, key)| index == target_index as usize || *key < tail)
+        );
+        while position * 2 + 1 < expected_heap.len() {
+          let left = position * 2 + 1;
+          let child = descent_path
+            .as_ref()
+            .map_or(left, |path| path[depth as usize + 1] as usize);
+          assert!(child == left || child == left + 1);
+          assert!(child < expected_heap.len());
+          if left + 1 < expected_heap.len() {
+            let sibling = if child == left { left + 1 } else { left };
+            assert!(expected_heap[child] < expected_heap[sibling]);
+          }
+          expected_heap.swap(position, child);
+          position = child;
+          depth += 1;
+        }
+        if geometry != CloseDeadlineKeyGeometry::InteriorWide {
+          assert_eq!(depth, u32::BITS - 1 - (keys - 1).leading_zeros());
+          let maximum_remaining = Pallet::<T>::max_configurable_active_actor_limit() - 1;
+          assert_eq!(depth, u32::BITS - 1 - maximum_remaining.leading_zeros());
+        }
+        if let Some((_, steps)) = expected_page_writes {
+          assert_eq!(depth, steps);
+        }
+      }
+      CloseDeadlineKeyGeometry::Upward => {
+        while position > 0 && expected_heap[(position - 1) / 2] > tail {
+          let parent = (position - 1) / 2;
+          expected_heap.swap(position, parent);
+          position = parent;
+          depth += 1;
+        }
+        assert_eq!(depth, expected_page_writes.unwrap().1);
+        for child in [position * 2 + 1, position * 2 + 2] {
+          assert!(expected_heap.get(child).is_none_or(|key| tail <= *key));
+        }
+      }
+    }
+    let mut index_pages: Vec<_> = DeadlineIndexPages::<T>::iter_prefix(clock).collect();
+    let mut changed_pages = 0;
+    index_pages.retain_mut(|(page_id, page)| {
+      let first = *page_id as usize * 32;
+      if first >= expected_heap.len() {
+        changed_pages += 1;
+        return false;
+      }
+      let end = (first + 32).min(expected_heap.len());
+      if page.as_slice() != &expected_heap[first..end] {
+        changed_pages += 1;
+      }
+      page.truncate(end - first);
+      for (slot, key) in page.iter_mut().enumerate() {
+        *key = expected_heap[first + slot];
+      }
+      true
+    });
+    if let Some((page_writes, _)) = expected_page_writes {
+      assert_eq!(changed_pages, page_writes);
+    }
+    assert_eq!(
+      index_pages
+        .iter()
+        .find(|(page_id, _)| *page_id == u64::from(full_prefix / 32))
+        .map(|(_, page)| page.len()),
+      (tail_entries > 1).then_some(tail_entries as usize - 1)
+    );
+    let handles: Vec<_> = match owner {
+      CloseDeadlineOwner::Process => DeadlineHandles::<T>::iter_values().collect(),
+      CloseDeadlineOwner::Trigger => TriggerDeadlineHandles::<T>::iter_values().collect(),
+    };
+    let peers: Vec<_> = handles
+      .into_iter()
+      .filter(|handle| handle.key.clock() == clock && handle.actor != actor)
+      .map(|handle| (handle.actor, handle))
+      .collect();
+    assert!(peers.len() >= (keys - 1) as usize);
+    let now = frame_system::Pallet::<T>::block_number();
+    frame_system::Pallet::<T>::set_block_number(now.saturating_add(1u32.into()));
+    if owner == CloseDeadlineOwner::Trigger {
+      let tick = Pallet::<T>::current_scheduler_tick()
+        .unwrap()
+        .saturating_add(1);
+      T::BenchmarkHelper::finalize_scheduler_clock()?;
+      T::BenchmarkHelper::advance_to_scheduler_tick(tick)?;
+    }
+    assert!(
+      DeadlineIndexPages::<T>::iter_prefix(clock)
+        .flat_map(|(_, page)| page.into_iter())
+        .all(|key| match key {
+          WakeupKey::Block(due) => due > frame_system::Pallet::<T>::block_number(),
+          WakeupKey::Tick(due) => due > Pallet::<T>::current_scheduler_tick().unwrap(),
+        })
+    );
+    Ok(capture_close_deadline_fixture::<T>(
+      owner,
+      actor,
+      None,
+      Vec::new(),
+      (keys - 1, index_pages).encode(),
+      peers,
+    ))
+  }
+
+  fn assert_close_deadline_page<T: Config>(
+    fixture: CloseDeadlinePageFixture<T>,
+  ) -> Result<(), BenchmarkError> {
+    let CloseDeadlinePageFixture {
+      owner,
+      actor,
+      handle,
+      expected_header,
+      expected_pages,
+      expected_index,
+      peers,
+      state,
+      record,
+      process,
+      service_before,
+      node_before,
+      balance,
+    } = fixture;
+    let actor_id = actor.actor_id;
+    assert!(close_deadline_handle::<T>(actor_id, owner).is_none());
+    assert_eq!(
+      DeadlinePages::<T>::contains_key(handle.key, handle.page),
+      expected_pages
+        .iter()
+        .any(|(page_id, _)| *page_id == handle.page)
+    );
+    assert_eq!(DeadlineHeaders::<T>::get(handle.key), expected_header);
+    assert_eq!(
+      DeadlinePages::<T>::iter_prefix(handle.key).count(),
+      expected_pages.len()
+    );
+    for (page_id, page) in expected_pages {
+      assert_eq!(DeadlinePages::<T>::get(handle.key, page_id), Some(page));
+    }
+    for (peer, expected) in peers {
+      assert_eq!(
+        close_deadline_handle::<T>(peer.actor_id, owner),
+        Some(expected)
+      );
+    }
+    assert_eq!(ActorProcesses::<T>::get(actor_id), Some(process));
+    assert_eq!(
+      ActorRunStateStore::<T>::get(actor_id).encode(),
+      state.run_state.encode()
+    );
+    assert_eq!(
+      ActorSemanticStates::<T>::get(actor_id).unwrap().encode(),
+      ActorSemanticState::Active(record.clone()).encode()
+    );
+    assert_eq!(ServiceNodes::<T>::get(actor_id), node_before);
+    assert_eq!(ServiceHeader::<T>::get(), service_before);
+    assert_eq!(
+      close_deadline_index_snapshot::<T>(handle.key.clock()),
+      expected_index
+    );
+    assert_deadline_clock_indices::<T>(handle.key.clock());
+    finish_close_after_deadline_removal::<T>(owner, actor, state, record, balance)?;
+    Ok(())
+  }
+
+  fn finish_close_after_deadline_removal<T: Config>(
+    owner: CloseDeadlineOwner,
+    actor: ActorRef,
+    mut state: ActiveActorStateOf<T>,
+    record: ActorSemanticRecordOf<T>,
+    balance: T::Balance,
+  ) -> Result<(), BenchmarkError> {
+    let actor_id = actor.actor_id;
+    // Complete the caller's remaining teardown after checking the measured component. Only the
+    // complete close restores the global Actor invariant; the removed residence is transitional.
+    if owner == CloseDeadlineOwner::Trigger {
+      state.hot.trigger_wakeup_pointer = None;
+      let mut replacement = record.clone();
+      replacement.hot = state.hot.clone();
+      Pallet::<T>::mutate_actor_semantic_state(
+        actor_id,
+        ActorSemanticMutation::Replace {
+          expected: ActorSemanticState::Active(record.clone()),
+          replacement: ActorSemanticState::Active(replacement),
+        },
+      )
+      .map_err(|_| BenchmarkError::Stop("consumed Trigger pointer cannot be cleared"))?;
+      let run = state.run_state.clone();
+      state = Pallet::<T>::detach_actor_publication(actor, state, run.as_ref())?;
+    } else {
+      ActorProcesses::<T>::remove(actor_id);
+    }
+    Pallet::<T>::finalize_actor_from_consumed_state(
+      actor_id,
+      state.clone(),
+      &record.admission,
+      CloseReason::OwnerInitiated,
+    )?;
+    assert_eq!(
+      T::AssetOps::balance(
+        &state.identity.sovereign_account,
+        T::FeeNativeAssetId::get()
+      ),
+      balance
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("remaining close work preserves peers and global authority");
+    Ok(())
+  }
+
+  /// Pure process-Deadline removal; no Service return or lifecycle finalization is measured.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_deadline_page_unlink() -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_deadline_page_unlink::<T>(CloseDeadlineOwner::Process)?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::remove_deadline_member(fixture.actor) {
+          Ok(removed) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(removed))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    // FRAME keeps the return expression outside verification; teardown must be a statement.
+    assert_close_deadline_page::<T>(fixture)?;
+    Ok(())
+  }
+
+  /// Independent Trigger removal owns semantic-pointer validation, not primary residence removal.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_trigger_page_unlink() -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_deadline_page_unlink::<T>(CloseDeadlineOwner::Trigger)?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::remove_trigger_deadline_member(fixture.actor) {
+          Ok(removed) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(removed))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    assert_close_deadline_page::<T>(fixture)?;
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_deadline_page_retain() -> Result<(), BenchmarkError> {
+    let fixture = prepare_attempted_process_page::<T>(CloseDeadlinePageGeometry::RetainFull)?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::remove_deadline_member(fixture.actor) {
+          Ok(removed) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(removed))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    assert_close_deadline_page::<T>(fixture)?;
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_trigger_page_retain() -> Result<(), BenchmarkError> {
+    let fixture = prepare_completed_trigger_page::<T>(CloseDeadlinePageGeometry::RetainFull)?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::remove_trigger_deadline_member(fixture.actor) {
+          Ok(removed) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(removed))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    assert_close_deadline_page::<T>(fixture)?;
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_deadline_key_remove(n: Linear<1, 32>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_deadline_key_remove::<T>(
+      CloseDeadlineOwner::Process,
+      n,
+      CloseDeadlineKeyGeometry::Root,
+    )?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::remove_deadline_member(fixture.actor) {
+          Ok(removed) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(removed))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    assert_close_deadline_page::<T>(fixture)?;
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_trigger_key_remove(n: Linear<1, 32>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_deadline_key_remove::<T>(
+      CloseDeadlineOwner::Trigger,
+      n,
+      CloseDeadlineKeyGeometry::Root,
+    )?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::remove_trigger_deadline_member(fixture.actor) {
+          Ok(removed) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(removed))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    assert_close_deadline_page::<T>(fixture)?;
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_deadline_key_remove_wide(n: Linear<1, 32>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_deadline_key_remove::<T>(
+      CloseDeadlineOwner::Process,
+      n,
+      CloseDeadlineKeyGeometry::RootWide,
+    )?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::remove_deadline_member(fixture.actor) {
+          Ok(removed) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(removed))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    assert_close_deadline_page::<T>(fixture)?;
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_trigger_key_remove_wide(n: Linear<1, 32>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_deadline_key_remove::<T>(
+      CloseDeadlineOwner::Trigger,
+      n,
+      CloseDeadlineKeyGeometry::RootWide,
+    )?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::remove_trigger_deadline_member(fixture.actor) {
+          Ok(removed) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(removed))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    assert_close_deadline_page::<T>(fixture)?;
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_deadline_key_remove_interior(n: Linear<1, 32>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_deadline_key_remove::<T>(
+      CloseDeadlineOwner::Process,
+      n,
+      CloseDeadlineKeyGeometry::InteriorWide,
+    )?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::remove_deadline_member(fixture.actor);
+        if result.is_ok() {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+        } else {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(result)
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    assert_close_deadline_page::<T>(fixture)?;
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_trigger_key_remove_interior(n: Linear<1, 32>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_deadline_key_remove::<T>(
+      CloseDeadlineOwner::Trigger,
+      n,
+      CloseDeadlineKeyGeometry::InteriorWide,
+    )?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::remove_trigger_deadline_member(fixture.actor);
+        if result.is_ok() {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+        } else {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(result)
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    assert_close_deadline_page::<T>(fixture)?;
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_deadline_key_remove_upward(n: Linear<1, 32>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_deadline_key_remove::<T>(
+      CloseDeadlineOwner::Process,
+      n,
+      CloseDeadlineKeyGeometry::Upward,
+    )?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::remove_deadline_member(fixture.actor) {
+          Ok(removed) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(removed))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    assert_close_deadline_page::<T>(fixture)?;
+    Ok(())
+  }
+
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_trigger_key_remove_upward(n: Linear<1, 32>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_close_deadline_key_remove::<T>(
+      CloseDeadlineOwner::Trigger,
+      n,
+      CloseDeadlineKeyGeometry::Upward,
+    )?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::remove_trigger_deadline_member(fixture.actor) {
+          Ok(removed) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(removed))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    assert_close_deadline_page::<T>(fixture)?;
     Ok(())
   }
 
@@ -4214,18 +6249,36 @@ mod benches {
           .expect("real Manual occurrence is admitted");
         vec![actor_id]
       }
-      Trigger::AddressEvent { .. } => {
-        T::BenchmarkHelper::setup_address_event_ingress(
-          &identity.sovereign_account,
+      Trigger::AddressEvent {
+        ref asset_filter, ..
+      } => {
+        let asset = match asset_filter {
+          AssetFilter::Any => T::FeeNativeAssetId::get(),
+          AssetFilter::Whitelist(assets) => assets[0],
+        };
+        let amount = T::AssetOps::minimum_balance(asset).max(One::one());
+        T::AssetOps::mint(&identity.owner, asset, amount)
+          .expect("signed source owns the matched ingress asset");
+        let source_before = T::AssetOps::balance(&identity.owner, asset);
+        let custody_before = T::AssetOps::balance(&identity.sovereign_account, asset);
+        T::BenchmarkHelper::transfer_signed(
           &identity.owner,
-          One::one(),
+          &identity.sovereign_account,
+          asset,
+          amount,
         )
-        .expect("host prepares the initial AddressEvent");
-        assert!(T::BenchmarkHelper::run_address_event_ingress(
-          &identity.sovereign_account,
-          &identity.owner,
-          One::one(),
-        ));
+        .expect("real signed movement publishes the matched AddressEvent");
+        assert_eq!(
+          T::AssetOps::balance(&identity.owner, asset),
+          source_before - amount
+        );
+        // A native occurrence may additionally pay its Trigger fee from the recipient.
+        if asset != T::FeeNativeAssetId::get() {
+          assert_eq!(
+            T::AssetOps::balance(&identity.sovereign_account, asset),
+            custody_before + amount
+          );
+        }
         vec![actor_id]
       }
       _ => panic!("reachable retry fixture requires a supported Trigger"),
@@ -4716,7 +6769,9 @@ mod benches {
       assert!(CurrentBlockResourceState::<T>::get().is_none());
       let budget = T::BlockResourceBudget::get();
       let mut state = BlockResourceState::new(now);
-      state.begin_prepass().expect("benchmark prepass opens");
+      state
+        .begin_prepass(budget)
+        .expect("benchmark prepass opens");
       let mut reservation = state
         .reserve(
           budget.limits(),
@@ -4753,7 +6808,9 @@ mod benches {
       consecutive_blocks: 1,
     });
     let mut state = BlockResourceState::new(now);
-    state.begin_prepass().expect("benchmark state opens"); // deos-bypass: panic-owner — fresh benchmark state has no reservations.
+    state
+      .begin_prepass(T::BlockResourceBudget::get())
+      .expect("benchmark state opens"); // deos-bypass: panic-owner — fresh benchmark state has no reservations.
     state
       .open_external_phase()
       .expect("benchmark prepass closes"); // deos-bypass: panic-owner — preceding transition establishes empty PrepassExecuting.
@@ -8630,11 +10687,449 @@ mod benches {
     Ok(())
   }
 
-  /// Parked close repairs both independent deep clock indices in one shared finalizer.
+  fn populate_shared_parked_balance_peers<T: Config>(
+    actor_id: ActorId,
+  ) -> Result<Vec<ActorId>, BenchmarkError> {
+    let activation = ActorContractHeads::<T>::get(actor_id)
+      .expect("Parked target has a Contract")
+      .header
+      .parked_balance_activation
+      .expect("Parked target has balance watches");
+    let mut peers = Vec::new();
+    // One target plus 31 ordinarily completed peers fills each fixed-width registration page.
+    for index in 0..31 {
+      let mut contract = system_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        make_inert_contract_steps::<T>(),
+      )
+      .expect("peer Contract exists");
+      contract.parked_balance_activation = Some(activation.clone());
+      Pallet::<T>::create_system_actor(
+        RawOrigin::Root.into(),
+        account("shared-parked-close-peer", index, 0),
+        Mutability::Mutable,
+        Some(contract),
+      )?;
+      let peer = NextActorId::<T>::get() - 1;
+      Pallet::<T>::manual_trigger(RawOrigin::Root.into(), peer)?;
+      peers.push(peer);
+    }
+    for _ in 0..31 {
+      let next = frame_system::Pallet::<T>::block_number().saturating_add(One::one());
+      frame_system::Pallet::<T>::set_block_number(next);
+      Pallet::<T>::execute_cycle(Weight::MAX);
+      if peers
+        .iter()
+        .all(|peer| ParkedBalanceEpisodes::<T>::contains_key(peer))
+      {
+        break;
+      }
+    }
+    for peer in &peers {
+      assert!(matches!(
+        ActorProcesses::<T>::get(peer).and_then(|process| process.residence),
+        Some(ProcessResidence::Parked(_))
+      ));
+      assert!(ActorRunStateStore::<T>::get(peer).is_none());
+    }
+    let WakeupKey::Block(target_due) = DeadlineHandles::<T>::get(actor_id)
+      .expect("target owns a Block review")
+      .key
+    else {
+      panic!("Parked review uses the Block clock")
+    };
+    let earlier_reviews: Vec<_> = peers
+      .iter()
+      .filter_map(|peer| match DeadlineHandles::<T>::get(peer).unwrap().key {
+        WakeupKey::Block(due) if due < target_due => Some(due),
+        _ => None,
+      })
+      .collect();
+    if let Some(due) = earlier_reviews.iter().max().copied() {
+      // Keep the target at the heap root through real negative reviews, not handle rewrites.
+      frame_system::Pallet::<T>::set_block_number(due);
+      let next_review = target_due.checked_add(&One::one()).unwrap();
+      let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+      for _ in earlier_reviews {
+        assert!(matches!(
+          Pallet::<T>::process_next_due_block_deadline(
+            &mut meter,
+            ServiceResidenceKind::Pending,
+            due,
+            Some(WakeupKey::Block(next_review)),
+          ),
+          Ok(DueBlockDeadlineMutation::ReviewProcessed(
+            actor, DependencyReviewMutation::Rearmed(_),
+          )) if peers.contains(&actor.actor_id)
+        ));
+      }
+    }
+    Ok(peers)
+  }
+
+  fn parked_close_peer_snapshot<T: Config>(actor_id: ActorId) -> Vec<u8> {
+    let identity = Pallet::<T>::actor_identity(actor_id).expect("Parked peer remains live");
+    let plan = DependencyPlans::<T>::get(actor_id);
+    let registrations: Vec<_> = plan
+      .iter()
+      .map(|entry| {
+        (
+          entry,
+          DependencyRegistrations::<T>::get(entry.source, actor_id),
+          DependencyRegistrationPositions::<T>::get(entry.source, actor_id),
+        )
+      })
+      .collect();
+    let balances: Vec<_> = plan
+      .iter()
+      .map(|entry| {
+        let asset = DependencySourceBalances::<T>::get(entry.source)
+          .expect("shared peer watches a balance source");
+        (
+          asset,
+          T::AssetOps::balance(&identity.sovereign_account, asset),
+        )
+      })
+      .collect();
+    (
+      ActorSemanticStates::<T>::get(actor_id),
+      ActorProcesses::<T>::get(actor_id),
+      ActorContractHeads::<T>::get(actor_id),
+      ActorRunStateStore::<T>::get(actor_id),
+      ParkedBalanceEpisodes::<T>::get(actor_id),
+      PendingCheckOwners::<T>::get(actor_id),
+      ActorStateHolds::<T>::get(actor_id),
+      DeadlineHandles::<T>::get(actor_id),
+      TriggerDeadlineHandles::<T>::get(actor_id),
+      registrations,
+      balances,
+      T::AssetOps::balance(&identity.sovereign_account, T::FeeNativeAssetId::get()),
+    )
+      .encode()
+  }
+
+  struct ParkedDependencyReleaseFixture<T: Config> {
+    parked: ParkedTemporalOccurrence<T>,
+    evidence: ParkEvidence<BlockNumberFor<T>>,
+    state: ActiveActorStateOf<T>,
+    retained_authority: Vec<u8>,
+    peers: Vec<(ActorId, Vec<u8>)>,
+    review: DeadlineHandleOf<T>,
+    block_keys: u32,
+    review_peers: Vec<(ActorId, DeadlineHandleOf<T>)>,
+    registrations: Vec<(
+      DependencySourceId,
+      DependencyRegistrationPosition,
+      DependencyRegistrationPage,
+      DependencyRegistrationHeader,
+    )>,
+    balances: Vec<(T::AssetId, T::Balance)>,
+    events: u32,
+  }
+
+  fn close_retained_authority<T: Config>(actor_id: ActorId) -> Vec<u8> {
+    (
+      ActorSemanticStates::<T>::get(actor_id),
+      ActorProcesses::<T>::get(actor_id),
+      ActorContractHeads::<T>::get(actor_id),
+      ActorRunStateStore::<T>::get(actor_id),
+      ActorStateHolds::<T>::get(actor_id),
+      TriggerDeadlineHandles::<T>::get(actor_id),
+      ServiceHeader::<T>::get(),
+      ServiceNodes::<T>::get(actor_id),
+    )
+      .encode()
+  }
+
+  fn prepare_parked_dependency_release<T: Config>()
+  -> Result<ParkedDependencyReleaseFixture<T>, BenchmarkError> {
+    let parked = prepare_cadenced_parked_balance_occurrence::<T>()?;
+    let actor_id = parked.actor.actor_id;
+    let peers = populate_shared_parked_balance_peers::<T>(actor_id)?;
+    let Some(ProcessResidence::Parked(evidence)) =
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence)
+    else {
+      panic!("completed target owns a real Parked residence")
+    };
+    assert_eq!(
+      evidence.reason,
+      ParkNegativeReason::ParkedBalanceBelowThreshold
+    );
+    assert!(DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+    let review = DeadlineHandles::<T>::get(actor_id).unwrap();
+    let WakeupKey::Block(due) = review.key else {
+      panic!("Parked review uses the Block clock")
+    };
+    let block_keys = populate_canonical_deadline_index_with_tail::<T>(due, true);
+    assert!(block_keys > 64);
+    assert_eq!(block_keys % 32, 1);
+    assert_eq!(DeadlineIndexPositions::<T>::get(review.key), Some(0));
+    assert_eq!(
+      DeadlineIndexPages::<T>::get(WakeupClock::Block, u64::from(block_keys / 32))
+        .expect("deep review index has a singleton tail page")
+        .len(),
+      1
+    );
+    let review_peers = DeadlineHandles::<T>::iter()
+      .filter(|(peer, _)| *peer != actor_id)
+      .collect();
+    // A real third-party balance change publishes a causal event without qualifying the target.
+    // Portable mocks without a ledger hook use the same host publication boundary explicitly.
+    assert!(!PendingDependencyEvents::<T>::contains_key(actor_id));
+    let registration = DependencyPlans::<T>::get(actor_id)[0];
+    let source = registration.source;
+    let asset = DependencySourceBalances::<T>::get(source).unwrap();
+    let revision = DependencyRevisions::<T>::get(source).revision;
+    T::AssetOps::mint(
+      &account("parked-release-source-change", 0, 0),
+      asset,
+      T::AssetOps::minimum_balance(asset).max(One::one()),
+    )
+    .map_err(|_| BenchmarkError::Stop("host cannot publish a watched balance change"))?;
+    if DependencyRevisions::<T>::get(source).revision == revision {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Pallet::<T>::publish_balance_dependency_event(asset),
+        )
+      })?;
+    }
+    // With no further publication, each retained source needs at most its current frontier,
+    // one coalesced frontier and their completions. All of this dispatcher work is setup only.
+    let units: u64 = DependencyScanSourceNodes::<T>::iter_keys()
+      .map(|source| 2 * (DependencyRegistrationHeaders::<T>::get(source).next_index + 1))
+      .sum();
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    for _ in 0..units {
+      if PendingDependencyEvents::<T>::contains_key(actor_id) {
+        break;
+      }
+      Pallet::<T>::process_next_dependency_scan_unit(&mut meter)
+        .expect("source dispatcher publishes Pending without moving Parked authority");
+    }
+    let pending = PendingDependencyEvents::<T>::get(actor_id)
+      .expect("source publication creates a durable Pending event");
+    assert_eq!(pending.owner.actor, parked.actor);
+    assert_eq!(pending.source, source);
+    assert!(pending.revision > registration.handle.acknowledged_revision);
+    assert!(!PendingDependencyReviews::<T>::contains_key(actor_id));
+    assert!(DependencyTimedReviews::<T>::contains_key(actor_id));
+    let peers = peers
+      .into_iter()
+      .map(|peer| (peer, parked_close_peer_snapshot::<T>(peer)))
+      .collect();
+    let plan = DependencyPlans::<T>::get(actor_id);
+    assert_eq!(
+      plan.len(),
+      T::MaxWhitelistSize::get().min(T::MaxContractSteps::get()) as usize
+    );
+    let registrations = plan
+      .iter()
+      .map(|entry| {
+        let position = DependencyRegistrationPositions::<T>::get(entry.source, actor_id)
+          .expect("target registration has a reverse position");
+        let page = DependencyRegistrationPages::<T>::get(entry.source, position.page)
+          .expect("target registration page exists");
+        assert_eq!(page.entries.len(), 32);
+        assert!(page.entries.iter().all(Option::is_some));
+        assert_eq!(
+          page.encoded_size(),
+          DependencyRegistrationPage::max_encoded_len()
+        );
+        assert_eq!(page.entries[position.slot as usize], Some(entry.handle));
+        (
+          entry.source,
+          position,
+          page,
+          DependencyRegistrationHeaders::<T>::get(entry.source),
+        )
+      })
+      .collect();
+    let balances = plan
+      .iter()
+      .map(|entry| {
+        let asset = DependencySourceBalances::<T>::get(entry.source)
+          .expect("balance plan source retains its asset");
+        (
+          asset,
+          T::AssetOps::balance(&parked.identity.sovereign_account, asset),
+        )
+      })
+      .collect();
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("Parked release setup has complete live authority");
+    Ok(ParkedDependencyReleaseFixture {
+      parked,
+      evidence,
+      state: Pallet::<T>::active_actor_state(actor_id)
+        .expect("Parked setup has complete Active state"),
+      retained_authority: close_retained_authority::<T>(actor_id),
+      peers,
+      review,
+      block_keys,
+      review_peers,
+      registrations,
+      balances,
+      events: frame_system::Pallet::<T>::event_count(),
+    })
+  }
+
+  fn assert_parked_dependency_release<T: Config>(
+    fixture: ParkedDependencyReleaseFixture<T>,
+  ) -> Result<(), BenchmarkError> {
+    let actor_id = fixture.parked.actor.actor_id;
+    assert_eq!(
+      close_retained_authority::<T>(actor_id),
+      fixture.retained_authority
+    );
+    assert_eq!(frame_system::Pallet::<T>::event_count(), fixture.events);
+    assert!(!DependencyPlans::<T>::contains_key(actor_id));
+    assert!(!DependencyTimedReviews::<T>::contains_key(actor_id));
+    assert!(!PendingDependencyEvents::<T>::contains_key(actor_id));
+    assert!(!PendingDependencyReviews::<T>::contains_key(actor_id));
+    assert!(!PendingCheckOwners::<T>::contains_key(actor_id));
+    assert!(!ParkedBalanceEpisodes::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert_eq!(
+      DeadlineIndexLen::<T>::get(WakeupClock::Block),
+      fixture.block_keys - 1
+    );
+    assert!(!DeadlineIndexPositions::<T>::contains_key(
+      fixture.review.key
+    ));
+    assert!(!DeadlineIndexPages::<T>::contains_key(
+      WakeupClock::Block,
+      u64::from(fixture.block_keys / 32)
+    ));
+    for (peer, handle) in &fixture.review_peers {
+      assert_eq!(DeadlineHandles::<T>::get(peer), Some(*handle));
+    }
+    for (peer, snapshot) in &fixture.peers {
+      assert_eq!(parked_close_peer_snapshot::<T>(*peer), *snapshot);
+    }
+    for (source, position, mut page, mut header) in fixture.registrations {
+      page.entries[position.slot as usize] = None;
+      assert_eq!(
+        DependencyRegistrationPages::<T>::get(source, position.page),
+        Some(page)
+      );
+      assert_eq!(
+        DependencyRegistrationFreePositions::<T>::get(source, header.free_count),
+        Some(position)
+      );
+      header.count -= 1;
+      header.free_count += 1;
+      assert_eq!(DependencyRegistrationHeaders::<T>::get(source), header);
+      assert!(!DependencyRegistrations::<T>::contains_key(
+        source, actor_id
+      ));
+      assert!(!DependencyRegistrationPositions::<T>::contains_key(
+        source, actor_id
+      ));
+    }
+    assert_deadline_clock_indices::<T>(WakeupClock::Block);
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
+    // Complete the caller's remaining Close outside measurement. Release alone intentionally
+    // retains process/semantic authority; the finalizer removes the independent Tick Trigger.
+    let ActorSemanticState::Active(record) = ActorSemanticStates::<T>::get(actor_id).unwrap()
+    else {
+      panic!("release retains the semantic record")
+    };
+    ActorProcesses::<T>::remove(actor_id);
+    Pallet::<T>::finalize_actor_from_consumed_state(
+      actor_id,
+      fixture.state,
+      &record.admission,
+      CloseReason::OwnerInitiated,
+    )?;
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    for (asset, balance) in fixture.balances {
+      assert_eq!(
+        T::AssetOps::balance(&fixture.parked.identity.sovereign_account, asset),
+        balance
+      );
+    }
+    assert_eq!(
+      T::AssetOps::balance(
+        &fixture.parked.identity.sovereign_account,
+        T::FeeNativeAssetId::get()
+      ),
+      fixture.parked.balance
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("remaining Close preserves peers and global authority");
+    Ok(())
+  }
+
+  /// Pure maximum-watch release with a causal Pending event and deep Block-root removal.
+  /// Ordinary guards fill the admitted population up to the last singleton index-tail page.
+  /// No Service successor, independent Trigger removal or lifecycle destruction is measured.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_parked_dependency_release() -> Result<(), BenchmarkError> {
+    let fixture = prepare_parked_dependency_release::<T>()?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        match Pallet::<T>::release_parked_dependency_authority(
+          fixture.parked.actor,
+          fixture.evidence,
+        ) {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      });
+    }
+    assert_eq!(result, Ok(()));
+    assert_parked_dependency_release::<T>(fixture)?;
+    Ok(())
+  }
+
+  /// Parked close repairs both deep clock indices and fully occupied shared watch pages.
   #[benchmark(extra, pov_mode = Measured)]
   fn close_actor_user_parked_two_clock_both_deep() -> Result<(), BenchmarkError> {
     let fixture = prepare_cadenced_parked_balance_occurrence::<T>()?;
     let actor_id = fixture.actor.actor_id;
+    let peers = populate_shared_parked_balance_peers::<T>(actor_id)?;
+    let peer_snapshots: Vec<_> = peers
+      .iter()
+      .map(|peer| (*peer, parked_close_peer_snapshot::<T>(*peer)))
+      .collect();
+    let registration_pages: Vec<_> = DependencyPlans::<T>::get(actor_id)
+      .into_iter()
+      .map(|entry| {
+        let position = DependencyRegistrationPositions::<T>::get(entry.source, actor_id)
+          .expect("target watch owns a position");
+        let page = DependencyRegistrationPages::<T>::get(entry.source, position.page)
+          .expect("target watch owns a page");
+        assert_eq!(page.entries.len(), 32);
+        assert!(page.entries.iter().all(Option::is_some));
+        assert_eq!(
+          page.encoded_size(),
+          DependencyRegistrationPage::max_encoded_len()
+        );
+        assert_eq!(page.entries[position.slot as usize], Some(entry.handle));
+        let header = DependencyRegistrationHeaders::<T>::get(entry.source);
+        (entry.source, position, page, header)
+      })
+      .collect();
+    let watched_balances: Vec<_> = registration_pages
+      .iter()
+      .map(|(source, ..)| {
+        let asset = DependencySourceBalances::<T>::get(source).unwrap();
+        (
+          asset,
+          T::AssetOps::balance(&fixture.identity.sovereign_account, asset),
+        )
+      })
+      .collect();
     let review = DeadlineHandles::<T>::get(actor_id).expect("Parked review owns a Deadline");
     let WakeupKey::Block(review_due) = review.key else {
       panic!("Parked review uses the Block clock")
@@ -8691,7 +11186,8 @@ mod benches {
     );
     assert!(ActorStateHolds::<T>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("both deep clock indices have canonical authority");
+    Pallet::<T>::do_try_state()
+      .expect("deep clocks and shared watch pages have canonical authority");
     #[block]
     {
       Pallet::<T>::close_actor(
@@ -8708,6 +11204,35 @@ mod benches {
     assert!(!ActorStateHolds::<T>::contains_key(actor_id));
     assert!(!DeadlineIndexPositions::<T>::contains_key(review.key));
     assert!(!DeadlineIndexPositions::<T>::contains_key(tick));
+    for (peer, snapshot) in peer_snapshots {
+      assert_eq!(parked_close_peer_snapshot::<T>(peer), snapshot);
+    }
+    for (asset, balance) in watched_balances {
+      assert_eq!(
+        T::AssetOps::balance(&fixture.identity.sovereign_account, asset),
+        balance
+      );
+    }
+    for (source, position, mut page, mut header) in registration_pages {
+      page.entries[position.slot as usize] = None;
+      assert_eq!(
+        DependencyRegistrationPages::<T>::get(source, position.page),
+        Some(page)
+      );
+      assert_eq!(
+        DependencyRegistrationFreePositions::<T>::get(source, header.free_count),
+        Some(position)
+      );
+      header.count -= 1;
+      header.free_count += 1;
+      assert_eq!(DependencyRegistrationHeaders::<T>::get(source), header);
+      assert!(!DependencyRegistrations::<T>::contains_key(
+        source, actor_id
+      ));
+      assert!(!DependencyRegistrationPositions::<T>::contains_key(
+        source, actor_id
+      ));
+    }
     assert_eq!(
       DeadlineIndexLen::<T>::get(WakeupClock::Block),
       block_keys - 1
@@ -8732,6 +11257,8 @@ mod benches {
       ),
       fixture.balance
     );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("shared-page close preserves all surviving authority");
     Ok(())
   }
 
@@ -9587,6 +12114,515 @@ mod benches {
     })
   }
 
+  fn assert_deadline_process_authority_width<T: Config>(actor: ActorRef) {
+    let process = ActorProcesses::<T>::get(actor.actor_id).unwrap();
+    let handle = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
+    assert!(process.last_attempted.is_some());
+    assert_eq!(process.status, ProcessStatus::Serving);
+    assert_eq!(
+      process.residence,
+      Some(ProcessResidence::Deadline {
+        key: handle.key,
+        page: handle.page,
+        slot: handle.slot,
+      })
+    );
+    assert!(matches!(handle.key, WakeupKey::Block(_)));
+    assert_eq!(
+      handle.key.encoded_size(),
+      1 + BlockNumberFor::<T>::max_encoded_len()
+    );
+    // Some(Deadline { key, page, slot }) contributes two one-byte discriminants.
+    let maximum = process.generation.encoded_size()
+      + Option::<BlockNumberFor<T>>::max_encoded_len()
+      + ProcessStatus::<BlockNumberFor<T>>::Serving.encoded_size()
+      + 2
+      + handle.key.encoded_size()
+      + u64::max_encoded_len()
+      + u8::max_encoded_len();
+    assert_eq!(process.encoded_size(), maximum);
+    assert!(maximum < ActorProcessOf::<T>::max_encoded_len());
+    // Compare encoding only; never erase attempt history from the admitted Actor.
+    let mut never_attempted = process;
+    never_attempted.last_attempted = None;
+    assert_eq!(
+      never_attempted.encoded_size() + BlockNumberFor::<T>::max_encoded_len(),
+      maximum
+    );
+  }
+
+  /// Pure Block removal at the branch-legal Process width, reached by real failed attempts.
+  /// Run cancellation, independent Tick removal and lifecycle destruction remain unmeasured.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_deadline_retry_authority() -> Result<(), BenchmarkError> {
+    let fixture = prepare_busy_temporal_rearm::<T>(2, true)?;
+    let actor_id = fixture.actor.actor_id;
+    assert_deadline_process_authority_width::<T>(fixture.actor);
+    let state = Pallet::<T>::active_actor_state(actor_id).unwrap();
+    let ActorSemanticState::Active(record) = ActorSemanticStates::<T>::get(actor_id).unwrap()
+    else {
+      panic!("retry has Active semantic authority")
+    };
+    let retained = close_retained_authority::<T>(actor_id);
+    let handle = DeadlineHandles::<T>::get(actor_id).unwrap();
+    let count = DeadlineHeaders::<T>::get(handle.key).unwrap().count;
+    let peers: Vec<_> = DeadlineHandles::<T>::iter()
+      .filter(|(peer, _)| *peer != actor_id)
+      .collect();
+    let sovereign = state.identity.sovereign_account.clone();
+    let balance = T::AssetOps::balance(&sovereign, T::FeeNativeAssetId::get());
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::remove_deadline_member(fixture.actor);
+        if result.is_ok() {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+        } else {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(result)
+        }
+      });
+    }
+    assert_eq!(result, Ok(handle));
+    assert_eq!(close_retained_authority::<T>(actor_id), retained);
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert_eq!(
+      DeadlineHeaders::<T>::get(handle.key).map_or(0, |header| header.count),
+      count - 1
+    );
+    for (peer, expected) in peers {
+      assert_eq!(DeadlineHandles::<T>::get(peer), Some(expected));
+    }
+    assert_deadline_clock_indices::<T>(WakeupClock::Block);
+    assert_deadline_clock_indices::<T>(WakeupClock::Tick);
+    ActorProcesses::<T>::remove(actor_id);
+    Pallet::<T>::finalize_actor_from_consumed_state(
+      actor_id,
+      state,
+      &record.admission,
+      CloseReason::OwnerInitiated,
+    )?;
+    assert!(!ActorRunStateStore::<T>::contains_key(actor_id));
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ActorStateHolds::<T>::contains_key(actor_id));
+    assert_eq!(
+      T::AssetOps::balance(&sovereign, T::FeeNativeAssetId::get()),
+      balance
+    );
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("unmeasured cancellation and finalization preserve peers");
+    Ok(())
+  }
+
+  fn prepare_completed_temporal_authority<T: Config>(
+    one_shot: bool,
+    period: u64,
+  ) -> Result<(ActorRef, ActorSemanticRecordOf<T>), BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    T::BenchmarkHelper::advance_to_scheduler_tick(2)?;
+    let trigger = if one_shot {
+      Trigger::AtTime {
+        after_ticks: period,
+      }
+    } else {
+      Trigger::cadenced(period)
+    };
+    let contract = system_contract::<T>(
+      Schedule {
+        trigger,
+        cooldown_blocks: 0,
+      },
+      make_inert_contract_steps::<T>(),
+    )
+    .unwrap();
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      account("close-temporal-authority", 0, 0),
+      Mutability::Mutable,
+      Some(contract),
+    )?;
+    let actor_id = NextActorId::<T>::get() - 1;
+    let actor = Pallet::<T>::load_actor_ref(actor_id).unwrap();
+    let ActorSemanticState::Active(initial) = ActorSemanticStates::<T>::get(actor_id).unwrap()
+    else {
+      panic!("temporal Actor is Active")
+    };
+    assert!(initial.hot.last_cycle_block.is_none());
+    assert!(initial.hot.terminal_at.is_none());
+    let WakeupKey::Tick(due) = TriggerDeadlineHandles::<T>::get(actor_id).unwrap().key else {
+      panic!("temporal source uses Tick")
+    };
+    T::BenchmarkHelper::finalize_scheduler_clock()?;
+    T::BenchmarkHelper::advance_to_scheduler_tick(due)?;
+    prepare_temporal_deadline_frontier::<T>(actor, due);
+    Pallet::<T>::process_due_temporal_deadline(actor, due).unwrap();
+    let eligible = ServiceNodes::<T>::get(actor_id).unwrap().eligible_from;
+    frame_system::Pallet::<T>::set_block_number(eligible);
+    Pallet::<T>::execute_cycle(Weight::MAX);
+    if one_shot {
+      assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
+    } else {
+      assert_eq!(
+        Pallet::<T>::actor_identity(actor_id).unwrap().cycle_nonce,
+        1
+      );
+      assert!(TriggerDeadlineHandles::<T>::contains_key(actor_id));
+      assert!(
+        Pallet::<T>::actor_hot(actor_id)
+          .unwrap()
+          .last_cycle_block
+          .is_some()
+      );
+    }
+    Ok((actor, initial))
+  }
+
+  fn assert_completed_temporal_authority_width<T: Config>(record: &ActorSemanticRecordOf<T>) {
+    let class_gap = ActorClass::max_encoded_len() - record.identity.actor_class.encoded_size();
+    assert_eq!(
+      record.identity.encoded_size(),
+      ActorIdentityOf::<T>::max_encoded_len() - class_gap
+    );
+    match record.hot.trigger_runtime_state {
+      TriggerRuntimeState::Cadenced {
+        anchor_tick: Some(_),
+      } => assert!(record.hot.trigger_wakeup_pointer.is_some()),
+      TriggerRuntimeState::AtTime {
+        anchor_tick: Some(_),
+        consumed: true,
+      } => assert!(record.hot.trigger_wakeup_pointer.is_none()),
+      _ => panic!("completed temporal authority retains its real anchor and consumption state"),
+    }
+    assert!(record.hot.terminal_at.is_none());
+    assert!(record.hot.last_cycle_block.is_some());
+    assert!(record.hot.queue_ticket.is_none());
+    assert!(record.hot.wakeup_pointer.is_none());
+    // Canonical temporal authority excludes legacy placement fields and ScheduleWindow expiry.
+    // The host certificate fixes its compact Weight; never fabricate Weight::MAX to widen it.
+    let excluded = class_gap + Option::<u64>::max_encoded_len() - None::<u64>.encoded_size()
+      + Option::<WakeupPointer<BlockNumberFor<T>>>::max_encoded_len()
+      - None::<WakeupPointer<BlockNumberFor<T>>>.encoded_size()
+      + Option::<BlockNumberFor<T>>::max_encoded_len()
+      - None::<BlockNumberFor<T>>.encoded_size()
+      + TriggerRuntimeState::max_encoded_len()
+      - record.hot.trigger_runtime_state.encoded_size()
+      + Option::<TriggerWakeupPointer>::max_encoded_len()
+      - record.hot.trigger_wakeup_pointer.encoded_size()
+      + 2 * codec::Compact::<u64>::max_encoded_len()
+      - record.admission.maximum_lifecycle_weight.encoded_size();
+    assert_eq!(
+      record.encoded_size(),
+      ActorSemanticRecordOf::<T>::max_encoded_len() - excluded
+    );
+  }
+
+  fn prepare_completed_trigger_page<T: Config>(
+    geometry: CloseDeadlinePageGeometry,
+  ) -> Result<CloseDeadlinePageFixture<T>, BenchmarkError> {
+    let (actor, _) = prepare_completed_temporal_authority::<T>(false, 1_000)?;
+    let key = TriggerDeadlineHandles::<T>::get(actor.actor_id)
+      .unwrap()
+      .key;
+    let now = frame_system::Pallet::<T>::block_number();
+    frame_system::Pallet::<T>::set_block_number(now.saturating_add(1u32.into()));
+    Pallet::<T>::pause_actor(RawOrigin::Root.into(), actor.actor_id)?;
+    assert!(!TriggerDeadlineHandles::<T>::contains_key(actor.actor_id));
+    let guards = prepare_close_authority_page_prefix::<T>(key, geometry)?;
+    frame_system::Pallet::<T>::set_block_number(now.saturating_add(2u32.into()));
+    Pallet::<T>::resume_actor(RawOrigin::Root.into(), actor.actor_id)?;
+    let fixture =
+      finish_close_authority_page::<T>(CloseDeadlineOwner::Trigger, actor, key, guards, geometry)?;
+    assert_completed_temporal_authority_width::<T>(&fixture.record);
+    Ok(fixture)
+  }
+
+  fn prepare_close_authority_page_prefix<T: Config>(
+    key: WakeupKey<BlockNumberFor<T>>,
+    geometry: CloseDeadlinePageGeometry,
+  ) -> Result<Vec<ActorId>, BenchmarkError> {
+    let clock = key.clock();
+    let initial_keys = DeadlineIndexLen::<T>::get(clock);
+    if initial_keys > 47 {
+      return Err(BenchmarkError::Stop(
+        "host occupies the target index position",
+      ));
+    }
+    let floor = match clock {
+      // Keep guards future-dated through Opening and the final peer-close setup block.
+      WakeupClock::Block => {
+        WakeupKey::Block(frame_system::Pallet::<T>::block_number().saturating_add(4u32.into()))
+      }
+      WakeupClock::Tick => WakeupKey::Tick(
+        Pallet::<T>::current_scheduler_tick()
+          .unwrap()
+          .saturating_add(4),
+      ),
+    };
+    let mut prefix = DeadlineIndexPages::<T>::iter_prefix(clock)
+      .flat_map(|(_, page)| page.into_iter())
+      .max()
+      .unwrap_or(floor)
+      .max(floor);
+    for index in initial_keys..47 {
+      prefix = next_close_deadline_key::<T>(prefix)?;
+      if prefix >= key {
+        return Err(BenchmarkError::Stop(
+          "host leaves no room before the retained deadline",
+        ));
+      }
+      create_close_deadline_guard::<T>(1_000 + index, prefix)?;
+    }
+    let members = if geometry == CloseDeadlinePageGeometry::Unlink {
+      96
+    } else {
+      32
+    };
+    (0..members)
+      .map(|seed| create_close_deadline_guard::<T>(seed, key))
+      .collect()
+  }
+
+  fn finish_close_authority_page<T: Config>(
+    owner: CloseDeadlineOwner,
+    actor: ActorRef,
+    key: WakeupKey<BlockNumberFor<T>>,
+    mut guards: Vec<ActorId>,
+    geometry: CloseDeadlinePageGeometry,
+  ) -> Result<CloseDeadlinePageFixture<T>, BenchmarkError> {
+    let clock = key.clock();
+    let handle = close_deadline_handle::<T>(actor.actor_id, owner).unwrap();
+    let (target_page, population) = if geometry == CloseDeadlinePageGeometry::Unlink {
+      (3, 288)
+    } else {
+      (1, 160)
+    };
+    assert_eq!(guards.len(), target_page as usize * 32);
+    assert_eq!(
+      (handle.key, handle.page, handle.slot),
+      (key, target_page, 0)
+    );
+    guards.push(actor.actor_id);
+    for seed in guards.len() as u32..population {
+      guards.push(create_close_deadline_guard::<T>(seed, key)?);
+    }
+    assert_eq!(DeadlineIndexPositions::<T>::get(key), Some(47));
+    let mut suffix = key;
+    for index in 48..128 {
+      suffix = next_close_deadline_key::<T>(suffix)?;
+      create_close_deadline_guard::<T>(1_000 + index, suffix)?;
+    }
+    assert_eq!(DeadlineIndexLen::<T>::get(clock), 128);
+    for page in 0..4 {
+      assert_eq!(DeadlineIndexPages::<T>::get(clock, page).unwrap().len(), 32);
+    }
+    let close_at = frame_system::Pallet::<T>::block_number().saturating_add(1u32.into());
+    frame_system::Pallet::<T>::set_block_number(close_at);
+    let closed: Vec<_> = match geometry {
+      CloseDeadlinePageGeometry::Unlink => [32, 160]
+        .into_iter()
+        .chain(97..128)
+        .chain([192, 224])
+        .collect(),
+      CloseDeadlinePageGeometry::RetainFull => vec![64, 96],
+      #[cfg(test)]
+      CloseDeadlinePageGeometry::RetainVacant => vec![33, 64, 96],
+    };
+    for index in &closed {
+      Pallet::<T>::close_actor(RawOrigin::Root.into(), guards[*index])?;
+    }
+    assert!(
+      DeadlineIndexPages::<T>::iter_prefix(clock)
+        .flat_map(|(_, page)| page.into_iter())
+        .all(|key| match key {
+          WakeupKey::Block(due) => due > frame_system::Pallet::<T>::block_number(),
+          WakeupKey::Tick(due) => due > Pallet::<T>::current_scheduler_tick().unwrap(),
+        }),
+      "page geometry must not depend on skipping an already-due frontier"
+    );
+    capture_close_deadline_page_geometry::<T>(
+      owner,
+      actor,
+      geometry,
+      population,
+      closed.len() as u32,
+    )
+  }
+
+  struct CloseDeadlineAuthority<T: Config> {
+    actor: ActorRef,
+    key: WakeupKey<BlockNumberFor<T>>,
+    publish_at: BlockNumberFor<T>,
+  }
+
+  fn prepare_attempted_process_page<T: Config>(
+    geometry: CloseDeadlinePageGeometry,
+  ) -> Result<CloseDeadlinePageFixture<T>, BenchmarkError> {
+    let authority = prepare_retry_authority::<T>(1_000)?;
+    let guards = prepare_close_authority_page_prefix::<T>(authority.key, geometry)?;
+    let actor = publish_close_deadline_authority::<T>(&authority)?;
+    finish_close_authority_page::<T>(
+      CloseDeadlineOwner::Process,
+      actor,
+      authority.key,
+      guards,
+      geometry,
+    )
+  }
+
+  fn prepare_retry_authority<T: Config>(
+    cooldown: u32,
+  ) -> Result<CloseDeadlineAuthority<T>, BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    T::BenchmarkHelper::advance_to_scheduler_tick(2)?;
+    let owner: T::AccountId = account("close-process-authority", 0, 0);
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner.clone(),
+      Mutability::Mutable,
+      None,
+    )?;
+    let actor_id = NextActorId::<T>::get() - 1;
+    let identity = Pallet::<T>::actor_identity(actor_id).unwrap();
+    let (asset, total, recipient) =
+      T::BenchmarkHelper::setup_temporary_split_transfer(&owner, &identity.sovereign_account)?;
+    let steps = BoundedVec::try_from(vec![
+      Step {
+        precondition: Some(packed_predicate_clauses::<T>(
+          vec![Predicate::BlockNumberBelow {
+            threshold: Zero::zero(),
+          }],
+          1,
+        )),
+        task: ActorTask::StopCycle,
+        on_error: StepErrorPolicy::AbortCycle,
+      },
+      Step {
+        precondition: None,
+        task: ActorTask::SplitTransfer {
+          asset,
+          amount: AmountResolution::Fixed(total),
+          legs: BoundedVec::try_from(vec![
+            SplitLeg {
+              to: owner,
+              share: Perbill::from_percent(50),
+            },
+            SplitLeg {
+              to: recipient,
+              share: Perbill::from_percent(50),
+            },
+          ])
+          .unwrap(),
+        },
+        on_error: StepErrorPolicy::RetryLater { max_attempts: 2 },
+      },
+    ])
+    .unwrap();
+    let contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::Manual,
+        cooldown_blocks: cooldown,
+      },
+      steps,
+    )
+    .unwrap();
+    let now = frame_system::Pallet::<T>::block_number();
+    frame_system::Pallet::<T>::set_block_number(now.saturating_add(1u32.into()));
+    Pallet::<T>::activate_actor(RawOrigin::Root.into(), actor_id, contract)?;
+    let actor = Pallet::<T>::load_actor_ref(actor_id).unwrap();
+    Pallet::<T>::manual_trigger(RawOrigin::Root.into(), actor_id)?;
+    let opening = ServiceNodes::<T>::get(actor_id).unwrap().eligible_from;
+    frame_system::Pallet::<T>::set_block_number(opening);
+    Pallet::<T>::execute_cycle(Weight::MAX);
+    let run = Pallet::<T>::actor_run_state(actor_id).unwrap();
+    assert_eq!(run.cursor, 1);
+    assert!(run.suspension.is_none());
+    Ok(CloseDeadlineAuthority {
+      actor,
+      key: WakeupKey::Block(run.eligible_at.saturating_add(cooldown.into())),
+      publish_at: run.eligible_at,
+    })
+  }
+
+  fn publish_close_deadline_authority<T: Config>(
+    authority: &CloseDeadlineAuthority<T>,
+  ) -> Result<ActorRef, BenchmarkError> {
+    assert!(authority.publish_at >= frame_system::Pallet::<T>::block_number());
+    frame_system::Pallet::<T>::set_block_number(authority.publish_at);
+    let actor = authority.actor;
+    match authority.key {
+      WakeupKey::Block(due) => {
+        Pallet::<T>::execute_cycle(Weight::MAX);
+        let run = Pallet::<T>::actor_run_state(actor.actor_id).unwrap();
+        assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+        assert_eq!(run.suspension, Some(SuspensionReason::Temporary));
+        assert_eq!(run.eligible_at, due);
+        assert_deadline_process_authority_width::<T>(actor);
+      }
+      WakeupKey::Tick(_) => {
+        Pallet::<T>::resume_actor(RawOrigin::Root.into(), actor.actor_id)?;
+        let Some(ActorSemanticState::Active(record)) =
+          ActorSemanticStates::<T>::get(actor.actor_id)
+        else {
+          panic!("resumed temporal authority is Active")
+        };
+        assert_completed_temporal_authority_width::<T>(&record);
+      }
+    }
+    let owner = match authority.key.clock() {
+      WakeupClock::Block => CloseDeadlineOwner::Process,
+      WakeupClock::Tick => CloseDeadlineOwner::Trigger,
+    };
+    assert_eq!(
+      close_deadline_handle::<T>(actor.actor_id, owner)
+        .unwrap()
+        .key,
+      authority.key
+    );
+    Ok(actor)
+  }
+
+  /// Pure Block removal combines real attempt history, full-width neighbors and index pages.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_deadline_attempted_authority() -> Result<(), BenchmarkError> {
+    let fixture = prepare_attempted_process_page::<T>(CloseDeadlinePageGeometry::Unlink)?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::remove_deadline_member(fixture.actor);
+        if result.is_ok() {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+        } else {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(result)
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    assert_close_deadline_page::<T>(fixture)?;
+    Ok(())
+  }
+
+  /// Pure Tick removal combines completed-cycle authority, full-width neighbors and index pages.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn close_trigger_completed_authority() -> Result<(), BenchmarkError> {
+    let fixture = prepare_completed_trigger_page::<T>(CloseDeadlinePageGeometry::Unlink)?;
+    let result;
+    #[block]
+    {
+      result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::remove_trigger_deadline_member(fixture.actor);
+        if result.is_ok() {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+        } else {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(result)
+        }
+      });
+    }
+    assert_eq!(result, Ok(fixture.handle));
+    assert_close_deadline_page::<T>(fixture)?;
+    Ok(())
+  }
+
   /// Signed close releases one ordinary suspended Block retry residence and its independent
   /// minimum Tick Trigger, repairing the full temporal index without executing the retry Task.
   #[benchmark(extra, pov_mode = Measured)]
@@ -10302,21 +13338,28 @@ mod benches {
     assert_eq!(state.contract.steps.len(), 1);
     assert!(state.contract.steps[0].precondition.is_none());
     assert!(ActorStateHolds::<T>::get(actor_id).is_none());
-    let FundingSourcePolicy::SignedAllowlist(sources) = &state.contract.funding else {
-      panic!("real System Transfer owns the maximum signed funding head")
-    };
-    assert_eq!(sources.len() as u32, T::MaxWhitelistSize::get());
-    assert!(sources.contains(&state.identity.owner));
     let ActorTask::Transfer {
       asset,
       ref to,
-      amount: AmountResolution::Percent(percent),
+      amount,
     } = state.contract.steps[0].task
     else {
-      panic!("real System Transfer owns a positive Percent Step")
+      panic!("real System Transfer owns a Transfer Step")
     };
-    assert_eq!(percent, Perbill::from_percent(50));
-    assert_ne!(asset, T::FeeNativeAssetId::get());
+    match (&state.contract.funding, amount) {
+      (FundingSourcePolicy::SignedAllowlist(sources), AmountResolution::Percent(percent)) => {
+        assert_eq!(sources.len() as u32, T::MaxWhitelistSize::get());
+        assert!(sources.contains(&state.identity.owner));
+        assert_eq!(percent, Perbill::from_percent(50));
+        assert_ne!(asset, T::FeeNativeAssetId::get());
+      }
+      (FundingSourcePolicy::RuntimePolicy, AmountResolution::Fixed(amount)) => {
+        assert_eq!(asset, T::FeeNativeAssetId::get());
+        assert_eq!(amount, T::AssetOps::minimum_balance(asset));
+        assert!(!amount.is_zero());
+      }
+      _ => panic!("System Transfer fixture has a declared header/amount profile"),
+    }
     let sovereign = state.identity.sovereign_account;
     let source_before = T::AssetOps::balance(&sovereign, asset);
     assert!(source_before > T::AssetOps::minimum_balance(asset));
@@ -10367,8 +13410,12 @@ mod benches {
     let native = T::FeeNativeAssetId::get();
     assert_eq!(
       T::AssetOps::balance(&witness.sovereign, native),
-      witness.sovereign_native_before,
-      "System Transfer must not pay User fees"
+      if witness.asset == native {
+        witness.sovereign_native_before - (witness.source_before - source_after)
+      } else {
+        witness.sovereign_native_before
+      },
+      "System Transfer must debit only its Task amount, never User fees"
     );
     assert_eq!(
       T::AssetOps::balance(&T::FeeSink::get(), native),
@@ -13603,6 +16650,140 @@ mod benches {
     Ok(())
   }
 
+  /// Diagnostic complete Service turn using the same positive System Transfer fixture as the
+  /// inner profile. Physical measurement includes the Task effect; ledger categories stay separate.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_service_system_transfer_header_max()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, count) =
+      prepare_reachable_opening::<T>(0, ReachableOpeningProfile::SystemTransferHeaderMax)?;
+    assert_eq!(count, 1);
+    let witness = capture_system_transfer_header::<T>(actor_id);
+    let now = frame_system::Pallet::<T>::block_number();
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("real Service actor exists");
+    assert_eq!(ServiceHeader::<T>::get().count, 1);
+    assert_eq!(ServiceHeader::<T>::get().cursor, Some(actor));
+    let limits = T::BlockResourceBudget::get().limits();
+    let mut resources = BlockResourceState::new(now);
+    resources
+      .begin_prepass(T::BlockResourceBudget::get())
+      .expect("fixture prepass opens");
+    resources
+      .open_external_phase()
+      .expect("fixture external phase opens");
+    resources.begin_drain().expect("fixture drain opens");
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    let result;
+    #[block]
+    {
+      result = Pallet::<T>::service_canonical_round_head_with_resources(
+        &mut meter,
+        now,
+        &mut resources,
+        limits,
+        BlockResourceDomain::ActorDrainEffect,
+      );
+    }
+    assert_eq!(result, Ok(ServiceRoundEncounter::Eligible(actor)));
+    assert_eq!(resources.outstanding_reservations(), 0);
+    let usage = resources.usage();
+    assert_eq!(
+      meter.consumed(),
+      usage
+        .actor_control_used()
+        .saturating_add(usage.actor_effect_used())
+    );
+    assert_system_transfer_header::<T>(actor_id, witness, usage.actor_effect_used());
+    assert_eq!(ServiceHeader::<T>::get().count, 1);
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("complete System Transfer preserves canonical state");
+    Ok(())
+  }
+
+  /// Diagnostic W1-shaped Native/Fixed turn. Singleton topology and benchmark genesis remain
+  /// different from the full-block population; this profile makes no throughput claim.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_service_system_transfer_native_fixed()
+  -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(0u32.into());
+    let native = T::FeeNativeAssetId::get();
+    let amount = T::AssetOps::minimum_balance(native);
+    assert!(
+      !amount.is_zero(),
+      "Native/Fixed fixture requires a nonzero ledger minimum"
+    );
+    let recipient = measured_account::<T>("service-native-recipient", 0);
+    let actor_id = bench_create_system_with_plan::<T>(
+      9_010,
+      BoundedVec::try_from(alloc::vec![Step {
+        precondition: None,
+        task: ActorTask::Transfer {
+          asset: native,
+          to: recipient,
+          amount: AmountResolution::Fixed(amount)
+        },
+        on_error: StepErrorPolicy::AbortCycle,
+      }])
+      .expect("one Step fits"),
+    );
+    let identity = Pallet::<T>::actor_identity(actor_id).expect("System actor exists");
+    let funding = amount
+      .checked_mul(&1_000u32.saturated_into())
+      .expect("fixture funding fits");
+    T::AssetOps::mint(&identity.sovereign_account, native, funding).expect("source is funded");
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    Pallet::<T>::manual_trigger(RawOrigin::Root.into(), actor_id).expect("real Manual readiness");
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let witness = capture_system_transfer_header::<T>(actor_id);
+    assert_distinct_measured_accounts::<T>(&[
+      &identity.owner,
+      &witness.sovereign,
+      &witness.recipient,
+      &T::FeeSink::get(),
+    ]);
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("real Service actor exists");
+    assert_eq!(ServiceHeader::<T>::get().count, 1);
+    assert_eq!(ServiceHeader::<T>::get().cursor, Some(actor));
+    let limits = T::BlockResourceBudget::get().limits();
+    let mut resources = BlockResourceState::new(now);
+    resources
+      .begin_prepass(T::BlockResourceBudget::get())
+      .expect("fixture prepass opens");
+    resources
+      .open_external_phase()
+      .expect("fixture external phase opens");
+    resources.begin_drain().expect("fixture drain opens");
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    let result;
+    #[block]
+    {
+      result = Pallet::<T>::service_canonical_round_head_with_resources(
+        &mut meter,
+        now,
+        &mut resources,
+        limits,
+        BlockResourceDomain::ActorDrainEffect,
+      );
+    }
+    assert_eq!(result, Ok(ServiceRoundEncounter::Eligible(actor)));
+    assert_eq!(resources.outstanding_reservations(), 0);
+    let usage = resources.usage();
+    assert_eq!(
+      meter.consumed(),
+      usage
+        .actor_control_used()
+        .saturating_add(usage.actor_effect_used())
+    );
+    assert_eq!(
+      T::AssetOps::balance(&witness.sovereign, native),
+      witness.source_before - amount
+    );
+    assert_system_transfer_header::<T>(actor_id, witness, usage.actor_effect_used());
+    assert_eq!(ServiceHeader::<T>::get().count, 1);
+    Ok(())
+  }
+
   /// Diagnostic: real positive System Burn with maximum signed funding-policy width.
   #[benchmark(extra, pov_mode = Measured)]
   fn scheduler_inner_opening_system_burn_header_max()
@@ -14539,7 +17720,7 @@ mod benches {
     let consumed_before = limits.actor_control().saturating_sub(remaining);
     let mut resource_state = BlockResourceState::new(now);
     resource_state
-      .begin_prepass()
+      .begin_prepass(T::BlockResourceBudget::get())
       .expect("benchmark prepass opens");
     resource_state
       .open_external_phase()
@@ -15832,14 +19013,12 @@ mod benches {
     let now = frame_system::Pallet::<T>::block_number();
     let budget = T::BlockResourceBudget::get();
     let mut state = BlockResourceState::new(now);
-    state.begin_prepass().expect("benchmark state opens"); // deos-bypass: panic-owner — fresh benchmark state has no reservations.
+    state.begin_prepass(budget).expect("benchmark state opens"); // deos-bypass: panic-owner — fresh benchmark state has no reservations.
     state
       .open_external_phase()
       .expect("benchmark prepass closes"); // deos-bypass: panic-owner — preceding transition establishes empty PrepassExecuting.
     state.begin_drain().expect("benchmark drain opens"); // deos-bypass: panic-owner — preceding transition establishes ExternalPhase.
-    state
-      .finish_drain(budget, budget.fixed_envelope())
-      .expect("benchmark state reconciles"); // deos-bypass: panic-owner — empty usage plus the configured fixed envelope exactly satisfies the budget.
+    state.finish_drain().expect("benchmark state reconciles"); // deos-bypass: panic-owner — empty usage plus the configured fixed envelope exactly satisfies the budget.
     CurrentBlockResourceState::<T>::put(state);
     #[block]
     {
@@ -17984,6 +21163,1308 @@ mod benches {
   fn cadenced_parked_balance_occurrence_wakes_after_negative_review() {
     new_test_ext().execute_with(|| {
       Pallet::<Test>::test_benchmark_cadenced_parked_balance_occurrence().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_deadline_page_profiles_exclude_verification_teardown() {
+    for owner in [CloseDeadlineOwner::Process, CloseDeadlineOwner::Trigger] {
+      new_test_ext().execute_with(|| {
+        let before = ActiveActorCount::<Test>::get();
+        let clock = match owner {
+          CloseDeadlineOwner::Process => WakeupClock::Block,
+          CloseDeadlineOwner::Trigger => WakeupClock::Tick,
+        };
+        let index_guards = 127 - DeadlineIndexLen::<Test>::get(clock);
+        match owner {
+          CloseDeadlineOwner::Process => _close_deadline_page_unlink::<Test>(false).unwrap(),
+          CloseDeadlineOwner::Trigger => _close_trigger_page_unlink::<Test>(false).unwrap(),
+        }
+        // Pure removal leaves the target, its 252 source peers and every index guard alive.
+        assert_eq!(ActiveActorCount::<Test>::get(), before + 253 + index_guards);
+      });
+      new_test_ext().execute_with(|| {
+        let before = ActiveActorCount::<Test>::get();
+        let clock = match owner {
+          CloseDeadlineOwner::Process => WakeupClock::Block,
+          CloseDeadlineOwner::Trigger => WakeupClock::Tick,
+        };
+        let index_guards = 127 - DeadlineIndexLen::<Test>::get(clock);
+        let actor_id = NextActorId::<Test>::get();
+        match owner {
+          CloseDeadlineOwner::Process => {
+            _close_deadline_page_retain::<Test>(false).unwrap();
+            assert!(
+              ActorProcesses::<Test>::get(actor_id)
+                .unwrap()
+                .last_attempted
+                .is_some()
+            );
+            assert_eq!(
+              ActorRunStateStore::<Test>::get(actor_id)
+                .unwrap()
+                .suspension,
+              Some(SuspensionReason::Temporary)
+            );
+            assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
+          }
+          CloseDeadlineOwner::Trigger => {
+            _close_trigger_page_retain::<Test>(false).unwrap();
+            let Some(ActorSemanticState::Active(record)) =
+              ActorSemanticStates::<Test>::get(actor_id)
+            else {
+              panic!("pure removal retains temporal authority")
+            };
+            assert_completed_temporal_authority_width::<Test>(&record);
+            assert!(!TriggerDeadlineHandles::<Test>::contains_key(actor_id));
+          }
+        }
+        assert_eq!(ActiveActorCount::<Test>::get(), before + 158 + index_guards);
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_deadline_page_unlink_preserves_four_neighbors_and_close_boundary() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_deadline_page_unlink().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_trigger_page_unlink().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_deadline_page_retention_preserves_vacancies_and_close_boundary() {
+    use polkadot_sdk::frame_support::storage::{TransactionOutcome, with_transaction_unchecked};
+
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_deadline_page_retain().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_trigger_page_retain().unwrap();
+    });
+    for owner in [CloseDeadlineOwner::Process, CloseDeadlineOwner::Trigger] {
+      new_test_ext().execute_with(|| {
+        let fixture = match owner {
+          CloseDeadlineOwner::Process => {
+            prepare_attempted_process_page::<Test>(CloseDeadlinePageGeometry::RetainVacant)
+          }
+          CloseDeadlineOwner::Trigger => {
+            prepare_completed_trigger_page::<Test>(CloseDeadlinePageGeometry::RetainVacant)
+          }
+        }
+        .unwrap();
+        let result = with_transaction_unchecked(|| {
+          let removed = match owner {
+            CloseDeadlineOwner::Process => Pallet::<Test>::remove_deadline_member(fixture.actor),
+            CloseDeadlineOwner::Trigger => {
+              Pallet::<Test>::remove_trigger_deadline_member(fixture.actor)
+            }
+          };
+          if removed.is_ok() {
+            TransactionOutcome::Commit(removed)
+          } else {
+            TransactionOutcome::Rollback(removed)
+          }
+        });
+        assert_eq!(result, Ok(fixture.handle));
+        assert_close_deadline_page::<Test>(fixture).unwrap();
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_deadline_key_removal_covers_tail_page_outcomes() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_deadline_key_remove().unwrap();
+    });
+    for tail_entries in [1, 32] {
+      new_test_ext().execute_with(|| {
+        frame_system::Pallet::<Test>::set_block_number(1);
+        Pallet::<Test>::create_system_actor(
+          RawOrigin::Root.into(),
+          account("close-key-host-prefix", 0, 0),
+          Mutability::Mutable,
+          system_contract::<Test>(
+            Schedule {
+              trigger: Trigger::at_time(1),
+              cooldown_blocks: 0,
+            },
+            make_inert_contract_steps::<Test>(),
+          ),
+        )
+        .unwrap();
+        let earlier = NextActorId::<Test>::get() - 1;
+        // The Pallet test wrapper wipes storage; retain post-state for host-prefix assertions.
+        _close_trigger_key_remove::<Test>(tail_entries, true).unwrap();
+        // Preparing completed temporal authority services the earlier one-shot normally.
+        assert_eq!(
+          Pallet::<Test>::actor_identity(earlier).unwrap().cycle_nonce,
+          1
+        );
+        assert!(!Pallet::<Test>::actor_hot(earlier).unwrap().pending_signal);
+        assert!(ActorRunStateStore::<Test>::get(earlier).is_none());
+        assert!(ServiceNodes::<Test>::contains_key(earlier));
+        assert!(!TriggerDeadlineHandles::<Test>::contains_key(earlier));
+      });
+      for owner in [CloseDeadlineOwner::Process, CloseDeadlineOwner::Trigger] {
+        new_test_ext().execute_with(|| {
+          let target = NextActorId::<Test>::get();
+          match owner {
+            CloseDeadlineOwner::Process => {
+              _close_deadline_key_remove::<Test>(tail_entries, false).unwrap()
+            }
+            CloseDeadlineOwner::Trigger => {
+              _close_trigger_key_remove::<Test>(tail_entries, false).unwrap()
+            }
+          }
+          assert!(ActorSemanticStates::<Test>::contains_key(target));
+          assert!(ActorProcesses::<Test>::contains_key(target));
+          assert!(close_deadline_handle::<Test>(target, owner).is_none());
+          match owner {
+            CloseDeadlineOwner::Process => {
+              assert!(
+                ActorProcesses::<Test>::get(target)
+                  .unwrap()
+                  .last_attempted
+                  .is_some()
+              );
+              assert!(ActorRunStateStore::<Test>::contains_key(target));
+            }
+            CloseDeadlineOwner::Trigger => {
+              let Some(ActorSemanticState::Active(record)) =
+                ActorSemanticStates::<Test>::get(target)
+              else {
+                panic!("pure key removal retains temporal authority")
+              };
+              assert_completed_temporal_authority_width::<Test>(&record);
+            }
+          }
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_deadline_interior_descent_crosses_more_write_pages_than_leftmost_path() {
+    use polkadot_sdk::frame_support::storage::{TransactionOutcome, with_transaction_unchecked};
+    let full_keys = 1_024u32;
+    let full_prefix = full_keys - 32;
+    // Turn right at slot 15: slot 32 occupies a new page, unlike left child 31.
+    let mut path = vec![0u32, 1, 3, 7, 15];
+    let mut position = 32;
+    while position < full_prefix {
+      path.push(position);
+      position = position * 2 + 1;
+    }
+    for tail_entries in [1u32, 32] {
+      for owner in [CloseDeadlineOwner::Process, CloseDeadlineOwner::Trigger] {
+        new_test_ext().execute_with(|| {
+          frame_system::Pallet::<Test>::set_block_number(1);
+          let keys = full_prefix + tail_entries;
+          let mut peers = Vec::new();
+          let mut heap = Vec::new();
+          for index in 0..keys {
+            // Ancestor-closed low keys select the path without fabricating heap storage.
+            let offset = if path.contains(&index) {
+              index + 1
+            } else {
+              full_keys + index + 1
+            };
+            let key = match owner {
+              CloseDeadlineOwner::Process => WakeupKey::Block(u64::from(1_000 + offset)),
+              CloseDeadlineOwner::Trigger => WakeupKey::Tick(u64::from(1_000 + offset)),
+            };
+            let actor_id = create_close_deadline_guard::<Test>(index, key).unwrap();
+            assert_eq!(DeadlineIndexPositions::<Test>::get(key), Some(index));
+            heap.push(key);
+            peers.push((
+              Pallet::<Test>::load_actor_ref(actor_id).unwrap(),
+              close_deadline_handle::<Test>(actor_id, owner).unwrap(),
+            ));
+          }
+          let (actor, handle) = peers.remove(path[1] as usize);
+          let clock = handle.key.clock();
+          assert_eq!(DeadlineIndexLen::<Test>::get(clock), keys);
+          assert_eq!(DeadlineHeaders::<Test>::get(handle.key).unwrap().count, 1);
+          let tail = heap.pop().unwrap();
+          assert!(heap.iter().all(|key| *key < tail));
+          for pair in path[1..].windows(2) {
+            heap[pair[0] as usize] = heap[pair[1] as usize];
+          }
+          heap[*path.last().unwrap() as usize] = tail;
+          let mut pages: Vec<_> = DeadlineIndexPages::<Test>::iter_prefix(clock).collect();
+          let mut changed_pages = 0;
+          pages.retain_mut(|(page_id, page)| {
+            let first = *page_id as usize * 32;
+            if first >= heap.len() {
+              changed_pages += 1;
+              return false;
+            }
+            let end = (first + 32).min(heap.len());
+            changed_pages += usize::from(page.as_slice() != &heap[first..end]);
+            page.truncate(end - first);
+            for (slot, key) in page.iter_mut().enumerate() {
+              *key = heap[first + slot];
+            }
+            true
+          });
+          let mut leftmost_pages = vec![full_prefix / 32];
+          let mut position = 0;
+          while position < keys - 1 {
+            leftmost_pages.push(position / 32);
+            position = position * 2 + 1;
+          }
+          leftmost_pages.sort_unstable();
+          leftmost_pages.dedup();
+          assert_eq!((changed_pages, leftmost_pages.len()), (7, 6));
+          frame_system::Pallet::<Test>::set_block_number(2);
+          let fixture = capture_close_deadline_fixture::<Test>(
+            owner,
+            actor,
+            None,
+            Vec::new(),
+            (keys - 1, pages).encode(),
+            peers,
+          );
+          let result = with_transaction_unchecked(|| {
+            let removed = match owner {
+              CloseDeadlineOwner::Process => Pallet::<Test>::remove_deadline_member(actor),
+              CloseDeadlineOwner::Trigger => Pallet::<Test>::remove_trigger_deadline_member(actor),
+            };
+            if removed.is_ok() {
+              TransactionOutcome::Commit(removed)
+            } else {
+              TransactionOutcome::Rollback(removed)
+            }
+          });
+          assert_eq!(result, Ok(handle));
+          assert_close_deadline_page::<Test>(fixture).unwrap();
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_deadline_process_authority_width_requires_attempt_history() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_deadline_retry_authority().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      _close_deadline_retry_authority::<Test>(false).unwrap();
+      let (actor_id, process) = ActorProcesses::<Test>::iter()
+        .find(|(actor_id, process)| {
+          process.last_attempted.is_some() && ActorRunStateStore::<Test>::contains_key(actor_id)
+        })
+        .expect("pure removal retains the attempted Run and process");
+      assert!(matches!(
+        process.residence,
+        Some(ProcessResidence::Deadline { .. })
+      ));
+      assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
+      assert!(TriggerDeadlineHandles::<Test>::contains_key(actor_id));
+      assert!(ActorStateHolds::<Test>::contains_key(actor_id));
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_deadline_attempted_authority_preserves_width_and_geometry() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_deadline_attempted_authority().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      let actor_id = NextActorId::<Test>::get();
+      _close_deadline_attempted_authority::<Test>(false).unwrap();
+      let process = ActorProcesses::<Test>::get(actor_id).unwrap();
+      assert!(process.last_attempted.is_some());
+      assert!(matches!(
+        process.residence,
+        Some(ProcessResidence::Deadline { .. })
+      ));
+      assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
+      assert!(ActorSemanticStates::<Test>::contains_key(actor_id));
+      assert_eq!(
+        ActorRunStateStore::<Test>::get(actor_id)
+          .unwrap()
+          .suspension,
+        Some(SuspensionReason::Temporary)
+      );
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_trigger_authority_width_covers_legal_temporal_shapes() {
+    for trigger in [Trigger::AtTime { after_ticks: 12 }, Trigger::cadenced(12)] {
+      new_test_ext().execute_with(|| {
+        let mut contract = system_contract::<Test>(
+          Schedule {
+            trigger,
+            cooldown_blocks: 0,
+          },
+          make_inert_contract_steps::<Test>(),
+        )
+        .unwrap();
+        contract.window = Some(ScheduleWindow {
+          start: 1,
+          end: 1_000,
+        });
+        polkadot_sdk::frame_support::assert_noop!(
+          Pallet::<Test>::create_system_actor(
+            RawOrigin::Root.into(),
+            account("invalid-temporal-window", 0, 0),
+            Mutability::Mutable,
+            Some(contract),
+          ),
+          Error::<Test>::InvalidScheduleWindow
+        );
+      });
+    }
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_trigger_completed_authority().unwrap();
+    });
+    let completed_size = new_test_ext().execute_with(|| {
+      let actor_id = NextActorId::<Test>::get();
+      _close_trigger_completed_authority::<Test>(false).unwrap();
+      let ActorSemanticState::Active(record) = ActorSemanticStates::<Test>::get(actor_id).unwrap()
+      else {
+        panic!("pure removal must retain Active authority")
+      };
+      assert_completed_temporal_authority_width::<Test>(&record);
+      assert!(ActorProcesses::<Test>::contains_key(actor_id));
+      assert!(!TriggerDeadlineHandles::<Test>::contains_key(actor_id));
+      record.encoded_size()
+    });
+    let one_shot_size = new_test_ext().execute_with(|| {
+      let (_, initial) = prepare_completed_temporal_authority::<Test>(true, 1_000).unwrap();
+      assert!(matches!(
+        initial.hot.trigger_runtime_state,
+        TriggerRuntimeState::AtTime {
+          consumed: false,
+          ..
+        }
+      ));
+      assert!(initial.hot.last_cycle_block.is_none());
+      initial.encoded_size()
+    });
+    // AtTime adds one consumed flag, but its source disappears before any completed cycle.
+    assert_eq!(
+      completed_size + 1,
+      one_shot_size + BlockNumberFor::<Test>::max_encoded_len()
+    );
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_deadline_tail_removal_preserves_the_index_prefix() {
+    use polkadot_sdk::frame_support::storage::{TransactionOutcome, with_transaction_unchecked};
+    // Empty the whole heap, retain a full tail page, or reclaim a singleton tail page.
+    for keys in [1u32, 32, 33] {
+      for owner in [CloseDeadlineOwner::Process, CloseDeadlineOwner::Trigger] {
+        new_test_ext().execute_with(|| {
+          frame_system::Pallet::<Test>::set_block_number(1);
+          let mut peers = Vec::new();
+          for index in 0..keys {
+            let key = match owner {
+              CloseDeadlineOwner::Process => WakeupKey::Block(u64::from(1_000 + index)),
+              CloseDeadlineOwner::Trigger => WakeupKey::Tick(u64::from(1_000 + index)),
+            };
+            let actor_id = create_close_deadline_guard::<Test>(index, key).unwrap();
+            peers.push((
+              Pallet::<Test>::load_actor_ref(actor_id).unwrap(),
+              close_deadline_handle::<Test>(actor_id, owner).unwrap(),
+            ));
+          }
+          let (actor, handle) = peers.pop().unwrap();
+          let clock = handle.key.clock();
+          assert_eq!(DeadlineIndexLen::<Test>::get(clock), keys);
+          assert_eq!(
+            DeadlineIndexPositions::<Test>::get(handle.key),
+            Some(keys - 1)
+          );
+          assert_eq!(DeadlineHeaders::<Test>::get(handle.key).unwrap().count, 1);
+          let mut pages: Vec<_> = DeadlineIndexPages::<Test>::iter_prefix(clock).collect();
+          let (_, tail) = pages
+            .iter_mut()
+            .find(|(page_id, _)| *page_id == u64::from((keys - 1) / 32))
+            .unwrap();
+          assert_eq!(tail.pop(), Some(handle.key));
+          pages.retain(|(_, page)| !page.is_empty());
+          frame_system::Pallet::<Test>::set_block_number(2);
+          let fixture = capture_close_deadline_fixture::<Test>(
+            owner,
+            actor,
+            None,
+            Vec::new(),
+            (keys - 1, pages).encode(),
+            peers,
+          );
+          let result = with_transaction_unchecked(|| {
+            let removed = match owner {
+              CloseDeadlineOwner::Process => Pallet::<Test>::remove_deadline_member(actor),
+              CloseDeadlineOwner::Trigger => Pallet::<Test>::remove_trigger_deadline_member(actor),
+            };
+            if removed.is_ok() {
+              TransactionOutcome::Commit(removed)
+            } else {
+              TransactionOutcome::Rollback(removed)
+            }
+          });
+          assert_eq!(result, Ok(handle));
+          assert_close_deadline_page::<Test>(fixture).unwrap();
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_deadline_descent_geometry_covers_interior_suffixes() {
+    for (maximum, prefix, selected_reads, read_bound, write_bound) in
+      [(1_024u32, 992, 11, 11, 7), (10_000, 9952, 17, 18, 11)]
+    {
+      let last = maximum - 1;
+      let fresh_tail = maximum.div_ceil(32);
+      assert!(fresh_tail * 32 > last);
+      let mut maximum_reads = 0;
+      let mut maximum_writes = 0;
+      // Every smaller heap prunes child reads from this tree. A distinct tail page bounds
+      // every possible alias; no corresponding storage page is fabricated or measured.
+      for end in 0..last {
+        let mut path = vec![end];
+        let mut index = end;
+        while index > 0 {
+          index = (index - 1) / 2;
+          path.push(index);
+        }
+        path.reverse();
+        let (root_reads, root_writes) = close_deadline_descent_pages(&path, last, fresh_tail);
+        maximum_reads = maximum_reads.max(root_reads.len());
+        maximum_writes = maximum_writes.max(root_writes.len());
+        let (short_reads, short_writes) = close_deadline_descent_pages(&path, end + 1, fresh_tail);
+        assert!(short_reads.iter().all(|page| root_reads.contains(page)));
+        assert_eq!(short_writes, root_writes);
+        for start in 0..path.len() {
+          let (suffix_reads, suffix_writes) =
+            close_deadline_descent_pages(&path[start..], last, fresh_tail);
+          assert!(suffix_reads.iter().all(|page| root_reads.contains(page)));
+          assert!(suffix_writes.iter().all(|page| root_writes.contains(page)));
+          // Ascending repair reads each moving node and its parent, then checks the
+          // stopping node's children. It writes only the traversed nodes and tail.
+          let mut upward_reads = vec![fresh_tail];
+          let mut upward_writes = vec![fresh_tail];
+          for &index in path[start..].iter().rev() {
+            upward_reads.push(index / 32);
+            upward_writes.push(index / 32);
+            if index > 0 {
+              upward_reads.push(((index - 1) / 2) / 32);
+            }
+          }
+          let left = path[start] * 2 + 1;
+          for child in [left, left + 1] {
+            if child < last {
+              upward_reads.push(child / 32);
+            }
+          }
+          assert!(upward_reads.iter().all(|page| root_reads.contains(page)));
+          assert!(upward_writes.iter().all(|page| root_writes.contains(page)));
+        }
+      }
+      assert_eq!((maximum_reads, maximum_writes), (read_bound, write_bound));
+      let selected = widest_close_deadline_descent(prefix, None).unwrap();
+      let (reads, writes) = close_deadline_descent_pages(&selected, prefix + 31, prefix / 32);
+      assert_eq!((reads.len(), writes.len()), (selected_reads, write_bound));
+      let interior = widest_close_deadline_descent(prefix, Some(1)).unwrap();
+      assert!(interior[0] > 0);
+      let interior_pages = close_deadline_descent_pages(&interior, prefix + 31, prefix / 32);
+      assert!(interior_pages.0.len() <= read_bound);
+      assert!(interior_pages.1.len() <= write_bound);
+      for tail_entries in 1..=32 {
+        let last = prefix + tail_entries - 1;
+        assert_eq!(
+          close_deadline_descent_pages(&interior, last, last / 32),
+          interior_pages
+        );
+        assert_eq!(
+          close_deadline_descent_pages(&selected, last, last / 32),
+          (reads.clone(), writes.clone())
+        );
+        let mut leftmost = vec![0];
+        while leftmost.last().unwrap() * 2 + 1 < last {
+          leftmost.push(leftmost.last().unwrap() * 2 + 1);
+        }
+        let (left_reads, left_writes) = close_deadline_descent_pages(&leftmost, last, last / 32);
+        // The executable witnesses attain both coordinates, not necessarily together.
+        assert_eq!(reads.len().max(left_reads.len()), read_bound);
+        assert_eq!(writes.len().max(left_writes.len()), write_bound);
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_deadline_key_removal_interior_preserves_peers_and_isolation() {
+    for tail in [1, 32] {
+      for owner in [CloseDeadlineOwner::Process, CloseDeadlineOwner::Trigger] {
+        for verify in [true, false] {
+          new_test_ext().execute_with(|| {
+            match owner {
+              CloseDeadlineOwner::Process => {
+                _close_deadline_key_remove_interior::<Test>(tail, verify).unwrap()
+              }
+              CloseDeadlineOwner::Trigger => {
+                _close_trigger_key_remove_interior::<Test>(tail, verify).unwrap()
+              }
+            }
+            let remaining = ActiveActorCount::<Test>::get();
+            let clock = match owner {
+              CloseDeadlineOwner::Process => WakeupClock::Block,
+              CloseDeadlineOwner::Trigger => WakeupClock::Tick,
+            };
+            assert_eq!(
+              remaining,
+              DeadlineIndexLen::<Test>::get(clock) + u32::from(!verify)
+            );
+          });
+        }
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_deadline_key_repair_late_failure_rolls_back() {
+    use polkadot_sdk::frame_support::storage::{TransactionOutcome, with_transaction_unchecked};
+    for geometry in [
+      CloseDeadlineKeyGeometry::RootWide,
+      CloseDeadlineKeyGeometry::InteriorWide,
+      CloseDeadlineKeyGeometry::Upward,
+    ] {
+      for owner in [CloseDeadlineOwner::Process, CloseDeadlineOwner::Trigger] {
+        new_test_ext().execute_with(|| {
+          let fixture = prepare_close_deadline_key_remove::<Test>(owner, 1, geometry).unwrap();
+          let clock = fixture.handle.key.clock();
+          let mut position = DeadlineIndexPositions::<Test>::get(fixture.handle.key).unwrap();
+          let key_at = |index: u32| {
+            DeadlineIndexPages::<Test>::get(clock, u64::from(index / 32)).unwrap()
+              [index as usize % 32]
+          };
+          // Fail the second swap, after tail truncation and one committed-in-transaction swap.
+          for _ in 0..2 {
+            position = if geometry == CloseDeadlineKeyGeometry::Upward {
+              (position - 1) / 2
+            } else {
+              let left = position * 2 + 1;
+              let right = left + 1;
+              if key_at(right) < key_at(left) {
+                right
+              } else {
+                left
+              }
+            };
+          }
+          let broken = key_at(position);
+          DeadlineIndexPositions::<Test>::insert(broken, u32::MAX);
+          let before =
+            polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+          let remove = || {
+            with_transaction_unchecked(|| {
+              let result = match owner {
+                CloseDeadlineOwner::Process => {
+                  Pallet::<Test>::remove_deadline_member(fixture.actor)
+                }
+                CloseDeadlineOwner::Trigger => {
+                  Pallet::<Test>::remove_trigger_deadline_member(fixture.actor)
+                }
+              };
+              if result.is_ok() {
+                TransactionOutcome::Commit(result)
+              } else {
+                TransactionOutcome::Rollback(result)
+              }
+            })
+          };
+          assert_eq!(remove(), Err(DeadlineMutationError::CorruptCarrier));
+          assert_eq!(
+            polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+            before
+          );
+          DeadlineIndexPositions::<Test>::insert(broken, position);
+          assert_eq!(remove(), Ok(fixture.handle));
+          assert_close_deadline_page::<Test>(fixture).unwrap();
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_deadline_key_removal_wide_path_preserves_peers_and_isolation() {
+    for tail_entries in [1, 32] {
+      for owner in [CloseDeadlineOwner::Process, CloseDeadlineOwner::Trigger] {
+        for verify in [true, false] {
+          new_test_ext().execute_with(|| {
+            let clock = match owner {
+              CloseDeadlineOwner::Process => WakeupClock::Block,
+              CloseDeadlineOwner::Trigger => WakeupClock::Tick,
+            };
+            let actors_before = ActiveActorCount::<Test>::get();
+            let keys_before = DeadlineIndexLen::<Test>::get(clock);
+            match owner {
+              CloseDeadlineOwner::Process => {
+                _close_deadline_key_remove_wide::<Test>(tail_entries, verify).unwrap()
+              }
+              CloseDeadlineOwner::Trigger => {
+                _close_trigger_key_remove_wide::<Test>(tail_entries, verify).unwrap()
+              }
+            }
+            assert_eq!(
+              ActiveActorCount::<Test>::get(),
+              actors_before + DeadlineIndexLen::<Test>::get(clock) - keys_before
+                + u32::from(!verify)
+            );
+          });
+        }
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_deadline_key_removal_repairs_upward_and_preserves_peers() {
+    for tail_entries in [1, 32] {
+      for owner in [CloseDeadlineOwner::Process, CloseDeadlineOwner::Trigger] {
+        for verify in [true, false] {
+          new_test_ext().execute_with(|| {
+            let clock = match owner {
+              CloseDeadlineOwner::Process => WakeupClock::Block,
+              CloseDeadlineOwner::Trigger => WakeupClock::Tick,
+            };
+            let actors_before = ActiveActorCount::<Test>::get();
+            let keys_before = DeadlineIndexLen::<Test>::get(clock);
+            match owner {
+              CloseDeadlineOwner::Process => {
+                _close_deadline_key_remove_upward::<Test>(tail_entries, verify).unwrap()
+              }
+              CloseDeadlineOwner::Trigger => {
+                _close_trigger_key_remove_upward::<Test>(tail_entries, verify).unwrap()
+              }
+            }
+            let surviving_keys = DeadlineIndexLen::<Test>::get(clock);
+            assert_eq!(
+              ActiveActorCount::<Test>::get(),
+              actors_before + surviving_keys - keys_before + u32::from(!verify)
+            );
+          });
+        }
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn contract_encoding_bounds_cover_compact_weight_extremes() {
+    type ChunkSteps = BoundedVec<(), ConstU32<MAX_STEPS_PER_TAIL_CHUNK>>;
+    type ChunkResources = BoundedVec<ActorStepResourceEnvelope, ConstU32<MAX_STEPS_PER_TAIL_CHUNK>>;
+    // Codec-only records: no storage insertion or claim that these resources are admitted.
+    let resource = ActorStepResourceEnvelope {
+      control: Weight::MAX,
+      effect: Weight::MAX,
+    };
+    let bound = step_resource_encoding_bound();
+    assert_eq!(bound, 36);
+    assert_eq!(resource.encoded_size(), bound);
+    let head = ActorContractHead {
+      header: (),
+      first_step: Some(()),
+      first_step_resources: Some(resource),
+    };
+    assert_eq!(head.encoded_size(), 2 + bound);
+    assert_eq!(
+      head.encoded_size(),
+      ActorContractHead::<(), ()>::max_encoded_len()
+    );
+    for count in 1..=MAX_STEPS_PER_TAIL_CHUNK {
+      let chunk = ActorStepChunk {
+        authority: ActorBodyAuthority::<ActorId, [u8; 32]> {
+          actor_id: 1,
+          semantic_contract_id: [0u8; 32],
+          body_commitment: [0u8; 32],
+          admission_identity: [0u8; 32],
+        },
+        first_step_index: 1,
+        steps: ChunkSteps::try_from(vec![(); count as usize]).unwrap(),
+        step_resources: ChunkResources::try_from(vec![resource; count as usize]).unwrap(),
+      };
+      let fixed = ActorBodyAuthority::<ActorId, [u8; 32]>::max_encoded_len()
+        + u32::max_encoded_len()
+        + 2 * codec::Compact(count).encoded_size();
+      assert_eq!(chunk.encoded_size(), fixed + count as usize * bound);
+      let metadata_bound =
+        ActorStepChunk::<ActorId, [u8; 32], ChunkSteps, ChunkResources>::max_encoded_len();
+      assert!(chunk.encoded_size() <= metadata_bound);
+      if count == MAX_STEPS_PER_TAIL_CHUNK {
+        assert_eq!(chunk.encoded_size(), metadata_bound);
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn contract_encoding_bounds_cover_zero_head_partial_and_full_tails() {
+    let maximum = <<Test as Config>::MaxContractSteps as Get<u32>>::get();
+    let mut counts = vec![0, 1, 2, 4, 5, 6, maximum - 1, maximum];
+    counts.retain(|count| *count <= maximum);
+    counts.sort_unstable();
+    counts.dedup();
+    for count in counts {
+      new_test_ext().execute_with(|| {
+        let contract = system_contract::<Test>(
+          Schedule {
+            trigger: Trigger::manual(),
+            cooldown_blocks: 0,
+          },
+          inert_contract_steps_of_len::<Test>(count),
+        )
+        .unwrap();
+        Pallet::<Test>::create_system_actor(
+          RawOrigin::Root.into(),
+          account("body-encoding-owner", 0, 0),
+          Mutability::Mutable,
+          Some(contract),
+        )
+        .unwrap();
+        let actor_id = NextActorId::<Test>::get() - 1;
+        let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+        assert_eq!(assert_contract_geometry_encoding::<Test>(actor_id), count);
+        if count == maximum {
+          assert_max_contract_geometry::<Test>(actor_id);
+        } else if count == maximum - 1 {
+          assert_eq!(
+            count.saturating_sub(1).div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+            maximum.saturating_sub(1).div_ceil(MAX_STEPS_PER_TAIL_CHUNK)
+          );
+          assert!(
+            std::panic::catch_unwind(|| assert_max_contract_geometry::<Test>(actor_id)).is_err(),
+            "equal chunk counts cannot certify maximum Step geometry"
+          );
+        }
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+          before
+        );
+        Pallet::<Test>::do_try_state().unwrap();
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn close_destruction_profiles_cover_both_classes_without_verification_teardown() {
+    for verify in [true, false] {
+      let assert_removed = || {
+        let actor_id = NextActorId::<Test>::get() - 1;
+        assert!(!ActorSemanticStates::<Test>::contains_key(actor_id));
+        assert!(!ActorContractHeads::<Test>::contains_key(actor_id));
+        assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
+        assert!(!ActorStateHolds::<Test>::contains_key(actor_id));
+        Pallet::<Test>::do_try_state().unwrap();
+      };
+      let active: [fn(u32, bool) -> Result<(), BenchmarkError>; 3] = [
+        |shape, verify| _close_finalize_user::<Test>(shape, 0, verify),
+        |shape, verify| _close_finalize_user::<Test>(shape, 1, verify),
+        _close_finalize_system::<Test>,
+      ];
+      for shape in 0..=5 {
+        for profile in active {
+          new_test_ext().execute_with(|| {
+            profile(shape, verify).unwrap();
+            assert_removed();
+          });
+        }
+      }
+      let dormant: [fn(bool) -> Result<(), BenchmarkError>; 3] = [
+        |verify| _close_dormant_user::<Test>(0, verify),
+        |verify| _close_dormant_user::<Test>(1, verify),
+        _close_dormant_system::<Test>,
+      ];
+      for profile in dormant {
+        new_test_ext().execute_with(|| {
+          profile(verify).unwrap();
+          assert_removed();
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn close_authority_load_profiles_exclude_destruction() {
+    for verify in [true, false] {
+      for shape in 0..=5 {
+        for profile in [
+          _close_load_user::<Test> as fn(u32, bool) -> Result<(), BenchmarkError>,
+          _close_load_system::<Test>,
+        ] {
+          new_test_ext().execute_with(|| {
+            profile(shape, verify).unwrap();
+            let actor_id = NextActorId::<Test>::get() - 1;
+            assert_eq!(ActorProcesses::<Test>::contains_key(actor_id), !verify);
+            assert_eq!(
+              DeadlineHandles::<Test>::contains_key(actor_id),
+              !verify && shape < 2
+            );
+            assert_eq!(
+              TriggerDeadlineHandles::<Test>::contains_key(actor_id),
+              !verify && matches!(shape, 2 | 4 | 5)
+            );
+            assert_eq!(
+              ActorRunStateStore::<Test>::contains_key(actor_id),
+              !verify && matches!(shape, 0 | 1 | 4 | 5)
+            );
+            assert_eq!(ActorSemanticStates::<Test>::contains_key(actor_id), !verify);
+            Pallet::<Test>::do_try_state().unwrap();
+          });
+        }
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn close_host_authority_calls_belong_to_detachment() {
+    use crate::mock::take_admission_authority_calls;
+
+    for actor_type in [ActorType::User, ActorType::System] {
+      for shape in 0..=5 {
+        for public in [false, true] {
+          new_test_ext().execute_with(|| {
+            let fixture = prepare_close_shape::<Test>(actor_type, shape).unwrap();
+            let id = fixture.actor_id;
+            let owner = fixture.identity.owner;
+            let admission = Pallet::<Test>::load_control_admission(id).unwrap();
+            take_admission_authority_calls();
+            assert!(
+              Pallet::<Test>::load_close_authority(
+                RawOrigin::Signed(owner.wrapping_add(1)).into(),
+                id,
+              )
+              .is_err()
+            );
+            assert_eq!(take_admission_authority_calls(), 0, "origin refusal");
+            if public {
+              Pallet::<Test>::close_actor(RawOrigin::Signed(owner).into(), id).unwrap();
+              assert_eq!(take_admission_authority_calls(), 1, "complete public Close");
+            } else {
+              let CheckedCloseAuthorityOf::Active(instance) =
+                Pallet::<Test>::load_close_authority(RawOrigin::Signed(owner).into(), id).unwrap()
+              else {
+                panic!("Active fixture")
+              };
+              assert_eq!(take_admission_authority_calls(), 0, "public loading");
+              let (state, actor) =
+                Pallet::<Test>::load_finalization_authority(id, &instance).unwrap();
+              assert_eq!(take_admission_authority_calls(), 0, "finalization loading");
+              let terminal = Pallet::<Test>::detach_actor_publication(
+                actor.unwrap(),
+                state.clone(),
+                state.run_state.as_ref(),
+              )
+              .unwrap();
+              assert_eq!(
+                take_admission_authority_calls(),
+                1,
+                "detachment certificate rebuild"
+              );
+              Pallet::<Test>::finalize_actor_from_consumed_state(
+                id,
+                terminal,
+                &admission,
+                CloseReason::OwnerInitiated,
+              )
+              .unwrap();
+              assert_eq!(take_admission_authority_calls(), 0, "consumed finalization");
+            }
+            assert_close_destruction::<Test>(&fixture);
+          });
+        }
+      }
+      new_test_ext().execute_with(|| {
+        let fixture = prepare_dormant_close::<Test>(actor_type).unwrap();
+        take_admission_authority_calls();
+        Pallet::<Test>::close_actor(
+          RawOrigin::Signed(fixture.identity.owner).into(),
+          fixture.actor_id,
+        )
+        .unwrap();
+        assert_eq!(take_admission_authority_calls(), 0, "Dormant Close");
+        assert_close_destruction::<Test>(&fixture);
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn close_loading_rejects_carrier_drift_without_mutation() {
+    let reject = |actor: ActorRef, owner| {
+      let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      assert!(Pallet::<Test>::load_canonical_actor_semantic_state(actor).is_err());
+      assert!(matches!(
+        Pallet::<Test>::load_close_authority(RawOrigin::Signed(owner).into(), actor.actor_id),
+        Err(error) if error == Error::<Test>::ActorInvariant.into()
+      ));
+      assert_eq!(
+        Pallet::<Test>::close_actor(RawOrigin::Signed(owner).into(), actor.actor_id),
+        Err(Error::<Test>::ActorInvariant.into()),
+      );
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        before,
+      );
+    };
+    for class in [ActorType::User, ActorType::System] {
+      for shape in 0..=5 {
+        new_test_ext().execute_with(|| {
+          let fixture = prepare_close_shape::<Test>(class, shape).unwrap();
+          let id = fixture.actor_id;
+          let actor = Pallet::<Test>::load_actor_ref(id).unwrap();
+          let process = ActorProcesses::<Test>::get(id).unwrap();
+          match process.residence {
+            Some(ProcessResidence::Service(_)) => {
+              let node = ServiceNodes::<Test>::get(id).unwrap();
+              ServiceNodes::<Test>::mutate(id, |stored| stored.as_mut().unwrap().generation += 1);
+              reject(actor, fixture.identity.owner);
+              ServiceNodes::<Test>::insert(id, node);
+            }
+            Some(ProcessResidence::Deadline { .. }) => {
+              let handle = DeadlineHandles::<Test>::get(id).unwrap();
+              let page = DeadlinePages::<Test>::get(handle.key, handle.page).unwrap();
+              DeadlinePages::<Test>::mutate(handle.key, handle.page, |stored| {
+                stored.as_mut().unwrap().entries[usize::from(handle.slot)] = None;
+              });
+              reject(actor, fixture.identity.owner);
+              DeadlinePages::<Test>::insert(handle.key, handle.page, page);
+            }
+            None => {
+              assert!(matches!(process.status, ProcessStatus::Disabled(_)));
+              ActorProcesses::<Test>::mutate(id, |stored| {
+                stored.as_mut().unwrap().residence =
+                  Some(ProcessResidence::Service(ServiceResidenceKind::Live));
+              });
+              reject(actor, fixture.identity.owner);
+              ActorProcesses::<Test>::insert(id, process);
+            }
+            _ => panic!("six-shape fixture has no Parked residence"),
+          }
+          Pallet::<Test>::load_canonical_actor_semantic_state(actor).unwrap();
+          Pallet::<Test>::close_actor(RawOrigin::Signed(fixture.identity.owner).into(), id)
+            .unwrap();
+          assert_close_destruction::<Test>(&fixture);
+        });
+      }
+    }
+    new_test_ext().execute_with(|| {
+      let fixture = prepare_cadenced_parked_balance_occurrence::<Test>().unwrap();
+      let id = fixture.actor.actor_id;
+      let owner = fixture.identity.owner;
+      let pending = PendingCheckOwners::<Test>::take(id).unwrap();
+      reject(fixture.actor, owner);
+      PendingCheckOwners::<Test>::insert(id, pending);
+      let review = DependencyTimedReviews::<Test>::take(id).unwrap();
+      reject(fixture.actor, owner);
+      DependencyTimedReviews::<Test>::insert(id, review);
+      let episode = ParkedBalanceEpisodes::<Test>::take(id).unwrap();
+      reject(fixture.actor, owner);
+      ParkedBalanceEpisodes::<Test>::insert(id, episode);
+      Pallet::<Test>::load_canonical_actor_semantic_state(fixture.actor).unwrap();
+      Pallet::<Test>::do_try_state().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn close_authority_loading_preserves_state_and_rejection_order() {
+    for actor_type in [ActorType::User, ActorType::System] {
+      for dormant in [false, true] {
+        new_test_ext().execute_with(|| {
+          let fixture = if dormant {
+            prepare_dormant_close::<Test>(actor_type).unwrap()
+          } else {
+            prepare_full_header_retry_close::<Test>(actor_type).unwrap()
+          };
+          let owner = fixture.identity.owner;
+          let root = || polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+          let before = root();
+          assert!(matches!(
+            Pallet::<Test>::load_close_authority(RawOrigin::Signed(owner.wrapping_add(1)).into(), fixture.actor_id),
+            Err(error) if error == Error::<Test>::NotOwner.into()
+          ));
+          let root_result = Pallet::<Test>::load_close_authority(RawOrigin::Root.into(), fixture.actor_id);
+          if actor_type == ActorType::User {
+            assert!(matches!(root_result, Err(error) if error == Error::<Test>::NotGovernance.into()));
+          } else {
+            assert!(root_result.is_ok());
+          }
+          let loaded = Pallet::<Test>::load_close_authority(RawOrigin::Signed(owner).into(), fixture.actor_id).unwrap();
+          match loaded {
+            CheckedCloseAuthorityOf::Active(mut instance) => {
+              assert!(!dormant);
+              let (state, actor) = Pallet::<Test>::load_finalization_authority(fixture.actor_id, &instance).unwrap();
+              assert_eq!(state.identity, fixture.identity);
+              assert_eq!(actor.unwrap().actor_id, fixture.actor_id);
+              instance.cycle_nonce += 1;
+              assert!(matches!(
+                Pallet::<Test>::load_finalization_authority(fixture.actor_id, &instance),
+                Err(error) if error == Error::<Test>::ActorNotFound.into()
+              ));
+            }
+            CheckedCloseAuthorityOf::Dormant(identity) => {
+              assert!(dormant);
+              assert_eq!(identity, fixture.identity);
+            }
+          }
+          assert!(matches!(
+            Pallet::<Test>::load_close_authority(RawOrigin::None.into(), ActorId::MAX),
+            Err(error) if error == Error::<Test>::ActorNotFound.into()
+          ));
+          assert_eq!(root(), before);
+          if !dormant {
+            let process = ActorProcesses::<Test>::take(fixture.actor_id).unwrap();
+            let corrupt = root();
+            assert!(matches!(
+              Pallet::<Test>::load_close_authority(RawOrigin::None.into(), fixture.actor_id),
+              Err(error) if error == Error::<Test>::ActorInvariant.into()
+            ));
+            assert_eq!(root(), corrupt);
+            ActorProcesses::<Test>::insert(fixture.actor_id, process);
+          }
+          assert_eq!(root(), before);
+          Pallet::<Test>::do_try_state().unwrap();
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn close_detachment_profiles_exclude_finalization() {
+    for verify in [true, false] {
+      for shape in 0..=5 {
+        for profile in [
+          _close_detach_user::<Test> as fn(u32, bool) -> Result<(), BenchmarkError>,
+          _close_detach_system::<Test>,
+        ] {
+          new_test_ext().execute_with(|| {
+            profile(shape, verify).unwrap();
+            let actor_id = NextActorId::<Test>::get() - 1;
+            assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+            assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
+            assert_eq!(ActorSemanticStates::<Test>::contains_key(actor_id), !verify);
+            assert_eq!(ActorContractHeads::<Test>::contains_key(actor_id), !verify);
+            assert_eq!(
+              ActorRunStateStore::<Test>::contains_key(actor_id),
+              !verify && matches!(shape, 0 | 1 | 4 | 5)
+            );
+            assert!(!TriggerDeadlineHandles::<Test>::contains_key(actor_id));
+            if verify {
+              Pallet::<Test>::do_try_state().unwrap();
+            }
+          });
+        }
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn close_finalize_body_refusal_restores_run_and_event_prefix() {
+    use crate::mock::take_admission_authority_calls;
+
+    for class in [ActorType::User, ActorType::System] {
+      for shape in [0, 2] {
+        new_test_ext().execute_with(|| {
+          let fixture = prepare_close_shape::<Test>(class, shape).unwrap();
+          let id = fixture.actor_id;
+          let (state, admission) = detach_close_destruction::<Test>(id).unwrap();
+          assert_eq!(state.run_state.is_some(), shape == 0);
+          let head = ActorContractHeads::<Test>::get(id).unwrap();
+          let close = || {
+            Pallet::<Test>::finalize_actor_from_consumed_state(
+              id,
+              state.clone(),
+              &admission,
+              CloseReason::OwnerInitiated,
+            )
+          };
+          take_admission_authority_calls();
+          for oversized in [false, true] {
+            let chunk = if oversized {
+              ActorContractHeads::<Test>::mutate(id, |stored| {
+                stored.as_mut().unwrap().header.step_count = u32::MAX;
+              });
+              None
+            } else {
+              Some(ActorContractTailChunks::<Test>::take(id, 0).unwrap())
+            };
+            let before =
+              polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+            assert_eq!(close(), Err(Error::<Test>::ActorInvariant.into()));
+            assert_eq!(take_admission_authority_calls(), 0);
+            assert_eq!(
+              polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+              before,
+            );
+            assert_eq!(
+              ActorRunStateStore::<Test>::get(id).encode(),
+              state.run_state.encode()
+            );
+            if let Some(chunk) = chunk {
+              ActorContractTailChunks::<Test>::insert(id, 0, chunk);
+            } else {
+              ActorContractHeads::<Test>::insert(id, &head);
+            }
+          }
+          close().unwrap();
+          assert_eq!(take_admission_authority_calls(), 0);
+          assert_close_destruction::<Test>(&fixture);
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn close_destruction_late_hold_failure_restores_public_and_consumed_state() {
+    use crate::mock::take_admission_authority_calls;
+    use polkadot_sdk::frame_support::traits::{fungible::MutateHold, tokens::Precision};
+    type Currency = <Test as Config>::StateHoldCurrency;
+    for (consumed, last_slot, shape, dormant) in [
+      (false, false, 0, false),
+      (false, true, 0, false),
+      (true, false, 0, false),
+      (true, true, 0, false),
+      (false, true, 2, false),
+      (false, true, 3, false),
+      (false, true, 4, false),
+      (false, true, 5, false),
+      (false, false, 0, true),
+      (false, true, 0, true),
+    ] {
+      new_test_ext().execute_with(|| {
+        let mut fixture = if dormant {
+          prepare_dormant_close::<Test>(ActorType::User).unwrap()
+        } else {
+          prepare_close_shape::<Test>(ActorType::User, shape).unwrap()
+        };
+        let host_calls = u32::from(!consumed && !dormant);
+        if last_slot {
+          leave_last_close_owner_slot::<Test>(&mut fixture).unwrap();
+        }
+        let terminal =
+          consumed.then(|| detach_close_destruction::<Test>(fixture.actor_id).unwrap());
+        let reason = HoldReason::ActorState.into();
+        let held = Currency::balance_on_hold(&reason, &fixture.identity.owner);
+        assert!(held > fixture.owner_hold_after);
+        // The last fallible owner runs after semantic/identity deletion, counters and
+        // slot release, plus Run/body deletion when closing an Active Actor.
+        Currency::release(&reason, &fixture.identity.owner, held, Precision::Exact).unwrap();
+        let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+        let close = || match &terminal {
+          Some((state, admission)) => Pallet::<Test>::finalize_actor_from_consumed_state(
+            fixture.actor_id,
+            state.clone(),
+            admission,
+            CloseReason::OwnerInitiated,
+          ),
+          None => Pallet::<Test>::close_actor(
+            RawOrigin::Signed(fixture.identity.owner).into(),
+            fixture.actor_id,
+          ),
+        };
+        take_admission_authority_calls();
+        assert_eq!(close(), Err(Error::<Test>::StateHoldInvariant.into()));
+        assert_eq!(take_admission_authority_calls(), host_calls);
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+          before
+        );
+        Currency::hold(&reason, &fixture.identity.owner, held).unwrap();
+        close().unwrap();
+        assert_eq!(take_admission_authority_calls(), host_calls);
+        assert_close_destruction::<Test>(&fixture);
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn production_retry_close_reaches_full_manual_header() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_actor().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_parked_release_preserves_peers_and_excludes_finalization() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_close_parked_dependency_release().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      let before = ActiveActorCount::<Test>::get();
+      let next_actor = NextActorId::<Test>::get();
+      _close_parked_dependency_release::<Test>(false).unwrap();
+      let created = NextActorId::<Test>::get() - next_actor;
+      assert!(created > 128, "deep index setup admits real guard Actors");
+      assert_eq!(u64::from(ActiveActorCount::<Test>::get() - before), created);
+      assert_eq!(ParkedBalanceEpisodes::<Test>::iter_keys().count(), 31);
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pure_parked_release_late_refusal_rolls_back_deadline_and_registration_prefix() {
+    use polkadot_sdk::frame_support::storage::{TransactionOutcome, with_transaction_unchecked};
+    new_test_ext().execute_with(|| {
+      let fixture = prepare_parked_dependency_release::<Test>().unwrap();
+      let source = fixture.registrations[1].0;
+      let header = DependencyRegistrationHeaders::<Test>::get(source);
+      DependencyRegistrationHeaders::<Test>::mutate(source, |header| {
+        header.free_count = <<Test as Config>::MaxActiveActors as Get<u32>>::get();
+      });
+      let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      let result = with_transaction_unchecked(|| {
+        match Pallet::<Test>::release_parked_dependency_authority(
+          fixture.parked.actor,
+          fixture.evidence,
+        ) {
+          Ok(()) => TransactionOutcome::Commit(Ok(())),
+          Err(error) => TransactionOutcome::Rollback(Err(error)),
+        }
+      });
+      assert_eq!(result, Err(DependencyRegistrationError::CorruptTopology));
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        before
+      );
+      DependencyRegistrationHeaders::<Test>::insert(source, header);
+      with_transaction_unchecked(|| {
+        let result = Pallet::<Test>::release_parked_dependency_authority(
+          fixture.parked.actor,
+          fixture.evidence,
+        );
+        assert_eq!(result, Ok(()));
+        TransactionOutcome::Commit(())
+      });
+      assert_parked_dependency_release::<Test>(fixture).unwrap();
     });
   }
 

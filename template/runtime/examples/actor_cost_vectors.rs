@@ -81,7 +81,6 @@ fn quote_value(quote: ActorCostQuote<Balance>) -> Value {
   let pipeline = quote.prospective_pipeline_fee.map(|pipeline| {
     json!({
       "machineFee": pipeline.pipeline_machine_fee.to_string(),
-      "cleanupFee": pipeline.cleanup_fee.to_string(),
       "totalFee": pipeline.total_fee.to_string(),
       "strategy": "UpfrontBounded",
       "admissionIdentity": hex(&pipeline.admission_identity),

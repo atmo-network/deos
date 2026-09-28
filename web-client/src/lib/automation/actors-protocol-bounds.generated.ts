@@ -1,4 +1,4 @@
-/* Generated from Actors runtime metadata 68301841c8e2b5894cddfdad9512441aaf8b054fecac5db4a7912cc52790d04e; do not edit. */
+/* Generated from Actors runtime metadata 16e5d2e03a54c29acb8334a00ad7dbbc22fa4d7d2a6c7d89cd2a65000f57cb35; do not edit. */
 export const ACTORS_MAX_CONTRACT_STEPS = 12;
 export const ACTORS_MAX_EXECUTION_DELAY_BLOCKS = 52596000;
 export const ACTORS_MAX_TEMPORAL_DELAY_TICKS = 631152000;

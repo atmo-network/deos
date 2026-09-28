@@ -341,7 +341,9 @@ fn recorded_trie_keys(recorder: &Recorder<Blake2Hasher>) -> BTreeSet<(H256, Vec<
     .collect()
 }
 
-fn key_proof_overlap(recorder: &Recorder<Blake2Hasher>) -> Result<KeyProofOverlap, String> {
+pub(super) fn key_proof_overlap(
+  recorder: &Recorder<Blake2Hasher>,
+) -> Result<KeyProofOverlap, String> {
   let proof = recorder.to_storage_proof();
   let proof_nodes = proof.iter_nodes().collect::<BTreeSet<_>>();
   let db = proof.to_memory_db::<Blake2Hasher>();

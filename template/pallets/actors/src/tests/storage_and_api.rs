@@ -661,6 +661,10 @@ fn parked_balance_episode_publishes_atomically_and_positive_review_reclaims_it()
       fixed_anchors,
       "negative current checks keep the fixed episode anchors"
     );
+    assert!(
+      !PendingDependencyReviews::<Test>::contains_key(actor_id),
+      "negative review consumes its transient marker before committing"
+    );
     let rearmed_evidence = ParkEvidence {
       review_at: Some(3),
       ..evidence
@@ -691,6 +695,10 @@ fn parked_balance_episode_publishes_atomically_and_positive_review_reclaims_it()
         None,
       ),
       Ok((actor, DependencyReviewMutation::Woke))
+    );
+    assert!(
+      !PendingDependencyReviews::<Test>::contains_key(actor_id),
+      "positive review consumes its transient marker before committing"
     );
     assert!(!ParkedBalanceEpisodes::<Test>::contains_key(actor_id));
     assert!(ServiceNodes::<Test>::contains_key(actor_id));
@@ -5975,7 +5983,7 @@ fn mandatory_service_frontier_pre_admits_and_executes_one_effectful_head() {
 
     let budget = <Test as crate::Config>::BlockResourceBudget::get();
     let mut resource_state = crate::BlockResourceState::new(5);
-    assert_ok!(resource_state.begin_prepass());
+    assert_ok!(resource_state.begin_prepass(budget));
     assert_ok!(resource_state.open_external_phase());
     assert_ok!(resource_state.begin_drain());
     let resource_before = resource_state;
@@ -6090,7 +6098,7 @@ fn mandatory_service_commits_abort_cycle_failure_and_retains_service_residence()
       .saturating_add(suffix);
     let budget = <Test as crate::Config>::BlockResourceBudget::get();
     let mut resource_state = crate::BlockResourceState::new(5);
-    assert_ok!(resource_state.begin_prepass());
+    assert_ok!(resource_state.begin_prepass(budget));
     assert_ok!(resource_state.open_external_phase());
     assert_ok!(resource_state.begin_drain());
     let resource_before = resource_state;
@@ -6177,7 +6185,7 @@ fn mandatory_service_commits_permanent_retry_failure_without_parking() {
       .saturating_add(suffix);
     let budget = <Test as crate::Config>::BlockResourceBudget::get();
     let mut resource_state = crate::BlockResourceState::new(5);
-    assert_ok!(resource_state.begin_prepass());
+    assert_ok!(resource_state.begin_prepass(budget));
     assert_ok!(resource_state.open_external_phase());
     assert_ok!(resource_state.begin_drain());
     let resource_before = resource_state;
@@ -6276,7 +6284,7 @@ fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
       .saturating_add(suffix);
     let budget = <Test as crate::Config>::BlockResourceBudget::get();
     let mut first_state = crate::BlockResourceState::new(5);
-    assert_ok!(first_state.begin_prepass());
+    assert_ok!(first_state.begin_prepass(budget));
     assert_ok!(first_state.open_external_phase());
     assert_ok!(first_state.begin_drain());
     let mut first_meter = WeightMeter::with_limit(complete);
@@ -6320,7 +6328,7 @@ fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
         .saturating_sub(deficit);
       let consumed_before = budget.limits().actor_control().saturating_sub(remaining);
       let mut resource_refused = crate::BlockResourceState::new(6);
-      assert_ok!(resource_refused.begin_prepass());
+      assert_ok!(resource_refused.begin_prepass(budget));
       assert_ok!(resource_refused.open_external_phase());
       assert_ok!(resource_refused.begin_drain());
       let mut prior = resource_refused
@@ -6373,7 +6381,7 @@ fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
     }
 
     let mut resource_state = crate::BlockResourceState::new(6);
-    assert_ok!(resource_state.begin_prepass());
+    assert_ok!(resource_state.begin_prepass(budget));
     assert_ok!(resource_state.open_external_phase());
     assert_ok!(resource_state.begin_drain());
     let resource_before = resource_state;
@@ -6463,7 +6471,7 @@ fn mandatory_service_closes_at_global_failure_limit_and_rolls_back_refusal() {
       .saturating_add(suffix);
     let budget = <Test as crate::Config>::BlockResourceBudget::get();
     let mut first_state = crate::BlockResourceState::new(5);
-    assert_ok!(first_state.begin_prepass());
+    assert_ok!(first_state.begin_prepass(budget));
     assert_ok!(first_state.open_external_phase());
     assert_ok!(first_state.begin_drain());
     let mut first_meter = WeightMeter::with_limit(complete);
@@ -6502,7 +6510,7 @@ fn mandatory_service_closes_at_global_failure_limit_and_rolls_back_refusal() {
       before_run.cumulative_outcomes,
     );
     let mut resource_refused = crate::BlockResourceState::new(6);
-    assert_ok!(resource_refused.begin_prepass());
+    assert_ok!(resource_refused.begin_prepass(budget));
     assert_ok!(resource_refused.open_external_phase());
     assert_ok!(resource_refused.begin_drain());
     let mut exhausted = resource_refused
@@ -6546,7 +6554,7 @@ fn mandatory_service_closes_at_global_failure_limit_and_rolls_back_refusal() {
     );
 
     let mut resource_state = crate::BlockResourceState::new(6);
-    assert_ok!(resource_state.begin_prepass());
+    assert_ok!(resource_state.begin_prepass(budget));
     assert_ok!(resource_state.open_external_phase());
     assert_ok!(resource_state.begin_drain());
     let resource_before = resource_state;
@@ -6641,7 +6649,7 @@ fn mandatory_service_continues_after_failed_step_without_repeating_the_prefix() 
       .saturating_add(first_resources.effect)
       .saturating_add(suffix);
     let mut first_state = crate::BlockResourceState::new(5);
-    assert_ok!(first_state.begin_prepass());
+    assert_ok!(first_state.begin_prepass(budget));
     assert_ok!(first_state.open_external_phase());
     assert_ok!(first_state.begin_drain());
     let mut first_meter = WeightMeter::with_limit(first_complete);
@@ -6709,7 +6717,7 @@ fn mandatory_service_continues_after_failed_step_without_repeating_the_prefix() 
       .saturating_add(second_resources.effect)
       .saturating_add(suffix);
     let mut second_state = crate::BlockResourceState::new(6);
-    assert_ok!(second_state.begin_prepass());
+    assert_ok!(second_state.begin_prepass(budget));
     assert_ok!(second_state.open_external_phase());
     assert_ok!(second_state.begin_drain());
     let mut second_meter = WeightMeter::with_limit(second_complete);
@@ -6807,7 +6815,7 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
       .saturating_add(suffix);
     let budget = <Test as crate::Config>::BlockResourceBudget::get();
     let mut resource_state = crate::BlockResourceState::new(2);
-    assert_ok!(resource_state.begin_prepass());
+    assert_ok!(resource_state.begin_prepass(budget));
     assert_ok!(resource_state.open_external_phase());
     assert_ok!(resource_state.begin_drain());
     let resource_before = resource_state;
@@ -6856,7 +6864,7 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
       let remaining = inspection.saturating_add(branch).saturating_sub(deficit);
       let consumed_before = budget.limits().actor_control().saturating_sub(remaining);
       let mut refused_state = crate::BlockResourceState::new(2);
-      assert_ok!(refused_state.begin_prepass());
+      assert_ok!(refused_state.begin_prepass(budget));
       assert_ok!(refused_state.open_external_phase());
       assert_ok!(refused_state.begin_drain());
       let mut prior = refused_state
@@ -6909,7 +6917,7 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
     frame_system::Pallet::<Test>::set_block_number(3);
     let retry_key = WakeupKey::Block(6);
     resource_state = crate::BlockResourceState::new(3);
-    assert_ok!(resource_state.begin_prepass());
+    assert_ok!(resource_state.begin_prepass(budget));
     assert_ok!(resource_state.open_external_phase());
     assert_ok!(resource_state.begin_drain());
     meter = WeightMeter::with_limit(complete);
@@ -8115,7 +8123,6 @@ fn canonical_deadline_index_rejects_missing_headers_legacy_authority_and_early_r
 fn test_pipeline_machine_envelope() -> crate::PipelineMachineEnvelope<Balance> {
   crate::PipelineMachineEnvelope {
     pipeline_machine_fee_upper: 11,
-    cleanup_fee_upper: 22,
   }
 }
 
@@ -8199,6 +8206,82 @@ fn public_api_error_signatures_use_shared_typed_cores() {
 }
 
 #[test]
+fn state_hold_encoding_consumers_separate_actual_body_from_control_capacity() {
+  use codec::MaxEncodedLen;
+
+  new_test_ext().execute_with(|| {
+    for count in [0, 1, 5] {
+      let step = transfer_contract_steps(BOB, 2)[0].clone();
+      let actor_id = create_user_with(
+        ALICE,
+        Mutability::Mutable,
+        manual_schedule(),
+        None,
+        vec![step; count].try_into().unwrap(),
+      );
+      let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      let head = ActorContractHeads::<Test>::get(actor_id).unwrap();
+      let admission = Actors::load_control_admission(actor_id).unwrap();
+      let hold = crate::ActorStateHolds::<Test>::get(actor_id)
+        .unwrap()
+        .breakdown;
+      let per_byte: Balance = <Test as crate::Config>::ActorStateHoldPerByte::get();
+      let base: Balance = <Test as crate::Config>::ActorStateHoldBase::get();
+      let price = |bytes: usize| {
+        if bytes == 0 {
+          0
+        } else {
+          base + bytes as Balance * per_byte
+        }
+      };
+      let capacity_without_resources =
+        crate::ActorControlHotState::<MockBlockNumber>::max_encoded_len()
+          + u32::max_encoded_len()
+          + Option::<MockBlockNumber>::max_encoded_len();
+      let actual_head = head.encoded_size() + admission.encoded_size();
+      let declared_resource = ActorStepResourceEnvelope::max_encoded_len();
+      assert_eq!(
+        hold.contract_head,
+        price(capacity_without_resources + declared_resource + actual_head)
+      );
+      let actual_tails: usize = ActorContractTailChunks::<Test>::iter_prefix(actor_id)
+        .map(|(_, chunk)| chunk.encoded_size())
+        .sum();
+      assert_eq!(hold.contract_body, price(actual_tails));
+      assert_eq!(
+        hold.run,
+        price(crate::ActorRunStateOf::<Test>::max_encoded_len())
+      );
+
+      // The reserved slot covers both compact Weight values without a per-Step surcharge.
+      let compact_resource = 4 * codec::Compact::<u64>::max_encoded_len();
+      assert_eq!(declared_resource, compact_resource);
+      assert_eq!(
+        price(capacity_without_resources + compact_resource + actual_head),
+        hold.contract_head,
+      );
+      let quote = Actors::actor_cost_quote(actor_id).unwrap();
+      assert_eq!(
+        quote.actor_state_hold.total,
+        [
+          hold.identity,
+          hold.contract_head,
+          hold.contract_body,
+          hold.detector,
+          hold.run
+        ]
+        .into_iter()
+        .sum::<Balance>()
+      );
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        before,
+      );
+    }
+  });
+}
+
+#[test]
 fn actor_cost_quote_keeps_fee_boundaries_and_state_hold_provenance_separate() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -8229,10 +8312,7 @@ fn actor_cost_quote_keeps_fee_boundaries_and_state_hold_provenance_separate() {
       pipeline.strategy,
       PipelineMachineFeeStrategy::UpfrontBounded
     );
-    assert_eq!(
-      pipeline.total_fee,
-      pipeline.pipeline_machine_fee + pipeline.cleanup_fee
-    );
+    assert_eq!(pipeline.total_fee, pipeline.pipeline_machine_fee);
     assert_eq!(
       pipeline.production_weight_identity,
       crate::AdmissionCertificateAuthority::compose_production_weight_identity([41; 32], [42; 32])
@@ -8391,6 +8471,82 @@ fn body_commitment_uses_fixed_domain_and_exact_ordered_indexes() {
     BoundedVec::try_from(vec![contract.steps[1].clone(), contract.steps[0].clone()])
       .expect("reordered Steps fit");
   assert_ne!(contract.body_commitment(), reordered.body_commitment());
+}
+
+#[test]
+fn contract_commitment_hashing_visits_each_step_once() {
+  use std::cell::Cell;
+
+  // This probes the generic codec owners, not admission or Actor history.
+  struct CountedStep<'a> {
+    value: u32,
+    visits: &'a Cell<usize>,
+  }
+  impl Encode for CountedStep<'_> {
+    fn size_hint(&self) -> usize {
+      4
+    }
+
+    fn encode_to<O: codec::Output + ?Sized>(&self, output: &mut O) {
+      self.visits.set(self.visits.get() + 1);
+      self.value.encode_to(output);
+    }
+  }
+
+  for count in [0usize, 1, 12, 63, 64] {
+    let visits = Cell::new(0);
+    let contract = crate::ActorContract {
+      trigger: (),
+      cooldown_blocks: 0,
+      window: None::<ScheduleWindow<u32>>,
+      steps: (0..count)
+        .map(|index| CountedStep {
+          value: index as u32,
+          visits: &visits,
+        })
+        .collect::<Vec<_>>(),
+      funding: (),
+      completion: CompletionPolicy::Persistent,
+      parked_balance_activation: None::<()>,
+      auto_close_at_cycle_nonce: None,
+    };
+    let authored = (
+      &contract.trigger,
+      contract.cooldown_blocks,
+      &contract.window,
+      &contract.funding,
+      contract.completion,
+      &contract.parked_balance_activation,
+      contract.auto_close_at_cycle_nonce,
+    );
+    let semantic_input = (crate::ACTOR_CONTRACT_HASH_DOMAIN, authored, &contract.steps).encode();
+    let prefix = codec::Compact(count as u32).encoded_size();
+    assert_eq!(
+      semantic_input.len(),
+      19 + authored.encoded_size() + prefix + 4 * count
+    );
+    visits.set(0);
+    assert_eq!(
+      contract.semantic_contract_id(),
+      frame::hashing::blake2_256(&semantic_input)
+    );
+    assert_eq!(visits.get(), count);
+
+    let indexed = contract
+      .steps
+      .iter()
+      .enumerate()
+      .map(|(index, step)| (index as u32, step))
+      .collect::<Vec<_>>();
+    let body_input = (crate::ACTOR_BODY_HASH_DOMAIN, indexed).encode();
+    assert_eq!(body_input.len(), 15 + prefix + (4 + 4) * count);
+    visits.set(0);
+    assert_eq!(
+      contract.body_commitment(),
+      Some(frame::hashing::blake2_256(&body_input))
+    );
+    assert_eq!(visits.get(), count);
+  }
 }
 
 #[test]
@@ -8583,6 +8739,154 @@ fn step_ticket_binds_run_cursor_fifo_eligibility_and_contract_commitment() {
 }
 
 #[test]
+fn resource_storage_metadata_uses_compact_aware_parent_bounds() {
+  use codec::MaxEncodedLen;
+  use polkadot_sdk::frame_support::traits::StorageInfoTrait;
+
+  assert_eq!(
+    crate::CurrentBlockResourceState::<Test>::storage_info()[0].max_size,
+    Some(crate::BlockResourceState::<MockBlockNumber>::max_encoded_len() as u32),
+  );
+  assert_eq!(
+    crate::FinalizedBlockResourceTelemetry::<Test>::storage_info()[0].max_size,
+    Some(crate::FinalizedBlockResourceSnapshot::<MockBlockNumber>::max_encoded_len() as u32),
+  );
+}
+
+#[test]
+fn quote_and_host_metadata_bounds_cover_compact_weights() {
+  use codec::MaxEncodedLen;
+
+  let authority = crate::AdmissionCertificateAuthority {
+    runtime_actor_semantics_version: 1,
+    production_weight_identity: [0; 32],
+    body_geometry_version: 1,
+    configured_bounds_commitment: [0; 32],
+    maximum_lifecycle_weight: Weight::MAX,
+  };
+  assert_eq!(
+    authority.encoded_size(),
+    crate::AdmissionCertificateAuthority::max_encoded_len()
+  );
+  new_test_ext().execute_with(|| {
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 2),
+    );
+    let mut quote = Actors::actor_cost_quote(actor_id).unwrap();
+    // Alter a detached codec value only; these are not host-admitted execution weights.
+    quote
+      .prospective_trigger_fee
+      .as_mut()
+      .unwrap()
+      .maximum_weight = Weight::MAX;
+    quote.maximum_next_action_fee.maximum_effect_weight = Weight::MAX;
+    assert_eq!(
+      quote.prospective_trigger_fee.unwrap().encoded_size(),
+      crate::ActorTriggerFeeQuote::<Balance>::max_encoded_len(),
+    );
+    assert_eq!(
+      quote.maximum_next_action_fee.encoded_size(),
+      crate::ActorActionFeeQuote::<Balance>::max_encoded_len(),
+    );
+    assert_eq!(
+      quote.encoded_size(),
+      crate::ActorCostQuote::<Balance>::max_encoded_len()
+    );
+  });
+}
+
+#[test]
+fn admission_identity_hash_input_has_bounded_encoding() {
+  use codec::MaxEncodedLen;
+  use polkadot_sdk::sp_io;
+
+  let trigger = manual_schedule().trigger;
+  let window = None::<crate::ScheduleWindow<MockBlockNumber>>;
+  let qualification = trigger.wake_qualification(&window);
+  let selector_input = (*b"DEOS_ACTOR_WAKE_SELECTOR", &trigger).encode();
+  let schedule_input = (*b"DEOS_ACTOR_WAKE_SCHEDULE", &window).encode();
+  assert_eq!(selector_input.len(), 24 + trigger.encoded_size());
+  assert_eq!(schedule_input.len(), 24 + window.encoded_size());
+  assert_eq!(
+    qualification.selector_commitment,
+    sp_io::hashing::blake2_256(&selector_input)
+  );
+  assert_eq!(
+    qualification.schedule_commitment,
+    sp_io::hashing::blake2_256(&schedule_input)
+  );
+  assert_eq!(qualification.encoded_size(), 65);
+
+  for component in [
+    0,
+    63,
+    64,
+    (1 << 14) - 1,
+    1 << 14,
+    (1 << 30) - 1,
+    1 << 30,
+    u64::MAX,
+  ] {
+    let weight = Weight::from_parts(component, component);
+    let certificate: crate::ActorAdmissionCertificateOf<Test> =
+      crate::ActorAdmissionCertificate::new(
+        [1; 32],
+        [2; 32],
+        qualification,
+        3,
+        [4; 32],
+        5,
+        [6; 32],
+        weight,
+      );
+    let input = (
+      *b"DEOS_ACTOR_ADMISSION",
+      [1u8; 32],
+      [2u8; 32],
+      qualification,
+      3u32,
+      [4u8; 32],
+      5u32,
+      [6u8; 32],
+      weight,
+    )
+      .encode();
+    assert_eq!(input.len(), 221 + weight.encoded_size());
+    let weight_encoding_bound = 2 * codec::Compact::<u64>::max_encoded_len();
+    assert!(input.len() <= 221 + weight_encoding_bound);
+    assert_eq!(
+      certificate.admission_identity,
+      sp_io::hashing::blake2_256(&input)
+    );
+    assert!(certificate.has_valid_identity());
+    assert!(certificate.authorizes_wake(qualification));
+    if component == u64::MAX {
+      assert_eq!(input.len(), 221 + weight_encoding_bound);
+      // The pinned derive ignores #[codec(compact)] when computing MaxEncodedLen.
+      // This is a codec counterexample, not an admitted Actor or host authority fixture.
+      assert_eq!(weight.encoded_size(), 18);
+      assert_eq!(Weight::max_encoded_len(), 16);
+      assert_eq!(
+        certificate.encoded_size(),
+        crate::ActorAdmissionCertificateOf::<Test>::max_encoded_len()
+      );
+      let resources = ActorStepResourceEnvelope {
+        control: weight,
+        effect: weight,
+      };
+      assert_eq!(
+        resources.encoded_size(),
+        ActorStepResourceEnvelope::max_encoded_len()
+      );
+    }
+  }
+}
+
+#[test]
 fn admission_identity_binds_every_runtime_owned_domain_field() {
   let qualification = manual_schedule()
     .trigger
@@ -8606,6 +8910,9 @@ fn admission_identity_binds_every_runtime_owned_domain_field() {
   wrong_selector.selector_commitment[0] ^= 1;
   assert!(!certificate.authorizes_wake(wrong_selector));
   let mut stale = certificate.clone();
+  stale.wake_qualification = wrong_family;
+  assert!(!stale.has_valid_identity());
+  let mut stale = certificate.clone();
   stale.wake_qualification = wrong_selector;
   assert!(!stale.has_valid_identity());
   let mut stale = certificate.clone();
@@ -8614,8 +8921,26 @@ fn admission_identity_binds_every_runtime_owned_domain_field() {
   let mut stale = certificate.clone();
   stale.production_weight_identity[0] ^= 1;
   assert!(!stale.has_valid_identity());
-  let mut stale = certificate;
+  let mut stale = certificate.clone();
   stale.maximum_lifecycle_weight = Weight::from_parts(78, 88);
+  assert!(!stale.has_valid_identity());
+  let mut stale = certificate.clone();
+  stale.maximum_lifecycle_weight = Weight::from_parts(77, 89);
+  assert!(!stale.has_valid_identity());
+  let mut stale = certificate.clone();
+  stale.semantic_contract_id[0] ^= 1;
+  assert!(!stale.has_valid_identity());
+  let mut stale = certificate.clone();
+  stale.body_commitment[0] ^= 1;
+  assert!(!stale.has_valid_identity());
+  let mut stale = certificate.clone();
+  stale.runtime_actor_semantics_version += 1;
+  assert!(!stale.has_valid_identity());
+  let mut stale = certificate.clone();
+  stale.configured_bounds_commitment[0] ^= 1;
+  assert!(!stale.has_valid_identity());
+  let mut stale = certificate;
+  stale.wake_qualification.schedule_commitment[0] ^= 1;
   assert!(!stale.has_valid_identity());
 }
 
@@ -8960,7 +9285,7 @@ fn step_resource_envelope_keeps_control_and_effect_weight_separate() {
 }
 
 #[test]
-fn user_pipeline_machine_envelope_prices_control_retries_and_cleanup_only() {
+fn user_pipeline_machine_envelope_prices_control_retries_without_destruction() {
   new_test_ext().execute_with(|| {
     let mut steps = BoundedVec::try_from(vec![
       make_step(Task::Transfer {
@@ -8996,21 +9321,17 @@ fn user_pipeline_machine_envelope_prices_control_retries_and_cleanup_only() {
     assert_eq!(second_fee.control_fee, 0);
     assert!(first_fee.effect_fee > 0);
     assert!(second_fee.effect_fee > 0);
+    let quote = Actors::pipeline_fee_breakdown(ActorType::User, envelope);
+    assert_eq!(quote.total_fee, envelope.pipeline_machine_fee_upper);
     assert_eq!(
-      envelope.cleanup_fee_upper,
-      TestWeightToFee::weight_to_fee(&<TestWeightInfo as crate::WeightInfo>::close_actor())
-    );
-    assert!(
-      envelope
-        .pipeline_machine_fee_upper
-        .checked_add(envelope.cleanup_fee_upper)
-        .is_some()
+      Actors::close_cleanup_weight_upper(),
+      <TestWeightInfo as crate::WeightInfo>::close_actor()
     );
   });
 }
 
 #[test]
-fn zero_step_pipeline_machine_envelope_prices_generated_control_and_cleanup() {
+fn zero_step_pipeline_machine_envelope_prices_generated_control_without_destruction() {
   new_test_ext().execute_with(|| {
     let steps = crate::ContractSteps::<Test>::default();
     let contract =
@@ -9025,15 +9346,16 @@ fn zero_step_pipeline_machine_envelope_prices_generated_control_and_cleanup() {
         &<TestWeightInfo as crate::WeightInfo>::scheduler_inner_zero_step_complete(),
       )
     );
-    assert_eq!(
-      user.cleanup_fee_upper,
-      TestWeightToFee::weight_to_fee(&<TestWeightInfo as crate::WeightInfo>::close_actor())
-    );
     assert!(user.pipeline_machine_fee_upper > 0);
+    let quote = Actors::pipeline_fee_breakdown(ActorType::User, user);
+    assert_eq!(quote.total_fee, user.pipeline_machine_fee_upper);
     let system = Actors::derive_pipeline_machine_envelope(ActorType::System, &steps, &resources)
       .expect("zero-Step System envelope fits");
     assert_eq!(system.pipeline_machine_fee_upper, 0);
-    assert_eq!(system.cleanup_fee_upper, 0);
+    assert_eq!(
+      Actors::pipeline_fee_breakdown(ActorType::System, user).total_fee,
+      0
+    );
   });
 }
 
@@ -9163,7 +9485,6 @@ fn contract_geometry_decomposition_is_gap_free_and_head_only_for_one_step() {
         head.header.pipeline_machine_envelope,
         crate::PipelineMachineEnvelope {
           pipeline_machine_fee_upper: 0,
-          cleanup_fee_upper: 0,
         }
       );
       let loaded_first = Actors::load_current_step_from_geometry(7, &head, &certificate, 0, None)
@@ -9212,7 +9533,20 @@ fn contract_geometry_decomposition_is_gap_free_and_head_only_for_one_step() {
         Actors::reconstruct_contract_geometry(7, head.clone(), &chunks),
         Some(contract.clone())
       );
+      let maximum: u32 = <Test as crate::Config>::MaxContractSteps::get();
+      for count in [maximum + 1, u32::MAX] {
+        let mut oversized = head.clone();
+        oversized.header.step_count = count;
+        assert!(Actors::reconstruct_contract_geometry(7, oversized, &chunks).is_none());
+      }
       if !chunks.is_empty() {
+        assert!(
+          Actors::reconstruct_contract_geometry(7, head.clone(), &chunks[..chunks.len() - 1])
+            .is_none()
+        );
+        let mut extra = chunks.clone();
+        extra.push(chunks[0].clone());
+        assert!(Actors::reconstruct_contract_geometry(7, head.clone(), &extra).is_none());
         assert_eq!(
           Actors::reconstruct_contract_geometry(8, head.clone(), &chunks),
           None

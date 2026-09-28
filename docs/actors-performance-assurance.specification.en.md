@@ -25,7 +25,7 @@ completed, skipped, failed, suspended, closed, and pending counts
 FIFO, detector, wakeup, body, and resource faults
 ```
 
-Setup, genesis construction, prefunding, and deterministic population generation are outside the measured block interval. The measured interval begins with the named trigger operation or first baseline operation. A profile passes only against runtime-bound production Weight and production-Wasm or stronger full-runtime block evidence. Native wall-clock or synthetic microbenchmarks may diagnose a candidate but cannot establish acceptance evidence.
+Setup, genesis construction, prefunding, and deterministic population generation are outside the measured block interval. The measured interval begins with the named trigger operation or first baseline operation. A production acceptance profile passes only against runtime-bound production Weight and production-Wasm or stronger full-runtime block evidence. The isolated design-comparison profile in §1.5 has its own explicit evidence boundary and does not establish production acceptance. Native wall-clock or synthetic microbenchmarks may diagnose a candidate but cannot establish acceptance evidence.
 
 All populations, market state, authored bounds, transaction demand, and seeds MUST be deterministic and retained by the project harness. Weight fairness and deltas are component-wise; no scalar score may combine RefTime and ProofSize. Database reads/writes, persistent bytes, block count, and faults remain separately reported.
 
@@ -119,6 +119,33 @@ Evidence and requirements in this document belong to one of five classes:
 - **Current release gate**: the rule a release decision actually applies. Correctness, resource-policy conformance, and declared comparative regression are gates; closure of a historical horizon is not.
 
 Each claim MUST identify its supporting class. Reporting completion against a historical horizon remains REQUIRED for continuity, but the horizon MUST NOT be presented as a current release requirement.
+
+### 1.5 Frozen Actors-Only Design Comparison
+
+Actor machinery design comparisons MUST use one fixed idealized resource profile until the current design campaign converges or an explicit benchmark-contract decision replaces it. Production conditional allocation remains governed by the resource-policy specification; it MUST NOT silently change this comparative profile. The reference block envelope is fixed numerically, not read from a changing runtime `BlockWeights` getter:
+
+| Quantity | RefTime (ps) | ProofSize (bytes) |
+| --- | ---: | ---: |
+| Reference block envelope | 2,000,000,000,000 | 10,485,760 |
+| Non-Actor system prefix and outstanding reserve | 0 | 0 |
+| Ordinary user dispatch | 0 | 0 |
+| Actor Control ceiling | 666,666,666,666 | 3,495,253 |
+| Shared Economic ceiling, all available to Actor effects over both passes | 1,333,333,333,334 | 6,990,507 |
+| Initial Actor base turn | 666,666,666,667 | 3,495,253 |
+
+The first baseline measurement MUST follow implementation and functional validation of the selected 10,485,760-byte common runtime/FRAME ceiling, the shared allocation/freeze mechanism, and this isolated harness. Complete production system-quarter certification and unrelated Governance/XCM lifecycle repairs are separate acceptance gates, not prerequisites for the explicitly zero-system comparison; no uncertified production cost may be discounted by invoking this isolation. Increasing ProofSize MUST NOT implicitly increase RefTime. Measurements under a different numeric ceiling are not the baseline or evidence of machinery improvement for this profile.
+
+The prepared measurement source MUST be checkpointed locally and remain clean during the baseline run. Record the commit/tree, toolchain, workload, command, applicable Weight identity and the identity and role of the executed Wasm. A benchmark Wasm is not an accepted production Wasm. Necessary scoped calibration and functional checks precede this checkpoint and are preparation, not the throughput baseline; known underbounds or inapplicable coefficients in any executed or reserved owner invalidate charged-capacity claims. Never satisfy identity checks by selecting a previously released artifact or silently omitting a required check.
+
+Before baseline, functional evidence MUST show that independent Control/effect refusal preserves the live head and Step progress, releases incomplete reservations, charges legitimate inspection and prevents successor bypass. Cover each Weight dimension, base/Drain phase boundaries and next-block recovery of the same head with no duplicate Step. Distinguish budget refusal from an executed business failure. Compare reserved maxima, charged actual work and physical costs separately; reservation-efficiency and allocation-policy changes require the measured machine baseline rather than assuming two accounting domains need two execution queues.
+
+The profile MUST use the canonical Prepass → empty external phase → Drain progression. Actor effects may consume the unused User turn only through ordinary Drain borrowing; the harness MUST NOT grant the whole economic pool to Prepass, lend Control to effects, bypass the live head, or relax next-block eligibility and one-Step-per-Actor pacing. These are capacity ceilings, not guaranteed consumption: Control exhaustion, effect geometry and fragmentation remain measured outcomes.
+
+Zero system work is an explicit isolated benchmark premise, not a claim that a real empty production block has zero cost. The harness MUST exclude unrelated system hooks and latent background Actors from the measured workload, identify its synthetic context setup, and retain all Actor-owned detection, admission, scheduling, fee, retry, cleanup, budget accounting and finalization costs. Canonical Task effects and their synchronous runtime adapter consequences remain charged; no Actor work may be reclassified as free setup or external system work. Genesis, prefunding and population construction stay outside measurement under Section 1.
+
+Each baseline/candidate pair MUST retain identical numeric envelopes, workload and initial semantic state, populations, Contract/Task geometry, admitted single-Step bounds, seeds, measurement method, host/toolchain and database settings. Source, Wasm and Weight identities remain explicit for each candidate; changed coefficients and charged throughput MUST be distinguished from independently measured physical work. A change in allocation or measurement method starts a separately labelled comparison and requires a matching baseline; it MUST NOT be reported as an Actor machinery improvement.
+
+This profile is the primary controlled coordinate for selecting Actor designs, not production acceptance or a replacement for the workload classes and adversarial scenarios in this specification. Full-runtime quiet/system-saturated, session-rotation, Governance/MQ and mixed-user profiles remain separate correctness and release checks. They MUST NOT redefine the frozen idealized comparison envelope. Historical measurements under other budgets remain labelled historical coordinates and MUST NOT be compared directly as speedup factors.
 
 ## 2. Ten-Thousand-Actor Reference Profiles
 

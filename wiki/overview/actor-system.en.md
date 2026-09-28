@@ -59,6 +59,12 @@ The Automation Observe view reads the bounded feed registry and one selected fee
 
 Funding uses ordinary inbound transfers rather than a dedicated value-transfer call. The Contract funding policy or the default-deny `FundingAuthority` decides whether a certified credit is accepted; rejected or source-less deposits remain balance-only custody, while post-expiry ingress closes the actor inline. Each supported producer preflights before value movement and submits one direct fallible notification in the same transaction, so a failure rolls back rather than silently losing state. Actors keep no funding accumulator or cycle snapshot: every Attempt reads the current available balance.
 
+## Fees and State Removal
+
+User creation pays for state installation through ordinary transaction payment and backs eventual complete removal through the Creation Fee. Each Pipeline pays for its own machine execution and Cycle completion, without repeating the final Actor-destruction charge. Trigger occurrences and invoked Action effects remain separate fees; refundable state holds are not cleanup payments.
+
+Prepaid cleanup still consumes current-block Weight and never transfers sovereign custody. Close currently removes process state atomically; prepayment does not imply deferred or incremental deletion. The configured Creation Fee alone is not evidence of a measured worst-case cleanup tariff, and fresh cost quotes are not production resource certification.
+
 ## Block-Paced Execution and Resource Zipper
 
 Production execution separates two component-wise `Weight` domains. **Actor Control** has a hard ceiling of one third of schedulable block capacity and pays for detection, materialization, current-Step evaluation, Service ring and deadline movement, lifecycle bookkeeping, and bounded cleanup. **Shared Economic Execution** owns the remaining two thirds and pays both ordinary external calls and Actor Task effects through the same host mechanisms and Weight owners.

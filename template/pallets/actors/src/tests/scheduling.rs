@@ -125,7 +125,13 @@ fn terminal_service_reserves_cleanup_before_any_step_mutation() {
                 crate::BlockResourceLimits::new(control, effect.saturating_mul(2), effect, effect)
                   .unwrap();
               let mut state = crate::BlockResourceState::new(now);
-              assert_ok!(state.begin_prepass());
+              assert_ok!(
+                state.begin_prepass(
+                  limits
+                    .into_budget()
+                    .expect("synthetic limits define one budget")
+                )
+              );
               let consumed = if pass_owned {
                 Actors::execute_cycle_to_cutoff_with_resources(
                   full_control.saturating_add(effect),
@@ -287,7 +293,13 @@ fn user_pipeline_insolvency_closes_before_effect_capacity_deferral() {
         .checked_limits()
         .expect("independent component limits fit");
         let mut resources = crate::BlockResourceState::new(2);
-        assert_ok!(resources.begin_prepass());
+        assert_ok!(
+          resources.begin_prepass(
+            limits
+              .into_budget()
+              .expect("synthetic limits define one budget")
+          )
+        );
         assert_ok!(resources.open_external_phase());
         assert_ok!(resources.begin_drain());
         let pass = Actors::execute_cycle_to_cutoff_with_resources(
@@ -512,7 +524,7 @@ fn suspended_expiry_and_breaker_precede_liability_and_effect_deferral() {
               shared_economic: effect_capacity,
             }.checked_limits().expect("independent lanes fit");
             let mut resources = crate::BlockResourceState::new(102);
-            assert_ok!(resources.begin_prepass());
+            assert_ok!(resources.begin_prepass(limits.into_budget().expect("synthetic limits define one budget")));
             assert_ok!(resources.open_external_phase());
             assert_ok!(resources.begin_drain());
             let pass = Actors::execute_cycle_to_cutoff_with_resources(Weight::MAX, Actors::queue_tail(), &mut resources, limits,
@@ -1797,6 +1809,267 @@ fn payload_free_actor_prepass_inherent_is_required_and_canonical() {
 }
 
 #[test]
+fn actor_prepass_declaration_covers_quiet_allocations_without_changing_with_fixed_work() {
+  use polkadot_sdk::frame_support::dispatch::{DispatchClass, GetDispatchInfo};
+
+  new_test_ext().execute_with(|| {
+    let maximum = Weight::from_parts(1200, 2400);
+    let quiet = crate::BlockResourceBudget::new_with_control_ratio(maximum, Weight::zero(), 1, 3)
+      .expect("bounded zero-fixed allocation");
+    let quiet_prepass = quiet
+      .limits()
+      .actor_control()
+      .saturating_add(quiet.limits().actor_base_turn());
+    let mut declaration = None;
+    for fixed in [
+      maximum / 4,
+      Weight::zero(),
+      Weight::from_parts(300, 0),
+      Weight::from_parts(0, 600),
+    ] {
+      set_block_resource_budget(
+        crate::BlockResourceBudget::new_with_control_ratio(maximum, fixed, 1, 3)
+          .expect("fixed work fits the system quarter"),
+      );
+      let info = crate::Call::<Test>::actor_prepass {}.get_dispatch_info();
+      assert_eq!(info.class, DispatchClass::Mandatory);
+      assert!(quiet_prepass.all_lte(info.call_weight));
+      assert!(info.call_weight.all_lte(maximum));
+      if let Some(previous) = declaration {
+        assert_eq!(info.call_weight, previous);
+      }
+      declaration = Some(info.call_weight);
+      assert!(Actors::block_resource_state().is_none());
+    }
+  });
+}
+
+#[test]
+fn prepass_freezes_host_settled_budget_once_across_all_phases() {
+  use polkadot_sdk::frame_support::dispatch::GetDispatchInfo;
+  let maximum = Weight::from_parts(2_000_000_000_000, 10_485_760);
+  let maximum_fixed = maximum / 4;
+  let configured =
+    crate::BlockResourceBudget::new_with_control_ratio(maximum, maximum_fixed, 1, 3).unwrap();
+  for (prefix, tail) in [
+    (Weight::zero(), Weight::zero()),
+    (maximum / 16, maximum / 16),
+    (maximum / 8, maximum / 8),
+    (
+      Weight::from_parts(maximum.ref_time() / 8, 0),
+      Weight::from_parts(0, maximum.proof_size() / 8),
+    ),
+  ] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      set_block_resource_budget(configured);
+      let steps =
+        BoundedVec::try_from(vec![transfer_contract_steps(BOB, 1)[0].clone(); 2]).unwrap();
+      let ids = (0..2)
+        .map(|_| {
+          let id = create_system_with(ALICE, manual_schedule(), None, steps.clone());
+          fund_native(id, 1_000);
+          assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+          id
+        })
+        .collect::<Vec<_>>();
+      let supplied =
+        crate::BlockResourceBudget::from_settled_prefix(maximum, maximum_fixed, prefix, tail, 1, 3)
+          .unwrap();
+      set_prepass_resource_budget(2, Ok(supplied));
+      assert_eq!(
+        crate::Call::<Test>::actor_prepass {}
+          .get_dispatch_info()
+          .call_weight,
+        maximum
+      );
+      assert_eq!(TestBlockResourceBudget::get(), configured);
+      assert_eq!(
+        prepass_resource_budget_reads(),
+        0,
+        "configuration and declaration do not consume block input"
+      );
+      System::set_block_number(2);
+      Actors::on_initialize(2);
+      run_prepass();
+      assert_eq!(prepass_resource_budget_reads(), 1);
+      let mut state = Actors::block_resource_state().unwrap();
+      assert_eq!(state.budget(), Ok(supplied));
+      assert_eq!(supplied.fixed_envelope(), prefix.saturating_add(tail));
+      assert!(
+        supplied
+          .limits()
+          .actor_control()
+          .all_gte(configured.limits().actor_control())
+      );
+      assert!(
+        supplied
+          .limits()
+          .shared_economic()
+          .all_gte(configured.limits().shared_economic())
+      );
+      for id in &ids {
+        assert_eq!(Actors::actor_run_state(*id).unwrap().cursor, 1);
+      }
+      let user_actual = Weight::from_parts(1_000, 1_000);
+      let mut reservation = state
+        .reserve(
+          supplied.limits(),
+          crate::BlockResourceDomain::UserDispatch,
+          user_actual,
+        )
+        .unwrap();
+      assert_ok!(state.settle(&mut reservation, user_actual));
+      let before = state;
+      for deficit in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+        let overflow = supplied
+          .limits()
+          .shared_economic()
+          .checked_sub(&state.usage().actor_effect_used())
+          .unwrap()
+          .checked_sub(&user_actual)
+          .unwrap()
+          .saturating_add(deficit);
+        assert_eq!(
+          state.reserve(
+            supplied.limits(),
+            crate::BlockResourceDomain::UserDispatch,
+            overflow
+          ),
+          Err(crate::BlockResourceError::LimitExceeded)
+        );
+        assert_eq!(state, before);
+      }
+      crate::CurrentBlockResourceState::<Test>::put(state);
+      set_prepass_resource_budget(2, Err(crate::BlockResourceError::InvalidPhase));
+      set_block_resource_budget(crate::BlockResourceBudget::fail_closed(Weight::MAX));
+      assert!(Actors::on_idle(2, Weight::MAX).all_gt(Weight::zero()));
+      assert_eq!(
+        prepass_resource_budget_reads(),
+        1,
+        "Drain cannot reread or replace frozen input"
+      );
+      let snapshot = Actors::finalized_block_resource_telemetry().unwrap();
+      assert_eq!(snapshot.budget(), supplied);
+      assert_eq!(snapshot.usage().user_dispatch_used(), user_actual);
+      assert!(!snapshot.optional_actor_work_halted());
+      Actors::on_finalize(2);
+      assert!(Actors::block_resource_state().is_none());
+      assert_eq!(prepass_resource_budget_reads(), 1);
+      for id in &ids {
+        assert_eq!(
+          Actors::actor_run_state(*id).unwrap().cursor,
+          1,
+          "Drain preserves Q1"
+        );
+      }
+
+      set_block_resource_budget(configured);
+      set_prepass_resource_budget(3, Ok(configured));
+      System::set_block_number(3);
+      Actors::on_initialize(3);
+      run_prepass();
+      assert_eq!(prepass_resource_budget_reads(), 2);
+      assert_eq!(
+        Actors::block_resource_state().unwrap().budget(),
+        Ok(configured)
+      );
+      Actors::on_idle(3, Weight::MAX);
+      Actors::on_finalize(3);
+      for id in ids {
+        assert_eq!(Actors::active_actor_view(id).unwrap().cycle_nonce, 1);
+        assert!(Actors::actor_run_state(id).is_none());
+      }
+    });
+  }
+}
+
+#[test]
+fn prepass_rejects_host_budget_errors_before_scheduler_mutation() {
+  let maximum = Weight::from_parts(2_000_000_000_000, 10_485_760);
+  let maximum_fixed = maximum / 4;
+  let configured =
+    crate::BlockResourceBudget::new_with_control_ratio(maximum, maximum_fixed, 1, 3).unwrap();
+  let mut cases = vec![
+    (2, Err(crate::BlockResourceError::InvalidPhase)),
+    (1, Ok(configured)),
+  ];
+  for deficit in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+    for wrong_maximum in [
+      maximum.saturating_add(deficit),
+      maximum.saturating_sub(deficit),
+    ] {
+      cases.push((
+        2,
+        crate::BlockResourceBudget::new_with_control_ratio(wrong_maximum, maximum_fixed, 1, 3),
+      ));
+    }
+    cases.push((
+      2,
+      crate::BlockResourceBudget::new_with_control_ratio(
+        maximum,
+        maximum_fixed.saturating_add(deficit),
+        1,
+        3,
+      ),
+    ));
+    cases.push((
+      2,
+      crate::BlockResourceBudget::from_settled_prefix(
+        maximum,
+        maximum_fixed,
+        maximum_fixed,
+        deficit,
+        1,
+        3,
+      ),
+    ));
+  }
+  for (block, candidate) in cases {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      set_block_resource_budget(configured);
+      let id = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        transfer_contract_steps(BOB, 1),
+      );
+      fund_native(id, 1_000);
+      assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+      System::set_block_number(2);
+      set_prepass_resource_budget(block, candidate);
+      assert_noop!(
+        Actors::actor_prepass(RuntimeOrigin::none()),
+        Error::<Test>::ResourceProtocolFailed
+      );
+      assert_eq!(prepass_resource_budget_reads(), 1);
+      assert!(Actors::block_resource_state().is_none());
+      assert_eq!(Actors::active_actor_view(id).unwrap().cycle_nonce, 0);
+      set_prepass_resource_budget(2, Ok(configured));
+      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+      assert_eq!(prepass_resource_budget_reads(), 2);
+      assert_eq!(Actors::active_actor_view(id).unwrap().cycle_nonce, 1);
+      polkadot_sdk::frame_support::assert_err!(
+        Actors::actor_prepass(RuntimeOrigin::none()),
+        Error::<Test>::PrepassDuplicateOrStale
+      );
+      assert_eq!(
+        prepass_resource_budget_reads(),
+        2,
+        "duplicate admission never asks the host for a replacement"
+      );
+      assert_eq!(
+        Actors::block_resource_state().unwrap().budget(),
+        Ok(configured)
+      );
+      Actors::on_idle(2, Weight::MAX);
+      Actors::on_finalize(2);
+    });
+  }
+}
+
+#[test]
 fn actor_prepass_rejects_signed_origin_before_resource_mutation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -1863,6 +2136,27 @@ fn block_finalize_consumes_the_one_pass_marker() {
     Actors::on_finalize(1);
     assert!(Actors::block_resource_state().is_none());
     assert!(std::panic::catch_unwind(|| Actors::on_finalize(1)).is_err());
+  });
+}
+
+#[test]
+fn drain_and_finalization_use_the_budget_frozen_by_prepass() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    Actors::on_initialize(1);
+    run_prepass();
+    let frozen = Actors::block_resource_state().unwrap().budget().unwrap();
+    set_block_resource_budget(crate::BlockResourceBudget::fail_closed(Weight::MAX));
+    assert_ne!(TestBlockResourceBudget::get(), frozen);
+    assert!(Actors::on_idle(1, Weight::MAX).all_gt(Weight::zero()));
+    let state = Actors::block_resource_state().unwrap();
+    assert_eq!(state.budget(), Ok(frozen));
+    assert_eq!(state.phase(), crate::BlockResourcePhase::Finalizable);
+    let snapshot = Actors::finalized_block_resource_telemetry().unwrap();
+    assert_eq!(snapshot.budget(), frozen);
+    assert_eq!(snapshot.fixed_reserved(), frozen.fixed_envelope());
+    Actors::on_finalize(1);
+    assert!(Actors::block_resource_state().is_none());
   });
 }
 
@@ -2131,7 +2425,7 @@ fn zero_step_opening_completes_without_step_or_run_state() {
     frame_system::Pallet::<Test>::set_block_number(2);
     let budget = TestBlockResourceBudget::get();
     let mut resource_state = crate::BlockResourceState::new(2);
-    assert_eq!(resource_state.begin_prepass(), Ok(()));
+    assert_eq!(resource_state.begin_prepass(budget), Ok(()));
     assert_eq!(resource_state.open_external_phase(), Ok(()));
     assert_eq!(resource_state.begin_drain(), Ok(()));
     let pass = Actors::execute_cycle_to_cutoff_with_resources(
@@ -3425,7 +3719,7 @@ fn manual_trigger_survives_paused_queue_pop_and_resume() {
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
     let budget = TestBlockResourceBudget::get();
     let mut resource_state = crate::BlockResourceState::new(1);
-    assert_eq!(resource_state.begin_prepass(), Ok(()));
+    assert_eq!(resource_state.begin_prepass(budget), Ok(()));
     assert_eq!(resource_state.open_external_phase(), Ok(()));
     assert_eq!(resource_state.begin_drain(), Ok(()));
     let pass = Actors::execute_cycle_to_cutoff_with_resources(
@@ -3656,7 +3950,7 @@ fn mandatory_prepass_pass_admits_effectful_service_without_double_reserving_cont
     frame_system::Pallet::<Test>::set_block_number(2);
     let budget = TestBlockResourceBudget::get();
     let mut resource_state = crate::BlockResourceState::new(2);
-    assert_eq!(resource_state.begin_prepass(), Ok(()));
+    assert_eq!(resource_state.begin_prepass(budget), Ok(()));
     // The enclosing pass owns the ActorControl envelope; the canonical Service round must admit
     // the effectful head without reserving that control a second time.
     Actors::execute_cycle_to_cutoff_with_resources(
@@ -3705,7 +3999,7 @@ fn service_discovery_refuses_before_round_mutation_in_each_dimension() {
           let short = selector.saturating_sub(deficit);
           let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
           let mut state = crate::BlockResourceState::new(2);
-          assert_ok!(state.begin_prepass());
+          assert_ok!(state.begin_prepass(TestBlockResourceBudget::get()));
           let pass = if pass_owned {
             Actors::execute_cycle_to_cutoff_with_resources(
               Weight::MAX,
@@ -3766,7 +4060,7 @@ fn service_discovery_classifies_without_admitting_actor_loading() {
           .saturating_add(TestWeightInfo::service_round_probe_eligible());
         let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
         let mut state = crate::BlockResourceState::new(2);
-        assert_ok!(state.begin_prepass());
+        assert_ok!(state.begin_prepass(TestBlockResourceBudget::get()));
         let pass = if pass_owned {
           Actors::execute_cycle_to_cutoff_with_resources(
             Weight::MAX,
@@ -3831,7 +4125,7 @@ fn service_discovery_stops_on_defensive_attempt_marker() {
       let selector = TestWeightInfo::service_round_begin_populated()
         .saturating_add(TestWeightInfo::service_round_probe_eligible());
       let mut state = crate::BlockResourceState::new(2);
-      assert_ok!(state.begin_prepass());
+      assert_ok!(state.begin_prepass(TestBlockResourceBudget::get()));
       let pass = if pass_owned {
         Actors::execute_cycle_to_cutoff_with_resources(
           Weight::MAX,
@@ -3876,7 +4170,7 @@ fn pass_owned_control_matches_direct_service_actual_accounting() {
           System::set_block_number(2);
           let limits = TestBlockResourceBudget::get().limits();
           let mut state = crate::BlockResourceState::new(2);
-          assert_ok!(state.begin_prepass());
+          assert_ok!(state.begin_prepass(TestBlockResourceBudget::get()));
           let consumed = if pass_owned {
             Actors::execute_cycle_to_cutoff_with_resources(
               Weight::MAX,
@@ -3997,7 +4291,7 @@ fn pass_owned_control_cannot_borrow_effect_capacity_or_bypass_a_refused_head() {
       );
       let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
       let mut state = crate::BlockResourceState::new(2);
-      assert_ok!(state.begin_prepass());
+      assert_ok!(state.begin_prepass(TestBlockResourceBudget::get()));
       let pass = Actors::execute_cycle_to_cutoff_with_resources(
         complete_control.saturating_add(resources.effect),
         0,
@@ -4019,6 +4313,323 @@ fn pass_owned_control_cannot_borrow_effect_capacity_or_bypass_a_refused_head() {
         !state.optional_actor_work_halted(),
         "ordinary capacity refusal is not corrupt accounting"
       );
+    });
+  }
+}
+
+#[test]
+fn paired_service_refusal_recovers_without_progress_or_fee_loss() {
+  use crate::{BlockResourceDomain as Domain, WeightInfo};
+  for (drain, control_shortfall) in [(false, false), (true, false), (false, true), (true, true)] {
+    for deficit in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+      for running in [false, true] {
+        new_test_ext().execute_with(|| {
+          // Synthetic settled usage isolates the admission boundary, not block throughput.
+          let budget = crate::BlockResourceBudget::new_with_control_ratio(
+            Weight::from_parts(2_000_000_000_000, 10_485_760),
+            Weight::zero(),
+            1,
+            3,
+          )
+          .unwrap();
+          let limits = budget.limits();
+          System::set_block_number(1);
+          let steps =
+            BoundedVec::try_from(vec![transfer_contract_steps(BOB, 1)[0].clone(); 3]).unwrap();
+          let ids = (0..2)
+            .map(|_| {
+              let id = create_user_with(
+                ALICE,
+                Mutability::Mutable,
+                manual_schedule(),
+                None,
+                steps.clone(),
+              );
+              fund_native(id, 10_000);
+              assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+              assert_eq!(Actors::service_nodes(id).unwrap().eligible_from, 2);
+              id
+            })
+            .collect::<Vec<_>>();
+          System::set_block_number(2);
+          if running {
+            let mut opening = crate::BlockResourceState::new(2);
+            assert_ok!(opening.begin_prepass(budget));
+            Actors::execute_cycle_to_cutoff_with_resources(
+              Weight::MAX,
+              0,
+              &mut opening,
+              limits,
+              Domain::ActorBaseEffect,
+              limits.actor_control(),
+            );
+            for id in &ids {
+              assert_eq!(Actors::actor_run_state(*id).unwrap().cursor, 1);
+            }
+            assert_eq!(opening.outstanding_reservations(), 0);
+            System::set_block_number(3);
+          }
+          let now = System::block_number();
+          let resources = Actors::load_current_step_from_storage(ids[0], u32::from(running))
+            .unwrap()
+            .resources;
+          let inspection = TestWeightInfo::service_round_begin_populated()
+            .saturating_add(TestWeightInfo::service_round_probe_eligible())
+            .saturating_add(TestWeightInfo::scheduler_actor_state_probe());
+          let suffix = TestWeightInfo::service_round_admit_eligible()
+            .max(TestWeightInfo::service_member_retire_interior())
+            .max(TestWeightInfo::service_member_retire_pair_cursor())
+            .max(TestWeightInfo::service_member_retire_singleton());
+          let complete_control = inspection
+            .saturating_add(resources.control)
+            .saturating_add(suffix);
+          assert!(complete_control.all_lte(limits.actor_control()));
+          assert!(resources.effect.all_lte(limits.actor_base_turn()));
+          let domain = if drain {
+            Domain::ActorDrainEffect
+          } else {
+            Domain::ActorBaseEffect
+          };
+          let mut state = crate::BlockResourceState::new(now);
+          assert_ok!(state.begin_prepass(budget));
+          if drain {
+            assert_ok!(state.open_external_phase());
+            assert_ok!(state.begin_drain());
+          }
+          let (charged_domain, capacity, required) = if control_shortfall {
+            (
+              Domain::ActorControl,
+              limits.actor_control(),
+              complete_control,
+            )
+          } else {
+            (
+              domain,
+              if drain {
+                limits.shared_economic()
+              } else {
+                limits.actor_base_turn()
+              },
+              resources.effect,
+            )
+          };
+          let remaining = required.checked_sub(&deficit).unwrap();
+          let prior_usage = capacity.checked_sub(&remaining).unwrap();
+          let mut prior = state.reserve(limits, charged_domain, prior_usage).unwrap();
+          assert_ok!(state.settle(&mut prior, prior_usage));
+          let before = state.usage();
+          let control = if control_shortfall {
+            remaining
+          } else {
+            limits.actor_control()
+          };
+          assert!(inspection.all_lte(control));
+          assert_ok!(
+            polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+              polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+                Actors::begin_service_round(now),
+              )
+            })
+          );
+          System::reset_events();
+          clear_fee_collections();
+          let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+          let recipient = native_balance(&BOB);
+          let pass = Actors::execute_cycle_to_cutoff_with_resources(
+            Weight::MAX,
+            0,
+            &mut state,
+            limits,
+            domain,
+            control,
+          );
+          assert!(pass.starved);
+          assert_eq!(pass.consumed, inspection);
+          // Covers ring, process, Run, pending signal, attempt markers, holds, custody and events.
+          assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), root);
+          assert!(fee_collections().is_empty());
+          assert_eq!(
+            state.usage().actor_effect_used(),
+            before.actor_effect_used()
+          );
+          assert_eq!(
+            state.usage().actor_control_used(),
+            before.actor_control_used().saturating_add(inspection)
+          );
+          assert_eq!(state.outstanding_reservations(), 0);
+          assert!(!state.optional_actor_work_halted());
+          assert_eq!(Actors::service_header().cursor.unwrap().actor_id, ids[0]);
+
+          if !drain {
+            assert_ok!(state.open_external_phase());
+            assert_ok!(state.begin_drain());
+          }
+          if drain || control_shortfall {
+            // A fully spent shared pool or Control can recover only in a later block.
+            assert_ok!(state.finish_drain());
+            assert_ok!(state.finalized_snapshot());
+            System::set_block_number(now + 1);
+            state = crate::BlockResourceState::new(now + 1);
+            assert_ok!(state.begin_prepass(budget));
+          }
+          let recovery_domain = if drain || control_shortfall {
+            Domain::ActorBaseEffect
+          } else {
+            Domain::ActorDrainEffect
+          };
+          let control_left = limits
+            .actor_control()
+            .checked_sub(&state.usage().actor_control_used())
+            .unwrap();
+          let recovered = Actors::execute_cycle_to_cutoff_with_resources(
+            Weight::MAX,
+            0,
+            &mut state,
+            limits,
+            recovery_domain,
+            control_left,
+          );
+          assert!(!recovered.starved);
+          assert_eq!(state.outstanding_reservations(), 0);
+          assert!(!state.optional_actor_work_halted());
+          let transfers = || {
+            System::events()
+              .into_iter()
+              .filter_map(|record| match record.event {
+                RuntimeEvent::Actors(Event::TransferExecuted { actor_id, .. }) => Some(actor_id),
+                _ => None,
+              })
+              .collect::<Vec<_>>()
+          };
+          assert_eq!(
+            transfers(),
+            ids,
+            "the refused head executes once before its successor"
+          );
+          assert_eq!(native_balance(&BOB), recipient + 2);
+          assert!(!fee_collections().is_empty());
+          for id in &ids {
+            let run = Actors::actor_run_state(*id).unwrap();
+            assert_eq!(run.cursor, u32::from(running) + 1);
+            assert_eq!(run.eligible_at, System::block_number() + 1);
+            let node = Actors::service_nodes(*id).unwrap();
+            assert_eq!(
+              node.eligible_from, 2,
+              "progress retains the original ring admission"
+            );
+            assert_eq!(node.last_considered, System::block_number());
+          }
+          let effect_after = state.usage().actor_effect_used();
+          let control_left = limits
+            .actor_control()
+            .checked_sub(&state.usage().actor_control_used())
+            .unwrap();
+          Actors::execute_cycle_to_cutoff_with_resources(
+            Weight::MAX,
+            0,
+            &mut state,
+            limits,
+            recovery_domain,
+            control_left,
+          );
+          assert_eq!(
+            transfers(),
+            ids,
+            "another pass cannot execute a second Step in this block"
+          );
+          assert_eq!(state.usage().actor_effect_used(), effect_after);
+          assert_eq!(state.outstanding_reservations(), 0);
+          #[cfg(feature = "try-runtime")]
+          assert_ok!(Actors::do_try_state());
+        });
+      }
+    }
+  }
+}
+
+#[test]
+fn paired_service_business_failure_consumes_attempt_and_allows_successor() {
+  use crate::BlockResourceDomain as Domain;
+  for drain in [false, true] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      set_max_consecutive_failures(3);
+      let mut failed_step = transfer_contract_steps(BOB, 1)[0].clone();
+      failed_step.on_error = StepErrorPolicy::AbortCycle;
+      let first = create_user_with(
+        ALICE,
+        Mutability::Mutable,
+        manual_schedule(),
+        None,
+        contract_steps_with_step(failed_step),
+      );
+      let second = create_user_with(
+        ALICE,
+        Mutability::Mutable,
+        manual_schedule(),
+        None,
+        transfer_contract_steps(ALICE, 1),
+      );
+      for id in [first, second] {
+        fund_native(id, 10_000);
+        assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+      }
+      System::set_block_number(2);
+      System::reset_events();
+      clear_fee_collections();
+      set_fail_transfer_to(Some(BOB));
+      let recipient = native_balance(&BOB);
+      let budget = TestBlockResourceBudget::get();
+      let limits = budget.limits();
+      let mut state = crate::BlockResourceState::new(2);
+      assert_ok!(state.begin_prepass(budget));
+      if drain {
+        assert_ok!(state.open_external_phase());
+        assert_ok!(state.begin_drain());
+      }
+      let pass = Actors::execute_cycle_to_cutoff_with_resources(
+        Weight::MAX,
+        0,
+        &mut state,
+        limits,
+        if drain {
+          Domain::ActorDrainEffect
+        } else {
+          Domain::ActorBaseEffect
+        },
+        limits.actor_control(),
+      );
+      set_fail_transfer_to(None);
+      assert!(!pass.starved);
+      assert!(!state.optional_actor_work_halted());
+      assert_eq!(state.outstanding_reservations(), 0);
+      assert_ne!(state.usage().actor_effect_used(), Weight::zero());
+      assert_eq!(native_balance(&BOB), recipient);
+      assert!(!fee_collections().is_empty());
+      let outcomes = System::events()
+        .into_iter()
+        .filter_map(|record| match record.event {
+          RuntimeEvent::Actors(Event::StepFailed {
+            actor_id, error, ..
+          }) => {
+            // DispatchError's static diagnostic string is not SCALE-persisted in events.
+            assert!(matches!(error, DispatchError::Other(_)));
+            Some((actor_id, false))
+          }
+          RuntimeEvent::Actors(Event::TransferExecuted { actor_id, .. }) => Some((actor_id, true)),
+          _ => None,
+        })
+        .collect::<Vec<_>>();
+      assert_eq!(outcomes, vec![(first, false), (second, true)]);
+      for id in [first, second] {
+        let hot = Actors::actor_hot(id).unwrap();
+        assert_eq!(Actors::active_actor_view(id).unwrap().cycle_nonce, 1);
+        assert_eq!(hot.cycle_state, CycleState::Idle);
+        assert!(!hot.pending_signal);
+        assert!(Actors::actor_run_state(id).is_none());
+      }
+      #[cfg(feature = "try-runtime")]
+      assert_ok!(Actors::do_try_state());
     });
   }
 }
@@ -4906,7 +5517,7 @@ fn uninspected_drain_preserves_starvation_evidence() {
         }
         let open_external = |block| {
           let mut state = crate::BlockResourceState::new(block);
-          assert_ok!(state.begin_prepass());
+          assert_ok!(state.begin_prepass(TestBlockResourceBudget::get()));
           assert_ok!(state.open_external_phase());
           crate::CurrentBlockResourceState::<Test>::put(state);
         };
@@ -4961,7 +5572,7 @@ fn drain_admitted_progress_survives_a_sub_discovery_remainder() {
       assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
       System::set_block_number(2);
       let mut state = crate::BlockResourceState::new(2);
-      assert_ok!(state.begin_prepass());
+      assert_ok!(state.begin_prepass(TestBlockResourceBudget::get()));
       assert_ok!(state.open_external_phase());
       crate::CurrentBlockResourceState::<Test>::put(state);
       let resources = Actors::load_current_step_from_storage(id, 0)

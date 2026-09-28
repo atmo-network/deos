@@ -1270,7 +1270,6 @@ pub struct ActorContract<Trigger, BlockNumber, Steps, FundingPolicy, ParkedBalan
 )]
 pub struct PipelineMachineEnvelope<Balance> {
   pub pipeline_machine_fee_upper: Balance,
-  pub cleanup_fee_upper: Balance,
 }
 
 #[derive(
@@ -1331,12 +1330,16 @@ pub struct ActorStepChunk<ActorId, Hash, Steps, Resources> {
 pub type ActorStepControlWeight = Weight;
 pub type ActorTaskEffectWeight = Weight;
 
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
+#[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct ActorStepResourceEnvelope {
   pub control: ActorStepControlWeight,
   pub effect: ActorTaskEffectWeight,
+}
+
+impl MaxEncodedLen for ActorStepResourceEnvelope {
+  fn max_encoded_len() -> usize {
+    2 * super::resource::weight_max_encoded_len()
+  }
 }
 
 #[derive(
@@ -1357,9 +1360,7 @@ pub struct ActorWakeQualification {
   pub schedule_commitment: [u8; 32],
 }
 
-#[derive(
-  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
+#[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 #[scale_info(skip_type_params(Resources))]
 pub struct ActorAdmissionCertificate<Resources> {
   pub semantic_contract_id: [u8; 32],
@@ -1372,6 +1373,15 @@ pub struct ActorAdmissionCertificate<Resources> {
   pub maximum_lifecycle_weight: Weight,
   pub admission_identity: [u8; 32],
   pub marker: core::marker::PhantomData<Resources>,
+}
+
+impl<Resources> MaxEncodedLen for ActorAdmissionCertificate<Resources> {
+  fn max_encoded_len() -> usize {
+    5 * <[u8; 32]>::max_encoded_len()
+      + ActorWakeQualification::max_encoded_len()
+      + 2 * u32::max_encoded_len()
+      + super::resource::weight_max_encoded_len()
+  }
 }
 
 impl<Resources> ActorAdmissionCertificate<Resources> {

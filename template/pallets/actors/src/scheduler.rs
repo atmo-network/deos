@@ -1635,7 +1635,11 @@ impl<T: Config> Pallet<T> {
     let now = frame_system::Pallet::<T>::block_number();
     let mut resources = BlockResourceState::new(now);
     resources
-      .begin_prepass()
+      .begin_prepass(
+        limits
+          .into_budget()
+          .map_err(|_| SimulationError::InvalidBudget)?,
+      )
       .map_err(|_| SimulationError::InvalidBudget)?;
     resources
       .open_external_phase()

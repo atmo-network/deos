@@ -154,7 +154,7 @@ mod async_backing_params {
 pub(crate) use async_backing_params::*;
 
 pub const HOURS: BlockNumber = 600;
-pub const MAXIMUM_BLOCK_WEIGHT: Weight = Weight::from_parts(2_000_000_000_000, 5_000_000);
+pub const MAXIMUM_BLOCK_WEIGHT: Weight = Weight::from_parts(2_000_000_000_000, 10_485_760);
 pub const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(50);
 pub const MIN_ON_IDLE_RESERVE_RATIO: Perbill = Perbill::from_percent(50);
 pub const AVERAGE_ON_INITIALIZE_RATIO: Perbill = Perbill::from_percent(10);

@@ -282,15 +282,21 @@ pub trait AssetOps<AccountId, AssetId, Balance> {
 }
 
 /// Runtime-owned non-semantic authority committed by an Actor admission certificate.
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
-)]
+#[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct AdmissionCertificateAuthority {
   pub runtime_actor_semantics_version: u32,
   pub production_weight_identity: [u8; 32],
   pub body_geometry_version: u32,
   pub configured_bounds_commitment: [u8; 32],
   pub maximum_lifecycle_weight: Weight,
+}
+
+impl MaxEncodedLen for AdmissionCertificateAuthority {
+  fn max_encoded_len() -> usize {
+    2 * u32::max_encoded_len()
+      + 2 * <[u8; 32]>::max_encoded_len()
+      + crate::types::weight_max_encoded_len()
+  }
 }
 
 impl AdmissionCertificateAuthority {

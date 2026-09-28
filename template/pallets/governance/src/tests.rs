@@ -275,6 +275,140 @@ fn epoch_catch_up_is_bounded_chronological_and_eventually_reaches_the_observed_e
 }
 
 #[test]
+fn epoch_service_advancing_clock_profiles_expiry_bursts_and_catch_up_debt() {
+  for (accounts, hook_interval) in [(0u64, 1u64), (512, 1), (513, 1), (1024, 1), (0, 4)] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let lookback: u32 = <Test as crate::Config>::WinningVoteLookbackEpochs::get();
+      let service_limit: u32 = <Test as crate::Config>::MaxExpiringAccountsPerBlock::get();
+      let expiry_epoch = 1 + u64::from(lookback);
+      for (batch, start) in (0..accounts).step_by(256).enumerate() {
+        let winners = (start..(start + 256).min(accounts)).collect::<Vec<_>>();
+        assert_ok!(Governance::record_winning_vote_batch(
+          RuntimeOrigin::root(),
+          7 + batch as u32,
+          100,
+          BoundedVec::try_from(winners).expect("bounded winner batch"),
+        ));
+      }
+      assert_eq!(ExpiryBuckets::<Test>::get(expiry_epoch).len() as u64, accounts);
+      let mut trace = Vec::new();
+      for invocation in 1..=8u64 {
+        let block = invocation * hook_interval;
+        System::set_block_number(block);
+        let before = ExpiryBuckets::<Test>::get(expiry_epoch).len();
+        Governance::on_initialize(block);
+        let after = ExpiryBuckets::<Test>::get(expiry_epoch).len();
+        let processed = before - after;
+        let completed_epoch = LastProcessedEpoch::<Test>::get();
+        assert!(processed <= service_limit as usize);
+        let expected_debt = if hook_interval > 1 {
+          block - invocation
+        } else {
+          u64::from(accounts > 512 && block >= expiry_epoch)
+        };
+        assert_eq!(block - completed_epoch, expected_debt);
+        trace.push((block, completed_epoch, processed));
+      }
+      let busy_blocks = trace
+        .iter()
+        .filter_map(|(block, _, processed)| (*processed > 0).then_some(*block))
+        .collect::<Vec<_>>();
+      let expected_busy_blocks = match accounts {
+        0 => vec![],
+        1..=512 => vec![expiry_epoch],
+        _ => vec![expiry_epoch, expiry_epoch + 1],
+      };
+      assert_eq!(busy_blocks, expected_busy_blocks);
+      assert_eq!(trace.iter().map(|(_, _, processed)| *processed).sum::<usize>(), accounts as usize);
+      assert!(ExpiryBuckets::<Test>::get(expiry_epoch).is_empty());
+      for (batch, start) in (0..accounts).step_by(256).enumerate() {
+        for account in start..(start + 256).min(accounts) {
+          assert!(!WinningVoteWindows::<Test>::contains_key(7 + batch as u32, account));
+        }
+      }
+      println!("accounts={accounts} hook_interval={hook_interval} (block, completed_epoch, expired)={trace:?}");
+    });
+  }
+}
+
+#[test]
+fn epoch_service_bounded_windows_separate_burst_recovery_from_sustained_overload() {
+  // Test-only service opportunities, not an Executive block mode or a Weight comparison.
+  for (consecutive, scan, sustained) in [
+    (1u64, 1u32, false),
+    (1, 2, false),
+    (1, 3, false),
+    (2, 1, false),
+    (2, 2, false),
+    (1, 3, true),
+    (2, 2, true),
+  ] {
+    new_test_ext().execute_with(|| {
+      MaxEpochCatchUpPerBlock::set(scan);
+      let mut longest_run = 0;
+      let mut run = 0;
+      let mut first_recovery = None;
+      let mut due_at_midpoint = 0;
+      let mut due_at_end = 0;
+      let mut calls = 0;
+      let mut trace = Vec::new();
+      for block in 1..=24u64 {
+        System::set_block_number(block);
+        let arrivals = if sustained { 512 } else if block == 1 { 513 } else { 0 };
+        for (batch, start) in (0..arrivals).step_by(256).enumerate() {
+          let winners = (start..(start + 256).min(arrivals))
+            .map(|account| block * 1024 + account)
+            .collect::<Vec<_>>();
+          assert_ok!(Governance::record_winning_vote_batch(
+            RuntimeOrigin::root(),
+            7 + batch as u32,
+            block as u32,
+            BoundedVec::try_from(winners).expect("bounded winner batch"),
+          ));
+        }
+        let service_opportunity = (block - 1) % (consecutive + 1) < consecutive;
+        let before = LastProcessedEpoch::<Test>::get();
+        if service_opportunity {
+          Governance::on_initialize(block);
+          calls += 1;
+          run += 1;
+          longest_run = longest_run.max(run);
+        } else {
+          run = 0;
+          assert_eq!(LastProcessedEpoch::<Test>::get(), before);
+        }
+        assert!(run <= consecutive);
+        let completed_epoch = LastProcessedEpoch::<Test>::get();
+        let due = (1..=block)
+          .map(|epoch| ExpiryBuckets::<Test>::get(epoch).len())
+          .sum::<usize>();
+        if block > 4 && completed_epoch == block && first_recovery.is_none() {
+          first_recovery = Some(block);
+        }
+        if block == 12 {
+          due_at_midpoint = due;
+        }
+        due_at_end = due;
+        trace.push((block, completed_epoch, due));
+      }
+      assert_eq!(calls, 24 * consecutive / (consecutive + 1));
+      assert_eq!(longest_run, consecutive);
+      if sustained {
+        assert!(due_at_end > due_at_midpoint);
+        assert!(LastProcessedEpoch::<Test>::get() < System::block_number());
+      } else {
+        assert_eq!(due_at_end, 0);
+        assert_eq!(first_recovery.is_some(), u64::from(scan) * consecutive > consecutive + 1);
+      }
+      println!(
+        "consecutive={consecutive} scan={scan} sustained={sustained} calls={calls} first_recovery={first_recovery:?} due_mid={due_at_midpoint} due_end={due_at_end} (block, completed_epoch, due)={trace:?}"
+      );
+    });
+  }
+}
+
+#[test]
 #[cfg(feature = "try-runtime")]
 fn try_state_rejects_epoch_phase_advancing_past_an_owned_bucket() {
   new_test_ext().execute_with(|| {
@@ -1701,6 +1835,114 @@ fn executable_payload_records_execution_failed_when_executor_errors() {
         payload_kind: ProposalPayloadKind::L1RootAction,
         reason: crate::ProposalExecutionFailureReason::DispatchFailed,
       }))
+    );
+  });
+}
+
+#[test]
+fn approval_rolls_back_when_retention_or_enactment_destination_is_full() {
+  for full_history in [true, false] {
+    new_test_ext().execute_with(|| {
+      ProposalEnactmentDelay::set(5);
+      assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+      let capacity: u32 = if full_history {
+        <Test as crate::Config>::MaxFinalizedProposalOutcomesPerEpoch::get()
+      } else {
+        <Test as crate::Config>::MaxPendingEnactmentsPerEpoch::get()
+      };
+      let touches = (0..capacity)
+        .map(|item_id| crate::FinalizedProposalTouch {
+          domain: 7,
+          item_id: 1000 + item_id,
+        })
+        .collect::<Vec<_>>();
+      let expected_error = if full_history {
+        crate::FinalizedProposalOutcomeExpiryBuckets::<Test>::insert(
+          4,
+          BoundedVec::try_from(touches).expect("exact history bucket capacity"),
+        );
+        Error::<Test>::FinalizedProposalOutcomeExpiryBucketFull
+      } else {
+        crate::PendingEnactmentBuckets::<Test>::insert(
+          6,
+          BoundedVec::try_from(touches).expect("exact enactment bucket capacity"),
+        );
+        Error::<Test>::PendingEnactmentBucketFull
+      };
+      // assert_noop checks the whole storage root, including earlier resolution effects.
+      assert_noop!(
+        Governance::resolve_proposal(
+          RuntimeOrigin::root(),
+          7,
+          100,
+          BoundedVec::try_from(vec![10u64]).expect("one winner fits"),
+        ),
+        expected_error
+      );
+      assert!(ActiveProposals::<Test>::contains_key(7, 100));
+      assert!(!FinalizedProposals::<Test>::contains_key(7, 100));
+      assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
+    });
+  }
+}
+
+#[test]
+fn late_epoch_service_executes_before_later_scheduled_history_expiry() {
+  new_test_ext().execute_with(|| {
+    let payload_hash = H256::repeat_byte(14);
+    set_payload_preimage_state(payload_hash, true, false);
+    set_payload_executor_enabled(true);
+    ProposalEnactmentDelay::set(2);
+    assert_ok!(Governance::submit_proposal(
+      RuntimeOrigin::root(),
+      7,
+      100,
+      DEFAULT_PROPOSER,
+      ProposalCadenceMode::Ordinary,
+      ProposalPayloadKind::L1RootAction,
+      payload_hash,
+    ));
+    assert_ok!(Governance::resolve_proposal(
+      RuntimeOrigin::root(),
+      7,
+      100,
+      BoundedVec::try_from(vec![10u64]).expect("one winner fits"),
+    ));
+    assert_eq!(ProposalPendingEnactmentAt::<Test>::get(7, 100), Some(3));
+    assert_eq!(
+      Governance::finalized_proposal_outcome_expiry_bucket(4).len(),
+      1
+    );
+    let mut executed_at = None;
+    let mut removed_at = None;
+    for block in 20..=28 {
+      System::set_block_number(block);
+      Governance::on_initialize(block);
+      match Governance::finalized_proposal_outcome(7, 100) {
+        Some(FinalizedProposalOutcome::Approved {
+          enactment: crate::ProposalEnactmentOutcome::Enacted { epoch },
+          ..
+        }) => {
+          assert_eq!(epoch, 3);
+          executed_at.get_or_insert(block);
+        }
+        None => {
+          assert!(
+            executed_at.is_some(),
+            "late service must not erase unexecuted approval"
+          );
+          removed_at.get_or_insert(block);
+        }
+        _ => {}
+      }
+    }
+    let executed_at = executed_at.expect("late enactment was serviced");
+    let removed_at = removed_at.expect("later history expiry was serviced");
+    assert!(executed_at < removed_at);
+    assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
+    assert!(!ProposalMetadataByItem::<Test>::contains_key(7, 100));
+    println!(
+      "late service: actual execution block={executed_at}, actual cleanup block={removed_at}"
     );
   });
 }

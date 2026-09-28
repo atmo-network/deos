@@ -156,6 +156,11 @@ thread_local! {
     RefCell::new(polkadot_sdk::sp_weights::Weight::MAX);
   static BLOCK_RESOURCE_BUDGET_OVERRIDE: RefCell<Option<crate::BlockResourceBudget>> =
     const { RefCell::new(None) };
+  static PREPASS_RESOURCE_BUDGET: RefCell<Option<(u64, Result<crate::BlockResourceBudget, crate::BlockResourceError>)>> =
+    const { RefCell::new(None) };
+  static PREPASS_RESOURCE_BUDGET_READS: RefCell<u32> = const { RefCell::new(0) };
+  #[cfg(feature = "runtime-benchmarks")]
+  static ADMISSION_AUTHORITY_CALLS: RefCell<u32> = const { RefCell::new(0) };
   static STEP_CONTROL_ACTUAL_WEIGHT_OVERRIDE: RefCell<Option<polkadot_sdk::sp_weights::Weight>> =
     RefCell::new(None);
   static LAST_STEP_CONTROL_EXECUTION: RefCell<Option<crate::StepControlExecution>> =
@@ -250,6 +255,8 @@ pub fn reset_mock_adapters() {
   DONATED_LIQUIDITY.with(|b| b.borrow_mut().clear());
   GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow_mut() = polkadot_sdk::sp_weights::Weight::MAX);
   BLOCK_RESOURCE_BUDGET_OVERRIDE.with(|v| *v.borrow_mut() = None);
+  PREPASS_RESOURCE_BUDGET.with(|v| *v.borrow_mut() = None);
+  PREPASS_RESOURCE_BUDGET_READS.with(|v| *v.borrow_mut() = 0);
   STEP_CONTROL_ACTUAL_WEIGHT_OVERRIDE.with(|v| *v.borrow_mut() = None);
   LAST_STEP_CONTROL_EXECUTION.with(|v| *v.borrow_mut() = None);
   MISSING_STEP_CONTROL_ACTUAL_WEIGHT.with(|v| *v.borrow_mut() = false);
@@ -1301,7 +1308,31 @@ pub fn set_block_resource_budget(budget: crate::BlockResourceBudget) {
   BLOCK_RESOURCE_BUDGET_OVERRIDE.with(|value| *value.borrow_mut() = Some(budget));
 }
 
+pub fn set_prepass_resource_budget(
+  block: u64,
+  budget: Result<crate::BlockResourceBudget, crate::BlockResourceError>,
+) {
+  PREPASS_RESOURCE_BUDGET.with(|value| *value.borrow_mut() = Some((block, budget)));
+}
+
+pub fn prepass_resource_budget_reads() -> u32 {
+  PREPASS_RESOURCE_BUDGET_READS.with(|value| *value.borrow())
+}
+
 pub struct TestBlockResourceBudget;
+impl crate::BlockResourceBudgetProvider<u64> for TestBlockResourceBudget {
+  fn for_prepass(
+    now: u64,
+    configured: crate::BlockResourceBudget,
+  ) -> Result<crate::BlockResourceBudget, crate::BlockResourceError> {
+    PREPASS_RESOURCE_BUDGET_READS.with(|reads| *reads.borrow_mut() += 1);
+    match PREPASS_RESOURCE_BUDGET.with(|value| *value.borrow()) {
+      Some((block, budget)) if block == now => budget,
+      Some(_) => Err(crate::BlockResourceError::WrongBlock),
+      None => Ok(configured),
+    }
+  }
+}
 impl Get<crate::BlockResourceBudget> for TestBlockResourceBudget {
   fn get() -> crate::BlockResourceBudget {
     if let Some(budget) = BLOCK_RESOURCE_BUDGET_OVERRIDE.with(|value| *value.borrow()) {
@@ -1367,8 +1398,15 @@ pub struct MockAdmissionCertificateAuthority;
 
 const ADMISSION_SEMANTICS_VERSION_KEY: &[u8] = b"mock-admission-semantics-version";
 
+#[cfg(feature = "runtime-benchmarks")]
+pub fn take_admission_authority_calls() -> u32 {
+  ADMISSION_AUTHORITY_CALLS.with(|calls| core::mem::take(&mut *calls.borrow_mut()))
+}
+
 impl crate::AdmissionCertificateAuthorityProvider for MockAdmissionCertificateAuthority {
   fn current() -> Option<crate::AdmissionCertificateAuthority> {
+    #[cfg(feature = "runtime-benchmarks")]
+    ADMISSION_AUTHORITY_CALLS.with(|calls| *calls.borrow_mut() += 1);
     let runtime_actor_semantics_version =
       polkadot_sdk::sp_io::storage::get(ADMISSION_SEMANTICS_VERSION_KEY)
         .and_then(|encoded| u32::decode(&mut &encoded[..]).ok())

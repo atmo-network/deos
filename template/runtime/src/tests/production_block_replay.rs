@@ -37,6 +37,7 @@ use polkadot_sdk::{
   sp_runtime::{
     BuildStorage, Digest, DigestItem, MultiAddress, Perbill,
     traits::{BlakeTwo256, Hash, Header as HeaderT},
+    transaction_validity::{InvalidTransaction, TransactionValidityError},
   },
   sp_trie::{
     StorageProof,
@@ -91,6 +92,7 @@ const REFERENCE_SYSTEM_ACTOR_IDENTITIES: u32 = 15;
 enum UserDemand {
   ActorOnly,
   ContinuousValid,
+  ContinuousShared,
   RefTimeHeavy,
 }
 
@@ -106,6 +108,7 @@ impl UserDemand {
     match self {
       Self::ActorOnly => "actor-only",
       Self::ContinuousValid => "continuous-valid-user-demand",
+      Self::ContinuousShared => "continuous-shared-capacity-user-demand",
       Self::RefTimeHeavy => "ref-time-heavy-valid-user-demand",
     }
   }
@@ -233,10 +236,12 @@ struct FullExecutiveBlockMetrics {
   trigger_occurrences: Vec<(ActorId, TriggerFamily)>,
   user_calls: u32,
   next_user_weight: Option<Weight>,
+  user_admission_refusal: Option<TransactionValidityError>,
   prepass_steps: u32,
   prepass_trigger_occurrences: u32,
   prepass_actor_control: Weight,
   prepass_actor_effect: Weight,
+  pre_idle_remaining: Weight,
   actor_control: Weight,
   actor_effect: Weight,
   user_dispatch: Weight,
@@ -260,6 +265,8 @@ struct AuthoredBlock {
   block: Block,
   inherent_data: InherentData,
   metrics: FullExecutiveBlockMetrics,
+  execution_backend_keys: BTreeSet<(H256, Vec<u8>)>,
+  execution_overlay_keys: BTreeSet<(Option<Vec<u8>>, Vec<u8>)>,
 }
 
 #[derive(Debug)]
@@ -309,11 +316,363 @@ fn merge_genesis_patch(target: &mut serde_json::Value, patch: serde_json::Value)
   }
 }
 
+#[test]
+fn session_authority_bound_covers_declared_genesis_presets() {
+  use polkadot_sdk::frame_support::traits::Get;
+
+  let maximum: u32 = <Runtime as polkadot_sdk::pallet_aura::Config>::MaxAuthorities::get();
+  let roster_maximum: u32 =
+    <Runtime as polkadot_sdk::pallet_collator_selection::Config>::MaxInvulnerables::get();
+  assert_eq!(maximum, roster_maximum);
+  for preset in crate::genesis_config_presets::preset_names() {
+    TestExternalities::new(preset_genesis_storage(&[], &preset)).execute_with(|| {
+      let validators = polkadot_sdk::pallet_session::Validators::<Runtime>::get();
+      let queued = polkadot_sdk::pallet_session::QueuedKeys::<Runtime>::get();
+      let authorities = polkadot_sdk::pallet_aura::Authorities::<Runtime>::get();
+      assert!(!validators.is_empty());
+      assert!(validators.len() <= maximum as usize);
+      assert_eq!(queued.len(), validators.len());
+      assert_eq!(authorities.len(), validators.len());
+      assert_eq!(
+        authorities.into_inner(),
+        queued
+          .into_iter()
+          .map(|(_, keys)| keys.aura)
+          .collect::<Vec<_>>(),
+      );
+    });
+  }
+}
+
+#[test]
+fn trusted_genesis_session_callbacks_preserve_empty_security_obligations() {
+  use crate::{Session, SessionRotation, Staking};
+  use polkadot_sdk::frame_support::{assert_noop, traits::Hooks};
+
+  for preset in crate::genesis_config_presets::preset_names() {
+    TestExternalities::new(preset_genesis_storage(&[], &preset)).execute_with(|| {
+      let assert_empty = || {
+        assert!(
+          pallet_staking::NativeSecurityRewardPots::<Runtime>::iter_keys()
+            .next()
+            .is_none()
+        );
+        assert!(
+          pallet_staking::NativeSecurityEpochSnapshots::<Runtime>::iter_keys()
+            .next()
+            .is_none()
+        );
+        assert!(Staking::active_native_security_epoch_snapshot().is_none());
+        assert_eq!(Staking::native_security_reward_liability(), 0);
+      };
+      assert_eq!(
+        Staking::native_security_mode(),
+        pallet_staking::NativeSecurityMode::TrustedSet
+      );
+      assert_empty();
+      assert_noop!(
+        Staking::open_native_security_epoch(0, &[]),
+        pallet_staking::Error::<Runtime>::NativeSecurityModeInactive,
+      );
+      assert_noop!(
+        Staking::activate_native_security_epoch(0),
+        pallet_staking::Error::<Runtime>::NativeSecurityModeInactive,
+      );
+      assert_noop!(
+        Staking::fund_native_security_reward(RuntimeOrigin::root(), 1),
+        pallet_staking::Error::<Runtime>::NativeSecurityModeInactive,
+      );
+      let source = crate::configs::staking_config::SecurityRewardFundingSource::get();
+      assert_noop!(
+        Staking::certify_native_security_reward_funding(&source, 0, 1),
+        pallet_staking::Error::<Runtime>::NativeSecurityModeInactive,
+      );
+      let reward_account = Staking::native_security_reward_account();
+      let balance_before = Balances::free_balance(&reward_account);
+      assert_ok!(Balances::transfer_keep_alive(
+        RuntimeOrigin::signed(polkadot_sdk::sp_keyring::Sr25519Keyring::Alice.to_account_id()),
+        reward_account.clone().into(),
+        crate::EXISTENTIAL_DEPOSIT,
+      ));
+      assert_empty();
+      let horizon = crate::configs::staking_config::SecurityRewardClaimHorizon::get();
+      for epoch in 1..=horizon + 2 {
+        let block = crate::configs::Period::get() * epoch;
+        System::set_block_number(block);
+        assert_ne!(SessionRotation::on_initialize(block), Weight::zero());
+        assert_eq!(Session::current_index(), epoch);
+        assert_empty();
+      }
+      assert_eq!(
+        Balances::free_balance(&reward_account),
+        balance_before + crate::EXISTENTIAL_DEPOSIT
+      );
+    });
+  }
+}
+
+#[test]
+fn xcm_discovery_failed_prefix_then_ump_success_has_distinct_storage_owners() {
+  use codec::Decode;
+  use polkadot_sdk::frame_support::{assert_noop, traits::Hooks};
+  use polkadot_sdk::staging_xcm::{
+    VersionedLocation, VersionedXcm, WrapVersion, latest::prelude::*,
+  };
+
+  TestExternalities::new(reference_genesis_storage(&[])).execute_with(|| {
+    System::set_block_number(1);
+    polkadot_sdk::cumulus_pallet_parachain_system::HostConfiguration::<Runtime>::put(
+      RelayStateSproofBuilder::default().host_config,
+    );
+    let before = System::block_weight();
+    let empty_return = crate::PolkadotXcm::on_initialize(1);
+    assert_eq!(empty_return, <Runtime as polkadot_sdk::frame_system::Config>::DbWeight::get().reads_writes(1, 1));
+    let capacity = <Runtime as polkadot_sdk::pallet_xcm::Config>::VERSION_DISCOVERY_QUEUE_SIZE;
+    let parent = Location::parent();
+    for destination in core::iter::once(parent.clone()).chain(
+      (1..capacity).map(|index| Location::new(0, [GeneralIndex(u128::from(index))])),
+    ) {
+      assert_ok!(<crate::PolkadotXcm as WrapVersion>::wrap_version::<RuntimeCall>(
+        &destination,
+        Xcm::<RuntimeCall>(Vec::new()),
+      ));
+    }
+    let queue_key = polkadot_sdk::frame_support::storage::storage_prefix(
+      b"PolkadotXcm", b"VersionDiscoveryQueue",
+    );
+    let queue_before = Vec::<(VersionedLocation, u32)>::decode(
+      &mut &polkadot_sdk::sp_io::storage::get(&queue_key).expect("version wrapping enqueued destinations")[..],
+    ).expect("SDK discovery queue decodes");
+    assert_eq!(queue_before.len(), capacity as usize);
+    assert_eq!(queue_before.first(), Some(&(VersionedLocation::from(parent.clone()), 1)));
+    let returned = crate::PolkadotXcm::on_initialize(1);
+    assert_eq!(returned, <Runtime as polkadot_sdk::frame_system::Config>::DbWeight::get().reads_writes(2, 2));
+    assert_eq!(System::block_weight(), before);
+    let messages = polkadot_sdk::cumulus_pallet_parachain_system::PendingUpwardMessages::<Runtime>::get();
+    assert_eq!(messages.len(), 1);
+    let message = VersionedXcm::<()>::decode(&mut &messages[0][..]).expect("UMP contains versioned XCM");
+    let message: Xcm<()> = message.try_into().expect("UMP subscription converts to current XCM");
+    let query_id = u64::from(capacity - 1);
+    assert!(matches!(message.0.first(), Some(SubscribeVersion { query_id: actual, .. }) if *actual == query_id));
+    assert!(matches!(
+      crate::PolkadotXcm::query(&query_id),
+      Some(polkadot_sdk::pallet_xcm::QueryStatus::VersionNotifier { origin, is_active: false })
+        if origin == VersionedLocation::from(parent.clone()),
+    ));
+    assert_noop!(crate::PolkadotXcm::request_version_notify(parent), polkadot_sdk::staging_xcm::latest::Error::InvalidLocation);
+    let remaining = Vec::<(VersionedLocation, u32)>::decode(
+      &mut &polkadot_sdk::sp_io::storage::get(&queue_key).expect("hook rewrote discovery queue")[..],
+    ).expect("rewritten discovery queue decodes");
+    assert!(remaining.is_empty());
+    println!("XCM discovery: {} rejected routes then UMP success; empty return={empty_return:?}; successful return={returned:?}; one pending UMP message and retained notifier query", capacity - 1);
+  });
+}
+
+#[test]
+fn ump_relay_capacity_is_not_a_local_pending_queue_bound() {
+  use polkadot_sdk::sp_runtime::traits::Dispatchable;
+  use polkadot_sdk::staging_xcm::{VersionedLocation, VersionedXcm, latest::prelude::*};
+
+  TestExternalities::new(reference_genesis_storage(&[])).execute_with(|| {
+    System::set_block_number(1);
+    let host = RelayStateSproofBuilder::default().host_config;
+    let count_limit = host.max_upward_queue_count;
+    let byte_limit = host.max_upward_queue_size;
+    let message_limit = host.max_upward_message_size;
+    polkadot_sdk::cumulus_pallet_parachain_system::HostConfiguration::<Runtime>::put(host);
+    let sender = polkadot_sdk::sp_keyring::Sr25519Keyring::Alice.to_account_id();
+    let balance_before = Balances::free_balance(&sender);
+    let message = Xcm::<()>(vec![ClearOrigin; (message_limit / 4) as usize]);
+    for _ in 0..=count_limit {
+      assert_ok!(RuntimeCall::PolkadotXcm(polkadot_sdk::pallet_xcm::Call::send {
+        dest: Box::new(VersionedLocation::from(Location::parent())),
+        message: Box::new(VersionedXcm::from(message.clone())),
+      }).dispatch(RuntimeOrigin::signed(sender.clone())));
+    }
+    let pending = polkadot_sdk::cumulus_pallet_parachain_system::PendingUpwardMessages::<Runtime>::get();
+    let total_bytes = pending.iter().map(Vec::len).sum::<usize>();
+    assert_eq!(pending.len(), count_limit as usize + 1);
+    assert!(total_bytes > byte_limit as usize);
+    assert!(pending.iter().all(|message| message.len() <= message_limit as usize));
+    assert!(Balances::free_balance(&sender) < balance_before);
+    println!(
+      "UMP accepted signed sends: pending_count={} > relay_count={count_limit}; pending_bytes={total_bytes} > relay_bytes={byte_limit}; individual_limit={message_limit}; delivery_fees_paid={}",
+      pending.len(),
+      balance_before - Balances::free_balance(&sender),
+    );
+  });
+}
+
+// Benchmark builds replace the production MessageQueue processor with a no-op.
+#[test]
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn parent_dmp_subscriptions_retain_ump_backlog_through_full_executive() {
+  use cumulus_primitives_parachain_inherent::MessageQueueChain;
+  use polkadot_sdk::{
+    cumulus_pallet_parachain_system as parachain_system,
+    cumulus_primitives_core::{AggregateMessageOrigin, InboundDownwardMessage},
+    staging_xcm::{VersionedXcm, latest::prelude::*},
+    staging_xcm_executor::traits::{VersionChangeNotifier, WeightBounds},
+  };
+
+  let host = RelayStateSproofBuilder::default().host_config;
+  let burst = 2 * host.max_upward_queue_count + 1;
+  let signer = sr25519::Pair::from_seed(&[0; 32]);
+  let profiles = BTreeMap::new();
+  let mut storage = reference_genesis_storage(&[]);
+  let mut parent = parent_header_for(storage.clone(), &[], 0);
+  let mut dmq = MessageQueueChain::default();
+  let mut previous_pending: Vec<Vec<u8>> = Vec::new();
+  let mut previous_subscriptions = 0;
+  for (index, subscriptions) in [1, burst, burst, 0].into_iter().enumerate() {
+    let number = index as u32 + 1;
+    let mut data = inherent_data_for(&parent, number);
+    let mut context = data
+      .get_data::<ParachainInherentData>(&INHERENT_IDENTIFIER)
+      .expect("fixture context decodes")
+      .expect("fixture supplies context");
+    if subscriptions != 0 {
+      let mut instructions = vec![UnpaidExecution {
+        weight_limit: Unlimited,
+        check_origin: None,
+      }];
+      for query in 0..subscriptions {
+        instructions.push(SubscribeVersion {
+          query_id: u64::from(number * burst + query),
+          max_response_weight: Weight::zero(),
+        });
+        instructions.push(UnsubscribeVersion);
+      }
+      let mut program = Xcm::<RuntimeCall>(instructions);
+      assert_ok!(
+        <Runtime as polkadot_sdk::pallet_xcm::Config>::Weigher::weight(
+          &mut program,
+          crate::configs::MessageQueueServiceWeight::get(),
+        )
+      );
+      let message = InboundDownwardMessage {
+        sent_at: number,
+        msg: VersionedXcm::from(program).encode(),
+      };
+      dmq.extend_downward(&message);
+      context.downward_messages = vec![message];
+    }
+    let proof_builder = RelayStateSproofBuilder {
+      para_id: crate::PARACHAIN_ID.into(),
+      current_slot: u64::from(number).into(),
+      included_para_head: Some(context.validation_data.parent_head.clone()),
+      dmq_mqc_head: Some(dmq.head()),
+      ..Default::default()
+    };
+    let (root, proof) = proof_builder.into_state_root_and_proof();
+    context.validation_data.relay_parent_storage_root = root;
+    context.relay_chain_state = proof;
+    data.replace_data(INHERENT_IDENTIFIER, &context);
+    let authored = author_complete_block_after_with_context(
+      storage,
+      &[],
+      &parent,
+      number,
+      UserDemand::ActorOnly,
+      &signer,
+      0,
+      &profiles,
+      &[],
+      data,
+    );
+    assert_complete_block_replays_natively(&authored, &[]);
+    let (pending, exported, sent, started, processed) =
+      TestExternalities::new(authored.post_state.clone()).execute_with(|| {
+        assert_eq!(
+          parachain_system::LastDmqMqcHead::<Runtime>::get().head(),
+          dmq.head()
+        );
+        assert!(!<crate::PolkadotXcm as VersionChangeNotifier>::is_subscribed(&Location::parent()));
+        let (mut sent, mut started, mut processed) = (0, 0, 0);
+        for record in System::events() {
+          match record.event {
+            RuntimeEvent::ParachainSystem(parachain_system::Event::UpwardMessageSent {
+              ..
+            }) => sent += 1,
+            RuntimeEvent::PolkadotXcm(polkadot_sdk::pallet_xcm::Event::VersionNotifyStarted {
+              destination,
+              ..
+            }) => {
+              assert_eq!(destination, Location::parent());
+              started += 1;
+            }
+            RuntimeEvent::MessageQueue(polkadot_sdk::pallet_message_queue::Event::Processed {
+              origin,
+              success,
+              ..
+            }) => {
+              assert_eq!(origin, AggregateMessageOrigin::Parent);
+              assert!(success);
+              processed += 1;
+            }
+            RuntimeEvent::MessageQueue(
+              polkadot_sdk::pallet_message_queue::Event::ProcessingFailed { error, .. },
+            ) => {
+              panic!("DMP processing failed: {error:?}");
+            }
+            _ => {}
+          }
+        }
+        (
+          parachain_system::PendingUpwardMessages::<Runtime>::get(),
+          parachain_system::UpwardMessages::<Runtime>::get(),
+          sent,
+          started,
+          processed,
+        )
+      });
+    assert_eq!(started, previous_subscriptions);
+    assert_eq!(processed, u32::from(previous_subscriptions != 0));
+    assert_eq!(
+      previous_pending.len() + sent,
+      exported.len() + pending.len()
+    );
+    assert!(exported.len() <= host.max_upward_message_num_per_candidate as usize);
+    assert!(exported.iter().map(Vec::len).sum::<usize>() <= host.max_upward_queue_size as usize);
+    assert!(
+      pending
+        .iter()
+        .chain(&exported)
+        .all(|message| message.len() <= host.max_upward_message_size as usize)
+    );
+    let previous_exported = previous_pending.len().min(exported.len());
+    assert_eq!(
+      exported[..previous_exported],
+      previous_pending[..previous_exported]
+    );
+    assert!(pending.starts_with(&previous_pending[previous_exported..]));
+    println!(
+      "DMP full Executive block={number}: subscriptions={started}, processed={processed}, sent={sent}, exported={}, pending={}, pending_bytes={}",
+      exported.len(),
+      pending.len(),
+      pending.iter().map(Vec::len).sum::<usize>(),
+    );
+    previous_pending = pending;
+    previous_subscriptions = subscriptions;
+    parent = authored.block.header;
+    storage = authored.post_state;
+  }
+  assert!(previous_pending.len() > host.max_upward_queue_count as usize);
+  assert!(
+    previous_pending.iter().map(Vec::len).sum::<usize>() > host.max_upward_queue_size as usize
+  );
+}
+
 fn reference_genesis_storage(wasm: &[u8]) -> Storage {
-  let preset = crate::genesis_config_presets::get_preset(
+  preset_genesis_storage(
+    wasm,
     &polkadot_sdk::sp_genesis_builder::DEV_RUNTIME_PRESET.into(),
   )
-  .expect("Development is a declared runtime preset");
+}
+
+fn preset_genesis_storage(wasm: &[u8], id: &polkadot_sdk::sp_genesis_builder::PresetId) -> Storage {
+  let preset = crate::genesis_config_presets::get_preset(id)
+    .expect("requested preset is declared by the runtime");
   let mut config = serde_json::to_value(RuntimeGenesisConfig::default())
     .expect("default runtime genesis serializes");
   merge_genesis_patch(
@@ -1353,7 +1712,7 @@ fn inherent_data_for(parent: &Header, block_number: u32) -> InherentData {
           parent_head,
           relay_parent_number: block_number,
           relay_parent_storage_root,
-          max_pov_size: 5_000_000,
+          max_pov_size: crate::MAXIMUM_BLOCK_WEIGHT.proof_size() as u32,
         },
         relay_chain_state,
         downward_messages: Default::default(),
@@ -1373,7 +1732,8 @@ fn saturate_user_dispatch(
   block_number: u32,
   initial_nonce: crate::Nonce,
   extrinsics: &mut Vec<crate::UncheckedExtrinsic>,
-) -> (u32, Weight) {
+  fill_shared: bool,
+) -> (u32, Weight, Option<TransactionValidityError>) {
   let user_limit = BlockResourceBudgetValue::get().limits().user_base_turn();
   let mut nonce = initial_nonce;
   let mut calls = 0u32;
@@ -1384,21 +1744,43 @@ fn saturate_user_dispatch(
     });
     let extrinsic =
       actors_integration_tests::signed_extrinsic(signer, crate::Nonce::from(nonce), call);
-    let next_weight = extrinsic.get_dispatch_info().total_weight();
+    let next_weight = polkadot_sdk::frame_system::calculate_consumed_extrinsic_weight::<RuntimeCall>(
+      &crate::configs::RuntimeBlockWeights::get(),
+      &extrinsic.get_dispatch_info(),
+      extrinsic.encoded_size(),
+    );
     let state = Actors::block_resource_state().expect("Actor Prepass opens resource state");
     let remaining = user_limit
       .checked_sub(&state.usage().user_dispatch_used())
       .unwrap_or_else(Weight::zero);
-    if !next_weight.all_lte(remaining) {
+    if !fill_shared && !next_weight.all_lte(remaining) {
       assert!(
         calls > 0,
         "continuous demand must admit at least one valid call"
       );
-      return (calls, next_weight);
+      return (calls, next_weight, None);
     }
-    Executive::apply_extrinsic(extrinsic.clone())
-      .unwrap_or_else(|error| panic!("valid user call rejected: {error:?}"))
-      .unwrap_or_else(|error| panic!("valid user call failed dispatch: {error:?}"));
+    let result = if fill_shared {
+      // Match block authoring: rejected candidates leave no state in the committed block.
+      polkadot_sdk::frame_support::storage::transactional::with_transaction_opaque_err(|| {
+        let result = Executive::apply_extrinsic(extrinsic.clone());
+        if result.is_ok() {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+        } else {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(result)
+        }
+      })
+      .expect("one bounded authoring attempt fits the storage transaction limit")
+    } else {
+      Executive::apply_extrinsic(extrinsic.clone())
+    };
+    match result {
+      Ok(result) => {
+        result.unwrap_or_else(|error| panic!("valid user call failed dispatch: {error:?}"))
+      }
+      Err(error) if fill_shared => return (calls, next_weight, Some(error)),
+      Err(error) => panic!("valid user call rejected: {error:?}"),
+    }
     extrinsics.push(extrinsic);
     nonce = nonce.saturating_add(1);
     calls = calls.saturating_add(1);
@@ -1436,7 +1818,11 @@ fn saturate_user_dispatch_with_router_swaps(
     });
     let extrinsic =
       actors_integration_tests::signed_extrinsic(signer, crate::Nonce::from(nonce), call);
-    let next_weight = extrinsic.get_dispatch_info().total_weight();
+    let next_weight = polkadot_sdk::frame_system::calculate_consumed_extrinsic_weight::<RuntimeCall>(
+      &crate::configs::RuntimeBlockWeights::get(),
+      &extrinsic.get_dispatch_info(),
+      extrinsic.encoded_size(),
+    );
     let state = Actors::block_resource_state().expect("Actor Prepass opens resource state");
     let remaining = user_limit
       .checked_sub(&state.usage().user_dispatch_used())
@@ -1458,10 +1844,12 @@ fn authored_metrics(
   workload_profiles: &BTreeMap<ActorId, WorkloadActorProfile>,
   user_calls: u32,
   next_user_weight: Option<Weight>,
+  user_admission_refusal: Option<TransactionValidityError>,
   prepass_steps: u32,
   prepass_trigger_occurrences: u32,
   prepass_actor_control: Weight,
   prepass_actor_effect: Weight,
+  pre_idle_remaining: Weight,
 ) -> FullExecutiveBlockMetrics {
   let mut progressed_steps = Vec::new();
   let mut opening_steps = 0u32;
@@ -1652,10 +2040,12 @@ fn authored_metrics(
     trigger_occurrences,
     user_calls,
     next_user_weight,
+    user_admission_refusal,
     prepass_steps,
     prepass_trigger_occurrences,
     prepass_actor_control,
     prepass_actor_effect,
+    pre_idle_remaining,
     actor_control: usage.actor_control_used(),
     actor_effect: usage.actor_effect_used(),
     user_dispatch: usage.user_dispatch_used(),
@@ -1675,7 +2065,32 @@ fn author_complete_block_after_with_calls(
   workload_profiles: &BTreeMap<ActorId, WorkloadActorProfile>,
   signed_calls: &[RuntimeCall],
 ) -> AuthoredBlock {
-  let inherent_data = inherent_data_for(parent, block_number);
+  author_complete_block_after_with_context(
+    pre_state,
+    wasm,
+    parent,
+    block_number,
+    demand,
+    signer,
+    signer_nonce,
+    workload_profiles,
+    signed_calls,
+    inherent_data_for(parent, block_number),
+  )
+}
+
+fn author_complete_block_after_with_context(
+  pre_state: Storage,
+  wasm: &[u8],
+  parent: &Header,
+  block_number: u32,
+  demand: UserDemand,
+  signer: &sr25519::Pair,
+  signer_nonce: crate::Nonce,
+  workload_profiles: &BTreeMap<ActorId, WorkloadActorProfile>,
+  signed_calls: &[RuntimeCall],
+  inherent_data: InherentData,
+) -> AuthoredBlock {
   let mut ext = TestExternalities::new_with_code_and_state(
     wasm,
     pre_state.clone(),
@@ -1684,7 +2099,8 @@ fn author_complete_block_after_with_calls(
   let recorder = Recorder::<polkadot_sdk::sp_core::Blake2Hasher>::default();
   let proof_size = RecordingProofSizeProvider::new(recorder.clone());
   ext.register_extension(ProofSizeExt::new(proof_size));
-  let (block, metrics, post_state) = ext.execute_with_recorder(recorder, || {
+  let execution_recorder = recorder.clone();
+  let (block, metrics) = ext.execute_with_recorder(recorder, || {
     let header = Header::new(
       block_number,
       Default::default(),
@@ -1744,12 +2160,17 @@ fn author_complete_block_after_with_calls(
       extrinsics.push(extrinsic);
       next_nonce = next_nonce.saturating_add(1);
     }
-    let (demand_calls, next_user_weight) = match demand {
-      UserDemand::ActorOnly => (0, None),
-      UserDemand::ContinuousValid => {
-        let (calls, next) =
-          saturate_user_dispatch(signer, block_number, next_nonce, &mut extrinsics);
-        (calls, Some(next))
+    let (demand_calls, next_user_weight, user_admission_refusal) = match demand {
+      UserDemand::ActorOnly => (0, None, None),
+      UserDemand::ContinuousValid | UserDemand::ContinuousShared => {
+        let (calls, next, refusal) = saturate_user_dispatch(
+          signer,
+          block_number,
+          next_nonce,
+          &mut extrinsics,
+          demand == UserDemand::ContinuousShared,
+        );
+        (calls, Some(next), refusal)
       }
       UserDemand::RefTimeHeavy => {
         let (calls, next) = saturate_user_dispatch_with_router_swaps(
@@ -1758,10 +2179,15 @@ fn author_complete_block_after_with_calls(
           next_nonce,
           &mut extrinsics,
         );
-        (calls, Some(next))
+        (calls, Some(next), None)
       }
     };
     let user_calls = signed_call_count.saturating_add(demand_calls);
+    // FRAME's finalize_block only records the extrinsic count and runs the empty
+    // PostTransactions hook before computing on_idle's remaining block Weight.
+    let pre_idle_remaining = crate::configs::RuntimeBlockWeights::get()
+      .max_block
+      .saturating_sub(System::block_weight().total());
     let block = Block {
       header: Executive::finalize_block(),
       extrinsics,
@@ -1770,20 +2196,44 @@ fn author_complete_block_after_with_calls(
       workload_profiles,
       user_calls,
       next_user_weight,
+      user_admission_refusal,
       prepass_steps,
       prepass_trigger_occurrences,
       prepass_usage.actor_control_used(),
       prepass_usage.actor_effect_used(),
+      pre_idle_remaining,
     );
-    let post_state = current_top_storage();
-    (block, metrics, post_state)
+    (block, metrics)
   });
+  // The post-state diagnostic scan must not enter the block's trie-read recording.
+  let execution_backend_keys = execution_recorder
+    .recorded_keys()
+    .into_iter()
+    .flat_map(|(root, keys)| {
+      keys
+        .into_keys()
+        .map(move |key| (root, key.as_ref().to_vec()))
+    })
+    .collect();
+  // The overlay records surviving block writes, including same-value writes,
+  // but not rolled-back transactions or the number of writes to each key.
+  let execution_overlay_keys = ext
+    .overlayed_changes()
+    .changes()
+    .map(|(key, _)| (None, key.clone()))
+    .chain(ext.overlayed_changes().children().flat_map(|(keys, info)| {
+      keys.map(|(key, _)| (Some(info.storage_key().to_vec()), key.clone()))
+    }))
+    .collect();
+  let post_state = ext.execute_with(current_top_storage);
   AuthoredBlock {
     pre_state,
     post_state,
     block,
     inherent_data,
     metrics,
+    execution_backend_keys,
+    execution_overlay_keys,
   }
 }
 
@@ -2352,9 +2802,42 @@ fn assert_successful_transfer_resource_ledger(
       .max(W::service_member_retire_pair_cursor())
       .max(W::service_member_retire_singleton()),
   );
+  // This fixed W0/W1 witness is an unpredicated, one-Step System Opening with persistent
+  // completion. Reconstruct its existing charged owners outside execution, not runtime probes.
+  let control_components = [
+    ("round-begin", W::service_round_begin_populated()),
+    ("head-probe", W::service_round_probe_eligible()),
+    ("loaded-classification", W::scheduler_actor_state_probe()),
+    ("opening-plan", W::current_step_plan_opening_head()),
+    ("run-complete", W::run_complete()),
+    ("inner-queue-placement", W::service_round_admit_eligible()),
+    ("invocation-receipt", W::action_invocation_receipt()),
+    ("outer-service-suffix-maximum", canonical_service_suffix),
+  ];
+  let control_per_step = control_components
+    .iter()
+    .fold(Weight::zero(), |sum, (_, weight)| {
+      sum.saturating_add(*weight)
+    });
   let effect_per_step = W::task_transfer();
-  let effect_io_per_step = DatabaseIo::new(20, 6);
-  assert_production_weight_component(effect_per_step, 363_533_000, 6_196, effect_io_per_step);
+  let effect_io_per_step = DatabaseIo::new(19, 6);
+  // Equal total Weight can hide a compensating change between RefTime and DB coefficients.
+  let generated_transfer = include_str!("../weights/pallet_deos_actors.rs")
+    .split_once("fn task_transfer() -> Weight {")
+    .expect("generated Transfer owner exists")
+    .1
+    .split_once('}')
+    .expect("generated Transfer owner ends")
+    .0;
+  for (operation, count) in [
+    ("reads", effect_io_per_step.reads),
+    ("writes", effect_io_per_step.writes),
+  ] {
+    let call = format!("T::DbWeight::get().{operation}(");
+    assert_eq!(generated_transfer.matches(&call).count(), 1);
+    assert!(generated_transfer.contains(&format!("{call}{count})")));
+  }
+  assert_production_weight_component(effect_per_step, 388_533_000, 6_196, effect_io_per_step);
   let pair = |weight: Weight| [weight.ref_time(), weight.proof_size()];
   let reference_events = |authored: &AuthoredBlock| {
     let ids = (0..ActorId::from(REFERENCE_SYSTEM_ACTOR_IDENTITIES)).collect::<Vec<_>>();
@@ -2375,7 +2858,7 @@ fn assert_successful_transfer_resource_ledger(
   assert_eq!(empty.metrics.completed_cycles, 0);
   assert_eq!(empty.metrics.actor_effect, Weight::zero());
   let mut rows = Vec::new();
-  for (label, authored, legacy_extra_probes) in profiles {
+  for (label, authored, capacity_refusal_classifications) in profiles {
     assert_successful_transfer_outcomes(&authored.metrics);
     assert!(
       authored.metrics.prepass_steps <= authored.metrics.actor_steps,
@@ -2404,10 +2887,35 @@ fn assert_successful_transfer_resource_ledger(
       authored.metrics.actor_effect,
       effect_per_step.saturating_mul(steps)
     );
+    let productive_control = control_per_step.saturating_mul(steps);
+    let refused_classification =
+      W::scheduler_actor_state_probe().saturating_mul(capacity_refusal_classifications);
+    assert_eq!(
+      control_delta,
+      productive_control.saturating_add(refused_classification)
+    );
+    let prepass_delta = authored
+      .metrics
+      .prepass_actor_control
+      .checked_sub(&empty.metrics.prepass_actor_control)
+      .expect("this witness adds Service work above the same first-block fixed owners");
+    let prepass_productive =
+      control_per_step.saturating_mul(u64::from(authored.metrics.prepass_steps));
+    let prepass_refusal = prepass_delta
+      .checked_sub(&prepass_productive)
+      .expect("Prepass covers every committed Step owner");
+    assert_eq!(
+      prepass_refusal,
+      W::scheduler_actor_state_probe()
+        .saturating_mul(u64::from(capacity_refusal_classifications > 0))
+    );
     let effect_io = effect_io_per_step.saturating_mul(steps);
     rows.push(serde_json::json!({
       "profile": label, "committedSteps": steps,
-      "retiredLegacyExtraProbeAssumption": legacy_extra_probes,
+      "capacityRefusalClassifications": capacity_refusal_classifications,
+      "productiveControl": pair(productive_control),
+      "refusedClassificationControl": pair(refused_classification),
+      "prepassRefusedClassificationControl": pair(prepass_refusal),
       "canonicalSelector": pair(canonical_selector),
       "canonicalLoadedInspection": pair(canonical_loaded_inspection),
       "canonicalServiceSuffix": pair(canonical_service_suffix),
@@ -2425,6 +2933,11 @@ fn assert_successful_transfer_resource_ledger(
       "baselineControl": pair(empty.metrics.actor_control),
       "baselineReferenceEvents": baseline_reference_events,
       "baselineWorkloadSteps": 0, "baselineIoAllocatedToSteps": false,
+      "controlPerCommittedStep": pair(control_per_step),
+      "controlComponentsPerCommittedStep": control_components.iter().map(|(owner, weight)|
+        serde_json::json!({"owner": owner, "weight": pair(*weight)})
+      ).collect::<Vec<_>>(),
+      "attributionBoundary": "exact generated-Weight ledger for this witness, not measured marginal trie bytes; selector work at empty/refused pass boundaries is already in baseline",
       "canonicalControlOwners": {
         "selector": pair(canonical_selector),
         "loadedInspection": pair(canonical_loaded_inspection),
@@ -3009,8 +3522,8 @@ fn run_schedule_campaign(
         );
         user_bound_blocks = user_bound_blocks.saturating_add(1);
       }
-      UserDemand::RefTimeHeavy => {
-        unreachable!("the W1/W2 schedule campaign does not prepare Router demand")
+      UserDemand::RefTimeHeavy | UserDemand::ContinuousShared => {
+        unreachable!("the W1/W2 schedule campaign only prepares User-base-turn remarks")
       }
     }
     assert_eq!(
@@ -3626,8 +4139,8 @@ fn run_w4_heterogeneous_effect_campaign(wasm: &[u8], demand: UserDemand) {
         );
         user_bound_blocks = user_bound_blocks.saturating_add(1);
       }
-      UserDemand::RefTimeHeavy => {
-        unreachable!("the W4 campaign does not prepare signed Router demand")
+      UserDemand::RefTimeHeavy | UserDemand::ContinuousShared => {
+        unreachable!("the W4 campaign only prepares User-base-turn remarks")
       }
     }
 
@@ -5428,7 +5941,7 @@ fn run_w8_tombstone_prefix_chunk_pressure_campaign(wasm: &[u8], replay_wasm: boo
     assert_eq!(authored.metrics.non_successful_steps, 0);
     assert_eq!(
       authored.metrics.actor_steps, authored.metrics.distinct_actors,
-      "W8 preserves Q1 under every tombstone-prefix profile"
+      "W8 preserves Q1 after every closed-prefix setup"
     );
     assert!(
       authored.metrics.actor_steps > 0,
@@ -5448,7 +5961,7 @@ fn run_w8_tombstone_prefix_chunk_pressure_campaign(wasm: &[u8], replay_wasm: boo
     assert_eq!(
       progressed,
       fixture.due[..progressed.len()],
-      "W8 service remains the exact live FIFO prefix after tombstone reclamation"
+      "W8 service preserves the live ordered prefix after setup closes removed Service members"
     );
     let mut post = TestExternalities::new_with_code_and_state(
       wasm,
@@ -5485,12 +5998,12 @@ fn run_w8_tombstone_prefix_chunk_pressure_campaign(wasm: &[u8], replay_wasm: boo
       replay_complete_block_in_wasm(
         &authored,
         wasm,
-        &format!("W8-tombstone-prefix-{tombstone_prefix}"),
+        &format!("W8-closed-during-setup-{tombstone_prefix}"),
       )
     });
     let proof = proof.as_ref();
     println!(
-      "EXP_0066_W8_V1 {{\"closedPrefix\":{tombstone_prefix},\"dueActors\":{},\"dueSteps\":{},\"distinctProgressedActors\":{},\"dueActorsRemaining\":{},\"serviceResidents\":{},\"fifoPrefixPreserved\":true,\"q1Preserved\":true,\"controlBound\":true,\"nextControlMaximumRefTime\":{},\"nextControlMaximumProofSize\":{},\"controlRemainingRefTime\":{},\"controlRemainingProofSize\":{},\"controlRefTime\":{},\"controlProofSize\":{},\"effectRefTime\":{},\"effectProofSize\":{},\"executionStorageProofBytes\":{},\"executionCompactProofBytes\":{},\"verificationStorageProofBytes\":{},\"verificationCompactProofBytes\":{}}}",
+      "EXP_0066_W8_V1 {{\"closedPrefix\":{tombstone_prefix},\"closurePhase\":\"unmeasured-setup\",\"measuredReadyTombstoneReclamation\":false,\"dueActors\":{},\"dueSteps\":{},\"distinctProgressedActors\":{},\"dueActorsRemaining\":{},\"serviceResidents\":{},\"fifoPrefixPreserved\":true,\"q1Preserved\":true,\"controlBound\":true,\"nextControlMaximumRefTime\":{},\"nextControlMaximumProofSize\":{},\"controlRemainingRefTime\":{},\"controlRemainingProofSize\":{},\"controlRefTime\":{},\"controlProofSize\":{},\"effectRefTime\":{},\"effectProofSize\":{},\"executionStorageProofBytes\":{},\"executionCompactProofBytes\":{},\"verificationStorageProofBytes\":{},\"verificationCompactProofBytes\":{}}}",
       fixture.due.len(),
       authored.metrics.actor_steps,
       authored.metrics.distinct_actors,
@@ -5603,15 +6116,18 @@ fn run_w9_resource_independence_campaign(wasm: &[u8], replay_wasm: bool) {
         assert!(!next_user.all_lte(remaining));
         let proof_bound = next_user.proof_size() > remaining.proof_size();
         let ref_time_bound = next_user.ref_time() > remaining.ref_time();
-        assert!(
-          proof_bound,
-          "retained W9 valid demand must exhaust User ProofSize"
-        );
-        assert!(
-          !ref_time_bound,
-          "W9 fallback must not mislabel a ProofSize frontier as RefTime saturation"
+        assert_eq!(
+          (proof_bound, ref_time_bound),
+          (
+            demand == UserDemand::ContinuousValid,
+            demand == UserDemand::RefTimeHeavy
+          ),
+          "W9 remarks and Router swaps must isolate ProofSize and RefTime refusal respectively"
         );
         (next_user, remaining, proof_bound, ref_time_bound)
+      }
+      UserDemand::ContinuousShared => {
+        unreachable!("the W9 campaign targets the User base-turn frontier")
       }
     };
     let proof = replay_wasm
@@ -5657,7 +6173,7 @@ fn run_w9_resource_independence_campaign(wasm: &[u8], replay_wasm: bool) {
     "W9 Router demand must be materially more RefTime-heavy than remarks"
   );
   println!(
-    "EXP_0066_W9_COMPARISON_V1 {{\"actorPrefixesCanonical\":true,\"actorServiceSurvivesEveryUserProfile\":true,\"proofSaturatedUserRefTime\":{},\"refTimeHeavyUserRefTime\":{},\"proofSaturatedUserProofSize\":{},\"refTimeHeavyUserProofSize\":{},\"userProofSizeDelta\":{},\"refTimeFrontierFallback\":\"highest-valid-business-call-profile-remains-proof-size-bound\"}}",
+    "EXP_0066_W9_COMPARISON_V1 {{\"actorPrefixesCanonical\":true,\"actorServiceSurvivesEveryUserProfile\":true,\"proofSaturatedUserRefTime\":{},\"refTimeHeavyUserRefTime\":{},\"proofSaturatedUserProofSize\":{},\"refTimeHeavyUserProofSize\":{},\"userProofSizeDelta\":{},\"remarksRefusalComponent\":\"ProofSize\",\"routerRefusalComponent\":\"RefTime\"}}",
     proof_saturated.2.user_dispatch.ref_time(),
     ref_time_heavy.2.user_dispatch.ref_time(),
     proof_saturated.2.user_dispatch.proof_size(),
@@ -5711,7 +6227,7 @@ fn run_control_phase_attribution_campaign(
         .trigger_occurrences
         .iter()
         .all(|(actor_id, _)| !progressed_actors.contains(actor_id)),
-      "the captured FIFO cutoff defers every newly materialized Actor to a later block"
+      "B+1 Service eligibility defers every newly materialized Actor to a later block"
     );
     assert_eq!(
       authored.metrics.non_successful_steps, 0,
@@ -5808,6 +6324,174 @@ fn assert_production_weight_component(
     .saturating_add(database.reads(io.reads))
     .saturating_add(database.writes(io.writes));
   assert_eq!(actual, expected, "production Weight component I/O drifted");
+}
+
+#[test]
+#[allow(deprecated)] // The SDK's actual bare-inherent pipeline still uses ValidateUnsigned.
+fn full_executive_prepass_prefix_excludes_its_provisional_reservation() {
+  use polkadot_sdk::sp_runtime::traits::{Dispatchable, TransactionExtension, ValidateUnsigned};
+  for actor_count in [0, 1] {
+    let fixture = prepare_actor_fixture(&[], actor_count, WorkloadSchedule::ManualOnly);
+    let parent = parent_header_for(fixture.storage.clone(), &[], 1);
+    let mut ext = TestExternalities::new(fixture.storage);
+    ext.execute_with(|| {
+      let header = Header::new(
+        2,
+        Default::default(),
+        Default::default(),
+        parent.hash(),
+        Digest {
+          logs: vec![DigestItem::PreRuntime(
+            polkadot_sdk::sp_consensus_aura::AURA_ENGINE_ID,
+            2u64.encode(),
+          )],
+        },
+      );
+      Executive::initialize_block(&header);
+      let extrinsics = inherent_data_for(&parent, 2).create_extrinsics();
+      let mut witnessed = false;
+      for extrinsic in extrinsics {
+        if !matches!(
+          extrinsic.function,
+          RuntimeCall::Actors(pallet_deos_actors::Call::actor_prepass {})
+        ) {
+          assert_ok!(Executive::apply_extrinsic(extrinsic));
+          continue;
+        }
+        assert!(!witnessed, "one runtime-created Prepass");
+        witnessed = true;
+        let prefix = System::block_weight().total();
+        let before_root = polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version());
+        let info = extrinsic.get_dispatch_info();
+        let encoded = extrinsic.encode();
+        let len = encoded.len();
+        let base = crate::configs::RuntimeBlockWeights::get()
+          .get(info.class)
+          .base_extrinsic;
+        let overhead = base.saturating_add(Weight::from_parts(0, len as u64));
+        assert_eq!(info.extension_weight, Weight::zero());
+        assert_eq!(
+          info.call_weight,
+          BlockResourceBudgetValue::get().maximum_block()
+        );
+        let guaranteed = BlockResourceBudgetValue::get().limits();
+        assert!(
+          info.call_weight.all_gte(
+            guaranteed
+              .actor_control()
+              .saturating_add(guaranteed.actor_base_turn()),
+          )
+        );
+        assert!(Actors::block_resource_state().is_none());
+
+        // A single backend transaction exposes the SDK dispatch boundary without adding a
+        // storage-backed transaction-depth key to the root being compared with Executive.
+        polkadot_sdk::sp_io::storage::start_transaction();
+        System::note_extrinsic(encoded);
+        assert_ok!(<Runtime as ValidateUnsigned>::pre_dispatch(
+          &extrinsic.function
+        ));
+        assert_ok!(crate::TxExtension::bare_validate_and_prepare(
+          &extrinsic.function,
+          &info,
+          len
+        ));
+        let prepared = System::block_weight().total();
+        assert!(
+          prepared.any_gt(crate::configs::RuntimeBlockWeights::get().max_block),
+          "Mandatory provisional bookkeeping is not settled block consumption",
+        );
+        assert_eq!(
+          prepared.checked_sub(&prefix),
+          info.total_weight().checked_add(&overhead)
+        );
+        assert_eq!(
+          prepared.checked_sub(&info.total_weight()),
+          prefix.checked_add(&overhead),
+          "normalization must preserve base and encoded-length charges"
+        );
+        let dispatched = extrinsic
+          .function
+          .clone()
+          .dispatch(RuntimeOrigin::none())
+          .expect("Prepass succeeds");
+        let usage = Actors::block_resource_state()
+          .expect("Prepass opens state")
+          .usage();
+        let actual = dispatched
+          .actual_weight
+          .expect("Prepass reports actual Weight");
+        assert_eq!(
+          actual,
+          usage
+            .actor_control_used()
+            .saturating_add(usage.actor_effect_used())
+        );
+        assert!(actual.all_lte(info.call_weight));
+        let mut post_info = dispatched;
+        assert_ok!(crate::TxExtension::bare_post_dispatch(
+          &info,
+          &mut post_info,
+          len,
+          &Ok(())
+        ));
+        let settled = System::block_weight().total();
+        assert_eq!(
+          settled,
+          prefix.saturating_add(overhead).saturating_add(actual)
+        );
+        // The wrapper and CheckWeight both reclaim; a further identical reclaim creates no credit.
+        assert_ok!(System::reclaim_weight(&info, &post_info));
+        assert_eq!(System::block_weight().total(), settled);
+        System::note_applied_extrinsic(&Ok(dispatched), info);
+        let expected_root = polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version());
+        polkadot_sdk::sp_io::storage::rollback_transaction();
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version()),
+          before_root
+        );
+        assert_ok!(Executive::apply_extrinsic(extrinsic));
+        assert_eq!(System::block_weight().total(), settled);
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version()),
+          expected_root
+        );
+        let pair = |w: Weight| [w.ref_time(), w.proof_size()];
+        println!(
+          "PREPASS_PREFIX_BOUNDARY_V1 {}",
+          serde_json::json!({
+            "preparedActors": actor_count,
+            "prefix": pair(prefix),
+            "dispatchMaximum": pair(info.total_weight()),
+            "overhead": pair(overhead),
+            "atDispatch": pair(prepared),
+            "actual": pair(actual),
+            "afterSettlement": pair(settled),
+          })
+        );
+      }
+      assert!(witnessed);
+      // These hooks follow Prepass. Keep their present no-work binding explicit rather than
+      // treating every hook as settled merely because all on_initialize calls have returned.
+      {
+        use polkadot_sdk::frame_support::traits::{OnPoll, PostInherents, PostTransactions};
+        let root = polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version());
+        let mut meter = polkadot_sdk::frame_support::weights::WeightMeter::with_limit(
+          crate::configs::RuntimeBlockWeights::get().max_block,
+        );
+        <Runtime as polkadot_sdk::frame_system::Config>::PostInherents::post_inherents();
+        <Runtime as polkadot_sdk::frame_system::Config>::PostTransactions::post_transactions();
+        <crate::AllPalletsWithSystem as OnPoll<u32>>::on_poll(2, &mut meter);
+        assert_eq!(meter.consumed(), Weight::zero());
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version()),
+          root
+        );
+      }
+      Executive::finalize_block();
+      assert!(Actors::finalized_block_resource_telemetry().is_some());
+    });
+  }
 }
 
 #[test]
@@ -5926,6 +6610,28 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     &fixture.actor_profiles,
   );
   assert_eq!(second.metrics.actor_control, fixed);
+  let fixed_envelope = crate::configs::FixedBlockWeight::get();
+  let frame_maximum = crate::configs::RuntimeBlockWeights::get().max_block;
+  let first_pre_idle_charge = frame_maximum
+    .checked_sub(&first.metrics.pre_idle_remaining)
+    .expect("pre-idle remainder uses the FRAME maximum, not the global economic ceiling");
+  let second_pre_idle_charge = frame_maximum
+    .checked_sub(&second.metrics.pre_idle_remaining)
+    .expect("pre-idle remainder uses the FRAME maximum, not the global economic ceiling");
+  assert!(first.metrics.pre_idle_remaining.all_gt(Weight::zero()));
+  assert!(second.metrics.pre_idle_remaining.all_gt(Weight::zero()));
+  println!(
+    "ACTOR_BASELINE_IDLE_REMAINING_V1 {}",
+    serde_json::json!({
+      "fixedEnvelope": [fixed_envelope.ref_time(), fixed_envelope.proof_size()],
+      "maximumBlock": [crate::MAXIMUM_BLOCK_WEIGHT.ref_time(), crate::MAXIMUM_BLOCK_WEIGHT.proof_size()],
+      "frameMaximum": [frame_maximum.ref_time(), frame_maximum.proof_size()],
+      "firstPreIdleCharge": [first_pre_idle_charge.ref_time(), first_pre_idle_charge.proof_size()],
+      "secondPreIdleCharge": [second_pre_idle_charge.ref_time(), second_pre_idle_charge.proof_size()],
+      "first": [first.metrics.pre_idle_remaining.ref_time(), first.metrics.pre_idle_remaining.proof_size()],
+      "second": [second.metrics.pre_idle_remaining.ref_time(), second.metrics.pre_idle_remaining.proof_size()],
+    })
+  );
   let second_snapshot = actor_lifecycle_observation(&[], &second.post_state, &[fee_sink]);
   assert_eq!(first_snapshot["actors"], second_snapshot["actors"]);
   for snapshot in [&first_snapshot, &second_snapshot] {
@@ -6042,7 +6748,9 @@ fn assert_control_phase_attribution_campaign(wasm: &[u8], replay_wasm: bool) {
       );
     }
   }
-  assert_eq!(manual.steps, vec![15, 16, 16, 16, 16, 16, 5, 0, 0]);
+  assert!(manual.steps[0] > 0 && manual.steps[0] < CONTROL_ATTRIBUTION_ACTORS);
+  assert_eq!(manual.steps.iter().sum::<u32>(), CONTROL_ATTRIBUTION_ACTORS);
+  assert_eq!(manual.steps.last(), Some(&0));
   assert_eq!(manual.prepass_steps, manual.steps);
   assert_eq!(manual.trigger_occurrences, vec![0; 9]);
   assert_eq!(cadenced.steps, vec![0, 0, 1, 1, 1, 1, 1, 1, 1]);
@@ -6100,6 +6808,8 @@ fn reference_full_block_fixture_replays_through_executive() {
     post_state: storage,
     block,
     inherent_data: data,
+    execution_backend_keys: BTreeSet::new(),
+    execution_overlay_keys: BTreeSet::new(),
     metrics: FullExecutiveBlockMetrics {
       actor_steps: 0,
       distinct_actors: 0,
@@ -6122,10 +6832,12 @@ fn reference_full_block_fixture_replays_through_executive() {
       trigger_occurrences: Vec::new(),
       user_calls: 0,
       next_user_weight: None,
+      user_admission_refusal: None,
       prepass_steps: 0,
       prepass_trigger_occurrences: 0,
       prepass_actor_control: Weight::zero(),
       prepass_actor_effect: Weight::zero(),
+      pre_idle_remaining: Weight::zero(),
       actor_control: Weight::zero(),
       actor_effect: Weight::zero(),
       user_dispatch: Weight::zero(),
@@ -6235,6 +6947,12 @@ fn full_executive_manual_phase_control_stops_use_live_head_and_stage_budget() {
       assert_eq!(contract.header.completion, CompletionPolicy::Persistent);
       assert!(contract.header.window.is_none());
       assert!(contract.header.auto_close_at_cycle_nonce.is_none());
+      assert_eq!(state.hot.unsuccessful_attempt_streak, 0);
+      assert!(<Runtime as pallet_deos_actors::Config>::MaxConsecutiveFailures::get() > 1);
+      assert_eq!(
+        contract.first_step.as_ref().expect("one Step").on_error,
+        StepErrorPolicy::AbortCycle
+      );
       (actor, node.eligible_from, contract.first_step_resources)
     });
     assert_eq!(header.cursor.is_none(), header.count == 0);
@@ -6323,6 +7041,56 @@ fn full_executive_manual_phase_control_stops_use_live_head_and_stage_budget() {
       Weight::zero(),
       "idle and finalization own nonzero canonical control work"
     );
+    type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    let stored = head
+      .as_ref()
+      .and_then(|(_, _, resources)| *resources)
+      .expect("saturated Manual head retains its certified Step envelope");
+    let step_maximum_components = [
+      (
+        "head-plan-maximum",
+        W::current_step_plan_opening_head().max(W::current_step_plan_suspended_head()),
+      ),
+      (
+        "run-commit-maximum",
+        W::run_progress()
+          .max(W::run_suspend())
+          .max(W::run_complete()),
+      ),
+      (
+        "placement-maximum",
+        W::service_round_admit_eligible().max(W::service_member_to_deadline_new_key()),
+      ),
+      ("fee-collection-allowance", W::fee_collection()),
+      ("invocation-receipt", W::action_invocation_receipt()),
+    ];
+    assert_eq!(
+      stored.control,
+      step_maximum_components
+        .iter()
+        .fold(Weight::zero(), |sum, (_, weight)| sum
+          .saturating_add(*weight)),
+      "the shared composed maximum dominates the alternative complete-owner profiles for this witness"
+    );
+    let inspection = W::service_round_begin_populated()
+      .saturating_add(W::service_round_probe_eligible())
+      .saturating_add(W::scheduler_actor_state_probe());
+    let suffix = W::service_round_admit_eligible().max(
+      W::service_member_retire_interior()
+        .max(W::service_member_retire_pair_cursor())
+        .max(W::service_member_retire_singleton()),
+    );
+    // The snapshot excludes every terminal-control condition for this persistent System Step.
+    let next_admission_control = inspection
+      .saturating_add(stored.control)
+      .saturating_add(suffix);
+    assert!(next_admission_control.ref_time() <= prepass_remaining.ref_time());
+    assert!(next_admission_control.proof_size() > prepass_remaining.proof_size());
+    assert!(!next_admission_control.all_lte(final_remaining));
+    assert_eq!(
+      head, final_head,
+      "both phases retain the same refused Service member"
+    );
     let prepass_head = format!("{head:?}");
     let final_head = format!("{final_head:?}");
     rows.push(serde_json::json!({
@@ -6336,6 +7104,16 @@ fn full_executive_manual_phase_control_stops_use_live_head_and_stage_budget() {
       "prepassRemainingControl": pair(prepass_remaining),
       "finalRemainingControl": pair(final_remaining),
       "laterPhaseControl": pair(later_phase_control),
+      "storedStepControlMaximum": pair(stored.control),
+      "stepMaximumComponents": step_maximum_components.iter().map(|(owner, weight)|
+        serde_json::json!({"owner": owner, "weight": pair(*weight)})
+      ).collect::<Vec<_>>(),
+      "storedStepEffectMaximum": pair(stored.effect),
+      "inspectionControl": pair(inspection),
+      "outerSuffixMaximum": pair(suffix),
+      "nextAdmissionControl": pair(next_admission_control),
+      "prepassAdmissionDeficit": pair(next_admission_control.saturating_sub(prepass_remaining)),
+      "finalAdmissionDeficit": pair(next_admission_control.saturating_sub(final_remaining)),
     }));
     parent = authored.block.header.clone();
     pre_state = authored.post_state;
@@ -6430,6 +7208,358 @@ fn full_executive_control_frontier_separates_capacity_from_service_eligibility()
         })
       );
     });
+  }
+}
+
+#[test]
+fn full_executive_w0_read_write_key_owners_are_observed_before_diagnostic_state_scan() {
+  let storage_info = runtime_proof_storage_info();
+  let owner_for_key = |key: &[u8]| {
+    let mut matching = storage_info
+      .iter()
+      .filter(|info| key.starts_with(&info.prefix));
+    let owner = matching
+      .next()
+      .map(|info| {
+        format!(
+          "{}.{}",
+          String::from_utf8_lossy(&info.pallet_name),
+          String::from_utf8_lossy(&info.storage_name),
+        )
+      })
+      .unwrap_or_else(|| {
+        if key.starts_with(b":") {
+          "WellKnownTop"
+        } else {
+          "UnmappedTop"
+        }
+        .to_owned()
+      });
+    assert!(matching.next().is_none(), "one owner per storage prefix");
+    owner
+  };
+  for actors in [0, 1] {
+    let fixture = prepare_actor_fixture(&[], actors, WorkloadSchedule::ManualOnly);
+    let authored = author_complete_block(
+      fixture.storage,
+      &[],
+      2,
+      UserDemand::ActorOnly,
+      &fixture.signer,
+      &fixture.actor_profiles,
+    );
+    assert_eq!(authored.metrics.actor_steps, actors);
+    let roots = authored
+      .execution_backend_keys
+      .iter()
+      .map(|(root, _)| *root)
+      .collect::<BTreeSet<_>>();
+    assert_eq!(roots.len(), 1, "W0 uses only the top trie");
+    assert!(
+      authored
+        .execution_overlay_keys
+        .iter()
+        .all(|(child, _)| child.is_none()),
+      "W0 has no child-trie writes"
+    );
+    let mut read_owners = BTreeMap::<String, usize>::new();
+    for (_, key) in &authored.execution_backend_keys {
+      *read_owners.entry(owner_for_key(key)).or_default() += 1;
+    }
+    let mut write_owners = BTreeMap::<String, usize>::new();
+    for (_, key) in &authored.execution_overlay_keys {
+      *write_owners.entry(owner_for_key(key)).or_default() += 1;
+    }
+    assert_eq!(
+      read_owners.values().sum::<usize>(),
+      authored.execution_backend_keys.len()
+    );
+    assert_eq!(
+      write_owners.values().sum::<usize>(),
+      authored.execution_overlay_keys.len()
+    );
+    println!(
+      "ACTOR_BASELINE_NATIVE_BLOCK_KEYS_V1 {}",
+      serde_json::json!({
+        "preparedActors": actors,
+        "committedSteps": authored.metrics.actor_steps,
+        "distinctBackendReadPaths": authored.execution_backend_keys.len(),
+        "readOwners": read_owners,
+        "distinctCommittedOverlayWriteKeys": authored.execution_overlay_keys.len(),
+        "writeOwners": write_owners,
+        "scope": "whole authored block; surviving overlay write identities and backend trie read paths, not per-Step attribution or access frequency",
+      })
+    );
+  }
+}
+
+#[test]
+fn full_executive_native_proof_owner_partition() {
+  let storage_info = runtime_proof_storage_info();
+  for actors in [0, 1, PREPARED_W1_ACTORS] {
+    let fixture = prepare_actor_fixture(&[], actors, WorkloadSchedule::ManualOnly);
+    let authored = author_complete_block(
+      fixture.storage,
+      &[],
+      2,
+      UserDemand::ActorOnly,
+      &fixture.signer,
+      &fixture.actor_profiles,
+    );
+    assert_successful_transfer_outcomes(&authored.metrics);
+    if actors <= 1 {
+      assert_eq!(authored.metrics.actor_steps, actors);
+    } else {
+      assert!(authored.metrics.actor_steps > 0 && authored.metrics.actor_steps < actors);
+    }
+    let mut replay = TestExternalities::new_with_code_and_state(
+      &[],
+      authored.pre_state.clone(),
+      crate::VERSION.state_version(),
+    );
+    let recorder = Recorder::<polkadot_sdk::sp_core::Blake2Hasher>::default();
+    replay.register_extension(ProofSizeExt::new(RecordingProofSizeProvider::new(
+      recorder.clone(),
+    )));
+    // Record only Executive execution, not authoring, inherent checks, or diagnostic queries.
+    replay.execute_with_recorder(recorder.clone(), || {
+      Executive::execute_block(authored.block.clone().into());
+    });
+    let proof = recorder.to_storage_proof();
+    let overlap = super::wasm_replay::key_proof_overlap(&recorder)
+      .expect("every recorded access reconstructs from execution proof with the same access kind");
+    let roots = overlap
+      .paths
+      .keys()
+      .map(|(root, _)| *root)
+      .collect::<BTreeSet<_>>();
+    assert_eq!(
+      roots.len(),
+      1,
+      "this workload accesses only the pre-state top trie"
+    );
+    let pre_state_root = *roots.first().expect("Executive reads pre-state");
+    let (owners, shared_bytes) =
+      storage_proof_owners(pre_state_root, &overlap.paths, &storage_info);
+    let exclusive_bytes = owners
+      .values()
+      .map(|owner| owner.exclusive_node_bytes)
+      .sum::<usize>();
+    let node_bytes = proof.iter_nodes().map(Vec::len).sum::<usize>();
+    assert_eq!(exclusive_bytes + shared_bytes, overlap.unique_node_bytes);
+    assert_eq!(
+      overlap.unique_node_bytes + overlap.unattributed_node_bytes,
+      node_bytes
+    );
+    assert_eq!(
+      owners.values().map(|owner| owner.key_paths).sum::<usize>(),
+      overlap.paths.len()
+    );
+    assert!(
+      owners
+        .keys()
+        .all(|owner| !owner.starts_with("UnmappedTop") && owner != "NonTopTrie")
+    );
+    let service_read_actors = fixture
+      .actor_profiles
+      .keys()
+      .copied()
+      .filter(|actor_id| {
+        overlap.paths.contains_key(&(
+          pre_state_root,
+          pallet_deos_actors::ServiceNodes::<Runtime>::hashed_key_for(actor_id),
+        ))
+      })
+      .collect::<BTreeSet<_>>();
+    let progressed_actors = authored
+      .metrics
+      .progressed_steps
+      .iter()
+      .map(|(actor_id, _)| *actor_id)
+      .collect::<BTreeSet<_>>();
+    assert!(progressed_actors.is_subset(&service_read_actors));
+    let service_read_without_step = service_read_actors
+      .difference(&progressed_actors)
+      .copied()
+      .collect::<Vec<_>>();
+    let owner_rows = owners
+      .iter()
+      .map(|(owner, metrics)| {
+        let info = storage_info.iter().find(|info| {
+          format!(
+            "{}.{}",
+            String::from_utf8_lossy(&info.pallet_name),
+            String::from_utf8_lossy(&info.storage_name)
+          ) == *owner
+        });
+        // Encoded pre-state values are context, not an additive attribution of trie proof bytes.
+        let values = overlap
+          .paths
+          .keys()
+          .filter_map(|(_, key)| {
+            let matches = info.map_or_else(
+              || owner == "WellKnownTop" && key.starts_with(b":"),
+              |info| key.starts_with(&info.prefix),
+            );
+            matches.then(|| authored.pre_state.top.get(key).map(Vec::len))
+          })
+          .collect::<Vec<_>>();
+        assert_eq!(values.len(), metrics.key_paths);
+        serde_json::json!({
+          "owner": owner,
+          "keyPaths": metrics.key_paths,
+          "exclusiveNodeBytes": metrics.exclusive_node_bytes,
+          "sharedNodeBytes": metrics.shared_node_bytes,
+          "presentPreStateValues": values.iter().flatten().count(),
+          "absentPreStateValues": values.iter().filter(|value| value.is_none()).count(),
+          "encodedPreStateValueBytes": values.iter().flatten().sum::<usize>(),
+        })
+      })
+      .collect::<Vec<_>>();
+    println!(
+      "ACTOR_BASELINE_NATIVE_PROOF_OWNERS_V1 {}",
+      serde_json::json!({
+        "preparedActors": actors,
+        "committedSteps": authored.metrics.actor_steps,
+        "preStateRoot": format!("{pre_state_root:?}"),
+        "blockHash": format!("{:?}", authored.block.header.hash()),
+        "chargedControl": [authored.metrics.actor_control.ref_time(), authored.metrics.actor_control.proof_size()],
+        "chargedEffect": [authored.metrics.actor_effect.ref_time(), authored.metrics.actor_effect.proof_size()],
+        "storageProofScaleBytes": proof.encoded_size(),
+        "trieNodes": proof.len(),
+        "trieNodeBytes": node_bytes,
+        "workloadServiceNodesRead": service_read_actors.len(),
+        "workloadServiceReadsWithoutCommittedStep": service_read_without_step,
+        "exclusiveNodeBytes": exclusive_bytes,
+        "crossOwnerSharedNodeBytes": shared_bytes,
+        "unattributedNodeBytes": overlap.unattributed_node_bytes,
+        "owners": owner_rows,
+        "scope": "native full Executive replay; whole-block trie proof, not per-Step marginal, FRAME discount, parachain PoV, or production-Wasm evidence",
+      })
+    );
+    // State inspection stays outside the recorder and checks that diagnostics changed no behavior.
+    assert_eq!(
+      replay.execute_with(current_top_storage).top,
+      authored.post_state.top
+    );
+  }
+}
+
+#[test]
+fn full_executive_governance_expiry_competes_with_actor_and_user_demand() {
+  for participants in [0u32, 512] {
+    // Four block-sized cohorts keep eligible work live through the expiry block.
+    let mut fixture =
+      prepare_actor_fixture(&[], 4 * PREPARED_W1_ACTORS, WorkloadSchedule::ManualOnly);
+    let mut setup = TestExternalities::new_with_code_and_state(
+      &[],
+      fixture.storage.clone(),
+      crate::VERSION.state_version(),
+    );
+    setup.execute_with(|| {
+      assert_eq!(System::block_number(), 1);
+      for (batch, start) in (0..participants).step_by(256).enumerate() {
+        let winners = (start..(start + 256).min(participants))
+          .map(|account| {
+            crate::AccountId::new(polkadot_sdk::sp_io::hashing::blake2_256(
+              &(b"governance-expiry", account).encode(),
+            ))
+          })
+          .collect::<Vec<_>>();
+        assert_ok!(crate::Governance::record_winning_vote_batch(
+          RuntimeOrigin::root(),
+          0,
+          10_000 + batch as u32,
+          BoundedVec::try_from(winners).expect("one bounded winning batch"),
+        ));
+      }
+      assert_eq!(
+        pallet_governance::ExpiryBuckets::<Runtime>::get(4).len(),
+        participants as usize
+      );
+    });
+    setup
+      .commit_all()
+      .expect("Governance ingress commits before authoring");
+    fixture.storage = setup.execute_with(current_top_storage);
+    let mut parent = parent_header_for(fixture.storage.clone(), &[], 1);
+    for block in 2..=5 {
+      let authored = author_complete_block_after(
+        fixture.storage.clone(),
+        &[],
+        &parent,
+        block,
+        if block == 5 {
+          UserDemand::ContinuousShared
+        } else {
+          UserDemand::ActorOnly
+        },
+        &fixture.signer,
+        0,
+        &fixture.actor_profiles,
+      );
+      assert_complete_block_replays_natively(&authored, &[]);
+      if block == 5 {
+        assert_successful_transfer_outcomes(&authored.metrics);
+        assert!(authored.metrics.actor_steps > 0);
+        assert!(authored.metrics.user_calls > 0);
+        // Custom(44) is the runtime economic meter's reservation-rejected code, not FRAME.
+        assert_eq!(
+          authored.metrics.user_admission_refusal,
+          Some(InvalidTransaction::Custom(44).into()),
+        );
+        let mut post = TestExternalities::new_with_code_and_state(
+          &[],
+          authored.post_state.clone(),
+          crate::VERSION.state_version(),
+        );
+        post.execute_with(|| {
+          assert!(pallet_governance::ExpiryBuckets::<Runtime>::get(4).is_empty());
+          let evicted = System::events()
+            .iter()
+            .filter(|record| {
+              matches!(
+                record.event,
+                RuntimeEvent::Governance(pallet_governance::Event::WinningVoteWindowEvicted { .. })
+              )
+            })
+            .count();
+          assert_eq!(evicted, participants as usize);
+        });
+        let limits = BlockResourceBudgetValue::get().limits();
+        let shared_used = authored
+          .metrics
+          .actor_effect
+          .saturating_add(authored.metrics.user_dispatch);
+        let shared_remaining = limits
+          .shared_economic()
+          .checked_sub(&shared_used)
+          .expect("economic usage fits its ledger");
+        let next = authored
+          .metrics
+          .next_user_weight
+          .expect("the rejected candidate is recorded");
+        assert!(next.proof_size() > shared_remaining.proof_size());
+        assert!(next.all_lte(authored.metrics.pre_idle_remaining));
+        let pair = |weight: Weight| [weight.ref_time(), weight.proof_size()];
+        println!(
+          "GOVERNANCE_MIXED_EXECUTIVE_V1 {}",
+          serde_json::json!({
+            "participants": participants, "block": block,
+            "actorSteps": authored.metrics.actor_steps, "userCalls": authored.metrics.user_calls,
+            "refusal": format!("{:?}", authored.metrics.user_admission_refusal),
+            "control": pair(authored.metrics.actor_control),
+            "effect": pair(authored.metrics.actor_effect),
+            "userDispatch": pair(authored.metrics.user_dispatch),
+            "sharedRemaining": pair(shared_remaining),
+            "preIdleRemaining": pair(authored.metrics.pre_idle_remaining),
+            "scope": "native full Executive, real governance expiry and signed remarks; generated charges, not production Wasm or measured PoV",
+          })
+        );
+      }
+      parent = authored.block.header;
+      fixture.storage = authored.post_state;
+    }
   }
 }
 

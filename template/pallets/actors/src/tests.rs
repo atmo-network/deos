@@ -679,7 +679,7 @@ fn fund_native_raw(who: &AccountId, amount: Balance) {
 }
 
 /// Fixture funding: ledger minimum plus one Manual Trigger occurrence and the complete
-/// Pipeline Machine/cleanup maximum. Creation itself still requires no service prefunding.
+/// Pipeline Machine maximum. Creation itself still requires no service prefunding.
 fn user_prefunding_requirement(plan: &crate::ContractSteps<crate::mock::Test>) -> Balance {
   let pipeline = Actors::user_pipeline_machine_capacity_requirement(plan)
     .expect("fixture plan has a checked Pipeline Machine requirement");

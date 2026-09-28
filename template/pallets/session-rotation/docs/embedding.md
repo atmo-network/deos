@@ -6,7 +6,7 @@
 - Disable any pre-existing hook that would independently rotate the same session.
 - Keep session prediction APIs logically aligned with `should_rotate`.
 - Implement `BenchmarkHelper` under `runtime-benchmarks` so setup reaches the host's maximum admitted active and queued session geometry.
-- Generate and bind a production `WeightInfo`; `()` is suitable only for tests.
+- Generate and bind a production `WeightInfo`; `()` is suitable only for tests. Satisfy the specification's complete-call ownership rule for nested callbacks before accepting the binding; regenerate when the host's admitted state or callback domain changes.
 - Include the generated maximum in fixed block-resource accounting.
 
 ## Reference Composition

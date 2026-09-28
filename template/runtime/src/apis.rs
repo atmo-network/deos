@@ -474,7 +474,9 @@ impl pallet_deos_actors::ActorEligibilityApi<Block, BlockNumber> for Runtime {
             }
 
             use polkadot_sdk::frame_support::traits::WhitelistedStorageKeys;
-            let whitelist = AllPalletsWithSystem::whitelisted_storage_keys();
+            let mut whitelist = AllPalletsWithSystem::whitelisted_storage_keys();
+      // Benchmark-only mode selection is not a production storage access.
+      whitelist.push(crate::configs::staking_config::BENCHMARK_NATIVE_SECURITY_MODE_KEY.to_vec().into());
 
             let mut batches = Vec::<BenchmarkBatch>::new();
             let params = (&config, &whitelist);

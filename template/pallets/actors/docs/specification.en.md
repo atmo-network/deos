@@ -210,7 +210,9 @@ Each admitted Contract carries a runtime-owned admission certificate binding at 
 
 Each Step carries one runtime-owned resource envelope with a maximum Actor Control Weight and a maximum Task-effect Weight, bound to its index, fragment, predicate and read geometry, Weight identity, and configured bounds.
 
-The Pipeline envelope is the generated maximum **reachable** Actor Control work of one complete admitted Pipeline. It includes Opening exactly once (§6.2), each reachable current-Step control path (§7.1), retry control up to authored bounds (§7.5), and exactly one reachable completion or close branch including its cleanup (§6.6, §10.3). It excludes Trigger work (§5.2), Task effects (§12.1), and pre-Opening minimal apoptosis (§10.4). It MUST NOT be the sum of mutually exclusive Step maxima; Opening-only work is not multiplied by Step 0 retries and finalization-only work is not multiplied across Steps.
+The Pipeline fee envelope is the generated maximum **reachable** chargeable Actor Control work of one complete admitted Pipeline. It includes Opening exactly once (§6.2), each reachable current-Step control path (§7.1), retry control up to authored bounds (§7.5), and the reachable Cycle-completion work (§6.6). It excludes Trigger work (§5.2), Task effects (§12.1), and final Actor-state destruction through Close or minimal apoptosis (§10.3–§10.4), whose economic owner is creation (§8.2). It MUST NOT be the sum of mutually exclusive Step maxima; Opening-only work is not multiplied by Step 0 retries and Cycle-finalization work is not multiplied across Steps.
+
+Fee ownership does not reduce physical resource admission. Step and lifecycle Weight envelopes MUST still reserve and account for every reachable close branch in both RefTime and ProofSize. Chargeable Cycle control and creation-backed destruction require explicit non-overlapping cost owners; subtracting an unrelated public-close coefficient from a complete-Step measurement does not establish that partition.
 
 Create and semantic update are the only envelope producers. Opening reads the fixed-size envelope in `O(1)` and MUST NOT load tail chunks to quote Pipeline service (§6.2, §8.4).
 
@@ -657,7 +659,11 @@ Ordinary transaction payment remains owned by the host. Task-native protocol fee
 
 ### 8.2 Creation fee and state hold
 
-`ActorCreationFee` is a fixed nonrefundable process-admission and anti-spam charge, paid by the signed creator only when User creation commits. It is not a second payment for create-call Weight. It economically backs the protocol obligation to perform minimal pre-Opening apoptosis (§10.4) and prepays no Trigger, Pipeline, or Action service; minimal apoptosis remains an obligation even if later cleanup cost exceeds the historical fee.
+User creation pays for physical Actor-state installation and its eventual complete removal. The host transaction fee owns the create-call execution; `ActorCreationFee` is the fixed nonrefundable process-admission, anti-spam, and lifetime-cleanup charge, paid by the signed creator only when User creation commits. It is not a second payment for create-call Weight and prepays no Trigger, Pipeline execution, or Action service.
+
+The committed Creation Fee economically backs complete Close (§10.3), including minimal apoptosis (§10.4), across the admitted User lifecycle, not only pre-Opening failure. Final state destruction MUST NOT be charged again at Pipeline Opening, retry, or automatic closure, and MUST NOT depend on the Actor's later solvency. The obligation survives a later cleanup cost exceeding the historical fee. Creation and later activation or Contract replacement MUST stay within the host's bounded lifetime-cleanup domain; a larger refundable state hold alone does not pay for additional cleanup work.
+
+Prepayment is an economic obligation, not stored future block capacity, a per-Actor fee escrow, or permission for unmetered work. Cleanup consumes current-block Actor Control Weight when executed (§9). Ordinary explicit-control transaction payment remains host-owned (§10.3); refundable state backing remains separate from this nonrefundable fee.
 
 `ActorStateHold` is a refundable hold on the User owner account backed by actual retained geometry; it is not a fee and not rent:
 
@@ -685,7 +691,7 @@ A User Trigger fee is charged exactly once, from fee-native balance above `MinUs
 PipelineMachineFee = WeightToFee(Pipeline envelope, §4.4)
 ```
 
-The User fee is charged once at Opening from fee-native balance above `MinUserBalance` (§6.2, §11.4). It prepays all reachable Actor Control work of that Pipeline through its Cycle boundary, including exactly one reachable completion or close branch with its cleanup. Quotes MAY report the machine and cleanup components separately, but there is no separately charged cleanup fee, per-Step machine charge, remaining machine budget, hold or refund settlement, Trigger work, or Task-effect work in it. Running and Suspended Attempts consume paid machine authority without a balance predicate.
+The User fee is charged once at Opening from fee-native balance above `MinUserBalance` (§6.2, §11.4). It prepays the reachable chargeable machine work through that Pipeline's Cycle boundary (§4.4), including ordinary Cycle completion but excluding final Actor-state destruction already backed by creation (§8.2). Pipeline quotes MUST NOT add a lifetime-cleanup surcharge. There is no per-Step machine charge, remaining machine budget, hold or refund settlement, Trigger work, or Task-effect work in it. Running and Suspended Attempts consume paid machine authority without a balance predicate.
 
 Insufficient capacity causes minimal apoptosis before Opening (§10.4); collector failure rolls back Opening and preserves the latch (§6.2). Committed Pipeline fees are nonrefundable.
 
@@ -709,7 +715,7 @@ No two economic surfaces may charge the same Weight or retained byte:
 | Work | Sole economic owner |
 | --- | --- |
 | External call dispatch and origin work | ordinary transaction fee |
-| User process admission | Actor Creation Fee (§8.2) |
+| User process admission and eventual complete state destruction | Actor Creation Fee (§8.2) |
 | Retained Actor state | Actor State Hold (§8.2) |
 | Useful readiness `false -> true` | Trigger Fee (§8.3) |
 | Complete admitted Pipeline control | Pipeline Machine Fee (§8.4) |
@@ -731,13 +737,13 @@ ActorBaseTurn       = floor(SharedEconomicLimit / 2)
 UserBaseTurn        = SharedEconomicLimit - ActorBaseTurn
 ```
 
-The host configures `host_control_share` in `(0, 1]`; its integration documentation owns the selected value and the fixed envelope. Both components are compared, reserved, and released independently; neither converts into the other.
+The host configures `host_control_share` in `(0, 1]`; its integration documentation owns the selected value and the maximum fixed envelope. Allocation MUST reject a settled prefix plus outstanding fixed reserve that exceeds that host ceiling in either Weight component, even when the sum fits the complete block. Unused fixed allowance MUST NOT reduce the schedulable remainder. Both components are compared, reserved, and released independently; neither converts into the other. The context-to-Prepass transition MUST freeze exactly one immutable budget in the current-block resource state. Prepass, external admission, Drain and final reconciliation MUST use that budget; later configuration reads or caller-supplied limits MUST NOT replace it. Before the transition no current allocation exists, and the bounded finalized snapshot MUST retain the budget that governed its block.
 
 Actor Control pays only Actor-specific work: detection and occurrence materialization, latch and placement, Opening, precondition and amount evaluation, run persistence, retry, completion, close control, scheduler topology, and bounded cleanup. Shared Economic pays ordinary external economic dispatch and Actor Task effects; a Task effect and its external equivalent use the same host mechanism and effect Weight (§12.1). Actor Control MUST NOT borrow Shared Economic capacity and MUST NOT be lent to it; actual-Weight reclaim never moves Weight between the meters.
 
 ### 9.2 Prepass, base pass, external phase, and Drain
 
-Every block contains exactly one mandatory Actor Prepass inherent after required context inherents and before ordinary external extrinsics, including a block with no Actor work. It carries no author-selected scheduling, budget, or payload data. The Prepass:
+Every block contains exactly one mandatory Actor Prepass inherent after required context inherents and before ordinary external extrinsics, including a block with no Actor work. It carries no author-selected scheduling, budget, or payload data. Its declared Weight MUST cover every legal frozen allocation, including a quiet prefix, independently of the configured worst-case fixed envelope. That declaration is provisional FRAME accounting, not authority to exceed frozen domains; the Prepass MUST return its charged actual Weight for settlement. The Prepass:
 
 1. Services bounded due Deadline and detector obligations caused before the current block boundary (§5.8);
 2. Materializes eligible readiness (§5.2);
