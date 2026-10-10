@@ -16,7 +16,7 @@ Zone: Governance component; receives already-derived labels/details from governa
     openingFeeLabel: string;
     advisoryScopeLabel?: string | null;
     settlementLabel?: string | null;
-    fundingSourceLabel?: string | null;
+    treasuryAccountLabel?: string | null;
     authorizedRuntimeUpgradeLabel?: string | null;
   };
 
@@ -29,7 +29,7 @@ Zone: Governance component; receives already-derived labels/details from governa
     openingFeeLabel,
     advisoryScopeLabel = null,
     settlementLabel = null,
-    fundingSourceLabel = null,
+    treasuryAccountLabel = null,
     authorizedRuntimeUpgradeLabel = null,
   }: Props = $props();
 </script>
@@ -69,10 +69,10 @@ Zone: Governance component; receives already-derived labels/details from governa
     valueClass="text-(--mono-text)"
   />
 {/if}
-{#if fundingSourceLabel}
+{#if treasuryAccountLabel}
   <DetailRow
-    label="Funding source"
-    value={fundingSourceLabel}
+    label="Treasury account"
+    value={treasuryAccountLabel}
     valueClass="text-(--mono-text)"
   />
 {/if}

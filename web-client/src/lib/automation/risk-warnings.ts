@@ -12,8 +12,6 @@ export type ActorCompositionWarningKind =
   | 'ResidualCustodyThroughLocatorReuse'
   | 'DeepActorGraphAmplification'
   | 'TriggerRevisionCoalescing'
-  | 'BroadObservationFanout'
-  | 'SparseObservationCrossing'
   | 'StrictFifoHeadOfLine'
   | 'CompletedDoesNotImplyAllTasksSuccess';
 
@@ -31,18 +29,7 @@ export type ActorCompositionWarningInput = {
   simulatorStatus?: 'Completed' | 'Failed' | 'Suspended' | 'Closed';
   successfulTaskCount?: number;
   totalTaskCount?: number;
-  observationSubscriberCount?: number;
 };
-
-export const HIGH_CARDINALITY_OBSERVATION_SUBSCRIBERS = 1_000;
-
-function isTerminalStep(
-  step: ActorContractStaticAnalysis['steps'][number],
-): boolean {
-  // A step is terminal-reachable when a failure path ends the run without a
-  // later resumable step: AbortCycle error policy or a zero-retry boundary.
-  return step.errorPolicy === 'AbortCycle' || step.retryMaxAttempts === 0;
-}
 
 /**
  * Project shipped runtime facts into typed composition warnings. Every
@@ -57,16 +44,15 @@ export function projectActorCompositionWarnings(
   const { artifact, analysis } = input;
 
   if (artifact.mutability === 'Immutable') {
-    const reachableTerminal =
-      analysis.autoCloseAtCycleNonce !== null ||
-      analysis.steps.some(isTerminalStep);
-    if (!reachableTerminal) {
+    const hasAuthoredTerminal =
+      analysis.autoCloseAtCycleNonce !== null || analysis.closeWhen !== null;
+    if (!hasAuthoredTerminal) {
       warnings.push({
         kind: 'ImmutableWithoutReachableTerminal',
         severity: 'critical',
         message:
-          'Immutable actor has no reachable terminal condition and will keep custody permanently.',
-        evidence: `mutability=Immutable, ${analysis.steps.length} step(s), no auto-close nonce or AbortCycle/zero-retry terminal step`,
+          'Immutable actor has no authored lifetime terminal; its owner cannot close it early.',
+        evidence: `mutability=Immutable, no close_when or auto-close nonce; Cycle abort is not Actor destruction and mandatory safety terminals remain independent`,
       });
     }
   }
@@ -100,15 +86,11 @@ export function projectActorCompositionWarnings(
   }
 
   const signalFindings = analysis.findings.filter(
-    (finding) =>
-      finding.kind === 'ExternallySignalledAdmission' ||
-      finding.kind === 'TriggerAmountCompatibilityViolation',
+    (finding) => finding.kind === 'ExternallySignalledAdmission',
   );
   const hasSameBlockCoalescing =
     analysis.trigger != null &&
-    analysis.trigger.sourceKinds.some(
-      (kind) => kind === 'AddressEvent' || kind === 'ObservationChange',
-    );
+    analysis.trigger.sourceKinds.includes('AddressEvent');
   if (hasSameBlockCoalescing || signalFindings.length > 0) {
     warnings.push({
       kind: 'TriggerRevisionCoalescing',
@@ -116,32 +98,6 @@ export function projectActorCompositionWarnings(
       message:
         'Canonical temporal placement coalesces same-block trigger revisions into one execution per block.',
       evidence: `sources=${analysis.trigger?.sourceKinds.join('/') ?? 'none'}, ${signalFindings.length} signal finding(s)`,
-    });
-  }
-
-  if (analysis.trigger?.kind === 'ObservationChange') {
-    const subscriberCount = input.observationSubscriberCount;
-    const highCardinality =
-      subscriberCount != null &&
-      subscriberCount >= HIGH_CARDINALITY_OBSERVATION_SUBSCRIBERS;
-    warnings.push({
-      kind: 'BroadObservationFanout',
-      severity: highCardinality ? 'warning' : 'info',
-      message: highCardinality
-        ? 'This broad observation feed has high subscriber cardinality; every committed change requires bounded fanout across those Actors.'
-        : 'Observation change reacts to every committed feed change, so detection work grows with subscribed Actors.',
-      evidence:
-        subscriberCount == null
-          ? 'trigger=ObservationChange, broad feed-subscriber semantics'
-          : `trigger=ObservationChange, subscribers=${subscriberCount}`,
-    });
-  } else if (analysis.trigger?.kind === 'ObservationCrossing') {
-    warnings.push({
-      kind: 'SparseObservationCrossing',
-      severity: 'info',
-      message:
-        'Observation crossing reacts only when the declared directional fire or rearm boundary is crossed.',
-      evidence: 'trigger=ObservationCrossing, sparse threshold semantics',
     });
   }
 
@@ -179,8 +135,6 @@ export const ACTORS_COMPOSITION_WARNING_KINDS: readonly ActorCompositionWarningK
     'ResidualCustodyThroughLocatorReuse',
     'DeepActorGraphAmplification',
     'TriggerRevisionCoalescing',
-    'BroadObservationFanout',
-    'SparseObservationCrossing',
     'StrictFifoHeadOfLine',
     'CompletedDoesNotImplyAllTasksSuccess',
   ];

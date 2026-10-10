@@ -90,7 +90,7 @@ async function chainSnapshot(client, api) {
     throw new Error('finalized runtime code is unavailable');
   if (
     actorControl.status !== 'Active' ||
-    actorControl.cell.identity.actor_class.type !== 'System'
+    actorControl.record.identity.actor_class.type !== 'System'
   ) {
     throw new Error('Burn Actor active System identity is unavailable');
   }
@@ -98,7 +98,7 @@ async function chainSnapshot(client, api) {
   if (!feed)
     throw new Error('Native-to-foreign pre-execution Oracle feed is absent');
   const burnAccount = deriveSystemActorSovereignAccount(
-    actorControl.cell.identity.actor_class.value.sovereign_id,
+    actorControl.record.identity.actor_class.value.sovereign_id,
   );
   const [
     burnNative,
@@ -109,7 +109,6 @@ async function chainSnapshot(client, api) {
     lpPairs,
     observation,
     actorContractHead,
-    actorFunding,
   ] = await Promise.all([
     api.query.System.Account.getValue(burnAccount, { at: block.hash }),
     api.view.Assets.balance_of(burnAccount, foreignId, { at: block.hash }),
@@ -123,15 +122,13 @@ async function chainSnapshot(client, api) {
     api.query.Actors.ActorContractHead.getValue(burnActorId, {
       at: block.hash,
     }),
-    api.query.Actors.ActorFunding.getValue(burnActorId, { at: block.hash }),
   ]);
   if (!assetDetails)
     throw new Error(`foreign asset ${foreignId} is unavailable`);
   if (!pool || !reserves.success)
     throw new Error('Native/foreign pool state is unavailable');
   if (!observation) throw new Error('Oracle observation is unavailable');
-  if (!actorContractHead || !actorFunding)
-    throw new Error('Burn Actor state is incomplete');
+  if (!actorContractHead) throw new Error('Burn Actor state is incomplete');
 
   return jsonValue({
     finalized_block: {
@@ -160,9 +157,9 @@ async function chainSnapshot(client, api) {
       router_lp_pairs: lpPairs,
       oracle_feed: feed,
       oracle_observation: observation,
-      actor_identity: actorControl.cell.identity,
+      actor_identity: actorControl.record.identity,
       actor_control_location: actorControl.location,
-      actor_control_cell: actorControl.cell,
+      actor_control_cell: actorControl.record,
       actor_contract_head: actorContractHead,
       actor_funding: actorFunding,
     },

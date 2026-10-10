@@ -20,10 +20,13 @@ Environment:
   NETWORK_WORK_DIR=template
   ZOMBIENET_CONFIG=<NETWORK_WORK_DIR>/zombienet.toml
   CHAIN_SPEC_PATH=<NETWORK_WORK_DIR>/chain_spec.json
+  DEOS_BINARY_DIR=<repository>/bin  SDK bundle and selected Omni receipt
 
 Inputs:
-  Existing Zombienet config and matching chain spec in the selected network work
-  directory, plus node binaries on PATH.
+  Existing Zombienet config and matching raw-storage chain spec in the selected network work
+  directory, plus node binaries on PATH. The reference topology uses
+  polkadot-omni-node-deos selected through 01-download-binaries.sh; its receipt,
+  SDK marker and SHA-256 must agree. Custom topologies own their node commands.
 
 Outputs:
   Foreground local Zombienet process and its runtime logs.
@@ -53,7 +56,8 @@ parse_args() {
 check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     hydrate_local_tool_paths
-    require_commands polkadot polkadot-omni-node zombienet
+    require_commands polkadot zombienet jq
+    verify_deos_omni_node "$(command -v polkadot-omni-node-deos || true)"
     log_success "Zombienet spawn prerequisites checked"
 }
 
@@ -75,6 +79,11 @@ verify_prerequisites() {
         exit 1
     fi
 
+    if ! jq -e '.genesis.raw.top | type == "object"' "$CHAIN_SPEC_PATH" >/dev/null; then
+        log_error "Raw-storage chain spec required to preserve runtime-owned genesis; regenerate with 04-generate-chain-spec.sh."
+        exit 1
+    fi
+
     log_info "Prerequisites verified"
 }
 
@@ -85,7 +94,7 @@ spawn_network() {
     echo "  Config: $ZOMBIENET_CONFIG"
     echo "  Chain spec: $CHAIN_SPEC_PATH"
     echo "  polkadot: $(command -v polkadot)"
-    echo "  polkadot-omni-node: $(command -v polkadot-omni-node)"
+    echo "  polkadot-omni-node-deos: $(command -v polkadot-omni-node-deos)"
     echo "  zombienet: $(command -v zombienet)"
     echo ""
 

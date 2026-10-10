@@ -502,6 +502,20 @@ The system MUST distinguish between:
 
 That distinction matters for auto-finalization, recovery, UI, and reward-memory export.
 
+### 6.0 Pending Execution and Terminal History
+
+Approval and terminal history have different lifetimes. An approved executable item remains pending until its single effect attempt commits an enacted or execution-failed result; an advisory item becomes terminal when its advisory result commits. Outcome-history expiry MUST NOT delete pending metadata, execution authority or its approval fact. Terminal retention starts at the actual committed terminal epoch, including late execution, rejection and veto cancellation; approval time is not the retention origin for an unattempted effect.
+
+Delayed approval MUST atomically reserve one slot in a runtime-bounded global pending set and one slot in bounded per-domain finalized discovery before releasing active proposal capacity. A full destination defers approval with the active proposal and its votes intact; it MUST NOT admit an unindexed pending record. Pending capacity is independent of active capacity and history retention. Each item occupies at most one pending slot, regardless of how many epochs pass or how often an executor is unavailable. Neither longer delay nor executor unavailability may increase its storage allocation.
+
+Pending service MUST visit a bounded number of members per block in rotating order and attempt only members whose admitted enactment epoch is due. Unavailability preserves that exact due epoch and pending identity; it is not a new approval, a new queue ticket or a next-epoch copy. One unavailable member MUST NOT prevent service opportunities for other pending members, proposal maturity, reward expiry or terminal-history cleanup. This bounded pending service is independent of historical epoch catch-up; it MUST NOT scan elapsed epochs to find live execution obligations. Rotation/removal must preserve eventual visits to every retained member under the configured service budget.
+
+Before invoking an effect, service MUST reserve its terminal cleanup destination at the actual terminal epoch plus retention and validate all remaining fallible lifecycle transitions. If cleanup admission is unavailable, the item remains pending and no effect is invoked. Effect execution, its typed result, pending-slot release and terminal cleanup publication commit atomically. An executor-reported failure rolls back partial economic effects before committing the explicit failure result. A later bookkeeping refusal rolls back the entire current attempt; it never leaves an unrecorded effect or drops the pending obligation. Checked horizon failure fails closed with the obligation retained.
+
+Finalized discovery MUST use an explicit bounded per-domain index covering pending approvals and retained terminal outcomes. Admission and cleanup maintain its bijection with canonical records transactionally. Queries may load and sort only this bounded index; collecting a storage prefix and truncating the resulting vector is not a bounded query. Pending records retain their index slots until their terminal retention ends. Full discovery capacity applies backpressure at resolution rather than deleting a pending or unexpired terminal record. Global pending capacity, per-domain discovery capacity, per-block visits and terminal cleanup capacity are separate host limits and need independent integrity and resource checks.
+
+The package architecture owns the chosen storage and service realization. Preservation/recovery regressions, late rollback tests, changed-owner benchmarks and physical admission must agree before production qualification; a correct bounded representation alone does not establish a numerical resource maximum.
+
 ### 6.1 Multi-Option Primary Evaluation Tracks
 
 Some tactical domains MAY use a multi-option primary track instead of bare `Aye / Nay`.

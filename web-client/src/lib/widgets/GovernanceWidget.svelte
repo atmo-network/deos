@@ -114,6 +114,8 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
     null,
   );
   let treasurySubmitItemIdInput = $state('');
+  let treasuryInvoiceCidInput = $state('');
+  let treasuryAccountInput = $state('');
   let treasuryBeneficiaryInput = $state('');
   let treasuryPayoutAssetInput = $state('');
   let treasuryBaseAmountInput = $state('');
@@ -161,11 +163,16 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
   });
 
   const treasuryPayloadDraft = $derived(
-    deriveGovernanceTreasuryPayloadDraftState({
-      beneficiary: treasuryBeneficiaryInput,
-      payoutAsset: treasuryPayoutAssetInput,
-      baseAmount: treasuryBaseAmountInput,
-    }),
+    deriveGovernanceTreasuryPayloadDraftState(
+      {
+        invoiceCid: treasuryInvoiceCidInput,
+        treasuryAccount: treasuryAccountInput,
+        beneficiary: treasuryBeneficiaryInput,
+        payoutAsset: treasuryPayoutAssetInput,
+        baseAmount: treasuryBaseAmountInput,
+      },
+      governanceStore.state.maxCidBytes,
+    ),
   );
 
   function authorizedRuntimeUpgradeLabel() {
@@ -442,8 +449,17 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
     if (treasurySubmissionOption == null) {
       return 'Signed tactical treasury submission is unavailable';
     }
+    if (!treasuryPayloadDraft.capabilityReady) {
+      return 'Invoice schema capability unavailable in current metadata';
+    }
     if (!treasurySubmitItemReady) {
       return 'Enter a valid positive item id';
+    }
+    if (
+      !treasuryPayloadDraft.invoiceCidValid ||
+      !treasuryPayloadDraft.treasuryAccountValid
+    ) {
+      return 'Enter a bounded canonical CIDv1 and treasury account';
     }
     if (!treasuryPayloadDraft.beneficiaryValid) {
       return 'Enter a valid beneficiary address';
@@ -940,14 +956,38 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
                 'L2TreasurySpend',
                 'Invoice',
               )}
-              fundingSourceLabel="BLDR treasury"
+              treasuryAccountLabel="Explicit domain-approved Mutable System treasury"
             />
             <Notice variant="muted"
-              >This is the smallest live browser composition slice for the
-              signed tactical invoice path. It always encodes `BldrTreasury` as
-              the funding source and leaves richer treasury-routing policy for
-              later work.</Notice
+              >Approval sets a target, not a reserved payout. Only the
+              above-base premium may be clipped at enactment. The runtime
+              validates the complete CID and treasury authority; the local CID
+              format check is not admission proof.</Notice
             >
+            {#if !treasuryPayloadDraft.capabilityReady}
+              <Notice variant="muted"
+                >Invoice authoring unavailable: current metadata does not expose
+                the required MaxCidBytes capability. Source changes alone do not
+                qualify live metadata/Wasm.</Notice
+              >
+            {/if}
+            <TextField
+              label="Invoice CIDv1 · canonical lowercase base32"
+              bind:value={treasuryInvoiceCidInput}
+              placeholder="baf..."
+              inputClass="rounded-lg px-2 py-1 text-[12px] text-(--mono-text)"
+            />
+            <TextField
+              label="Domain treasury account"
+              bind:value={treasuryAccountInput}
+              placeholder="5..."
+              inputClass="rounded-lg px-2 py-1 text-[12px] text-(--mono-text)"
+            />
+            <DetailRow
+              label="Max CID bytes"
+              value={governanceStore.state.maxCidBytes?.toString() ??
+                'Unavailable'}
+            />
             <NumberInput
               label="Item id"
               bind:value={treasurySubmitItemIdInput}
@@ -1077,6 +1117,18 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
             />
             {#if !treasurySubmitItemReady}
               <Notice variant="muted">Enter a positive integer item id.</Notice>
+            {/if}
+            {#if treasuryPayloadDraft.capabilityReady && !treasuryPayloadDraft.invoiceCidValid}
+              <Notice variant="muted"
+                >Enter a canonical lowercase base32 CIDv1 within the runtime CID
+                byte bound. Mutable URLs are not invoice identities.</Notice
+              >
+            {/if}
+            {#if !treasuryPayloadDraft.treasuryAccountValid}
+              <Notice variant="muted"
+                >Enter the domain-approved treasury address. An arbitrary
+                account is not a debit authorization.</Notice
+              >
             {/if}
             {#if !treasuryPayloadDraft.beneficiaryValid}
               <Notice variant="muted">Enter a valid beneficiary address.</Notice

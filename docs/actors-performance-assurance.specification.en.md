@@ -25,7 +25,7 @@ completed, skipped, failed, suspended, closed, and pending counts
 FIFO, detector, wakeup, body, and resource faults
 ```
 
-Setup, genesis construction, prefunding, and deterministic population generation are outside the measured block interval. The measured interval begins with the named trigger operation or first baseline operation. A profile passes only against runtime-bound production Weight and production-Wasm or stronger full-runtime block evidence. Native wall-clock or synthetic microbenchmarks may diagnose a candidate but cannot establish acceptance evidence.
+Setup, genesis construction, prefunding, and deterministic population generation are outside the measured block interval. The measured interval begins with the named trigger operation or first baseline operation. A production acceptance profile passes only against runtime-bound production Weight and production-Wasm or stronger full-runtime block evidence. The isolated design-comparison profile in §1.5 has its own explicit evidence boundary and does not establish production acceptance. Native wall-clock or synthetic microbenchmarks may diagnose a candidate but cannot establish acceptance evidence.
 
 All populations, market state, authored bounds, transaction demand, and seeds MUST be deterministic and retained by the project harness. Weight fairness and deltas are component-wise; no scalar score may combine RefTime and ProofSize. Database reads/writes, persistent bytes, block count, and faults remain separately reported.
 
@@ -120,6 +120,33 @@ Evidence and requirements in this document belong to one of five classes:
 
 Each claim MUST identify its supporting class. Reporting completion against a historical horizon remains REQUIRED for continuity, but the horizon MUST NOT be presented as a current release requirement.
 
+### 1.5 Frozen Actors-Only Design Comparison
+
+Actor machinery design comparisons MUST use one fixed idealized resource profile until the current design campaign converges or an explicit benchmark-contract decision replaces it. Production conditional allocation remains governed by the resource-policy specification; it MUST NOT silently change this comparative profile. The reference block envelope is fixed numerically, not read from a changing runtime `BlockWeights` getter:
+
+| Quantity | RefTime (ps) | ProofSize (bytes) |
+| --- | ---: | ---: |
+| Reference block envelope | 2,000,000,000,000 | 10,485,760 |
+| Non-Actor system prefix and outstanding reserve | 0 | 0 |
+| Ordinary user dispatch | 0 | 0 |
+| Actor Control ceiling | 666,666,666,666 | 3,495,253 |
+| Shared Economic ceiling, all available to Actor effects over both passes | 1,333,333,333,334 | 6,990,507 |
+| Initial Actor base turn | 666,666,666,667 | 3,495,253 |
+
+The first baseline measurement MUST follow implementation and functional validation of the selected 10,485,760-byte common runtime/FRAME ceiling, the shared allocation/freeze mechanism, and this isolated harness. Complete production system-quarter certification and unrelated Governance/XCM lifecycle repairs are separate acceptance gates, not prerequisites for the explicitly zero-system comparison; no uncertified production cost may be discounted by invoking this isolation. Increasing ProofSize MUST NOT implicitly increase RefTime. Measurements under a different numeric ceiling are not the baseline or evidence of machinery improvement for this profile.
+
+The prepared measurement source MUST be checkpointed locally and remain clean during the baseline run. Record the commit/tree, toolchain, workload, command, applicable Weight identity and the identity and role of the executed Wasm. A benchmark Wasm is not an accepted production Wasm. Necessary scoped calibration and functional checks precede this checkpoint and are preparation, not the throughput baseline; known underbounds or inapplicable coefficients in any executed or reserved owner invalidate charged-capacity claims. Never satisfy identity checks by selecting a previously released artifact or silently omitting a required check.
+
+Before baseline, functional evidence MUST show that independent Control/effect refusal preserves the live head and Step progress, releases incomplete reservations, charges legitimate inspection and prevents successor bypass. Cover each Weight dimension, base/Drain phase boundaries and next-block recovery of the same head with no duplicate Step. Distinguish budget refusal from an executed business failure. Compare reserved maxima, charged actual work and physical costs separately; reservation-efficiency and allocation-policy changes require the measured machine baseline rather than assuming two accounting domains need two execution queues.
+
+The profile MUST use the canonical Prepass → empty external phase → Drain progression. Actor effects may consume the unused User turn only through ordinary Drain borrowing; the harness MUST NOT grant the whole economic pool to Prepass, lend Control to effects, bypass the live head, or relax next-block eligibility and one-Step-per-Actor pacing. These are capacity ceilings, not guaranteed consumption: Control exhaustion, effect geometry and fragmentation remain measured outcomes.
+
+Zero system work is an explicit isolated benchmark premise, not a claim that a real empty production block has zero cost. The harness MUST exclude unrelated system hooks and latent background Actors from the measured workload, identify its synthetic context setup, and retain all Actor-owned detection, admission, scheduling, fee, retry, cleanup, budget accounting and finalization costs. Canonical Task effects and their synchronous runtime adapter consequences remain charged; no Actor work may be reclassified as free setup or external system work. Genesis, prefunding and population construction stay outside measurement under Section 1.
+
+Each baseline/candidate pair MUST retain identical numeric envelopes, workload and initial semantic state, populations, Contract/Task geometry, admitted single-Step bounds, seeds, measurement method, host/toolchain and database settings. Source, Wasm and Weight identities remain explicit for each candidate; changed coefficients and charged throughput MUST be distinguished from independently measured physical work. A change in allocation or measurement method starts a separately labelled comparison and requires a matching baseline; it MUST NOT be reported as an Actor machinery improvement.
+
+This profile is the primary controlled coordinate for selecting Actor designs, not production acceptance or a replacement for the workload classes and adversarial scenarios in this specification. Full-runtime quiet/system-saturated, session-rotation, Governance/MQ and mixed-user profiles remain separate correctness and release checks. They MUST NOT redefine the frozen idealized comparison envelope. Historical measurements under other budgets remain labelled historical coordinates and MUST NOT be compared directly as speedup factors.
+
 ## 2. Ten-Thousand-Actor Reference Profiles
 
 These profiles construct the population and horizon of the historical `0.7.25` target:
@@ -136,12 +163,13 @@ They are retained as reference workloads for like-for-like comparison and so tha
 Construct 10,000 prefunded one-Step User Actors on one feed:
 
 ```text
-ObservationCrossing
+Cadenced (one shared due tick)
+→ Fresh ObservationAbove precondition
 → Transfer
 → completed Cycle
 ```
 
-One accepted changed publication in source block `N` causes the qualifying crossing. Report each Actor's first completed one-Step Cycle and aggregate coverage against the historical horizon `N + 1 ..= N + 100` and against any declared bounded extension horizon. Report `S` and `A` per block even though both count the same committed population in this exact Q1 one-Step profile.
+The shared due tick is reached in block `N` while the authored observation predicate is true; publication itself activates no Actor. Report each Actor's first completed one-Step Cycle and aggregate coverage against the historical horizon `N + 1 ..= N + 100` and against any declared bounded extension horizon. Report `S` and `A` per block even though both count the same committed population in this exact Q1 one-Step profile.
 
 The Transfer destination and amount geometry MUST be identical across the population and executable throughout the run. Setup MUST isolate scheduler/control throughput from avoidable recipient-creation or insufficient-funding failures while retaining the real certified ingress and ledger consequences of the canonical Transfer operation.
 
@@ -156,12 +184,13 @@ The external workload MUST be deterministic, independently successful, and suffi
 Construct 10,000 prefunded one-Step User Actors:
 
 ```text
-ObservationCrossing
+Cadenced (one shared due tick)
+→ Fresh observation precondition
 → bounded SwapOut
 → committed typed Step disposition
 ```
 
-One qualifying publication in block `N` causes readiness. Report each Actor's typed Step disposition and coverage against the historical horizon `N + 1 ..= N + 100` and against any declared bounded extension horizon. The market fixture MUST use deterministic bounded liquidity and authored input protection; it MUST NOT fabricate 10,000 stale shared quotes or promise that every market operation succeeds economically.
+The shared due tick in block `N` causes readiness; the observation predicate is evaluated at each Attempt. Report each Actor's typed Step disposition and coverage against the historical horizon `N + 1 ..= N + 100` and against any declared bounded extension horizon. The market fixture MUST use deterministic bounded liquidity and authored input protection; it MUST NOT fabricate 10,000 stale shared quotes or promise that every market operation succeeds economically.
 
 Report runtime service separately from economic outcome:
 
@@ -228,17 +257,17 @@ Measure `0/1/4/8/32` Steps across no/max Precondition geometry and reads, no/max
 
 Additionally report:
 
-- Trigger occurrence service by `Manual`, `AddressEvent`, `ObservationChange`, `ObservationCrossing`, `AtTime`, and `Cadenced`, separating source publication/ordinary transaction work from the disjoint User Trigger Fee.
-- Independent Trigger and Pipeline deltas for: Idle useful occurrence with immediate Opening; one busy `false -> true` occurrence during an active Pipeline; redundant latched-period sources that perform no Actor-specific evaluation or charge; delayed Opening after retained `pending_signal`; paid useful Trigger followed by unavailable Pipeline Machine capacity; and a zero-Step immutable AtTime one-shot.
-- For every separation fixture, component-wise incremental RefTime, ProofSize, database reads/writes, accounting touches, fee movement, latch transition, detector disable/re-arm, and Cycle transition attributable separately to useful occurrence materialization and Pipeline Opening.
+- Trigger occurrence service by `Manual`, `AddressEvent`, `AtTime`, and `Cadenced`, separating source publication/ordinary transaction work from the disjoint User Trigger Fee.
+- Independent Trigger and Pipeline deltas for: Idle useful occurrence with B+1 Opening; busy Running/Suspended source activity that preserves custody and current service authority without a latch or fee; redundant latched-period sources that perform no Actor-specific evaluation or charge; delayed Opening after retained Idle `pending_signal`; paid useful Trigger followed by unavailable Pipeline Machine capacity; and a zero-Step immutable AtTime one-shot.
+- For every separation fixture, component-wise incremental RefTime, ProofSize, database reads/writes, accounting touches, fee movement, latch transition, re-arm, and Cycle transition attributable separately to useful occurrence materialization and Pipeline Opening.
 - Running/Suspended current-Step cost at every cursor, proving no balance viability read, machine charge, machine hold, or suffix reconstruction after Opening.
 - Success, typed failure, retry, and `FundingUnavailable` Action paths: every invoked Action pays valid actual effect Weight; an unfunded non-invoked Action pays zero and follows prepaid control policy without apoptosis.
 - Pipeline-admission-insufficient minimal apoptosis Weight, ProofSize, reads/writes, touched keys, event count, custody-root invariance, non-refund of committed Trigger fees, and absence of any Task/economic adapter.
-- Exact-slot custody recovery, User Immutable early-close rejection, ordinary `Transfer(AllAvailable)` source preservation, and no close-time adapter invocation.
-- A zero-Step immutable AtTime one-shot fixture, reporting Creation, Trigger occurrence, delayed Pipeline Machine Opening, Action, completion, and cleanup dimensions independently; Action cost MUST be zero.
+- Exact-slot custody recovery, User Immutable early-close rejection, ordinary `Transfer(Percent(100%))` source preservation, and no close-time adapter invocation.
+- A zero-Step immutable AtTime one-shot fixture, reporting Creation, current applicability check, delayed control admission, Action, completion, and cleanup dimensions independently; Action cost MUST be zero.
 - Wasm size, run-state bytes, canonical lifecycle-state count, public event/error/API variants, Weight-owner count, and mandatory test-matrix count. `ActorFundingWait`, reactivation, and population-scale sleeping-state counts MUST remain zero.
 
-The fee-boundary profile fails on any combined Trigger/Pipeline charge, Actor-specific evaluation or fee for redundant latched-period source activity, duplicate deferred Pipeline, failure to re-arm from current authoritative state after latch consumption, refunded prior useful Trigger fee on Pipeline insufficiency, economic close between admitted Steps, future Action-fee prepayment, unpaid invoked Action effect, machine accounting inside Running/Suspended under P0, persistent funding wait, custody mutation during apoptosis, owner destruction of User Immutable, inability to recover by exact-slot recreation, invalid zero-Step authority, unbounded Opening work, or changed System service order.
+The fee-boundary profile fails on any combined Trigger/Pipeline charge, Actor-specific evaluation or fee for redundant latched-period source activity, busy readiness latch or deferred Pipeline, failure to re-arm from current authoritative state after latch consumption, refunded prior useful Trigger fee on Pipeline insufficiency, economic close between admitted Steps, future Action-fee prepayment, unpaid invoked Action effect, machine accounting inside Running/Suspended under P0, persistent funding wait, custody mutation during apoptosis, owner destruction of User Immutable, inability to recover by exact-slot recreation, invalid zero-Step authority, unbounded Opening work, or changed System service order.
 
 ## 4. Contract Complexity Matrix
 
@@ -280,13 +309,7 @@ Initial causal candidate discovery MUST be length-blind; fixtures fund every mem
 
 Construct 100,000 Actors with identical or tightly clustered due ticks. Measure empty-time probes, due-page materialization, aggregate FIFO placement, partial resumption, block/tick ordering, and total convergence. Service MUST remain bounded per block, preserve temporal order, coalesce missed cadence without catch-up Cycles, and expose no unbounded scan or duplicate ticket.
 
-### 5.2 Observation Herd
-
-Construct 100,000 `ObservationChange` subscriptions or `ObservationCrossing` memberships on one hot feed, subject to the tested profile's explicit configured capacity. Measure publication ingress separately from deferred page/threshold discovery, candidate materialization, FIFO placement, faults, and convergence.
-
-Publication work MUST remain cardinality-independent. Deferred work MAY span blocks but MUST preserve revision order, exact membership authority, causal delay, and bounded per-block control.
-
-### 5.3 Million Dormant
+### 5.2 Million Dormant
 
 Construct 1,000,000 Dormant identities in the stress state generator without claiming that the production runtime admits one million Active Actors. A tiny fixed active frontier is then exercised while all other identities remain Dormant.
 
@@ -294,7 +317,38 @@ Ordinary idle consensus work MUST use the same bounded probe/read topology as th
 
 TryRuntime or offline integrity cost for constructing/checking the full stress state MUST be reported separately from consensus idle Weight.
 
-## 6. Claim Boundary
+## 6. Current-State Workload Matrix
+
+Every current-state Actors comparison and the final production binding MUST use this fixed matrix, horizons, censoring and materiality rule, declared before any result. A workload whose mechanism the runtime does not ship is omitted and reported as such; it MUST NOT be replaced after results are known.
+
+| Workload | Geometry | Purpose |
+| --- | --- | --- |
+| W1 — long Live economic flow | 32 Actors (8 Fee Sink splitters, 8 Burn, 8 liquidity, 8 Users), 8 Steps each over 64 blocks, every Step `Percent` of current Available | Useful work, current amount, multi-Step residency, heterogeneous goals |
+| W2 — funded adjacent retry | 32 three-Step Actors; Step 2 fails temporarily twice, then succeeds after funding or market recovery; 16 blocks | Same-cursor retry, committed prefix, fresh inputs, no second Cycle |
+| W3 — recurrence matrix | 8 each level-sensitive `Cadenced`-plus-predicate, coalesced `AddressEvent`, one-shot `AtTime` and `Manual` Actors; 32 blocks | Recurrence counts, no same-block restart, no busy future-start latch |
+| W4 — true/false churn | 64 idle Actors alternate start truth each block for 64 blocks; half parked-balance episodes, half timed review | Park/Pending/Live churn and negative-check ownership |
+| W5 — sparse Park | 10,000 identities: 32 Live, 32 Pending, 64 timed review, 9,872 parked-balance episodes; 64 blocks | Population independence |
+| W6 — revision storm | 1,024 parked-balance Actors across 32 pages; one watched asset receives 4 qualifying updates per block for 32 blocks under capacity-limited Pending | Coalescing, revision acknowledgment, saturation and wake delay |
+| W7 — Sleep and reentry | 1,024 Sleepers across 32 C32 slots and 32 deadline keys; 32 due per block for 32 blocks | Deadline order, B+1 eligibility, no range scan |
+| W8 — owner mutation | 64 Actors; 8 head/interior/tail/singleton mutations per block across Live, Pending, Sleep and Park; 16 blocks | Arbitrary unlink, round integrity, replacement isolation |
+| W9 — heavy effects under demand | 96 Actors (32 Transfer, 16 Burn, 16 Router swap, 16 liquidity, 16 staking); 32 blocks plus valid User/Router demand | Contention, effect settlement, capacity-first stop |
+| W10 — close under demand | Close 256 maximum-state Actors at block 1 while W1 runs 64 blocks; recreate 32 identities | Close cost, retained bytes, generation isolation |
+| W11 — resource-blocked head | 32 Live Actors whose first transition is just above remaining per-pass resources, followers below; RefTime-only and ProofSize-only boundaries | Head priority, refusal retention, component separation |
+| W12 — bridge goals | One Fee Sink cycle, one foreign-fee Burn, one liquidity provision, one User three-Step transfer/retry; 32-Actor replicated cohort | Economic-goal bridge without semantic or order equivalence |
+
+| Rule | Contract |
+| --- | --- |
+| Demand modes | Actor-only; mixed valid demand alternating ProofSize-heavy remarks and RefTime-heavy Router/User calls up to the first component refusal; maintenance burst at a declared block |
+| Horizon | 64 blocks for W1, W4, W5 and W10; other workloads use their table horizon plus 32 drain blocks when work remains |
+| Censoring | Classify every intended workflow at horizon end as complete, Live, Pending, Sleeping, Parked, Disabled, closed or faulted with cursor/deadline and reason; unfinished work MUST NOT leave the denominator |
+| Order | Equal-semantics comparisons MUST produce identical encounter and Q1 digests; bridges report order differences beside outcomes |
+| Capacity | Exact final component budgets and generated owners; a supported transition that cannot fit a full block is an admission defect, not censoring |
+| Timing | Deterministic counts reproduce bit-for-bit; native timing uses A/B/A/B with one warmup pair and at least five measured pairs; a RefTime delta inside the matched baseline envelope is inconclusive |
+| Materiality | A useful-benefit claim requires one additional complete W1 workflow under the same budget, or removal of at least one persistent scheduler key mutation per successful interior Step with lower total scheduler write bytes and no regression in completed workflows, p95 delay, ProofSize, retained state or debt |
+
+W4–W10 pass their maintenance criterion when unserved work does not grow over the declared drain horizon; complete recovery inside the horizon is reported separately and is not implied by that pass.
+
+## 7. Claim Boundary
 
 Passing these profiles supports only the exact populations, Tasks, runtime constants, state geometry, production Weight, and source tree measured. It does not establish:
 

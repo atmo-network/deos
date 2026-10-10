@@ -34,7 +34,7 @@ Environment:
   AUDIT_SCOPE=changed|all
   RUN_SIMULATOR=auto|0|1
   RUN_CARGO_CHECK=auto|0|1
-  RUN_RUNTIME_TESTS=auto|0|1
+  RUN_RUNTIME_TESTS=auto|0|1|release
   REQUIRE_CONTEXT_SYNC=0|1
   DEOS_VERBOSE=0|1
   DEOS_FAILURE_TAIL_LINES=N
@@ -168,7 +168,7 @@ should_run_cargo_check() {
 }
 
 should_run_runtime_tests() {
-    if [[ "$RUN_RUNTIME_TESTS" == "1" ]]; then
+    if [[ "$RUN_RUNTIME_TESTS" == "1" || "$RUN_RUNTIME_TESTS" == "release" ]]; then
         return 0
     fi
     if [[ "$RUN_RUNTIME_TESTS" == "0" ]]; then
@@ -332,7 +332,15 @@ run_behavior_validation() {
         exit 1
     fi
     if should_run_runtime_tests; then
-        if ! run_shell_step "cargo test -p deos-runtime --lib" "" "cd \"$TEMPLATE_DIR\" && cargo test -p deos-runtime --lib"; then
+        # The runtime unit suite costs about 13 minutes in release but far more in the debug
+        # profile, so RUN_RUNTIME_TESTS=release keeps the canonical gate usable on a local
+        # machine. It changes only the build profile; every assertion stays identical.
+        local runtime_profile="" runtime_label=""
+        if [[ "$RUN_RUNTIME_TESTS" == "release" ]]; then
+            runtime_profile="--release"
+            runtime_label=" (release)"
+        fi
+        if ! run_shell_step "cargo test -p deos-runtime --lib$runtime_label" "" "cd \"$TEMPLATE_DIR\" && cargo test $runtime_profile -p deos-runtime --lib"; then
             log_error "Runtime behavioral validation failed"
             exit 1
         fi

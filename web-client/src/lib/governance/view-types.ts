@@ -71,6 +71,7 @@ export type GovernanceViewerState = {
   activeProposalIds: number[];
   activeProposals: GovernancePanelProposal[];
   submissionOptions: GovernancePublicSubmissionOption[];
+  maxCidBytes: number | null;
   authorizedRuntimeUpgrade: GovernanceAuthorizedRuntimeUpgrade | null;
   recentFinalizedProposals: GovernanceRetainedFinalizedProposal[];
   recentFinalizedProposalsView: ReadModelValue<

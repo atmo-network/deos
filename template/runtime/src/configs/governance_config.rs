@@ -14,6 +14,7 @@ use polkadot_sdk::sp_runtime::traits::Hash as _;
 use scale_info::TypeInfo;
 
 parameter_types! {
+  pub const MaxCidBytes: u32 = 96;
   pub const WinningVoteLookbackEpochs: u32 = 3;
   pub const MaxWinningVotesPerEpoch: u16 = 4;
   pub const MaxWinningVoteItemsPerEpoch: u32 = 4;
@@ -23,7 +24,7 @@ parameter_types! {
   pub const StrategicProposalReserve: u32 = 1;
   pub const MaxActiveProposalsPerAuthor: u32 = 16;
   pub const MaxMaturingProposalsPerEpoch: u32 = 4;
-  pub const MaxPendingEnactmentsPerEpoch: u32 = 4;
+  pub const MaxPendingEnactments: u32 = 128;
   pub const ProposalVotingPeriod: BlockNumber = 7 * 24 * HOURS;
   pub const ProposalLeadInPeriod: BlockNumber = 3 * 24 * HOURS;
   pub const ProposalProtectionPeriod: BlockNumber = 7 * 24 * HOURS;
@@ -52,15 +53,12 @@ parameter_types! {
 }
 
 parameter_types! {
-  /// Worst reachable one-block Governance hook branch: catch-up plus one bounded service phase.
+  /// The independent pending pass runs alongside catch-up and one bounded epoch phase.
   pub GovernanceFixedWeight: Weight = {
     type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
     let phase = [
       <W as pallet_governance::WeightInfo>::service_maturing_proposals(
         MaxGovernanceMaturingProposalsPerBlock::get(),
-      ),
-      <W as pallet_governance::WeightInfo>::service_pending_enactments(
-        MaxGovernancePendingEnactmentsPerBlock::get(),
       ),
       <W as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(
         MaxGovernanceFinalizedOutcomesPerBlock::get(),
@@ -76,7 +74,11 @@ parameter_types! {
         left.proof_size().max(right.proof_size()),
       )
     });
-    <W as pallet_governance::WeightInfo>::service_epoch_catch_up().saturating_add(phase)
+    <W as pallet_governance::WeightInfo>::service_pending_enactments(
+      MaxGovernancePendingEnactmentsPerBlock::get(),
+    )
+    .saturating_add(<W as pallet_governance::WeightInfo>::service_epoch_catch_up())
+    .saturating_add(phase)
   };
 }
 
@@ -540,6 +542,7 @@ impl pallet_governance::ProposalSubmissionAuthorityProvider<AssetId>
       && matches!(
         payload_kind,
         pallet_governance::ProposalPayloadKind::L1RootAction
+          | pallet_governance::ProposalPayloadKind::L2ParameterChange
           | pallet_governance::ProposalPayloadKind::Intent
       )
     {
@@ -574,9 +577,88 @@ impl pallet_governance::ProposalSubmissionEligibilityProvider<AccountId, AssetId
 pub struct RuntimeGovernanceBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
-impl pallet_governance::BenchmarkHelper<AccountId, AssetId, Hash, AssetId, Balance>
-  for RuntimeGovernanceBenchmarkHelper
+impl
+  pallet_governance::BenchmarkHelper<
+    AccountId,
+    AssetId,
+    Hash,
+    AssetId,
+    Balance,
+    pallet_governance::CidBytesOf<Runtime>,
+  > for RuntimeGovernanceBenchmarkHelper
 {
+  fn prepare_maximum_finalized_execution(
+    account: &AccountId,
+  ) -> Result<
+    (
+      AssetId,
+      pallet_governance::ProposalPayloadKind,
+      Hash,
+      pallet_governance::ProposalExecutionSuccessDetail<
+        AccountId,
+        AssetId,
+        Hash,
+        pallet_governance::CidBytesOf<Runtime>,
+      >,
+    ),
+    polkadot_sdk::sp_runtime::DispatchError,
+  > {
+    use alloc::string::ToString;
+    use polkadot_sdk::sp_runtime::{DispatchError, traits::AccountIdConversion};
+    let domain = tactical_governance_domain();
+    if !<crate::Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<AccountId>>::asset_exists(domain) {
+      crate::Assets::force_create(RuntimeOrigin::root(), domain, account.clone().into(), true, 1)?;
+    }
+    let sovereign_id = primitives::ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID;
+    let treasury = crate::Actors::sovereign_account_id_system(sovereign_id);
+    if pallet_deos_actors::SovereignIndex::<Runtime>::get(&treasury).is_none() {
+      crate::Actors::create_system_actor_at_sovereign_id(
+        RuntimeOrigin::root(),
+        sovereign_id,
+        crate::configs::actor_config::ActorsPalletId::get().into_account_truncating(),
+        pallet_deos_actors::Mutability::Mutable,
+        None,
+      )?;
+    }
+    let digest = cid::multihash::Multihash::<64>::wrap(0, &[7u8; 55])
+      .map_err(|_| DispatchError::Other("InvalidBenchmarkInvoiceCid"))?;
+    let bytes = cid::Cid::new_v1(0x55, digest).to_string().into_bytes();
+    if bytes.len() != MaxCidBytes::get() as usize {
+      return Err(DispatchError::Other("BenchmarkInvoiceCidBoundMismatch"));
+    }
+    let invoice_cid: pallet_governance::CidBytesOf<Runtime> = bytes
+      .try_into()
+      .map_err(|_| DispatchError::Other("BenchmarkInvoiceCidBoundMismatch"))?;
+    let payload = TacticalTreasuryInvoicePayload {
+      invoice_cid: invoice_cid.clone(),
+      treasury_account: treasury.clone(),
+      beneficiary: account.clone(),
+      payout_asset: domain,
+      base_amount: 100,
+    }
+    .encode();
+    decode_tactical_treasury_invoice(domain, &payload)
+      .map_err(|_| DispatchError::Other("InvalidBenchmarkInvoiceSource"))?;
+    Ok((
+      domain,
+      pallet_governance::ProposalPayloadKind::L2TreasurySpend,
+      <Runtime as frame_system::Config>::Hashing::hash(&payload),
+      pallet_governance::ProposalExecutionSuccessDetail::TreasurySpendExecuted {
+        invoice_cid,
+        treasury_account: treasury,
+        beneficiary: account.clone(),
+        payout_asset: domain,
+        base_amount: 100,
+        scalar: pallet_governance::ProposalTreasurySpendScalar::Amplify,
+        target_amount: 200,
+        actual_amount: 150,
+        capacity_limited: true,
+        settlement_kind:
+          pallet_governance::ProposalTreasurySpendSettlementKind::InvoiceScalarTransfer,
+      },
+    ))
+  }
+
   fn prepare_primary_eligible_submitter(
     account: &AccountId,
   ) -> Result<(AssetId, Hash, Vec<u8>), polkadot_sdk::sp_runtime::DispatchError> {
@@ -639,6 +721,33 @@ impl pallet_governance::BenchmarkHelper<AccountId, AssetId, Hash, AssetId, Balan
       pallet_governance::ProposalPayloadKind::Intent,
       payload_hash,
       payload,
+    ))
+  }
+
+  fn prepare_pending_enactment(
+    account: &AccountId,
+  ) -> Result<
+    (AssetId, pallet_governance::ProposalPayloadKind, Hash),
+    polkadot_sdk::sp_runtime::DispatchError,
+  > {
+    use polkadot_sdk::frame_support::traits::Currency;
+    crate::Actors::apply_user_creation_enabled(false);
+    let payload =
+      RuntimeCall::Actors(pallet_deos_actors::Call::set_user_creation_enabled { enabled: true })
+        .encode();
+    let hash = <Runtime as frame_system::Config>::Hashing::hash(&payload);
+    if !<crate::Preimage as PreimageProvider<Hash>>::have_preimage(&hash) {
+      let _ = <crate::Balances as Currency<AccountId>>::deposit_creating(
+        account,
+        primitives::ecosystem::params::PRECISION,
+      );
+      crate::Preimage::note_preimage(RuntimeOrigin::signed(account.clone()), payload)
+        .map_err(|error| error.error)?;
+    }
+    Ok((
+      protocol_governance_domain(),
+      pallet_governance::ProposalPayloadKind::L2ParameterChange,
+      hash,
     ))
   }
 
@@ -764,11 +873,96 @@ fn validate_advisory_payload(
     || summary.is_empty()
     || summary.len() > 128
     || core::str::from_utf8(&summary).is_err()
-    || doc_cid.as_ref().is_some_and(|cid| cid.len() > 96)
+    || doc_cid
+      .as_ref()
+      .is_some_and(|cid| cid.len() > MaxCidBytes::get() as usize)
   {
     return Err(Error::Invalid);
   }
   Ok(())
+}
+
+enum ProtocolParameterChange {
+  RouterFee(polkadot_sdk::sp_runtime::Perbill),
+  UserCreationEnabled(bool),
+  GlobalCircuitBreaker(bool),
+}
+
+fn decode_protocol_parameter_change(
+  domain: AssetId,
+  bytes: &[u8],
+) -> Result<ProtocolParameterChange, pallet_governance::ProposalExecutionFailureReason> {
+  use pallet_governance::ProposalExecutionFailureReason as Error;
+  if domain != protocol_governance_domain() {
+    return Err(Error::UnsupportedDomain);
+  }
+  if bytes.len()
+    > proposal_payload_length_ceiling(pallet_governance::ProposalPayloadKind::L2ParameterChange)
+  {
+    return Err(Error::InvalidPreimage);
+  }
+  let mut input = bytes;
+  let call = RuntimeCall::decode(&mut input).map_err(|_| Error::InvalidPreimage)?;
+  if !input.is_empty() {
+    return Err(Error::InvalidPreimage);
+  }
+  match call {
+    RuntimeCall::DeosRouter(pallet_deos_router::Call::update_router_fee { new_fee }) => {
+      Ok(ProtocolParameterChange::RouterFee(new_fee))
+    }
+    RuntimeCall::Actors(pallet_deos_actors::Call::set_user_creation_enabled { enabled }) => {
+      Ok(ProtocolParameterChange::UserCreationEnabled(enabled))
+    }
+    RuntimeCall::Actors(pallet_deos_actors::Call::set_global_circuit_breaker { paused }) => {
+      Ok(ProtocolParameterChange::GlobalCircuitBreaker(paused))
+    }
+    _ => Err(Error::UnsupportedCall),
+  }
+}
+
+fn decode_bounded_governance_payload<Payload: Decode + MaxEncodedLen>(
+  domain: AssetId,
+  expected_domain: AssetId,
+  bytes: &[u8],
+) -> Result<Payload, pallet_governance::ProposalExecutionFailureReason> {
+  use pallet_governance::ProposalExecutionFailureReason as Error;
+  if domain != expected_domain {
+    return Err(Error::UnsupportedDomain);
+  }
+  if bytes.len() > Payload::max_encoded_len() {
+    return Err(Error::InvalidPreimage);
+  }
+  let mut input = bytes;
+  let payload = Payload::decode(&mut input).map_err(|_| Error::InvalidPreimage)?;
+  if !input.is_empty() {
+    return Err(Error::InvalidPreimage);
+  }
+  Ok(payload)
+}
+
+fn governance_payload_authority(
+  domain: AssetId,
+  payload_kind: pallet_governance::ProposalPayloadKind,
+) -> Result<
+  pallet_governance::ProposalExecutionAuthority,
+  pallet_governance::ProposalPreimageAdmissionError,
+> {
+  use pallet_governance::{
+    ProposalExecutionAuthority as Authority, ProposalPayloadKind as Kind,
+    ProposalPreimageAdmissionError as Error,
+  };
+  match payload_kind {
+    Kind::L1RootAction if domain == protocol_governance_domain() => Ok(Authority::Root),
+    Kind::L2ParameterChange if domain == protocol_governance_domain() => {
+      Ok(Authority::DomainParameters)
+    }
+    Kind::L2TreasurySpend if domain == tactical_governance_domain() => {
+      Ok(Authority::DomainTreasury)
+    }
+    Kind::Intent => Ok(Authority::NonExecutable),
+    Kind::L2SignalToL1 if domain == tactical_governance_domain() => Ok(Authority::NonExecutable),
+    _ => Err(Error::Incompatible),
+  }
 }
 
 pub struct RuntimeProposalPayloadPreimageProvider;
@@ -804,40 +998,31 @@ impl pallet_governance::ProposalPayloadPreimageProvider<Hash, AssetId>
     if bytes.len() > proposal_payload_length_ceiling(payload_kind) {
       return Err(Error::Oversized);
     }
-    let mut input = bytes;
     match payload_kind {
       pallet_governance::ProposalPayloadKind::L1RootAction => {
-        if domain != protocol_governance_domain() {
-          return Err(Error::Incompatible);
-        }
-        let _payload =
-          StrategicRuntimeUpgradePayload::decode(&mut input).map_err(|_| Error::Invalid)?;
+        decode_bounded_governance_payload::<StrategicRuntimeUpgradePayload>(
+          domain,
+          protocol_governance_domain(),
+          bytes,
+        )
+        .map_err(|_| Error::Invalid)?;
       }
       pallet_governance::ProposalPayloadKind::L2ParameterChange => {
-        let call = RuntimeCall::decode(&mut input).map_err(|_| Error::Invalid)?;
-        if !matches!(
-          call,
-          RuntimeCall::DeosRouter(pallet_deos_router::Call::update_router_fee { .. })
-        ) || domain != protocol_governance_domain()
-        {
-          return Err(Error::Incompatible);
-        }
+        decode_protocol_parameter_change(domain, bytes).map_err(|error| match error {
+          pallet_governance::ProposalExecutionFailureReason::InvalidPreimage => Error::Invalid,
+          _ => Error::Incompatible,
+        })?;
       }
       pallet_governance::ProposalPayloadKind::L2TreasurySpend => {
-        if domain != tactical_governance_domain() {
-          return Err(Error::Incompatible);
-        }
-        let _payload =
-          TacticalTreasuryInvoicePayload::decode(&mut input).map_err(|_| Error::Invalid)?;
+        decode_tactical_treasury_invoice(domain, bytes).map_err(|error| match error {
+          pallet_governance::ProposalExecutionFailureReason::InvalidPreimage => Error::Invalid,
+          _ => Error::Incompatible,
+        })?;
       }
       pallet_governance::ProposalPayloadKind::Intent
       | pallet_governance::ProposalPayloadKind::L2SignalToL1 => {
         validate_advisory_payload(bytes)?;
-        input = &[];
       }
-    }
-    if !input.is_empty() {
-      return Err(Error::Invalid);
     }
     let payload_len = u32::try_from(bytes.len()).map_err(|_| Error::Oversized)?;
     Ok(pallet_governance::ValidatedProposalPayload {
@@ -857,20 +1042,12 @@ impl pallet_governance::ProposalPayloadPreimageProvider<Hash, AssetId>
     ),
     pallet_governance::ProposalPreimageAdmissionError,
   > {
-    use pallet_governance::{
-      ProposalExecutionAuthority as Authority, ProposalPayloadKind as Kind,
-      ProposalPreimageAdmissionError as Error,
-    };
-    let authority = match payload_kind {
-      Kind::L1RootAction if domain == protocol_governance_domain() => Authority::Root,
-      Kind::L2ParameterChange if domain == protocol_governance_domain() => {
-        Authority::DomainParameters
-      }
-      Kind::L2TreasurySpend if domain == tactical_governance_domain() => Authority::DomainTreasury,
-      Kind::Intent => Authority::NonExecutable,
-      Kind::L2SignalToL1 if domain == tactical_governance_domain() => Authority::NonExecutable,
-      _ => return Err(Error::Incompatible),
-    };
+    let authority = governance_payload_authority(domain, payload_kind)?;
+    if authority == pallet_governance::ProposalExecutionAuthority::DomainTreasury
+      && governance_treasury_account(domain).is_none()
+    {
+      return Err(pallet_governance::ProposalPreimageAdmissionError::Incompatible);
+    }
     Ok((
       authority,
       pallet_governance::ProposalPayloadCompatibility {
@@ -909,12 +1086,23 @@ fn tactical_governance_domain() -> AssetId {
 }
 
 fn governance_treasury_account(domain: AssetId) -> Option<AccountId> {
-  if domain == tactical_governance_domain() {
-    return Some(crate::Actors::sovereign_account_id_system(
-      primitives::ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
-    ));
+  use pallet_deos_actors::{ActorClass, Mutability, SovereignIndex, SystemSovereignState};
+  if domain != tactical_governance_domain() {
+    return None;
   }
-  None
+  let sovereign_id = primitives::ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID;
+  let account = crate::Actors::sovereign_account_id_system(sovereign_id);
+  let actor_id = SovereignIndex::<Runtime>::get(&account)?;
+  let identity = crate::Actors::actor_identity(actor_id)?;
+  if identity.sovereign_account != account
+    || identity.actor_class != (ActorClass::System { sovereign_id })
+    || identity.mutability != Mutability::Mutable
+    || crate::Actors::system_sovereigns(sovereign_id)
+      != Some(SystemSovereignState::Occupied(actor_id))
+  {
+    return None;
+  }
+  Some(account)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Encode, Decode, MaxEncodedLen, TypeInfo)]
@@ -922,26 +1110,36 @@ pub struct StrategicRuntimeUpgradePayload {
   pub code_hash: Hash,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Encode, Decode, MaxEncodedLen, TypeInfo)]
-pub enum TacticalTreasuryFundingSource {
-  BldrTreasury,
-}
-
 #[derive(Clone, PartialEq, Eq, Encode, Decode, MaxEncodedLen, TypeInfo)]
 pub struct TacticalTreasuryInvoicePayload {
+  pub invoice_cid: pallet_governance::CidBytesOf<Runtime>,
+  pub treasury_account: AccountId,
   pub beneficiary: AccountId,
   pub payout_asset: AssetId,
   pub base_amount: u128,
-  pub funding_source: TacticalTreasuryFundingSource,
 }
 
-fn tactical_treasury_account_for_invoice(
+fn decode_tactical_treasury_invoice(
   domain: AssetId,
-  funding_source: TacticalTreasuryFundingSource,
-) -> Option<AccountId> {
-  match funding_source {
-    TacticalTreasuryFundingSource::BldrTreasury => governance_treasury_account(domain),
+  bytes: &[u8],
+) -> Result<TacticalTreasuryInvoicePayload, pallet_governance::ProposalExecutionFailureReason> {
+  use alloc::string::ToString;
+  use pallet_governance::ProposalExecutionFailureReason as Failure;
+  let payload = decode_bounded_governance_payload::<TacticalTreasuryInvoicePayload>(
+    domain,
+    tactical_governance_domain(),
+    bytes,
+  )?;
+  let text = core::str::from_utf8(&payload.invoice_cid).map_err(|_| Failure::InvalidPreimage)?;
+  let cid = cid::Cid::try_from(text).map_err(|_| Failure::InvalidPreimage)?;
+  if cid.version() != cid::Version::V1 || cid.to_string() != text {
+    return Err(Failure::InvalidPreimage);
   }
+  let treasury = governance_treasury_account(domain).ok_or(Failure::DispatchFailed)?;
+  if payload.treasury_account != treasury {
+    return Err(Failure::UnsupportedDomain);
+  }
+  Ok(payload)
 }
 
 fn invoice_scalar_for_winning_option(
@@ -966,8 +1164,14 @@ fn invoice_scalar_for_winning_option(
 }
 
 pub struct RuntimeProposalPayloadExecutor;
-impl pallet_governance::ProposalPayloadExecutor<AccountId, AssetId, u32, Hash>
-  for RuntimeProposalPayloadExecutor
+impl
+  pallet_governance::ProposalPayloadExecutor<
+    AccountId,
+    AssetId,
+    u32,
+    Hash,
+    pallet_governance::CidBytesOf<Runtime>,
+  > for RuntimeProposalPayloadExecutor
 {
   fn can_execute(payload_kind: pallet_governance::ProposalPayloadKind) -> bool {
     matches!(
@@ -984,20 +1188,37 @@ impl pallet_governance::ProposalPayloadExecutor<AccountId, AssetId, u32, Hash>
     payload_kind: pallet_governance::ProposalPayloadKind,
     payload_hash: Hash,
   ) -> Result<
-    pallet_governance::ProposalExecutionReceipt<AccountId, AssetId, Hash>,
+    pallet_governance::ProposalExecutionReceipt<
+      AccountId,
+      AssetId,
+      Hash,
+      pallet_governance::CidBytesOf<Runtime>,
+    >,
     pallet_governance::ProposalExecutionFailureReason,
   > {
-    let Some(bytes) = <crate::Preimage as PreimageProvider<Hash>>::get_preimage(&payload_hash)
-    else {
-      return Err(pallet_governance::ProposalExecutionFailureReason::MissingPreimage);
-    };
+    use pallet_governance::ProposalExecutionFailureReason as Failure;
+    let len =
+      <crate::Preimage as QueryPreimage>::len(&payload_hash).ok_or(Failure::MissingPreimage)?;
+    if !Self::can_execute(payload_kind) {
+      return Err(Failure::UnsupportedCall);
+    }
+    governance_payload_authority(domain, payload_kind).map_err(|_| Failure::UnsupportedDomain)?;
+    if usize::try_from(len).map_err(|_| Failure::InvalidPreimage)?
+      > proposal_payload_length_ceiling(payload_kind)
+    {
+      return Err(Failure::InvalidPreimage);
+    }
+    // SDK status binds the stored hash/length key; fetch only after its per-kind check.
+    let bytes = <crate::Preimage as QueryPreimage>::fetch(&payload_hash, Some(len))
+      .map_err(|_| Failure::MissingPreimage)?
+      .into_owned();
     match payload_kind {
       pallet_governance::ProposalPayloadKind::L1RootAction => {
-        if domain != protocol_governance_domain() {
-          return Err(pallet_governance::ProposalExecutionFailureReason::UnsupportedDomain);
-        }
-        let payload = StrategicRuntimeUpgradePayload::decode(&mut &bytes[..])
-          .map_err(|_| pallet_governance::ProposalExecutionFailureReason::InvalidPreimage)?;
+        let payload = decode_bounded_governance_payload::<StrategicRuntimeUpgradePayload>(
+          domain,
+          protocol_governance_domain(),
+          &bytes,
+        )?;
         RuntimeCall::System(frame_system::Call::authorize_upgrade {
           code_hash: payload.code_hash,
         })
@@ -1010,55 +1231,80 @@ impl pallet_governance::ProposalPayloadExecutor<AccountId, AssetId, u32, Hash>
         .map_err(|_| pallet_governance::ProposalExecutionFailureReason::DispatchFailed)
       }
       pallet_governance::ProposalPayloadKind::L2ParameterChange => {
-        let call = RuntimeCall::decode(&mut &bytes[..])
-          .map_err(|_| pallet_governance::ProposalExecutionFailureReason::InvalidPreimage)?;
-        match call {
-          RuntimeCall::DeosRouter(pallet_deos_router::Call::update_router_fee { new_fee })
-            if domain == protocol_governance_domain() =>
-          {
+        let surface = match decode_protocol_parameter_change(domain, &bytes)? {
+          ProtocolParameterChange::RouterFee(new_fee) => {
             crate::DeosRouter::apply_router_fee_update(new_fee)
-              .map(
-                |_| pallet_governance::ProposalExecutionReceipt::ParameterChangeExecuted {
-                  surface: pallet_governance::ProposalParameterChangeSurface::RouterFee,
-                },
-              )
-              .map_err(|_| pallet_governance::ProposalExecutionFailureReason::DispatchFailed)
+              .map_err(|_| pallet_governance::ProposalExecutionFailureReason::DispatchFailed)?;
+            pallet_governance::ProposalParameterChangeSurface::RouterFee
           }
-          _ => Err(pallet_governance::ProposalExecutionFailureReason::UnsupportedCall),
-        }
+          ProtocolParameterChange::UserCreationEnabled(enabled) => {
+            crate::Actors::apply_user_creation_enabled(enabled);
+            pallet_governance::ProposalParameterChangeSurface::ActorUserCreationEnabled
+          }
+          ProtocolParameterChange::GlobalCircuitBreaker(paused) => {
+            crate::Actors::apply_global_circuit_breaker(paused);
+            pallet_governance::ProposalParameterChangeSurface::ActorGlobalCircuitBreaker
+          }
+        };
+        Ok(pallet_governance::ProposalExecutionReceipt::ParameterChangeExecuted { surface })
       }
       pallet_governance::ProposalPayloadKind::L2TreasurySpend => {
-        if domain != tactical_governance_domain() {
-          return Err(pallet_governance::ProposalExecutionFailureReason::UnsupportedDomain);
-        }
-        let payload = TacticalTreasuryInvoicePayload::decode(&mut &bytes[..])
-          .map_err(|_| pallet_governance::ProposalExecutionFailureReason::InvalidPreimage)?;
+        let payload = decode_tactical_treasury_invoice(domain, &bytes)?;
         let winning_option = crate::Governance::proposal_winning_primary_option(domain, item_id)
           .ok_or(pallet_governance::ProposalExecutionFailureReason::MissingWinningPrimaryOption)?;
         let (scalar, numerator, denominator) = invoice_scalar_for_winning_option(winning_option)
           .ok_or(pallet_governance::ProposalExecutionFailureReason::MissingWinningPrimaryOption)?;
-        let final_amount = payload
+        let target_amount = payload
           .base_amount
           .checked_mul(numerator)
           .and_then(|amount| amount.checked_div(denominator))
           .ok_or(pallet_governance::ProposalExecutionFailureReason::DispatchFailed)?;
-        let treasury_account =
-          tactical_treasury_account_for_invoice(domain, payload.funding_source)
-            .ok_or(pallet_governance::ProposalExecutionFailureReason::DispatchFailed)?;
+        let treasury_account = payload.treasury_account;
+        let spendable = <crate::Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<
+          AccountId,
+        >>::reducible_balance(
+          payload.payout_asset,
+          &treasury_account,
+          polkadot_sdk::frame_support::traits::tokens::Preservation::Expendable,
+          polkadot_sdk::frame_support::traits::tokens::Fortitude::Polite,
+        );
+        if spendable < payload.base_amount.min(target_amount) {
+          return Err(
+            pallet_governance::ProposalExecutionFailureReason::InsufficientTreasuryCapacity,
+          );
+        }
+        let actual_amount = target_amount.min(spendable);
+        if actual_amount != 0 {
+          // Assets::transfer may credit source dust as well as the requested amount.
+          // An invoice must either transfer its computed amount exactly or fail before effects.
+          let dust = <crate::Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<
+            AccountId,
+          >>::can_withdraw(
+            payload.payout_asset, &treasury_account, actual_amount
+          )
+          .into_result(false)
+          .map_err(|_| pallet_governance::ProposalExecutionFailureReason::DispatchFailed)?;
+          if dust != 0 {
+            return Err(pallet_governance::ProposalExecutionFailureReason::DispatchFailed);
+          }
+        }
         RuntimeCall::Assets(pallet_assets::Call::transfer {
           id: payload.payout_asset,
           target: polkadot_sdk::sp_runtime::MultiAddress::Id(payload.beneficiary.clone()),
-          amount: final_amount,
+          amount: actual_amount,
         })
         .dispatch_bypass_filter(RawOrigin::Signed(treasury_account.clone()).into())
         .map(
           |_| pallet_governance::ProposalExecutionReceipt::TreasurySpendExecuted {
-            funding_source: treasury_account,
+            invoice_cid: payload.invoice_cid,
+            treasury_account,
             beneficiary: payload.beneficiary,
             payout_asset: payload.payout_asset,
             base_amount: payload.base_amount,
             scalar,
-            final_amount,
+            target_amount,
+            actual_amount,
+            capacity_limited: actual_amount < target_amount,
             settlement_kind:
               pallet_governance::ProposalTreasurySpendSettlementKind::InvoiceScalarTransfer,
           },
@@ -1074,6 +1320,7 @@ impl pallet_governance::ProposalPayloadExecutor<AccountId, AssetId, u32, Hash>
 }
 
 impl pallet_governance::Config for Runtime {
+  type MaxCidBytes = MaxCidBytes;
   type AdminOrigin = EnsureRoot<AccountId>;
   type Currency = Balances;
   type ProposalOpeningFee = ProposalOpeningFee;
@@ -1100,7 +1347,7 @@ impl pallet_governance::Config for Runtime {
   type StrategicProposalReserve = StrategicProposalReserve;
   type MaxActiveProposalsPerAuthor = MaxActiveProposalsPerAuthor;
   type MaxMaturingProposalsPerEpoch = MaxMaturingProposalsPerEpoch;
-  type MaxPendingEnactmentsPerEpoch = MaxPendingEnactmentsPerEpoch;
+  type MaxPendingEnactments = MaxPendingEnactments;
   type ProposalVotingPeriod = ProposalVotingPeriod;
   type ProposalLeadInPeriod = ProposalLeadInPeriod;
   type ProposalProtectionPeriod = ProposalProtectionPeriod;

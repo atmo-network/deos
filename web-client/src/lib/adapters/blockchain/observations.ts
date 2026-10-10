@@ -1,35 +1,25 @@
 /*
 Domain: Blockchain observation adapter
-Owns: Exact bounded DEOS Oracle and reactive Actors inspection reads at one finalized block.
+Owns: Exact bounded DEOS Oracle feed inspection reads at one finalized block.
 Excludes: Observation history, plan authoring, widget state, actor execution, and fair-price claims.
-Zone: Transport adapter; projects canonical Oracle and Actors storage into the observation domain.
+Zone: Transport adapter; projects canonical Oracle storage into the observation domain.
 */
 import { Enum as PapiEnum } from 'polkadot-api';
 
 import {
   canonicalObservationReadModel,
   formatObservationFeed,
-  projectObservationActorDeliveryInspection,
-  projectObservationDeliveryInspection,
   projectObservationInspection,
 } from '$lib/observation/inspection';
-import { expectedObservationFanoutBudget } from '$lib/observation/runtime-evidence';
 import type {
   ObservationAggregation,
   ObservationAssetIdentity,
-  ObservationDeliveryInspection,
-  ObservationFanoutBudget,
-  ObservationFanoutEvidence,
   ObservationFeedIdentity,
   ObservationInspection,
 } from '$lib/observation/types';
 
-import { readActorControlProjection } from './actor-control';
 import type { DeosChainSnapshot } from './deos';
 import type { RuntimeAssetKind } from './runtime-assets';
-
-export const DEOS_OBSERVATION_FANOUT_BUDGET: ObservationFanoutBudget =
-  expectedObservationFanoutBudget();
 
 function assetIdentity(asset: RuntimeAssetKind): ObservationAssetIdentity {
   return asset.type === 'Native'
@@ -83,7 +73,7 @@ function feedIdentity(feed: {
   };
 }
 
-export function runtimeFeed(feed: ObservationFeedIdentity) {
+function runtimeFeed(feed: ObservationFeedIdentity) {
   return {
     asset_in: runtimeAsset(feed.assetIn),
     asset_out: runtimeAsset(feed.assetOut),
@@ -91,12 +81,6 @@ export function runtimeFeed(feed: ObservationFeedIdentity) {
     aggregation: runtimeAggregation(feed.aggregation),
     scale: feed.scale,
   };
-}
-
-function optionalFeedIdentity(
-  feed: ReturnType<typeof runtimeFeed> | null | undefined,
-) {
-  return feed == null ? null : feedIdentity(feed);
 }
 
 function stamp(snapshot: DeosChainSnapshot) {
@@ -119,201 +103,10 @@ export class BlockchainObservationReader {
     );
   }
 
-  private async dirtyFeedPositions(
-    snapshot: DeosChainSnapshot,
-    selected: ReturnType<typeof runtimeFeed>,
-    activeList: {
-      head?: ReturnType<typeof runtimeFeed>;
-      cursor?: ReturnType<typeof runtimeFeed>;
-      count: number;
-    },
-  ) {
-    if (activeList.count === 0) {
-      return { selectedPosition: null, cursorPosition: null };
-    }
-    if (activeList.head == null || activeList.cursor == null) {
-      throw new Error(
-        'Actors active dirty-feed list is missing head or cursor',
-      );
-    }
-    const selectedIdentity = formatObservationFeed(feedIdentity(selected));
-    const cursorIdentity = formatObservationFeed(
-      feedIdentity(activeList.cursor),
-    );
-    let selectedPosition: number | null = null;
-    let cursorPosition: number | null = null;
-    let current: ReturnType<typeof runtimeFeed> | undefined = activeList.head;
-    for (let position = 0; position < activeList.count; position += 1) {
-      if (current == null) {
-        throw new Error('Actors active dirty-feed list ended before its count');
-      }
-      const identity = formatObservationFeed(feedIdentity(current));
-      if (identity === selectedIdentity) selectedPosition = position;
-      if (identity === cursorIdentity) cursorPosition = position;
-      const state =
-        await snapshot.typedApi.query.Actors.DirtyObservationFeeds.getValue(
-          current,
-          { at: snapshot.at },
-        );
-      if (state == null) {
-        throw new Error('Actors active dirty-feed member is missing');
-      }
-      current = state.next_dirty_feed;
-    }
-    if (current != null) {
-      throw new Error('Actors active dirty-feed links exceed the list count');
-    }
-    if (selectedPosition === null || cursorPosition === null) {
-      throw new Error(
-        'Actors selected feed or fair cursor is outside the active list',
-      );
-    }
-    return { selectedPosition, cursorPosition };
-  }
-
-  private async remainingSubscriberPages(
-    snapshot: DeosChainSnapshot,
-    key: ReturnType<typeof runtimeFeed>,
-    firstPage: number | undefined,
-    occupiedCount: number,
-  ) {
-    let remaining = 0;
-    let page = firstPage;
-    while (page != null) {
-      remaining += 1;
-      if (remaining > occupiedCount) {
-        throw new Error(
-          'Actors subscriber-page links exceed the occupied-page bound',
-        );
-      }
-      const state =
-        await snapshot.typedApi.query.Actors.ObservationSubscriberPages.getValue(
-          key,
-          page,
-          { at: snapshot.at },
-        );
-      if (state == null) {
-        throw new Error('Actors next subscriber page is missing');
-      }
-      page = state.next;
-    }
-    return remaining;
-  }
-
-  private async selectedActorInspection(
-    snapshot: DeosChainSnapshot,
-    actorId: number | undefined,
-  ) {
-    if (actorId === undefined) return undefined;
-    if (!Number.isSafeInteger(actorId) || actorId < 0) {
-      throw new Error('Selected Actors id must be a non-negative safe integer');
-    }
-    const runtimeActorId = BigInt(actorId);
-    const control = await readActorControlProjection(
-      snapshot.typedApi,
-      snapshot.at,
-      runtimeActorId,
-    );
-    if (control.status !== 'Active') {
-      return projectObservationActorDeliveryInspection({
-        actorId: runtimeActorId,
-        hot: null,
-      });
-    }
-    return projectObservationActorDeliveryInspection({
-      actorId: runtimeActorId,
-      hot: {
-        actorClass: control.cell.identity.actor_class.type,
-        pendingSignal: control.cell.hot.pending_signal,
-        queueTicket:
-          control.location.type === 'Ready'
-            ? control.location.value.ticket
-            : null,
-        wakeup:
-          control.location.type === 'Waiting'
-            ? {
-                key: control.location.value.key,
-                pageId: control.location.value.page,
-                slot: control.location.value.slot,
-              }
-            : null,
-      },
-    });
-  }
-
-  private async deliveryInspection(
-    snapshot: DeosChainSnapshot,
-    key: ReturnType<typeof runtimeFeed>,
-    oracleRevision: bigint | null,
-    actorId: number | undefined,
-    evidence: ObservationFanoutEvidence,
-  ): Promise<ObservationDeliveryInspection> {
-    const [dirty, activeList, subscriberPages, selectedActor] =
-      await Promise.all([
-        snapshot.typedApi.query.Actors.DirtyObservationFeeds.getValue(key, {
-          at: snapshot.at,
-        }),
-        snapshot.typedApi.query.Actors.DirtyObservationListState.getValue({
-          at: snapshot.at,
-        }),
-        snapshot.typedApi.query.Actors.ObservationSubscriberPageLists.getValue(
-          key,
-          {
-            at: snapshot.at,
-          },
-        ),
-        this.selectedActorInspection(snapshot, actorId),
-      ]);
-    const occupiedPageCount = subscriberPages?.count ?? 0;
-    const positions =
-      dirty == null
-        ? { selectedPosition: null, cursorPosition: null }
-        : await this.dirtyFeedPositions(snapshot, key, activeList);
-    const remainingCurrentRevisionPages =
-      dirty == null
-        ? 0
-        : dirty.fanout_revision === 0n
-          ? occupiedPageCount
-          : await this.remainingSubscriberPages(
-              snapshot,
-              key,
-              dirty.next_subscriber_page,
-              occupiedPageCount,
-            );
-    return projectObservationDeliveryInspection({
-      oracleRevision,
-      dirty:
-        dirty == null
-          ? null
-          : {
-              latestRevision: dirty.latest_revision,
-              fanoutRevision: dirty.fanout_revision,
-              dirtySince: dirty.dirty_since,
-              nextSubscriberPage: dirty.next_subscriber_page ?? null,
-            },
-      activeList: {
-        head: optionalFeedIdentity(activeList.head),
-        tail: optionalFeedIdentity(activeList.tail),
-        cursor: optionalFeedIdentity(activeList.cursor),
-        count: activeList.count,
-        selectedPosition: positions.selectedPosition,
-        cursorPosition: positions.cursorPosition,
-      },
-      occupiedPageCount,
-      remainingCurrentRevisionPages,
-      finalizedBlock: snapshot.finalizedBlockNumber,
-      budget: DEOS_OBSERVATION_FANOUT_BUDGET,
-      evidence,
-      selectedActor,
-    });
-  }
-
   async inspection(
     snapshot: DeosChainSnapshot,
-    evidence: ObservationFanoutEvidence,
     feed: ObservationFeedIdentity,
     maxAgeBlocks: number,
-    actorId?: number,
   ) {
     const key = runtimeFeed(feed);
     const [config, observation] = await Promise.all([
@@ -322,13 +115,6 @@ export class BlockchainObservationReader {
         at: snapshot.at,
       }),
     ]);
-    const delivery = await this.deliveryInspection(
-      snapshot,
-      key,
-      observation?.revision ?? null,
-      actorId,
-      evidence,
-    );
     const projection: ObservationInspection = projectObservationInspection({
       feed,
       config:
@@ -358,7 +144,6 @@ export class BlockchainObservationReader {
             },
       finalizedBlock: snapshot.finalizedBlockNumber,
       maxAgeBlocks,
-      delivery,
     });
     return canonicalObservationReadModel(
       projection,

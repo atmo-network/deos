@@ -86,15 +86,25 @@ test('local projection commits successful tasks and rolls back one failed task',
   );
 });
 
-test('productive completion closes only after one committed effectful task', () => {
+test('explicit Action and normal-completion atoms close after their permitted effect', () => {
+  const closeWhen = {
+    clauses: [
+      [
+        { metric: 'ActionSuccessTotal', threshold: 1 },
+        { metric: 'CycleCompletedTotal', threshold: 1 },
+      ],
+    ],
+  };
+  const behaviorLimits = { maxClauses: 4, maxAtomsPerClause: 4 };
   const falseCycle = simulateActorLocally({
     ...provenance,
-    completionPolicy: 'CloseAfterProductiveCycle',
+    closeWhen,
+    behaviorLimits,
     initialState: { balance: 100n },
     steps: [
       localStep(0, 'AbortCycle', {
         precondition: {
-          clauses: [[{ timing: 'Current', predicate: 'latest-observation' }]],
+          clauses: [['latest-observation']],
         },
       }),
     ],
@@ -111,7 +121,8 @@ test('productive completion closes only after one committed effectful task', () 
 
   const productive = simulateActorLocally({
     ...provenance,
-    completionPolicy: 'CloseAfterProductiveCycle',
+    closeWhen,
+    behaviorLimits,
     initialState: { balance: 100n },
     steps: [localStep(0)],
     runTask(_step, state) {
@@ -120,7 +131,7 @@ test('productive completion closes only after one committed effectful task', () 
     },
   });
   assert.equal(productive.status, 'Closed');
-  assert.equal(productive.closeReason, 'ProductiveCycleCompleted');
+  assert.equal(productive.closeReason, 'BehaviorPolicySatisfied');
   assert.equal(productive.state.balance, 90n);
   assert.equal(productive.cumulative.committedEffectfulTasks, 1);
 });
@@ -195,7 +206,7 @@ test('RetryLater closes exactly on its local bound and counts funding unavailabi
       }),
     ],
     runTask() {
-      return { kind: 'FundingUnavailable' };
+      return { kind: 'FundingUnavailable', reason: 'TaskInput' };
     },
   });
   assert.equal(suspended.status, 'Suspended');
@@ -213,7 +224,7 @@ test('RetryLater closes exactly on its local bound and counts funding unavailabi
       }),
     ],
     runTask() {
-      return { kind: 'FundingUnavailable' };
+      return { kind: 'FundingUnavailable', reason: 'TaskInput' };
     },
   });
   assert.equal(exhausted.status, 'Closed');
@@ -280,20 +291,16 @@ test('bounded DNF visits every predicate and any error fails the expression', ()
     steps: [
       localStep(0, 'ContinueNextStep', {
         precondition: {
-          clauses: [
-            [{ timing: 'Current', predicate: 'true' }],
-            [{ timing: 'Opening', predicate: 'error' }],
-            [{ timing: 'Current', predicate: 'false' }],
-          ],
+          clauses: [['true'], ['error'], ['false']],
         },
       }),
       localStep(1),
     ],
-    evaluatePredicate(timed) {
-      observations.push(timed.predicate);
-      return timed.predicate === 'error'
+    evaluatePredicate(predicate) {
+      observations.push(predicate);
+      return predicate === 'error'
         ? { kind: 'Error', retry: 'Permanent', error: 'observation-failed' }
-        : { kind: 'Value', value: timed.predicate === 'true' };
+        : { kind: 'Value', value: predicate === 'true' };
     },
     runTask(step, state) {
       state.balance += BigInt(step.stepIndex + 1);
@@ -314,12 +321,7 @@ test('bounded DNF visits every predicate and any error fails the expression', ()
     steps: [
       localStep(0, 'AbortCycle', {
         precondition: {
-          clauses: [
-            [true, false, true].map((predicate) => ({
-              timing: 'Current',
-              predicate,
-            })),
-          ],
+          clauses: [[true, false, true]],
         },
       }),
     ],
@@ -372,33 +374,19 @@ test('donation classification identifies observation window and amount surface',
       {
         stepIndex: 1,
         surface: 'asset:2:amount',
-        resolution: 'AllAvailable',
-        observation: 'ActorBalance',
-      },
-      {
-        stepIndex: 2,
-        surface: 'asset:3:opening',
-        resolution: 'PercentageAtOpening',
+        resolution: 'Percent',
         observation: 'ActorBalance',
       },
       {
         stepIndex: 3,
-        surface: 'asset:4:funding',
-        resolution: 'PercentageOfLastFunding',
-        observation: 'ActorFunding',
-      },
-      {
-        stepIndex: 4,
         surface: 'pool:1:quote',
-        resolution: 'AllAvailable',
+        resolution: 'Percent',
         observation: 'AdapterState',
       },
     ]).map(({ sensitivity }) => sensitivity),
     [
       'InsensitiveFixedAmount',
       'BeforeStepResolution',
-      'BeforeOpeningSnapshot',
-      'BeforeFundingSnapshot',
       'BeforeAdapterObservation',
     ],
   );

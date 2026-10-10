@@ -15,7 +15,7 @@
       "scope": "active Actors code, clients, and non-normative documentation",
       "kind": "regex-any-case-insensitive",
       "patterns": [
-        "PercentageOfCurrentBalance",
+        "PercentBalance",
         "PercentageAtCycleStart",
         "funding[_ -]?batch",
         "User[ /-]+System FIFO lanes",
@@ -53,6 +53,14 @@
         "template/pallets/actors/src/lib\\.rs:.*SystemSovereigns::<T>::iter",
         "template/pallets/actors/src/lib\\.rs:.*SovereignIndex::<T>::iter",
         "template/pallets/actors/src/types\\.rs",
+        "template/pallets/actors/src/types/behavior\\.rs:.*let atom = self\\.metrics\\.iter\\(\\)\\.find",
+        "template/pallets/actors/src/types/behavior\\.rs:.*state\\.values\\.iter\\(\\)\\.zip\\(&self\\.plan\\.metrics\\)",
+        "template/pallets/actors/src/types/behavior\\.rs:.*metrics\\.iter\\(\\)\\.position\\(\\|entry\\| entry\\.metric == metric\\)",
+        "template/pallets/actors/src/types/behavior\\.rs:.*for \\(index, cap\\) in self\\.plan\\.metrics\\.iter\\(\\)\\.enumerate",
+        "template/pallets/actors/src/types/behavior\\.rs:.*clause\\.iter\\(\\)\\.any\\(\\|atom\\| atom\\.threshold == 0",
+        "template/pallets/actors/src/types/behavior\\.rs:.*for \\((strong_index|weak_index), (strong|weak)\\) in self\\.clauses\\.iter\\(\\)\\.enumerate\\(\\)",
+        "template/pallets/actors/src/types/behavior\\.rs:.*weak\\.iter\\(\\)\\.all\\(\\|required\\|",
+        "template/pallets/actors/src/types/behavior\\.rs:.*strong\\.iter\\(\\)\\.any\\(\\|provided\\|",
         "template/runtime/src/tmctol_read_model\\.rs:.*program\\.steps\\.iter",
         "template/runtime/src/configs/actor_config\\.rs:.*\\.iter",
         "template/pallets/staking/src/lib\\.rs:.*OperatorNativeLpLocked",
@@ -66,8 +74,8 @@
         "template/pallets/oracle/src/lib\\.rs:.*ProducerFeeds::<T>::iter",
         "template/pallets/oracle/src/lib\\.rs:.*Observations::<T>::iter"
       ],
-      "rationale": "The fee-vector example, runtime read models, exact bounded DNF and split-leg expressions, Governance ballot sums, named runtime Actor topology integrity checks, and Oracle try-state scans iterate only type-bounded, explicit retention-limited, or fixed genesis values. The Actors pallet root is intentionally not path-wide allowlisted, so new cohort, coordinator, bond, or reconciliation storage iteration remains auditable.",
-      "expiry": "Remove a path if its input loses an explicit bound or its iteration moves into consensus execution."
+      "rationale": "The fee-vector example, runtime read models, exact bounded DNF and split-leg expressions, Governance ballot sums, named runtime Actor topology integrity checks, and Oracle try-state scans iterate only type-bounded, explicit retention-limited, or fixed genesis values. CloseWhen's exact atom and implication loops consume nested BoundedVec values rechecked against host clause/atom limits before traversal; implication compares at most C*C*A*A atom pairs (types/behavior.rs, specification §7.7, behavior_policy limit-shrink and canonical-form tests). BehaviorPolicyPlan's cap lookup and bound-state lookup/update/validation traverse only ConstU32<10> dictionaries/values; state cardinality, identity, episode and cap ranges are checked before indexed use. Verification recompiles decoded plans, and behavior_state scope/shape/cap/rollback tests qualify these exact loops. The Actors pallet root and behavior type module are intentionally not path-wide allowlisted, so new coordinator, reconciliation or other storage iteration remains auditable.",
+      "expiry": "Remove an owner if its input loses an explicit bound, its length prevalidation is bypassed, or an off-chain-only iteration moves into consensus execution."
     },
     {
       "id": "actors-execution-panic-owner-allowlist",
@@ -89,15 +97,12 @@
         "handled above",
         "admitted execution plans have checked evaluation fees",
         "admitted User plans preserve their fee reservation",
-        "admitted opening predicates fit MaxOpeningPredicateResults",
-        "trigger surfaces fit MaxOpeningSnapshotEntries",
-        "suffix surfaces fit MaxOpeningSnapshotEntries",
         "predicates fit",
         "clauses fit",
         "one predicate fits",
         "one clause fits"
       ],
-      "rationale": "These exact execution assertions are mechanically precluded by the canonical actor loader, admission bounds, exhaustive StepOutcome control mapping, checked Opening nonce derivation, integrity checks, or transactional finalization; the four compact fit messages belong to the file-local test module. Any differently worded site is unowned and fails the full-tree audit.",
+      "rationale": "These exact execution assertions are mechanically precluded by the canonical actor loader, admission bounds, exhaustive StepOutcome control mapping, checked Opening nonce derivation, integrity checks, or transactional finalization; the remaining compact fit messages belong to the file-local test module. Any differently worded site is unowned and fails the full-tree audit.",
       "expiry": "Replace an entry when its assertion becomes typed failure or when its preclusion owner changes."
     },
     {
@@ -114,6 +119,9 @@
         "genesis auto-close target must be nonzero",
         "genesis precondition formulas must have valid bounded DNF",
         "genesis execution plan must have valid task and predicate shapes",
+        "genesis System Actors cannot await fee funding",
+        "genesis behavior policy admission is unavailable",
+        "genesis parked-balance activation must be canonical",
         "genesis System Actor topology must be valid",
         "genesis execution plan cannot transfer to its own sovereign account",
         "genesis opening snapshot surfaces must be valid",

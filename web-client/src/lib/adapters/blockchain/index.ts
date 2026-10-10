@@ -5,22 +5,18 @@ Excludes: Wallet store ownership, system composition wiring, UI Kit presentation
 Zone: Transport adapter boundary; consumes adapter contracts and runtime helpers without importing widgets.
 */
 import type { Adapter, AdapterRuntimeContext } from '$lib/adapters/contract';
-import type { ActorMaterializationProjection } from '$lib/automation/materialization';
 import type { ActorResourceProjection } from '$lib/automation/resource';
-import type {
-  AutomationActorSnapshot,
-  AutomationAuthoringContext,
-  AutomationContinuationSnapshot,
-  AutomationRunState,
+import {
+  type AutomationActorSnapshot,
+  type AutomationAuthoringContext,
+  type AutomationContinuationSnapshot,
+  type AutomationRunState,
+  projectActorOutcomeHeader,
 } from '$lib/automation/types';
 import { PRECISION } from '$lib/economics';
 import type { LogEntry, TransactionProgress } from '$lib/log/types';
 import type { PricePoint, Quote, SwapResult } from '$lib/market/types';
-import { compareObservationRuntimeEvidence } from '$lib/observation/runtime-evidence';
-import type {
-  ObservationFanoutEvidence,
-  ObservationFeedIdentity,
-} from '$lib/observation/types';
+import type { ObservationFeedIdentity } from '$lib/observation/types';
 import type {
   AssetBalanceProjection,
   TransferAssetKey,
@@ -34,7 +30,6 @@ import { DEFAULT_DEOS_DAPP_NAME } from '$lib/wallet/signer';
 
 import { readActorControlProjection } from './actor-control';
 import { readActorEligibility } from './actor-eligibility';
-import { readActorMaterializationProjection } from './actor-materialization';
 import { readActorResourceProjection } from './actor-resource';
 import { getDeosActorFinalizedAuthoringContext } from './actor-simulation';
 import { BlockchainConnectionSession } from './connection';
@@ -49,7 +44,7 @@ import {
   formatChainEventMessage,
   unwrapEventRecord,
 } from './events';
-import { BlockchainObservationReader, runtimeFeed } from './observations';
+import { BlockchainObservationReader } from './observations';
 import {
   quoteBuyAtSnapshot,
   quoteSellAtSnapshot,
@@ -87,6 +82,32 @@ export {
   type DeosSignerMatch,
   DEOS_DEV_SIGNER_PRESETS,
 } from '$lib/wallet/signer';
+
+function unavailableAutomationActor(
+  actor: { actorId: number; label: string; role: string },
+  reason: string,
+): AutomationActorSnapshot {
+  return {
+    ...actor,
+    exists: false,
+    actorClass: null,
+    paused: false,
+    runState: 'idle',
+    cycleNonce: 0n,
+    continuation: null,
+    lastCycleBlock: null,
+    hasCloseWhen: null,
+    onUnfunded: null,
+    triggerLabel: 'Unavailable',
+    nativeBalance: 0n,
+    controlStatus: 'Unavailable',
+    residence: null,
+    controlUnavailableReason: reason,
+    awaitingFunding: false,
+    fundingSourcePolicy: null,
+    eligibility: null,
+  };
+}
 
 function triggerRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null
@@ -129,22 +150,6 @@ function automationContinuationSnapshot(
   };
 }
 
-function automationFundingAccumulated(
-  funding: unknown,
-): ReadonlyArray<[string, bigint]> {
-  const value = triggerRecord(funding);
-  const accumulated = value?.funding_accumulated;
-  if (!Array.isArray(accumulated)) {
-    return [];
-  }
-  return accumulated.flatMap((entry) => {
-    if (!Array.isArray(entry) || entry.length !== 2) return [];
-    const [asset, amount] = entry;
-    if (typeof amount !== 'bigint') return [];
-    return [[String(asset), amount]];
-  });
-}
-
 function automationFundingSourcePolicy(policy: unknown): string | null {
   const value = triggerRecord(policy);
   return typeof value?.type === 'string' ? value.type : null;
@@ -156,8 +161,6 @@ function automationTriggerLabel(trigger?: {
 }): string {
   if (!trigger) return 'Unavailable';
   if (trigger.type === 'AddressEvent') return 'Address event';
-  if (trigger.type === 'ObservationChange') return 'Observation change';
-  if (trigger.type === 'ObservationCrossing') return 'Observation crossing';
   if (trigger.type === 'AtTime') {
     const afterTicks = triggerRecord(trigger.value)?.after_ticks;
     const delay =
@@ -411,32 +414,12 @@ export class BlockchainAdapter implements Adapter {
   async getObservationInspection(
     feed: ObservationFeedIdentity,
     maxAgeBlocks: number,
-    actorId?: number,
   ) {
-    const connection = await this.ensurePapi();
-    const snapshot = await connection.snapshot();
-    let evidence: ObservationFanoutEvidence;
-    try {
-      evidence = compareObservationRuntimeEvidence(
-        await connection.finalizedRuntimeEvidence(snapshot),
-      );
-    } catch (error) {
-      evidence = {
-        status: 'EvidenceMismatch',
-        observedIdentity: `Unavailable at ${snapshot.at}`,
-        reasons: [
-          error instanceof Error
-            ? error.message
-            : 'Finalized runtime evidence is unavailable',
-        ],
-      };
-    }
+    const snapshot = await (await this.ensurePapi()).snapshot();
     return await this.observationReader.inspection(
       snapshot,
-      evidence,
       feed,
       maxAgeBlocks,
-      actorId,
     );
   }
 
@@ -445,76 +428,65 @@ export class BlockchainAdapter implements Adapter {
     return readActorResourceProjection(snapshot.typedApi, snapshot.at);
   }
 
-  async getActorMaterializationProjection(
-    feed: ObservationFeedIdentity,
-  ): Promise<ActorMaterializationProjection> {
-    const snapshot = await (await this.ensurePapi()).snapshot();
-    return readActorMaterializationProjection(
-      snapshot.typedApi,
-      snapshot.at,
-      runtimeFeed(feed),
-    );
-  }
-
   async getAutomationActors(): Promise<AutomationActorSnapshot[]> {
     try {
       const snapshot = await (await this.ensurePapi()).snapshot();
       return await Promise.all(
         KNOWN_SYSTEM_ACTORS.map(async (actor) => {
           const runtimeActorId = BigInt(actor.actorId);
-          const [control, contractHead, runHead, funding] = await Promise.all([
-            readActorControlProjection(
-              snapshot.typedApi,
-              snapshot.at,
-              runtimeActorId,
-            ),
+          const control = await readActorControlProjection(
+            snapshot.typedApi,
+            snapshot.at,
+            runtimeActorId,
+          );
+          if (control.status === 'Unavailable') {
+            return unavailableAutomationActor(actor, control.reason);
+          }
+          const [contractHead, runState] = await Promise.all([
             snapshot.typedApi.query.Actors.ActorContractHead.getValue(
               runtimeActorId,
               { at: snapshot.at },
             ),
-            snapshot.typedApi.query.Actors.ActorRunHead.getValue(
-              runtimeActorId,
-              { at: snapshot.at },
-            ),
-            snapshot.typedApi.query.Actors.ActorFunding.getValue(
+            snapshot.typedApi.query.Actors.ActorRunState.getValue(
               runtimeActorId,
               { at: snapshot.at },
             ),
           ]);
           const identity =
             control.status === 'Active'
-              ? control.cell.identity
+              ? control.record.identity
               : control.status === 'Dormant'
                 ? control.identity
                 : null;
-          const hot = control.status === 'Active' ? control.cell.hot : null;
+          const hot = control.status === 'Active' ? control.record.hot : null;
           const eligibility = await readActorEligibility(
             snapshot.typedApi,
             snapshot.at,
             actor.actorId,
           );
-          if (
-            control.status === 'Active' &&
-            (contractHead == null || funding == null)
-          ) {
+          if (control.status === 'Active' && contractHead == null) {
             throw new Error('Active Actor is missing canonical cold state');
           }
           if (
             control.status !== 'Active' &&
-            (contractHead != null || runHead != null || funding != null)
+            (contractHead != null || runState != null)
           ) {
             throw new Error('Inactive Actor retains orphan active state');
           }
           const exists = control.status === 'Active';
+          const outcomeHeader =
+            contractHead == null
+              ? null
+              : projectActorOutcomeHeader(contractHead.header);
+          if (
+            identity?.actor_class?.type === 'System' &&
+            outcomeHeader?.onUnfunded === 'AwaitFunding'
+          ) {
+            throw new Error('System Actor cannot await fee funding');
+          }
           const sovereignAccount =
-            control.status === 'Dormant'
-              ? control.identity.sovereign_account
-              : control.status === 'Active' &&
-                  control.cell.identity.actor_class.type === 'System'
-                ? deriveSystemActorSovereignAccount(
-                    control.cell.identity.actor_class.value.sovereign_id,
-                  )
-                : deriveSystemActorSovereignAccount(actor.actorId);
+            identity?.sovereign_account ??
+            deriveSystemActorSovereignAccount(actor.actorId);
           const account = await snapshot.typedApi.query.System.Account.getValue(
             sovereignAccount,
             { at: snapshot.at },
@@ -533,16 +505,17 @@ export class BlockchainAdapter implements Adapter {
             paused: automationActorPaused(hot),
             runState: automationActorRunState(hot),
             cycleNonce: identity?.cycle_nonce ?? 0n,
-            continuation: automationContinuationSnapshot(runHead),
+            continuation: automationContinuationSnapshot(runState),
             lastCycleBlock: hot?.last_cycle_block ?? null,
-            completionPolicy: contractHead?.header.completion.type ?? null,
+            hasCloseWhen: outcomeHeader?.hasCloseWhen ?? null,
+            onUnfunded: outcomeHeader?.onUnfunded ?? null,
             triggerLabel: automationTriggerLabel(contractHead?.header.trigger),
             nativeBalance: account?.data?.free ?? 0n,
-            queueTicket:
-              control.status === 'Active' && control.location.type === 'Ready'
-                ? control.location.value.ticket
-                : null,
-            fundingAccumulated: automationFundingAccumulated(funding),
+            controlStatus: control.status,
+            residence: control.status === 'Active' ? control.residence : null,
+            controlUnavailableReason: null,
+            awaitingFunding:
+              control.status === 'Active' && control.awaitingFunding,
             fundingSourcePolicy: automationFundingSourcePolicy(
               contractHead?.header.funding,
             ),
@@ -550,8 +523,12 @@ export class BlockchainAdapter implements Adapter {
           } satisfies AutomationActorSnapshot;
         }),
       );
-    } catch {
-      return [];
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : 'Actor control is unavailable';
+      return KNOWN_SYSTEM_ACTORS.map((actor) =>
+        unavailableAutomationActor(actor, reason),
+      );
     }
   }
 

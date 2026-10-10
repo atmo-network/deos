@@ -52,11 +52,9 @@ The DEOS reference runtime registers forward and reverse pool observations as di
 
 A direction is never inferred from its reverse. The feed records pre-execution reserves with Router provenance; it does not claim a universal fair price, manipulation immunity, or complete market history.
 
-## Reactive Actors Boundary
+## Actors Read Boundary
 
-A changed revision invokes one atomic Actors transition-ingress hook carrying its exact previous and current scalar values. Broad `ObservationChange` remains latest-state reconsideration: it coalesces dirty state and later traverses exact occupied subscriber pages. Sparse `ObservationCrossing` instead retains revision-ordered transition obligations and visits only occupied thresholds crossed by that transition. If Actors cannot retain the required obligation, Oracle publication rolls back with it.
-
-Both paths converge on the existing Actors pending latch, queue, wakeup, and scheduler; DEOS Oracle never executes subscribers synchronously. Predicates still own attempt-time conditions, while Crossing owns declarative fire/rearm hysteresis and cannot fire twice before a qualifying rearm.
+Publication carries no Actors hook in the reference runtime: it creates no subscription, pending signal, or deferred work, and its cost does not grow with the number of Actors. Actors read the current value only when a fresh-only observation predicate is evaluated at an Attempt. A strategy that should react to price pairs a `Cadenced` or `AddressEvent` Trigger with such a predicate; its reaction latency is therefore the chosen cadence or event, not the publication itself.
 
 ## Read-Model Boundary
 

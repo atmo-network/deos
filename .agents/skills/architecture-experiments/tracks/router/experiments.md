@@ -46,6 +46,6 @@ No Router experiment has been opened or measured. The portfolio above is directi
 
 ## Maintenance
 
-- Allocate IDs from the single sequence across all tracks under [Record Identity and Layout](../../SKILL.md#record-identity-and-layout); retain this track as the ownership path and never restart numbering here.
+- Allocate IDs from the single sequence across all tracks under [Records and Layout](../../SKILL.md#records-and-layout); retain this track as the ownership path and never restart numbering here.
 - Create `EXP-NNNN.md` before Proposed becomes Prepared, and update this index with every lifecycle or relation change.
 - Keep measurements, interpretation, decisions, and artifacts in the record rather than this index.

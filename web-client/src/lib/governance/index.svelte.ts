@@ -194,6 +194,7 @@ class GovernanceStore {
     activeProposalIds: [],
     activeProposals: [],
     submissionOptions: [],
+    maxCidBytes: null,
     authorizedRuntimeUpgrade: null,
     recentFinalizedProposals: [],
     recentFinalizedProposalsView: null,
@@ -219,6 +220,7 @@ class GovernanceStore {
     this.state.activeProposals = [];
     this.state.submissionOptions = [];
     this.state.authorizedRuntimeUpgrade = null;
+    this.state.maxCidBytes = null;
     this.state.recentFinalizedProposals = [];
     this.state.recentFinalizedProposalsView = null;
     this.state.governanceParticipationCoefficient = null;
@@ -307,6 +309,7 @@ class GovernanceStore {
         activeProposalIds,
         submissionOptions,
         authorizedRuntimeUpgrade,
+        maxCidBytes,
         recentFinalizedProposals,
         governanceParticipationCoefficient,
         govxpCounters,
@@ -314,6 +317,7 @@ class GovernanceStore {
         this.adapter.getActiveProposalIds(this.state.domainId),
         loadPublicSubmissionOptions(this.adapter, this.state.domainId),
         this.adapter.getAuthorizedRuntimeUpgrade(),
+        this.adapter.getMaxCidBytes(),
         this.adapter.getRecentFinalizedProposals(this.state.domainId),
         this.adapter.getGovernanceParticipationCoefficient(
           this.state.domainId,
@@ -405,6 +409,7 @@ class GovernanceStore {
       this.state.activeProposals = activeProposals;
       this.state.submissionOptions = submissionOptions;
       this.state.authorizedRuntimeUpgrade = authorizedRuntimeUpgrade;
+      this.state.maxCidBytes = maxCidBytes;
       this.state.recentFinalizedProposals = recentFinalizedWithDetail;
       this.state.recentFinalizedProposalsView = fromClientBoundedProjection(
         recentFinalizedWithDetail,
@@ -426,6 +431,7 @@ class GovernanceStore {
   }
 
   setBlockchainProvider(provider: GovernanceBlockchainProvider) {
+    this.state.maxCidBytes = null;
     this.adapter = buildGovernanceAdapter(provider);
     this.bindAdapterUpdates();
   }

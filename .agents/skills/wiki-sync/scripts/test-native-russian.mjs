@@ -356,10 +356,7 @@ test("guards reviewed Actors grammar and Russian formula explanations", () => {
     actorSystem,
     /в переиспользуемом состоянии измененного канала/u,
   );
-  assert.match(
-    actorSystem,
-    /переиспользуемом состоянии с последним изменением канала/u,
-  );
+  assert.match(actorSystem, /Публикация наблюдения никогда не будит актора/u);
 
   const staking = readFileSync(
     resolve(projectRoot, "wiki/overview/staking.ru.md"),

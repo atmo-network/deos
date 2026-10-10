@@ -15,7 +15,7 @@ export const DEOS_INGRESS_RUNTIME_EVIDENCE = {
     transactionVersion: 1,
   },
   inventorySha256:
-    'e92869720bad326c9400f73e59b12d95fccfb3511366bb399e147e1c13654fb1',
+    '79119a288360cd7073835fa680ea497f110b5c14b50c90aa945f3a6d0b492aa4',
   certifiedProducers: [
     {
       id: 'AddressEventIngressExtension::signed_transfer',
@@ -55,7 +55,7 @@ export const DEOS_INGRESS_RUNTIME_EVIDENCE = {
       preflightOwner: 'TmctolAssetOps::transfer preflight',
       consequenceOwner: 'RuntimeAddressEventIngress::on_internal_inbound',
       rollbackOwner: 'Asset ops storage transaction',
-      weightOwner: 'task_transfer/task_split_transfer generated weights',
+      weightOwner: 'task_transfer generated weights',
     },
     {
       id: 'TmctolAssetOps::mint',

@@ -27,6 +27,12 @@ related:
 
 # Governance
 
+Pending execution and terminal history now have separate lifetimes. Approval reserves bounded pending and discovery capacity; rotating service preserves the original due epoch when an executor is unavailable. Cleanup admission precedes the effect, and execution/result/pending release commit atomically. Terminal retention starts at actual completion. Generic tests cover recovery and failure rollback. Native signed User-admission enactment passes on both named presets through ordinary maturity and the unchanged delay; this supplies minimal prepass context and does not prove complete consensus blocks or exact Wasm.
+
+Native signed freeze/thaw also passes both presets without Root recovery, including thaw submission while frozen and the ordinary delay from actual approval. Disabled User admission, System identity and ledger-only fee collection are preserved. Full machine freeze and physical resource bindings remain open.
+
+Four linked complete blocks per preset now pass native author/import replay around actual Governance thaw. Frozen Fee Sink state and its Deadline survive, the approved thaw commits, and cadence service resumes with User admission disabled and System identity preserved. The preceding history remains native preparation with a constructed parent, not a complete chain; exact Wasm, maximum geometry and physical qualification remain open.
+
 ## Summary
 
 DEOS Governance is the framework's bounded constitutional layer. It does not replace protocol physics with politics-by-default; it governs the strategic, tactical, and social surfaces that remain after the economic kernel mechanizes what it can.

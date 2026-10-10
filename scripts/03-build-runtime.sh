@@ -8,6 +8,9 @@ BUILD_PROJECT_ROOT=""
 BUILD_TEMPLATE_DIR=""
 BUILD_STAGE_OWNED=0
 OUTPUT_WASM_PATH="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
+CANONICAL_OUTPUT_WASM_PATH="$OUTPUT_WASM_PATH"
+OUTPUT_EXCLUSIVE=0
+SELF_TEST=0
 
 usage() {
     cat <<'EOF'
@@ -16,17 +19,24 @@ Usage: 03-build-runtime.sh [OPTIONS]
 Builds the current DEOS reference runtime (`deos-runtime`) Wasm artifact with substrate-wasm-builder's production profile.
 
 Options:
-  -h, --help        Show this help message
+  --output FILE    Write a new artifact instead of replacing canonical output
+  --self-test      Check output/argument contracts offline without Rust or a build
+  -h, --help       Show this help message
 
 Inputs:
   Locked template Cargo workspace and repository-pinned Rust toolchain.
 
 Outputs:
-  target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm.
+  Default: target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm.
+  --output selects a new file in an existing directory, relative to the caller.
+  Existing files, directories and symlinks are refused, including publication races.
+  The canonical destination is excluded from --output, even when absent.
 
 Side effects:
   Installs the pinned Wasm target when absent, builds in a fixed temporary
-  source root, and atomically replaces the selected Wasm output after success.
+  source root, and atomically replaces canonical output after success by default.
+  --output publishes exclusively without changing canonical output or identity pins.
+  --self-test only creates/removes its own temporary fixtures; no build/install.
 
 Notes:
   The production Wasm profile fixes fat LTO and one codegen unit. One physical
@@ -40,6 +50,19 @@ EOF
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --output)
+                [[ $# -ge 2 && -n "$2" && "$2" != --* && "$OUTPUT_EXCLUSIVE" == 0 ]] || {
+                    log_error "--output requires one new path and cannot be repeated"
+                    exit 1
+                }
+                OUTPUT_WASM_PATH="$2"
+                OUTPUT_EXCLUSIVE=1
+                shift
+                ;;
+            --self-test)
+                [[ "$SELF_TEST" == 0 ]] || { log_error "Duplicate --self-test"; exit 1; }
+                SELF_TEST=1
+                ;;
             -h|--help)
                 usage
                 exit 0
@@ -52,13 +75,39 @@ parse_args() {
         esac
         shift
     done
+    if (( SELF_TEST == 1 && OUTPUT_EXCLUSIVE == 1 )); then
+        log_error "--self-test must be used alone"
+        exit 1
+    fi
+}
+
+resolve_output() {
+    if (( OUTPUT_EXCLUSIVE == 1 )); then
+        local parent canonical_parent canonical
+        parent="$(dirname -- "$OUTPUT_WASM_PATH")"
+        require_directory "$parent" "New Wasm output parent"
+        OUTPUT_WASM_PATH="$(cd -- "$parent" && pwd -P)/$(basename -- "$OUTPUT_WASM_PATH")"
+        canonical_parent="$(dirname -- "$CANONICAL_OUTPUT_WASM_PATH")"
+        if [[ -d "$canonical_parent" ]]; then
+            canonical="$(cd -- "$canonical_parent" && pwd -P)/$(basename -- "$CANONICAL_OUTPUT_WASM_PATH")"
+            [[ "$OUTPUT_WASM_PATH" != "$canonical" ]] || {
+                log_error "--output cannot select the canonical Wasm destination"
+                return 1
+            }
+        fi
+        [[ ! -e "$OUTPUT_WASM_PATH" && ! -L "$OUTPUT_WASM_PATH" ]] || {
+            log_error "New Wasm output already exists: $OUTPUT_WASM_PATH"
+            return 1
+        }
+    fi
 }
 
 check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_directory "$TEMPLATE_DIR" "Template directory"
     hydrate_local_tool_paths
-    require_commands rustc cargo rustup du cut sha256sum tar mkdir rm cp mv dirname mktemp
+    require_commands rustc cargo rustup du cut sha256sum tar mkdir rm cp mv link dirname basename mktemp
+    resolve_output
     log_success "Runtime build prerequisites checked"
 }
 
@@ -121,9 +170,8 @@ configure_reproducible_wasm_paths() {
 
 build_runtime() {
     phase_banner "Step 4: Build runtime"
-    local built_wasm output_dir temporary_output
+    local built_wasm
     built_wasm="$BUILD_TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
-    output_dir="$(dirname "$OUTPUT_WASM_PATH")"
     log_info "Building parachain runtime (this may take several minutes)..."
 
     # substrate-wasm-builder treats any presence of SKIP_WASM_BUILD, including `0`, as skip.
@@ -135,15 +183,31 @@ build_runtime() {
         "cd '$BUILD_TEMPLATE_DIR' && cargo build --release -p deos-runtime --locked"
     [[ -f "$built_wasm" ]] || { log_error "Staged runtime Wasm is unavailable: $built_wasm"; exit 1; }
 
-    mkdir -p "$output_dir"
-    temporary_output="$(mktemp "$output_dir/.deos_runtime.compact.compressed.wasm.XXXXXX")"
+    publish_runtime_wasm "$built_wasm"
+    log_success "Runtime Wasm atomically written from the canonical build root"
+}
+
+publish_runtime_wasm() {
+    local built_wasm="$1" output_dir temporary_output
+    output_dir="$(dirname "$OUTPUT_WASM_PATH")"
+    mkdir -p "$output_dir" || return 1
+    temporary_output="$(mktemp "$output_dir/.deos_runtime.compact.compressed.wasm.XXXXXX")" || return 1
     if ! cp "$built_wasm" "$temporary_output"; then
         rm -f "$temporary_output"
         log_error "Unable to stage the successful runtime Wasm for publication"
-        exit 1
+        return 1
+    fi
+    if (( OUTPUT_EXCLUSIVE == 1 )); then
+        # POSIX link targets the exact pathname: no overwrite or directory-following fallback.
+        if ! link "$temporary_output" "$OUTPUT_WASM_PATH"; then
+            rm -f "$temporary_output"
+            log_error "Exclusive Wasm publication refused: $OUTPUT_WASM_PATH"
+            return 1
+        fi
+        rm -f "$temporary_output"
+        return
     fi
     mv "$temporary_output" "$OUTPUT_WASM_PATH"
-    log_success "Runtime Wasm atomically published from the canonical build root"
 }
 
 verify_build() {
@@ -170,8 +234,83 @@ print_summary() {
     log_success "Runtime build process completed successfully"
 }
 
+run_self_test() (
+    require_commands mktemp mkdir rmdir rm cp mv link dirname basename cmp ln
+    local fixture
+    fixture="$(mktemp -d)"
+    trap 'rm -rf "$fixture"' EXIT
+    CANONICAL_OUTPUT_WASM_PATH="$fixture/canonical.wasm"
+    printf 'current candidate\n' >"$fixture/source.wasm"
+    printf 'historical canonical\n' >"$fixture/canonical.wasm"
+    cp "$fixture/canonical.wasm" "$fixture/canonical.before"
+    expect_refusal() {
+        if (SELF_TEST=0; OUTPUT_EXCLUSIVE=0; "$@") >/dev/null 2>&1; then
+            log_error "Expected refusal: $*"
+            exit 1
+        fi
+    }
+    expect_refusal parse_args --output
+    expect_refusal parse_args --output ''
+    expect_refusal parse_args --output --self-test
+    expect_refusal parse_args --output a --output b
+    expect_refusal parse_args --self-test --output a
+    expect_refusal parse_args --unknown
+    (SELF_TEST=0; OUTPUT_EXCLUSIVE=0; parse_args; [[ "$OUTPUT_EXCLUSIVE" == 0 ]])
+    (
+        cd "$fixture"
+        SELF_TEST=0
+        OUTPUT_EXCLUSIVE=0
+        parse_args --output relative.wasm
+        resolve_output
+        [[ "$OUTPUT_WASM_PATH" == "$(pwd -P)/relative.wasm" ]]
+        publish_runtime_wasm "$fixture/source.wasm"
+        cmp "$fixture/source.wasm" relative.wasm
+    )
+    if (OUTPUT_EXCLUSIVE=1; OUTPUT_WASM_PATH="$fixture/missing/child.wasm"; resolve_output) >/dev/null 2>&1; then exit 1; fi
+    if (OUTPUT_EXCLUSIVE=1; CANONICAL_OUTPUT_WASM_PATH="$fixture/absent-canonical.wasm"; OUTPUT_WASM_PATH="$CANONICAL_OUTPUT_WASM_PATH"; resolve_output) >/dev/null 2>&1; then exit 1; fi
+    SELF_TEST=0
+    parse_args --output "$fixture/new candidate.wasm"
+    resolve_output
+    publish_runtime_wasm "$fixture/source.wasm"
+    cmp "$fixture/source.wasm" "$OUTPUT_WASM_PATH"
+    cmp "$fixture/canonical.before" "$fixture/canonical.wasm"
+    if resolve_output >/dev/null 2>&1 || publish_runtime_wasm "$fixture/source.wasm" >/dev/null 2>&1; then
+        log_error "Existing output accepted"
+        exit 1
+    fi
+    cmp "$fixture/source.wasm" "$OUTPUT_WASM_PATH"
+    OUTPUT_WASM_PATH="$fixture/raced.wasm"
+    resolve_output
+    printf 'race winner\n' >"$OUTPUT_WASM_PATH"
+    cp "$OUTPUT_WASM_PATH" "$fixture/race.before"
+    if publish_runtime_wasm "$fixture/source.wasm" >/dev/null 2>&1; then exit 1; fi
+    cmp "$fixture/race.before" "$OUTPUT_WASM_PATH"
+    OUTPUT_WASM_PATH="$fixture/directory.wasm"
+    resolve_output
+    mkdir "$OUTPUT_WASM_PATH"
+    if publish_runtime_wasm "$fixture/source.wasm" >/dev/null 2>&1; then exit 1; fi
+    rmdir "$OUTPUT_WASM_PATH"
+    OUTPUT_WASM_PATH="$fixture/link.wasm"
+    resolve_output
+    ln -s "$fixture/absent.wasm" "$OUTPUT_WASM_PATH"
+    if resolve_output >/dev/null 2>&1 || publish_runtime_wasm "$fixture/source.wasm" >/dev/null 2>&1; then exit 1; fi
+    [[ -L "$OUTPUT_WASM_PATH" && ! -e "$fixture/absent.wasm" ]]
+    OUTPUT_WASM_PATH="$fixture/missing-source.wasm"
+    if publish_runtime_wasm "$fixture/missing.wasm" >/dev/null 2>&1; then exit 1; fi
+    [[ ! -e "$OUTPUT_WASM_PATH" ]]
+    OUTPUT_EXCLUSIVE=0
+    OUTPUT_WASM_PATH="$fixture/canonical.wasm"
+    publish_runtime_wasm "$fixture/source.wasm"
+    cmp "$fixture/source.wasm" "$OUTPUT_WASM_PATH"
+    shopt -s nullglob
+    local leftovers=("$fixture"/.deos_runtime.compact.compressed.wasm.*)
+    [[ ${#leftovers[@]} == 0 ]]
+    log_success "Runtime output self-test passed: exclusive creation/races, default replacement and cleanup; no build"
+)
+
 main() {
     parse_args "$@"
+    if (( SELF_TEST == 1 )); then run_self_test; return; fi
     phase_banner "DEOS reference runtime build"
     check_prerequisites
     stage_runtime_source

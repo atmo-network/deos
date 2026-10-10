@@ -20,12 +20,14 @@ docify = { workspace = true }
 substrate-wasm-builder = { optional = true, workspace = true, default-features = true }
 
 [dev-dependencies]
-cumulus-primitives-parachain-inherent = "0.26.0"
-cumulus-primitives-proof-size-hostfunction = "=0.20.0"
-cumulus-test-relay-sproof-builder = "0.27.0"
-sc-executor = "=0.50.0"
+cumulus-primitives-parachain-inherent = "=0.27.0"
+cumulus-primitives-proof-size-hostfunction = "=0.21.0"
+cumulus-test-relay-sproof-builder = "=0.28.0"
+sc-executor = "=0.51.0"
+sc-block-builder = "=0.52.0"
 
 [dependencies]
+cid.workspace = true
 codec = { workspace = true }
 cumulus-pallet-parachain-system.workspace = true
 docify = { workspace = true }
@@ -82,6 +84,7 @@ smallvec = { workspace = true, default-features = true }
 [features]
 default = ["std"]
 std = [
+  "cid/std",
   "codec/std",
   "cumulus-pallet-parachain-system/std",
   "log/std",

@@ -8,7 +8,6 @@ import manifestJson from './actors-semantic-manifest.json' with { type: 'json' }
 
 export type ActorTaskName =
   | 'Transfer'
-  | 'SplitTransfer'
   | 'SwapIn'
   | 'SwapOut'
   | 'AddLiquidity'
@@ -34,14 +33,12 @@ export type ActorPredicateName =
 
 export type ActorAmountName =
   | 'Fixed'
-  | 'PercentageOfCurrent'
-  | 'PercentageAtOpening'
-  | 'PercentageOfLastFunding'
-  | 'AllAvailable';
+  | 'Percent'
+  | 'CaptureCycleBalance'
+  | 'CycleBalancePercent';
 
 const TASK_NAMES = [
   'Transfer',
-  'SplitTransfer',
   'SwapIn',
   'SwapOut',
   'AddLiquidity',
@@ -69,10 +66,9 @@ const PREDICATE_NAMES = [
 
 const AMOUNT_NAMES = [
   'Fixed',
-  'PercentageOfCurrent',
-  'PercentageAtOpening',
-  'PercentageOfLastFunding',
-  'AllAvailable',
+  'Percent',
+  'CaptureCycleBalance',
+  'CycleBalancePercent',
 ] as const satisfies readonly ActorAmountName[];
 
 export type ActorSemanticRecipient =
@@ -104,10 +100,7 @@ export type ActorSemanticTask = {
   committedNonCompensatedEffects: boolean;
   successfulControl: 'Advance' | 'CompleteCycle';
   weightOwner: string;
-  boundedInternalAlgorithm:
-    | 'None'
-    | 'PalletSplitFanout'
-    | 'RuntimeAdapterContract';
+  boundedInternalAlgorithm: 'None' | 'RuntimeAdapterContract';
   amountSurfaces: Array<{ role: string; path: string }>;
 };
 
@@ -132,16 +125,15 @@ export type ActorSemanticAmountResolution = {
   dataDependencies: Array<
     | 'ArtifactValue'
     | 'CurrentBalanceOrShares'
-    | 'OpeningSnapshot'
-    | 'LastFundingSnapshot'
+    | 'CycleBalanceSnapshot'
     | 'TaskPolicyCapacity'
   >;
   minimumBalanceDependency: 'None' | 'TaskPolicy';
   feeReserveDependency: 'None' | 'TaskPolicy';
   valueObservationWindow:
     | 'ArtifactTime'
-    | 'LogicalCycleStart'
-    | 'StepAttemptTime';
+    | 'StepAttemptTime'
+    | 'CaptureStepTime';
   retryObservation: 'ReobserveLiveValue' | 'ReuseFrozenValueWithLiveCapacity';
 };
 

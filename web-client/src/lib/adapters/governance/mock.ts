@@ -239,12 +239,16 @@ function seededDomainState(): MockDomainState {
           kind: 'Succeeded',
           detail: {
             kind: 'TreasurySpendExecuted',
-            fundingSource: 'bldr-treasury',
+            invoiceCid:
+              'bafkreiaha4dqobyha4dqobyha4dqobyha4dqobyha4dqobyha4dqobyha4',
+            treasuryAccount: 'bldr-treasury',
             beneficiary: 'alice',
             payoutAsset: 1000,
             baseAmount: 25000000000000n,
             scalar: 'Approve',
-            finalAmount: 25000000000000n,
+            targetAmount: 25000000000000n,
+            actualAmount: 25000000000000n,
+            capacityLimited: false,
             settlementKind: 'InvoiceScalarTransfer',
           },
         },
@@ -1114,6 +1118,10 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     payloadKind: GovernanceProposalPayloadKind,
   ): Promise<GovernanceProposalSubmissionAuthority | null> {
     return proposalSubmissionAuthority(domainId, payloadKind);
+  }
+
+  async getMaxCidBytes(): Promise<number | null> {
+    return 96; // Explicit mock fixture, not a live-chain capability fallback.
   }
 
   async getProposalOpeningFee(

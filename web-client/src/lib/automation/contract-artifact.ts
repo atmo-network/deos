@@ -15,6 +15,12 @@ import {
 } from '@polkadot-api/substrate-bindings';
 import { blake2AsHex } from '@polkadot/util-crypto';
 
+import {
+  ACTOR_BEHAVIOR_METRICS,
+  ACTOR_ON_UNFUNDED,
+  type ActorBehaviorLimits,
+} from './behavior-policy.ts';
+
 export const ACTOR_CONTRACT_FORMAT = 'deos.actor.contract' as const;
 export const ACTOR_CONTRACT_FORMAT_VERSION = 1 as const;
 
@@ -169,6 +175,120 @@ function contractCodec(metadata: UnifiedMetadata) {
     'pallet_deos_actors::types::contract::ActorContract',
   );
   return getDynamicBuilder(getLookupFn(metadata)).buildDefinition(entry.id);
+}
+
+export function readActorBehaviorContractSchema(
+  metadataBytes: Uint8Array,
+): ActorBehaviorLimits {
+  const metadata = unifyMetadata(decAnyMetadata(metadataBytes));
+  const contract = metadataEntry(
+    metadata,
+    'pallet_deos_actors::types::contract::ActorContract',
+  );
+  const fields = [
+    'trigger',
+    'cooldown_blocks',
+    'window',
+    'steps',
+    'funding',
+    'close_when',
+    'on_unfunded',
+    'parked_balance_activation',
+    'auto_close_at_cycle_nonce',
+  ];
+  if (
+    contract.def.tag !== 'composite' ||
+    contract.def.value.length !== fields.length ||
+    contract.def.value.some((field, index) => field.name !== fields[index])
+  ) {
+    throw new Error(
+      'Runtime metadata does not support close_when/on_unfunded Actor Contracts',
+    );
+  }
+  const metrics = metadataEntry(
+    metadata,
+    'pallet_deos_actors::types::behavior::BehaviorMetric',
+  );
+  if (
+    metrics.def.tag !== 'variant' ||
+    metrics.def.value.length !== ACTOR_BEHAVIOR_METRICS.length ||
+    metrics.def.value.some(
+      (variant, index) =>
+        variant.name !== ACTOR_BEHAVIOR_METRICS[index] ||
+        variant.index !== index ||
+        variant.fields.length !== 0,
+    )
+  ) {
+    throw new Error(
+      'Runtime behavior metric catalog does not match the authored language',
+    );
+  }
+  const unfunded = metadataEntry(
+    metadata,
+    'pallet_deos_actors::types::lifecycle::OnUnfunded',
+  );
+  if (
+    unfunded.def.tag !== 'variant' ||
+    unfunded.def.value.length !== 2 ||
+    unfunded.def.value.some(
+      (variant, index) =>
+        variant.name !== ACTOR_ON_UNFUNDED[index] ||
+        variant.index !== index ||
+        variant.fields.length !== 0,
+    )
+  ) {
+    throw new Error('Runtime on_unfunded vocabulary is unsupported');
+  }
+  const lookup = getLookupFn(metadata);
+  const policy = lookup(contract.def.value[5].type);
+  if (
+    policy.type !== 'option' ||
+    policy.value.type !== 'sequence' ||
+    policy.value.value.type !== 'sequence' ||
+    policy.value.value.value.type !== 'struct'
+  ) {
+    throw new Error('Runtime close_when must encode an optional bounded DNF');
+  }
+  const atom = policy.value.value.value.value;
+  if (
+    Object.keys(atom).length !== 2 ||
+    atom.metric?.id !== metrics.id ||
+    atom.threshold?.type !== 'primitive' ||
+    atom.threshold.value !== 'u32' ||
+    contract.def.value[6].type !== unfunded.id
+  ) {
+    throw new Error('Runtime outcome-policy field types are unsupported');
+  }
+  const owners = metadata.pallets.filter((pallet) =>
+    pallet.constants.some((constant) => constant.name === 'MaxBehaviorClauses'),
+  );
+  if (owners.length !== 1)
+    throw new Error('Runtime metadata requires one Actor behavior-limit owner');
+  const builder = getDynamicBuilder(getLookupFn(metadata));
+  const limit = (name: string) => {
+    const constant = owners[0].constants.find((entry) => entry.name === name);
+    if (constant == null)
+      throw new Error(`Runtime behavior limit ${name} is unavailable`);
+    const value = builder
+      .buildDefinition(constant.type)
+      .dec(hexToBytes(constant.value));
+    if (
+      typeof value !== 'number' ||
+      !Number.isInteger(value) ||
+      value <= 0 ||
+      value > 0xffff_ffff
+    ) {
+      throw new Error(`Runtime behavior limit ${name} must be a positive u32`);
+    }
+    return value;
+  };
+  const limits = {
+    maxClauses: limit('MaxBehaviorClauses'),
+    maxAtomsPerClause: limit('MaxBehaviorAtomsPerClause'),
+  };
+  if (limits.maxClauses * limits.maxAtomsPerClause > 0xffff_ffff)
+    throw new Error('Runtime behavior-limit product exceeds u32');
+  return limits;
 }
 
 function decodeContract(

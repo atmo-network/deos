@@ -61,6 +61,41 @@ hydrate_local_tool_paths() {
     add_path_if_dir "$HOME/.cargo/bin"
 }
 
+# Print the SHA-256 of one file with whichever checksum tool the platform provides, so the
+# macOS arm64 path (shasum) does not fail on a shared verifier that assumed GNU coreutils.
+deos_sha256_file() {
+    local file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | cut -d ' ' -f 1
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | cut -d ' ' -f 1
+    else
+        log_error "Install sha256sum or shasum to verify downloaded artifacts"
+        return 1
+    fi
+}
+
+verify_deos_omni_node() {
+    local node_path="${1:-$BIN_DIR/polkadot-omni-node-deos}"
+    local receipt="$BIN_DIR/.deos-omni-node.json"
+    require_commands jq cut
+    [[ -f "$receipt" && -f "$BIN_DIR/.polkadot-sdk-release" && -x "$node_path" ]] || {
+        log_error "Select a qualified Omni with DEOS_OMNI_NODE_PATH and DEOS_OMNI_NODE_SHA256 through 01-download-binaries.sh"
+        return 1
+    }
+    local release selected upstream actual
+    release="$(jq -er 'select(.schema_version == 1) | .sdk_release | select(type == "string")' "$receipt")" || return 1
+    selected="$(jq -er '.selected_sha256 | select(type == "string")' "$receipt")" || return 1
+    upstream="$(jq -er '.upstream_omni_sha256 | select(type == "string")' "$receipt")" || return 1
+    [[ "$release" == "$(<"$BIN_DIR/.polkadot-sdk-release")" && "$selected" =~ ^[a-f0-9]{64}$ && "$upstream" =~ ^[a-f0-9]{64}$ && "$selected" != "$upstream" ]] || {
+        log_error "Selected Omni receipt does not match the SDK bundle or identifies its unpatched upstream artifact"
+        return 1
+    }
+    actual="$(deos_sha256_file "$node_path")" || return 1
+    [[ "$actual" == "$selected" ]] || { log_error "Selected Omni checksum mismatch: $node_path"; return 1; }
+    log_success "Selected Omni artifact verified: $node_path ($selected)"
+}
+
 activate_pinned_node() {
     local package_json="$PROJECT_ROOT/web-client/package.json"
     [[ -f "$package_json" ]] || { log_error "Node version authority not found: $package_json"; exit 1; }

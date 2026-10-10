@@ -92,11 +92,8 @@ impl TmctolReadModel {
       pallet_deos_actors::ActorControlLocators::<Runtime>::contains_key(actor_id)
         || pallet_deos_actors::ActorUnsignaledControlCells::<Runtime>::contains_key(actor_id)
         || pallet_deos_actors::ActorContractHeads::<Runtime>::contains_key(actor_id)
-        || pallet_deos_actors::ActorActivationAuthorities::<Runtime>::contains_key(actor_id)
         || has_tail_chunk
-        || pallet_deos_actors::ActorFunding::<Runtime>::contains_key(actor_id)
-        || pallet_deos_actors::ActorRunHeads::<Runtime>::contains_key(actor_id)
-        || pallet_deos_actors::ActorRunPayloads::<Runtime>::contains_key(actor_id);
+        || pallet_deos_actors::ActorRunStateStore::<Runtime>::contains_key(actor_id);
     let status = if is_immutable_system_actor && !active_state_exists {
       GuaranteeStatus::Satisfied
     } else {
@@ -360,10 +357,7 @@ impl TmctolReadModel {
     let mut configured_lp_asset: Option<AssetKind> = None;
     let mut has_add_liquidity_step = false;
     let mut has_foreign_to_native_swap_step = false;
-    let mut has_lp_split_step = false;
-    let mut split_targets_all_buckets = false;
-    let mut split_shares_sum_to_one = false;
-    let mut split_shares_match_policy = false;
+    let mut distribution = alloc::vec::Vec::new();
 
     for step in &program.steps {
       match &step.task {
@@ -387,49 +381,63 @@ impl TmctolReadModel {
           has_foreign_to_native_swap_step = true;
           foreign_from_swap = Some(*asset_in);
         }
-        Task::SplitTransfer { asset, legs, .. } => {
-          has_lp_split_step = true;
-          configured_lp_asset = Some(*asset);
-          let bucket_targets = [
-            (
-              ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID,
-              ecosystem::params::TOL_BUCKET_A_ALLOCATION,
-            ),
-            (
-              ecosystem::actor_ids::TOL_BUCKET_B_ACTORS_ID,
-              ecosystem::params::TOL_BUCKET_B_ALLOCATION,
-            ),
-            (
-              ecosystem::actor_ids::TOL_BUCKET_C_ACTORS_ID,
-              ecosystem::params::TOL_BUCKET_C_ALLOCATION,
-            ),
-            (
-              ecosystem::actor_ids::TOL_BUCKET_D_ACTORS_ID,
-              ecosystem::params::TOL_BUCKET_D_ALLOCATION,
-            ),
-          ];
-          split_targets_all_buckets = bucket_targets.into_iter().all(|(actor_id, _)| {
-            let target = crate::Actors::sovereign_account_id_system(actor_id);
-            legs.iter().any(|leg| leg.to == target)
-          });
-          split_shares_match_policy =
-            bucket_targets
-              .into_iter()
-              .all(|(actor_id, expected_share)| {
-                let target = crate::Actors::sovereign_account_id_system(actor_id);
-                legs
-                  .into_iter()
-                  .find(|leg| leg.to == target)
-                  .map(|leg| leg.share == expected_share)
-                  .unwrap_or(false)
-              });
-          let share_sum: u32 = legs.iter().map(|leg| leg.share.deconstruct()).sum();
-          split_shares_sum_to_one =
-            share_sum == polkadot_sdk::sp_runtime::Perbill::one().deconstruct();
+        Task::Transfer { asset, to, amount } => {
+          use pallet_deos_actors::AmountResolution;
+          let share = match amount {
+            AmountResolution::CaptureCycleBalance { percent, share }
+              if *percent == polkadot_sdk::sp_runtime::Perbill::one() =>
+            {
+              configured_lp_asset = Some(*asset);
+              Some(*share)
+            }
+            AmountResolution::CycleBalancePercent(share) => Some(*share),
+            _ => None,
+          };
+          if let Some(share) = share {
+            distribution.push((*asset, to.clone(), share));
+          }
         }
         _ => {}
       }
     }
+
+    let bucket_targets = [
+      (
+        ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID,
+        ecosystem::params::TOL_BUCKET_A_ALLOCATION,
+      ),
+      (
+        ecosystem::actor_ids::TOL_BUCKET_B_ACTORS_ID,
+        ecosystem::params::TOL_BUCKET_B_ALLOCATION,
+      ),
+      (
+        ecosystem::actor_ids::TOL_BUCKET_C_ACTORS_ID,
+        ecosystem::params::TOL_BUCKET_C_ALLOCATION,
+      ),
+      (
+        ecosystem::actor_ids::TOL_BUCKET_D_ACTORS_ID,
+        ecosystem::params::TOL_BUCKET_D_ALLOCATION,
+      ),
+    ];
+    let has_lp_split_step = distribution.len() == 4
+      && distribution
+        .iter(/* deos-bypass: bounded-iter -- at most one distribution row per MaxContractSteps-bounded authored Step. */)
+        .all(|(asset, _, _)| Some(*asset) == configured_lp_asset);
+    let split_targets_all_buckets = bucket_targets.into_iter().all(|(id, _)| {
+      let target = crate::Actors::sovereign_account_id_system(id);
+      distribution.iter(/* deos-bypass: bounded-iter -- at most one row per bounded authored Step, across four fixed buckets. */).any(|(_, to, _)| *to == target)
+    });
+    let split_shares_match_policy = bucket_targets.into_iter().all(|(id, expected)| {
+      let target = crate::Actors::sovereign_account_id_system(id);
+      distribution
+        .iter(/* deos-bypass: bounded-iter -- at most one row per bounded authored Step, across four fixed buckets. */)
+        .any(|(_, to, share)| *to == target && *share == expected)
+    });
+    let split_shares_sum_to_one = distribution
+      .iter(/* deos-bypass: bounded-iter -- at most one distribution row per MaxContractSteps-bounded authored Step. */)
+      .map(|(_, _, share)| u64::from(share.deconstruct()))
+      .sum::<u64>()
+      == u64::from(polkadot_sdk::sp_runtime::Perbill::one().deconstruct());
 
     let configured_foreign_asset = if foreign_from_add == foreign_from_swap {
       foreign_from_add

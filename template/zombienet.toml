@@ -2,6 +2,9 @@
 default_command = "polkadot"
 chain = "rococo-local"
 
+[relaychain.genesis.runtimeGenesis.patch.configuration.config.scheduler_params]
+max_validators_per_core = 2
+
 [[relaychain.nodes]]
 name = "alice"
 validator = true
@@ -18,13 +21,13 @@ chain_spec_path = "./chain_spec.json"
 onboard_as_parachain = true
 
 [[parachains.collators]]
-name = "charlie"
+name = "alice"
 rpc_port = 9988
-command = "polkadot-omni-node"
+command = "polkadot-omni-node-deos"
 args = ["--force-authoring"]
 
 [[parachains.collators]]
-name = "dave"
+name = "bob"
 rpc_port = 9999
-command = "polkadot-omni-node"
+command = "polkadot-omni-node-deos"
 args = ["--force-authoring"]

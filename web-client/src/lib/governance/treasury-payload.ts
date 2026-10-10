@@ -1,20 +1,26 @@
 /*
 Domain: Governance treasury payloads
-Owns: Treasury payload draft validation, address/amount parsing, and runtime call-byte encoding helpers.
-Excludes: Proposal submission, store lifecycle, advisory payload encoding, and UI rendering.
-Zone: Governance payload helper; pure encoding/validation boundary for treasury proposals.
+Owns: Invoice draft validation, address/amount parsing and canonical source-schema encoding.
+Excludes: Full runtime CID/treasury-authority validation, proposal submission and UI rendering.
+Zone: Pure governance payload helper; the runtime remains admission authority.
 */
-import { u8aToHex } from '@polkadot/util';
-import { decodeAddress } from '@polkadot/util-crypto';
+import { compactAddLength, u8aToHex } from '@polkadot/util';
+import {
+  base32Decode,
+  base32Encode,
+  decodeAddress,
+} from '@polkadot/util-crypto';
 
 import {
   parseUnsignedDecimalBigInt,
   parseUnsignedDecimalNumber,
-} from '$lib/format/numeric';
+} from '../format/numeric.ts';
 
 const U128_MAX = (1n << 128n) - 1n;
 
 export type GovernanceTreasuryPayloadDraft = {
+  invoiceCid: string;
+  treasuryAccount: string;
   beneficiary: string;
   payoutAsset: string;
   baseAmount: string;
@@ -24,38 +30,27 @@ export type GovernanceTreasuryPayloadEncoding = {
   payloadBytes: Uint8Array;
   payloadHex: string;
   payloadByteLength: number;
+  invoiceCid: string;
+  treasuryAccount: string;
   beneficiary: string;
   payoutAssetId: number;
   baseAmount: bigint;
-  fundingSource: 'BldrTreasury';
 };
 
 export type GovernanceTreasuryPayloadDraftState = {
+  capabilityReady: boolean;
+  invoiceCidValid: boolean;
+  treasuryAccountValid: boolean;
   beneficiaryValid: boolean;
   payoutAssetValid: boolean;
   baseAmountValid: boolean;
   encoding: GovernanceTreasuryPayloadEncoding | null;
 };
 
-type ParsedBeneficiary = {
-  valid: boolean;
-  bytes: Uint8Array | null;
-  normalized: string;
-};
-
-type ParsedPayoutAsset = {
-  valid: boolean;
-  parsed: number | null;
-};
-
-type ParsedBaseAmount = {
-  valid: boolean;
-  parsed: bigint | null;
-};
-
 function concatBytes(parts: Uint8Array[]) {
-  const total = parts.reduce((sum, part) => sum + part.length, 0);
-  const output = new Uint8Array(total);
+  const output = new Uint8Array(
+    parts.reduce((sum, part) => sum + part.length, 0),
+  );
   let offset = 0;
   for (const part of parts) {
     output.set(part, offset);
@@ -64,103 +59,101 @@ function concatBytes(parts: Uint8Array[]) {
   return output;
 }
 
-function encodeU32(value: number) {
-  const bytes = new Uint8Array(4);
-  let remaining = value >>> 0;
-  for (let index = 0; index < 4; index += 1) {
-    bytes[index] = remaining & 0xff;
-    remaining >>>= 8;
+function encodeUnsigned(value: bigint, length: number) {
+  const bytes = new Uint8Array(length);
+  for (let index = 0; index < length; index += 1) {
+    bytes[index] = Number(value & 0xffn);
+    value >>= 8n;
   }
   return bytes;
 }
 
-function encodeU128(value: bigint) {
-  const bytes = new Uint8Array(16);
-  let remaining = value;
-  for (let index = 0; index < 16; index += 1) {
-    bytes[index] = Number(remaining & 0xffn);
-    remaining >>= 8n;
-  }
-  return bytes;
-}
-
-function parseBeneficiary(value: string): ParsedBeneficiary {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return { valid: false, bytes: null, normalized: '' };
-  }
+function parseAccount(value: string) {
+  const normalized = value.trim();
   try {
-    const bytes = decodeAddress(trimmed);
-    if (bytes.length !== 32) {
-      return {
-        valid: false,
-        bytes: null,
-        normalized: trimmed,
-      };
-    }
-    return { valid: true, bytes: Uint8Array.from(bytes), normalized: trimmed };
+    const bytes = decodeAddress(normalized);
+    return bytes.length === 32
+      ? { bytes: Uint8Array.from(bytes), normalized }
+      : null;
   } catch {
-    return {
-      valid: false,
-      bytes: null,
-      normalized: trimmed,
-    };
+    return null;
   }
 }
 
-function parsePayoutAsset(value: string): ParsedPayoutAsset {
-  const parsed = parseUnsignedDecimalNumber(value, { max: 0xffff_ffff });
-  return parsed === null
-    ? { valid: false, parsed: null }
-    : { valid: true, parsed };
-}
-
-function parseBaseAmount(value: string): ParsedBaseAmount {
-  const parsed = parseUnsignedDecimalBigInt(value, { min: 1n, max: U128_MAX });
-  return parsed === null
-    ? { valid: false, parsed: null }
-    : { valid: true, parsed };
+// This is a bounded local format check, not a complete CID parser or authority check.
+function hasInvoiceCidFormat(value: string, maxBytes: number | null) {
+  if (
+    maxBytes == null ||
+    value.length === 0 ||
+    value.length > maxBytes ||
+    !/^b[a-z2-7]+$/.test(value)
+  )
+    return false;
+  try {
+    const bytes = base32Decode(value, true);
+    return (
+      bytes.length >= 4 && bytes[0] === 1 && base32Encode(bytes, true) === value
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function deriveGovernanceTreasuryPayloadDraftState(
   draft: GovernanceTreasuryPayloadDraft,
+  maxCidBytes: number | null,
 ): GovernanceTreasuryPayloadDraftState {
-  const beneficiary = parseBeneficiary(draft.beneficiary);
-  const payoutAsset = parsePayoutAsset(draft.payoutAsset);
-  const baseAmount = parseBaseAmount(draft.baseAmount);
+  const capabilityReady =
+    maxCidBytes != null &&
+    Number.isInteger(maxCidBytes) &&
+    maxCidBytes > 0 &&
+    maxCidBytes <= 0xffff_ffff;
+  const invoiceCidValid =
+    capabilityReady && hasInvoiceCidFormat(draft.invoiceCid, maxCidBytes);
+  const treasury = parseAccount(draft.treasuryAccount);
+  const beneficiary = parseAccount(draft.beneficiary);
+  const payoutAsset = parseUnsignedDecimalNumber(draft.payoutAsset, {
+    max: 0xffff_ffff,
+  });
+  const baseAmount = parseUnsignedDecimalBigInt(draft.baseAmount, {
+    min: 1n,
+    max: U128_MAX,
+  });
+  const validity = {
+    capabilityReady,
+    invoiceCidValid,
+    treasuryAccountValid: treasury != null,
+    beneficiaryValid: beneficiary != null,
+    payoutAssetValid: payoutAsset != null,
+    baseAmountValid: baseAmount != null,
+  };
   if (
-    !beneficiary.valid ||
-    beneficiary.bytes == null ||
-    !payoutAsset.valid ||
-    payoutAsset.parsed == null ||
-    !baseAmount.valid ||
-    baseAmount.parsed == null
+    !invoiceCidValid ||
+    !treasury ||
+    !beneficiary ||
+    payoutAsset == null ||
+    baseAmount == null
   ) {
-    return {
-      beneficiaryValid: beneficiary.valid,
-      payoutAssetValid: payoutAsset.valid,
-      baseAmountValid: baseAmount.valid,
-      encoding: null,
-    };
+    return { ...validity, encoding: null };
   }
   const payloadBytes = concatBytes([
+    compactAddLength(new TextEncoder().encode(draft.invoiceCid)),
+    treasury.bytes,
     beneficiary.bytes,
-    encodeU32(payoutAsset.parsed),
-    encodeU128(baseAmount.parsed),
-    Uint8Array.of(0),
+    encodeUnsigned(BigInt(payoutAsset), 4),
+    encodeUnsigned(baseAmount, 16),
   ]);
   return {
-    beneficiaryValid: true,
-    payoutAssetValid: true,
-    baseAmountValid: true,
+    ...validity,
     encoding: {
       payloadBytes,
       payloadHex: u8aToHex(payloadBytes),
       payloadByteLength: payloadBytes.length,
+      invoiceCid: draft.invoiceCid,
+      treasuryAccount: treasury.normalized,
       beneficiary: beneficiary.normalized,
-      payoutAssetId: payoutAsset.parsed,
-      baseAmount: baseAmount.parsed,
-      fundingSource: 'BldrTreasury',
+      payoutAssetId: payoutAsset,
+      baseAmount,
     },
   };
 }

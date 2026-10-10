@@ -8,6 +8,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
+import { readActorsTestMetadata } from './actors-test-metadata.mjs';
+
 import { analyzeActorContract } from '../src/lib/automation/analysis.ts';
 import {
   createActorContractArtifact,
@@ -18,9 +20,7 @@ import {
   parseActorSemanticManifest,
 } from '../src/lib/automation/semantic-manifest.ts';
 
-const metadataBytes = new Uint8Array(
-  await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
-);
+const metadataBytes = await readActorsTestMetadata();
 const stepEditorSource = await readFile(
   new URL('../src/lib/automation/AutomationStepEditor.svelte', import.meta.url),
   'utf8',
@@ -50,7 +50,6 @@ const fixed = (value = 10n) => ({ type: 'Fixed', value });
 
 const taskNames = [
   'Transfer',
-  'SplitTransfer',
   'SwapIn',
   'SwapOut',
   'AddLiquidity',
@@ -74,13 +73,7 @@ const conditionNames = [
   'ObservationEquals',
   'ObservationNotEquals',
 ];
-const amountNames = [
-  'Fixed',
-  'PercentageOfCurrent',
-  'PercentageAtOpening',
-  'PercentageOfLastFunding',
-  'AllAvailable',
-];
+const amountNames = ['Fixed', 'Percent'];
 const errorPolicies = ['AbortCycle', 'ContinueNextStep', 'RetryLater'];
 
 const weightModel = {
@@ -91,9 +84,9 @@ const weightModel = {
     refTime: 10n + BigInt(conditionCount),
     proofSize: 2n + BigInt(conditionCount),
   }),
-  taskUpper: ({ splitLegs }) => ({
-    weight: { refTime: 100n + BigInt(splitLegs), proofSize: 5n },
-    executionFeeUpper: 7n + BigInt(splitLegs),
+  taskUpper: () => ({
+    weight: { refTime: 100n, proofSize: 5n },
+    executionFeeUpper: 7n,
   }),
   lifecycleOverhead: {
     weight: { refTime: 20n, proofSize: 3n },
@@ -121,15 +114,6 @@ function taskValue(name, amount = fixed()) {
   switch (name) {
     case 'Transfer':
       return { to: account, asset: native, amount };
-    case 'SplitTransfer':
-      return {
-        asset: native,
-        amount,
-        legs: [
-          { to: account, share: 400_000_000 },
-          { to: account, share: 600_000_000 },
-        ],
-      };
     case 'SwapIn':
       return {
         asset_in: native,
@@ -182,10 +166,6 @@ function taskValue(name, amount = fixed()) {
   }
 }
 
-function timed(predicate, timing = 'Current') {
-  return { timing: variant(timing), predicate };
-}
-
 function step({
   task = 'Transfer',
   amount = fixed(),
@@ -195,8 +175,8 @@ function step({
 } = {}) {
   const clauses =
     preconditionMode === 'Any'
-      ? predicates.map((predicate) => [timed(predicate)])
-      : [predicates.map((predicate) => timed(predicate))];
+      ? predicates.map((predicate) => [predicate])
+      : [predicates];
   return {
     precondition: predicates.length === 0 ? undefined : clauses,
     task: { type: task, value: taskValue(task, amount) },
@@ -226,7 +206,8 @@ function activeContract(steps) {
     cooldown_blocks: 5,
     window: undefined,
     steps,
-    completion: variant('Persistent'),
+    close_when: undefined,
+    on_unfunded: variant('Close'),
     funding: variant('OwnerOnly'),
     auto_close_at_cycle_nonce: undefined,
   };
@@ -287,7 +268,7 @@ test('analysis is deterministic, exactly bound, and produces every cursor envelo
       step({ task: 'SwapIn' }),
       step({
         task: 'Transfer',
-        amount: { type: 'AllAvailable', value: undefined },
+        amount: { type: 'Percent', value: 1_000_000_000 },
         predicates: [condition('BalanceAbove')],
         onError: 'RetryLater',
       }),
@@ -456,11 +437,6 @@ test('generated manifest preserves recipient kinds and rejects identity drift', 
   assert.deepEqual(analyzeTask('Transfer').economicSurface.recipients, [
     { kind: 'Explicit', value: account },
   ]);
-  assert.deepEqual(analyzeTask('SplitTransfer').economicSurface.recipients, [
-    { kind: 'Explicit', value: account },
-    { kind: 'Explicit', value: account },
-    { kind: 'ActorSovereign' },
-  ]);
   assert.deepEqual(analyzeTask('SwapIn').economicSurface.recipients, [
     { kind: 'ActorSovereign' },
   ]);
@@ -487,17 +463,15 @@ test('generated manifest preserves recipient kinds and rejects identity drift', 
   );
 });
 
-test('split transfer analysis exposes atomic temporary deposit preflight', () => {
-  const result = analyze(
-    artifactFor({ steps: [step({ task: 'SplitTransfer' })] }),
-  );
+test('Transfer analysis exposes atomic temporary deposit preflight', () => {
+  const result = analyze(artifactFor({ steps: [step({ task: 'Transfer' })] }));
   assert.deepEqual(
     result.findings.filter(
-      (finding) => finding.kind === 'SplitTransferDepositPreflight',
+      (finding) => finding.kind === 'TransferDepositPreflight',
     ),
     [
       {
-        kind: 'SplitTransferDepositPreflight',
+        kind: 'TransferDepositPreflight',
         step: 0,
         failureClass: 'Temporary',
         atomic: true,
@@ -538,9 +512,9 @@ test('System swap analysis exposes local reference limits without fair-price cla
   }
 });
 
-test('fixed split warnings require provenance-bound minimum and zero-balance evidence', () => {
+test('fixed Transfer warnings require provenance-bound minimum and zero-balance evidence', () => {
   const nativeArtifact = artifactFor({
-    steps: [step({ task: 'SplitTransfer', amount: fixed(20n) })],
+    steps: [step({ task: 'Transfer', amount: fixed(8n) })],
   });
   const baseline = analyze(nativeArtifact);
   const nativeParameters = baseline.steps[0].parameters;
@@ -552,9 +526,7 @@ test('fixed split warnings require provenance-bound minimum and zero-balance evi
       {
         asset: nativeParameters.asset,
         minimumBalance: '9',
-        recipientBalances: [
-          { recipient: nativeParameters.legs[0].to, balance: '0' },
-        ],
+        recipientBalances: [{ recipient: nativeParameters.to, balance: '0' }],
       },
     ],
   };
@@ -563,15 +535,14 @@ test('fixed split warnings require provenance-bound minimum and zero-balance evi
   });
   assert.deepEqual(
     below.findings.filter(
-      (finding) => finding.kind === 'SplitTransferLegBelowKnownMinimum',
+      (finding) => finding.kind === 'TransferBelowKnownMinimum',
     ),
     [
       {
-        kind: 'SplitTransferLegBelowKnownMinimum',
+        kind: 'TransferBelowKnownMinimum',
         step: 0,
-        leg: 0,
         asset: nativeParameters.asset,
-        recipient: nativeParameters.legs[0].to,
+        recipient: nativeParameters.to,
         amount: '8',
         minimumBalance: '9',
         evidenceIdentity: nativeEvidence.identity,
@@ -597,14 +568,14 @@ test('fixed split warnings require provenance-bound minimum and zero-balance evi
     });
     assert.equal(
       result.findings.some(
-        (finding) => finding.kind === 'SplitTransferLegBelowKnownMinimum',
+        (finding) => finding.kind === 'TransferBelowKnownMinimum',
       ),
       false,
     );
   }
   assert.equal(
     baseline.findings.some(
-      (finding) => finding.kind === 'SplitTransferLegBelowKnownMinimum',
+      (finding) => finding.kind === 'TransferBelowKnownMinimum',
     ),
     false,
   );
@@ -616,21 +587,19 @@ test('fixed split warnings require provenance-bound minimum and zero-balance evi
       entries: [
         {
           ...nativeEvidence.entries[0],
-          recipientBalances: [
-            { recipient: nativeParameters.legs[0].to, balance: '1' },
-          ],
+          recipientBalances: [{ recipient: nativeParameters.to, balance: '1' }],
         },
       ],
     },
   });
   assert.equal(
     funded.findings.some(
-      (finding) => finding.kind === 'SplitTransferLegBelowKnownMinimum',
+      (finding) => finding.kind === 'TransferBelowKnownMinimum',
     ),
     false,
   );
 
-  const localStep = step({ task: 'SplitTransfer', amount: fixed(20n) });
+  const localStep = step({ task: 'Transfer', amount: fixed(8n) });
   localStep.task.value.asset = local;
   const localArtifact = artifactFor({ steps: [localStep] });
   const localParameters = analyze(localArtifact).steps[0].parameters;
@@ -643,16 +612,14 @@ test('fixed split warnings require provenance-bound minimum and zero-balance evi
         {
           asset: localParameters.asset,
           minimumBalance: '9',
-          recipientBalances: [
-            { recipient: localParameters.legs[0].to, balance: '0' },
-          ],
+          recipientBalances: [{ recipient: localParameters.to, balance: '0' }],
         },
       ],
     },
   });
   assert.equal(
     localResult.findings.filter(
-      (finding) => finding.kind === 'SplitTransferLegBelowKnownMinimum',
+      (finding) => finding.kind === 'TransferBelowKnownMinimum',
     ).length,
     1,
   );
@@ -769,11 +736,7 @@ test('every current Predicate is pure, bounded, and explicitly timed', () => {
 test('every current AmountResolution reports frozen or live retry semantics', () => {
   for (const name of amountNames) {
     const amount =
-      name === 'Fixed'
-        ? fixed()
-        : name === 'AllAvailable'
-          ? { type: name, value: undefined }
-          : { type: name, value: 500_000_000 };
+      name === 'Fixed' ? fixed() : { type: name, value: 500_000_000 };
     const artifact = artifactFor({ steps: [step({ amount })] });
     const projected = analyze(artifact).steps[0].amounts[0];
     const contract = ACTORS_SEMANTIC_MANIFEST.amountResolutions.find(
@@ -788,8 +751,6 @@ test('every current AmountResolution reports frozen or live retry semantics', ()
           ({
             ArtifactValue: 'artifact-value',
             CurrentBalanceOrShares: 'current-balance-or-shares',
-            OpeningSnapshot: 'opening-snapshot',
-            LastFundingSnapshot: 'last-funding-snapshot',
             TaskPolicyCapacity: 'task-policy-capacity',
           })[dependency],
       ),
@@ -800,7 +761,6 @@ test('every current AmountResolution reports frozen or live retry semantics', ()
       projected.valueObservation,
       {
         ArtifactTime: 'artifact-time',
-        LogicalCycleStart: 'logical-cycle-start',
         StepAttemptTime: 'step-attempt-time',
       }[contract.valueObservationWindow],
     );
@@ -854,7 +814,8 @@ test('installed Actor Contracts produce complete bounded analysis', () => {
       const result = analyze(artifact);
       assert.equal(result.contract, 'Installed');
       assert.equal(result.cooldownBlocks, 5);
-      assert.equal(result.completionPolicy, 'Persistent');
+      assert.equal(result.closeWhen, null);
+      assert.equal(result.onUnfunded, 'Close');
       assert.equal(result.steps.length, 1);
     }
   }
@@ -866,98 +827,6 @@ test('trigger analysis projects one exact scalar trigger without runtime proof',
     contract.trigger = trigger;
     return contract;
   };
-  const observation = analyze(
-    artifactFor({
-      contract: contractWithTrigger({
-        type: 'ObservationChange',
-        value: { feed: observationFeed },
-      }),
-    }),
-  );
-  assert.equal(observation.completionPolicy, 'Persistent');
-  assert.deepEqual(observation.trigger, {
-    kind: 'ObservationChange',
-    afterTicks: null,
-    everyTicks: null,
-    sourceKinds: ['ObservationChange'],
-    observationFeeds: [
-      {
-        aggregation: {
-          type: 'Ema',
-          value: {
-            half_life_blocks: { $runtimeType: 'number', $integer: '100' },
-          },
-        },
-        asset_in: { type: 'Native', value: { $none: true } },
-        asset_out: {
-          type: 'Local',
-          value: { $runtimeType: 'number', $integer: '7' },
-        },
-        method: { type: 'PreExecutionSpot', value: { $none: true } },
-        scale: { $runtimeType: 'number', $integer: '12' },
-      },
-    ],
-  });
-  assert(
-    observation.findings.some(
-      (finding) =>
-        finding.kind === 'ExternallySignalledAdmission' &&
-        finding.trigger === 'ObservationChange',
-    ),
-  );
-  const crossing = analyze(
-    artifactFor({
-      contract: contractWithTrigger({
-        type: 'ObservationCrossing',
-        value: {
-          feed: observationFeed,
-          direction: { type: 'Rising', value: undefined },
-          threshold: 100n,
-          rearm_threshold: 80n,
-        },
-      }),
-    }),
-  );
-  assert.deepEqual(crossing.trigger, {
-    kind: 'ObservationCrossing',
-    afterTicks: null,
-    everyTicks: null,
-    sourceKinds: ['ObservationCrossing'],
-    observationFeeds: observation.trigger.observationFeeds,
-  });
-  const malformedCrossing = contractWithTrigger({
-    type: 'ObservationCrossing',
-    value: {
-      feed: observationFeed,
-      direction: { type: 'Rising', value: undefined },
-      threshold: 100n,
-      rearm_threshold: 100n,
-    },
-  });
-  assert.throws(
-    () => analyze(artifactFor({ contract: malformedCrossing })),
-    /invalid hysteresis/,
-  );
-  const triggerAmountContract = contractWithTrigger({
-    type: 'ObservationChange',
-    value: { feed: observationFeed },
-  });
-  triggerAmountContract.steps = [
-    step({ amount: { type: 'PercentageAtOpening', value: 500_000_000 } }),
-  ];
-  const triggerAmountAnalysis = analyze(
-    artifactFor({ contract: triggerAmountContract }),
-  );
-  assert(
-    triggerAmountAnalysis.findings.some(
-      (finding) =>
-        finding.kind === 'TriggerAmountCompatibilityViolation' &&
-        finding.reason === 'AddressEventOnlyRequired' &&
-        finding.steps[0] === 0 &&
-        finding.sourceKinds[0] === 'ObservationChange',
-    ),
-  );
-
   const oneShot = analyze(
     artifactFor({
       contract: contractWithTrigger({
@@ -971,7 +840,6 @@ test('trigger analysis projects one exact scalar trigger without runtime proof',
     afterTicks: 10,
     everyTicks: null,
     sourceKinds: [],
-    observationFeeds: [],
   });
   assert(
     oneShot.findings.some(
@@ -994,7 +862,6 @@ test('trigger analysis projects one exact scalar trigger without runtime proof',
     afterTicks: null,
     everyTicks: 10,
     sourceKinds: [],
-    observationFeeds: [],
   });
   assert(
     periodic.findings.some(

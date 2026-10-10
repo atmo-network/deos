@@ -145,6 +145,10 @@ fn testnet_genesis(
     polkadot_xcm: PolkadotXcmConfig {
       safe_xcm_version: Some(SAFE_XCM_VERSION)
     },
+    actors: pallet_deos_actors::GenesisConfig {
+      user_creation_enabled: false,
+      _marker: Default::default(),
+    },
     deos_router: pallet_deos_router::GenesisConfig {
       _marker: Default::default(),
     },

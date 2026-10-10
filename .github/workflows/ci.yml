@@ -19,11 +19,18 @@ jobs:
     env:
       CARGO_INCREMENTAL: 0
       SKIP_WASM_BUILD: 1
+      # The runtime and pallet suites exceed the harness step timeout in the debug profile, which
+      # is what the local release profile already solves; keep CI on the same profile so the gate
+      # measures the code rather than the debug build.
+      DEOS_TEST_PROFILE: release
+      # A cold runner must compile the whole workspace in release before the first assertion runs,
+      # which does not fit the local default step budget; the local default stays 15 minutes.
+      DEOS_TEST_TIMEOUT_MINUTES: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install validation prerequisites
-        run: sudo apt-get update && sudo apt-get install --yes ripgrep
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep perl protobuf-compiler pkg-config libssl-dev
 
       - name: Setup pinned Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
