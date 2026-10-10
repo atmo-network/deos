@@ -1,7 +1,4 @@
 use crate::{AccountId, Oracle, Runtime, RuntimeOrigin};
-use pallet_deos_actors::{
-  ObservationTransition, ObservationTransitionIngress, TriggerCauseProvenance,
-};
 use pallet_oracle::{Aggregation, FeedConfig, FeedLifecycle, ZeroPolicy};
 use polkadot_sdk::{
   frame_support::{ensure, parameter_types, transactional},
@@ -17,9 +14,6 @@ use super::deos_router_config::{DeosRouterEmaHalfLife, RouterPalletId};
 
 pub const DEOS_ROUTER_ORACLE_SCALE: u8 = 12;
 pub const DEOS_ROUTER_MAX_ORACLE_POOL_PAIRS: u32 = 500;
-
-/// Closed runtime inventory of publishers certified to create Actors observation ingress.
-pub const ACTORS_OBSERVATION_PUBLISHER_INVENTORY: &[&str] = &["DEOS Oracle::OnObservationChanged"];
 
 pub const fn deos_router_pool_feed(asset_in: AssetKind, asset_out: AssetKind) -> OracleFeedId {
   OracleFeedId::directional_local_pool_price(
@@ -119,123 +113,6 @@ fn ensure_deos_router_feed(feed: OracleFeedId) -> DispatchResult {
   )
 }
 
-#[cfg(feature = "runtime-benchmarks")]
-pub struct OraclePublicationBenchmarkHelper;
-
-#[cfg(feature = "runtime-benchmarks")]
-impl pallet_oracle::PublicationBenchmarkHelper<OracleFeedId> for OraclePublicationBenchmarkHelper {
-  fn prepare_changed_hook(
-    feed: OracleFeedId,
-    topology: pallet_oracle::ChangedHookBenchmarkTopology,
-  ) -> DispatchResult {
-    if matches!(
-      topology,
-      pallet_oracle::ChangedHookBenchmarkTopology::PrimaryFirst
-        | pallet_oracle::ChangedHookBenchmarkTopology::PrimaryExisting
-        | pallet_oracle::ChangedHookBenchmarkTopology::Combined
-    ) {
-      pallet_deos_actors::ObservationSubscriberCount::<Runtime>::insert(feed, 1);
-    }
-    if matches!(
-      topology,
-      pallet_oracle::ChangedHookBenchmarkTopology::SecondaryFirst
-        | pallet_oracle::ChangedHookBenchmarkTopology::SecondaryExisting
-        | pallet_oracle::ChangedHookBenchmarkTopology::Combined
-    ) {
-      pallet_deos_actors::CrossingFeedMembershipCount::<Runtime>::insert(feed, 1);
-    }
-    if topology == pallet_oracle::ChangedHookBenchmarkTopology::PrimaryExisting {
-      <crate::Actors as ObservationTransitionIngress<OracleFeedId>>::note_observation_transition(
-        feed,
-        ObservationTransition {
-          revision: 1,
-          previous: None,
-          current: 1_000_000_000,
-        },
-        TriggerCauseProvenance::Deferred,
-      )?;
-    }
-    if topology == pallet_oracle::ChangedHookBenchmarkTopology::SecondaryExisting {
-      <crate::Actors as ObservationTransitionIngress<OracleFeedId>>::note_observation_transition(
-        feed,
-        ObservationTransition {
-          revision: 1,
-          previous: None,
-          current: 1_000_000_000,
-        },
-        TriggerCauseProvenance::Deferred,
-      )?;
-    }
-    Ok(())
-  }
-
-  fn prepare_secondary_capacity_edge(
-    feed: OracleFeedId,
-  ) -> Result<(pallet_oracle::Revision, pallet_oracle::OracleValue, bool), DispatchError> {
-    pallet_deos_actors::CrossingFeedMembershipCount::<Runtime>::insert(feed, 1);
-    let mut current = 1_000_000_000u128;
-    <crate::Actors as ObservationTransitionIngress<OracleFeedId>>::note_observation_transition(
-      feed,
-      ObservationTransition {
-        revision: 1,
-        previous: None,
-        current,
-      },
-      TriggerCauseProvenance::Deferred,
-    )?;
-    let capacity = <<Runtime as pallet_deos_actors::Config>::MaxCrossingTransitionsPerFeed as polkadot_sdk::frame_support::traits::Get<u32>>::get();
-    for offset in 0..capacity {
-      let previous = current;
-      current = current.checked_add(1).ok_or(DispatchError::Arithmetic(
-        polkadot_sdk::sp_runtime::ArithmeticError::Overflow,
-      ))?;
-      <crate::Actors as ObservationTransitionIngress<OracleFeedId>>::note_observation_transition(
-        feed,
-        ObservationTransition {
-          revision: u64::from(offset).saturating_add(2),
-          previous: Some(previous),
-          current,
-        },
-        TriggerCauseProvenance::Deferred,
-      )?;
-    }
-    Ok((u64::from(capacity).saturating_add(1), current, true))
-  }
-}
-
-pub struct ActorObservationChangeIngress;
-
-impl ActorObservationChangeIngress {
-  pub const fn certified_publisher_inventory() -> &'static [&'static str] {
-    ACTORS_OBSERVATION_PUBLISHER_INVENTORY
-  }
-}
-
-impl pallet_oracle::OnObservationChanged<OracleFeedId> for ActorObservationChangeIngress {
-  fn on_observation_changed(
-    feed: OracleFeedId,
-    revision: pallet_oracle::Revision,
-    previous: Option<pallet_oracle::OracleValue>,
-    current: pallet_oracle::OracleValue,
-    cause_provenance: pallet_oracle::ObservationCauseProvenance,
-  ) -> DispatchResult {
-    <crate::Actors as ObservationTransitionIngress<OracleFeedId>>::note_observation_transition(
-      feed,
-      ObservationTransition {
-        revision,
-        previous,
-        current,
-      },
-      match cause_provenance {
-        pallet_oracle::ObservationCauseProvenance::ExternalPhase => {
-          TriggerCauseProvenance::ExternalPhase
-        }
-        pallet_oracle::ObservationCauseProvenance::Deferred => TriggerCauseProvenance::Deferred,
-      },
-    )
-  }
-}
-
 parameter_types! {
   pub const OracleMaxFeeds: u32 = 1_024;
   pub const OracleMaxFeedsPerProducer: u32 = 1_001;
@@ -249,9 +126,10 @@ impl pallet_oracle::Config for Runtime {
   type Provenance = OracleProvenance;
   type RegisterOrigin = EnsureRoot<AccountId>;
   type PublishOrigin = EnsureSigned<AccountId>;
-  type OnObservationChanged = ActorObservationChangeIngress;
+  type OnFeedStateChanged = ();
+  type OnObservationChanged = ();
   #[cfg(feature = "runtime-benchmarks")]
-  type BenchmarkHelper = OraclePublicationBenchmarkHelper;
+  type BenchmarkHelper = ();
   type MaxFeeds = OracleMaxFeeds;
   type MaxFeedsPerProducer = OracleMaxFeedsPerProducer;
   type MaxScale = OracleMaxScale;

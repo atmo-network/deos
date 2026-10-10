@@ -142,20 +142,6 @@ pub(crate) fn market_execution_failure(error: DispatchError) -> pallet_deos_rout
 
 fn oracle_publication_failure(error: DispatchError) -> pallet_deos_router::AdapterFailure {
   let retryable = error == pallet_oracle::Error::<Runtime>::FeedPaused.into();
-  if error == pallet_deos_actors::Error::<Runtime>::DirtyObservationCapacityExceeded.into() {
-    return router_adapter_failure(
-      error,
-      pallet_deos_router::RouterFailureClass::IngressRejected,
-      pallet_deos_router::RetryDisposition::RetryLater,
-    );
-  }
-  if error == pallet_deos_actors::Error::<Runtime>::DirtyObservationInvariant.into() {
-    return router_adapter_failure(
-      error,
-      pallet_deos_router::RouterFailureClass::IngressRejected,
-      pallet_deos_router::RetryDisposition::Permanent,
-    );
-  }
   router_adapter_failure(
     error,
     pallet_deos_router::RouterFailureClass::PublicationRejected,
@@ -360,19 +346,6 @@ impl AssetConversionAdapter {
           )),
         ));
       }
-      // The asset-B cap bounds the debit against the actor's pre-existing staked balance: the
-      // donation may not drive the staked position below the preservable floor (existing minus
-      // max_amount_b). A donation that staked-then-donated the same amount never consumes
-      // existing balance, so the cap is trivially satisfied; any donation consuming pre-existing
-      // staked balance beyond the preservable capacity is rejected before mutation.
-      let staked_after_donation = staked_after.saturating_sub(staked_donation);
-      if staked_after_donation < staked_before.saturating_sub(max_staked_debit) {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          pallet_deos_actors::TaskFailure::permanent(DispatchError::Other(
-            "DonationExceedsAssetBCap",
-          )),
-        ));
-      }
       if let Err(error) = Self::donate_balanced_liquidity_classified(
         donor,
         base_asset,
@@ -382,6 +355,15 @@ impl AssetConversionAdapter {
         max_ratio_error,
       ) {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      }
+      // Expendable SDK transfers may consume receipt dust beyond the requested amount.
+      let staked_after_donation = Self::asset_balance(staked_asset, donor);
+      if staked_after_donation < staked_before.saturating_sub(max_staked_debit) {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          pallet_deos_actors::TaskFailure::permanent(DispatchError::Other(
+            "DonationExceedsAssetBCap",
+          )),
+        ));
       }
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok((
         native_donation,
@@ -955,9 +937,7 @@ impl pallet_deos_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
         },
       );
     }
-    <super::oracle_config::OraclePublicationBenchmarkHelper as pallet_oracle::PublicationBenchmarkHelper<
-      primitives::OracleFeedId,
-    >>::prepare_changed_hook(feed, pallet_oracle::ChangedHookBenchmarkTopology::Combined)
+    Ok(())
   }
 
   fn create_tmc_curve(

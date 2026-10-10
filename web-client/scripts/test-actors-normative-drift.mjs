@@ -17,10 +17,10 @@ const scriptSource = await readFile(
 
 test('drift gate script exists and parses the canonical spec markers', () => {
   assert.match(scriptSource, /specTypeSurface\('Event'\)/);
-  assert.match(scriptSource, /### 12\.4 Errors and projections/);
+  assert.match(scriptSource, /### 13\.4 Errors and projections/);
   assert.match(
     scriptSource,
-    /## 13\. Storage, upgrades, configuration, and conformance/,
+    /## 14\. Storage, upgrades, configuration, and conformance/,
   );
   assert.match(scriptSource, /'ActorContract'/);
   assert.match(scriptSource, /'Task'/);

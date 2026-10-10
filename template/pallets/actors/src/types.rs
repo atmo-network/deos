@@ -1,15 +1,15 @@
+mod behavior;
 mod contract;
-mod fault;
+mod financial_wait;
 mod lifecycle;
-mod observation;
 mod plan;
 mod resource;
 mod scheduler;
 
+pub use behavior::*;
 pub use contract::*;
-pub use fault::*;
+pub use financial_wait::*;
 pub use lifecycle::*;
-pub use observation::*;
 pub use plan::*;
 pub use resource::*;
 pub use scheduler::*;

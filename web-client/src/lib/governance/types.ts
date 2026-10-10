@@ -141,8 +141,12 @@ export type GovernanceProposalExecutionFailureReason =
   | 'UnsupportedDomain'
   | 'UnsupportedCall'
   | 'MissingWinningPrimaryOption'
+  | 'InsufficientTreasuryCapacity'
   | 'DispatchFailed';
-export type GovernanceProposalParameterChangeSurface = 'RouterFee';
+export type GovernanceProposalParameterChangeSurface =
+  | 'RouterFee'
+  | 'ActorUserCreationEnabled'
+  | 'ActorGlobalCircuitBreaker';
 export type GovernanceProposalTreasurySpendSettlementKind =
   'InvoiceScalarTransfer';
 export type GovernanceProposalTreasurySpendScalar =
@@ -163,12 +167,15 @@ export type GovernanceProposalExecutionSuccessDetail =
     }
   | {
       kind: 'TreasurySpendExecuted';
-      fundingSource: GovernanceAccountId;
+      invoiceCid: string;
+      treasuryAccount: GovernanceAccountId;
       beneficiary: GovernanceAccountId;
       payoutAsset: GovernanceDomainId;
       baseAmount: bigint;
       scalar: GovernanceProposalTreasurySpendScalar;
-      finalAmount: bigint;
+      targetAmount: bigint;
+      actualAmount: bigint;
+      capacityLimited: boolean;
       settlementKind: GovernanceProposalTreasurySpendSettlementKind;
     };
 export type GovernanceProposalExecutionDetail =
@@ -330,6 +337,7 @@ export type GovernanceWriteSurfaceAvailability = Record<
   GovernanceWriteCapability
 >;
 export type GovernanceReadAdapter = {
+  getMaxCidBytes(): Promise<number | null>;
   syncProviderState(): Promise<void>;
   subscribeToUpdates(onUpdate: () => void): () => void;
   getProviderState(): GovernanceProviderState;

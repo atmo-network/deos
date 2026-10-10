@@ -13,7 +13,7 @@ usage() {
     cat <<'EOF'
 Usage: 04-generate-chain-spec.sh [OPTIONS]
 
-Generates template/chain_spec.json directly from a complete runtime-owned genesis preset.
+Generates template/chain_spec.json as raw storage from a complete runtime-owned genesis preset.
 
 Options:
   -h, --help        Show this help message
@@ -137,6 +137,7 @@ generate_chain_spec() {
             -p "$PARA_ID" \
             -r "$RUNTIME_WASM_PATH" \
             --properties tokenSymbol=NTVE,tokenDecimals=12,ss58Format=42,isEthereum=false \
+            --raw-storage \
             --verify \
             named-preset "$PRESET"
     ); then

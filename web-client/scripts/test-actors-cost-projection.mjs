@@ -55,8 +55,7 @@ function activeUserQuote() {
       },
       prospective_pipeline_fee: {
         pipeline_machine_fee: 1_000n,
-        cleanup_fee: 600n,
-        total_fee: 1_600n,
+        total_fee: 1_000n,
         strategy: { type: 'UpfrontBounded', value: undefined },
         admission_identity: hash(2),
         production_weight_identity: hash(3),
@@ -75,10 +74,9 @@ function activeUserQuote() {
           contract_head: 12n,
           contract_body: 0n,
           detector: 13n,
-          funding: 14n,
           run: 0n,
         },
-        total: 50n,
+        total: 36n,
       },
     },
   };
@@ -114,14 +112,13 @@ test('cost projection keeps every economic owner and provenance separate', () =>
   });
   assert.deepEqual(quote.prospectivePipelineFee, {
     machineFee: 1_000n,
-    cleanupFee: 600n,
-    totalFee: 1_600n,
+    totalFee: 1_000n,
     strategy: 'UpfrontBounded',
     admissionIdentity: `0x${'02'.repeat(32)}`,
     productionWeightIdentity: `0x${'03'.repeat(32)}`,
   });
   assert.equal(quote.maximumNextActionFee.maximumEffectFee, 280n);
-  assert.equal(quote.stateHold.total, 50n);
+  assert.equal(quote.stateHold.total, 36n);
   assert.equal('activationTotal' in quote, false);
   assert.equal('remainingMachineBudget' in quote, false);
 });
@@ -142,7 +139,6 @@ test('dormant and System quotes preserve absence and explicit exemption', () => 
   system.value.creation_fee = 0n;
   system.value.prospective_trigger_fee.fee = 0n;
   system.value.prospective_pipeline_fee.pipeline_machine_fee = 0n;
-  system.value.prospective_pipeline_fee.cleanup_fee = 0n;
   system.value.prospective_pipeline_fee.total_fee = 0n;
   system.value.maximum_next_action_fee.maximum_effect_fee = 0n;
   system.value.actor_state_hold.exempt = true;
@@ -176,11 +172,19 @@ test('cost projection rejects unknown variants and inconsistent named totals', (
     () => projectActorCostQuote(unknownStrategy),
     /Unsupported runtime Pipeline strategy RefundAfterRun/,
   );
+  for (const cleanupFee of [0n, 600n]) {
+    const retired = activeUserQuote();
+    retired.value.prospective_pipeline_fee.cleanup_fee = cleanupFee;
+    assert.throws(
+      () => projectActorCostQuote(retired),
+      /Pipeline quote contains a retired cleanup fee/,
+    );
+  }
   const badPipeline = activeUserQuote();
-  badPipeline.value.prospective_pipeline_fee.total_fee = 1_601n;
+  badPipeline.value.prospective_pipeline_fee.total_fee = 1_001n;
   assert.throws(
     () => projectActorCostQuote(badPipeline),
-    /Pipeline total must equal Machine plus cleanup fees/,
+    /Pipeline total must equal the Machine fee/,
   );
   const badHold = activeUserQuote();
   badHold.value.actor_state_hold.total = 51n;
@@ -251,7 +255,7 @@ test('runtime-generated cost vectors bind metadata, Weight, geometry, and Trigge
     createHash('sha256').update(weights).digest('hex'),
   );
   assert.equal(ACTORS_COST_VECTORS.runtimeApiVersion, 1);
-  assert.equal(ACTORS_COST_VECTORS.vectors.length, 12);
+  assert.equal(ACTORS_COST_VECTORS.vectors.length, 10);
 
   const manual = ACTORS_COST_VECTORS.vectors
     .filter(
@@ -289,14 +293,7 @@ test('runtime-generated cost vectors bind metadata, Weight, geometry, and Trigge
   );
   assert.deepEqual(
     families,
-    new Set([
-      'Manual',
-      'AddressEvent',
-      'ObservationChange',
-      'ObservationCrossing',
-      'AtTime',
-      'Cadenced',
-    ]),
+    new Set(['Manual', 'AddressEvent', 'AtTime', 'Cadenced']),
   );
 });
 
@@ -333,6 +330,17 @@ test('generated cost vector parser fails closed on drift and malformed ownership
     () => parseActorCostVectors(malformedTotal),
     /total is inconsistent/,
   );
+
+  for (const cleanupFee of ['0', '600']) {
+    const retired = structuredClone(costVectorArtifact);
+    retired.vectors.find(
+      (vector) => vector.name === 'user-manual-1',
+    ).quote.prospectivePipelineFee.cleanupFee = cleanupFee;
+    assert.throws(
+      () => parseActorCostVectors(retired),
+      /contains a retired cleanup fee/,
+    );
+  }
 
   const missingGeometry = structuredClone(costVectorArtifact);
   missingGeometry.vectors = missingGeometry.vectors.filter(

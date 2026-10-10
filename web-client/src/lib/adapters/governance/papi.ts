@@ -34,8 +34,6 @@ import type {
   GovernanceProposalStatus,
   GovernanceProposalSubmissionAuthority,
   GovernanceProposalTiming,
-  GovernanceProposalTreasurySpendScalar,
-  GovernanceProposalTreasurySpendSettlementKind,
   GovernanceProposalVoteTally,
   GovernanceProviderState,
   GovernanceQuerySurfaceAvailability,
@@ -57,6 +55,7 @@ import {
   injectedSignerAvailability,
 } from '$lib/wallet/signer';
 
+import { mapInvoiceExecutionReceipt } from './invoice-receipt';
 import type { GovernanceBlockchainProvider } from './provider';
 
 import type { DeosChainSnapshot, DeosPapiConnection } from '../blockchain/deos';
@@ -66,6 +65,9 @@ const FIXED_U128_SCALE = 10n ** 18n;
 type GovernanceSnapshot = DeosChainSnapshot;
 
 type GovernanceEnum<T extends Record<string, unknown>> = PapiRuntimeEnum<T>;
+type GovernanceParameterChangeSurface = GovernanceEnum<
+  Record<GovernanceProposalParameterChangeSurface, undefined>
+>;
 
 function unavailableWriteSurface(
   reason: string,
@@ -280,6 +282,7 @@ function mapProposalExecutionFailureReason(
     UnsupportedDomain: undefined;
     UnsupportedCall: undefined;
     MissingWinningPrimaryOption: undefined;
+    InsufficientTreasuryCapacity: undefined;
     DispatchFailed: undefined;
   }>,
 ): GovernanceProposalExecutionFailureReason {
@@ -351,29 +354,9 @@ function mapProposalTiming(
 }
 
 function mapProposalParameterChangeSurface(
-  surface: GovernanceEnum<{
-    RouterFee: undefined;
-  }>,
+  surface: GovernanceParameterChangeSurface,
 ): GovernanceProposalParameterChangeSurface {
   return surface.type;
-}
-
-function mapProposalTreasurySpendSettlementKind(
-  settlementKind: GovernanceEnum<{
-    InvoiceScalarTransfer: undefined;
-  }>,
-): GovernanceProposalTreasurySpendSettlementKind {
-  return settlementKind.type;
-}
-
-function mapProposalTreasurySpendScalar(
-  scalar: GovernanceEnum<{
-    Amplify: undefined;
-    Approve: undefined;
-    Reduce: undefined;
-  }>,
-): GovernanceProposalTreasurySpendScalar {
-  return scalar.type;
 }
 
 function mapProposalExecutionSuccessDetail(
@@ -383,27 +366,11 @@ function mapProposalExecutionSuccessDetail(
       code_hash: string;
     };
     ParameterChangeExecuted: {
-      surface: GovernanceEnum<{
-        RouterFee: undefined;
-      }>;
+      surface: GovernanceParameterChangeSurface;
     };
-    TreasurySpendExecuted: {
-      funding_source: GovernanceAccountId;
-      beneficiary: GovernanceAccountId;
-      payout_asset: GovernanceDomainId;
-      base_amount: bigint;
-      scalar: GovernanceEnum<{
-        Amplify: undefined;
-        Approve: undefined;
-        Reduce: undefined;
-      }>;
-      final_amount: bigint;
-      settlement_kind: GovernanceEnum<{
-        InvoiceScalarTransfer: undefined;
-      }>;
-    };
+    TreasurySpendExecuted: unknown;
   }>,
-): GovernanceProposalExecutionSuccessDetail {
+): GovernanceProposalExecutionSuccessDetail | null {
   switch (detail.type) {
     case 'Generic':
       return { kind: 'Generic' };
@@ -418,18 +385,7 @@ function mapProposalExecutionSuccessDetail(
         surface: mapProposalParameterChangeSurface(detail.value.surface),
       };
     case 'TreasurySpendExecuted':
-      return {
-        kind: 'TreasurySpendExecuted',
-        fundingSource: detail.value.funding_source,
-        beneficiary: detail.value.beneficiary,
-        payoutAsset: detail.value.payout_asset,
-        baseAmount: detail.value.base_amount,
-        scalar: mapProposalTreasurySpendScalar(detail.value.scalar),
-        finalAmount: detail.value.final_amount,
-        settlementKind: mapProposalTreasurySpendSettlementKind(
-          detail.value.settlement_kind,
-        ),
-      };
+      return mapInvoiceExecutionReceipt(detail.value);
   }
 }
 
@@ -440,23 +396,9 @@ function mapProposalExecutionDetail(
           Generic: undefined;
           RuntimeUpgradeAuthorized: { code_hash: string };
           ParameterChangeExecuted: {
-            surface: GovernanceEnum<{ RouterFee: undefined }>;
+            surface: GovernanceParameterChangeSurface;
           };
-          TreasurySpendExecuted: {
-            funding_source: GovernanceAccountId;
-            beneficiary: GovernanceAccountId;
-            payout_asset: GovernanceDomainId;
-            base_amount: bigint;
-            scalar: GovernanceEnum<{
-              Amplify: undefined;
-              Approve: undefined;
-              Reduce: undefined;
-            }>;
-            final_amount: bigint;
-            settlement_kind: GovernanceEnum<{
-              InvoiceScalarTransfer: undefined;
-            }>;
-          };
+          TreasurySpendExecuted: unknown;
         }>;
         Failed: GovernanceEnum<{
           MissingPreimage: undefined;
@@ -464,6 +406,7 @@ function mapProposalExecutionDetail(
           UnsupportedDomain: undefined;
           UnsupportedCall: undefined;
           MissingWinningPrimaryOption: undefined;
+          InsufficientTreasuryCapacity: undefined;
           DispatchFailed: undefined;
         }>;
       }>
@@ -473,11 +416,10 @@ function mapProposalExecutionDetail(
     return null;
   }
   switch (detail.type) {
-    case 'Succeeded':
-      return {
-        kind: 'Succeeded',
-        detail: mapProposalExecutionSuccessDetail(detail.value),
-      };
+    case 'Succeeded': {
+      const success = mapProposalExecutionSuccessDetail(detail.value);
+      return success ? { kind: 'Succeeded', detail: success } : null;
+    }
     case 'Failed':
       return {
         kind: 'Failed',
@@ -1147,6 +1089,27 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
         { at: snapshot.at },
       );
     return mapProposalSubmissionAuthority(policy.authority);
+  }
+
+  async getMaxCidBytes(): Promise<number | null> {
+    try {
+      const snapshot = await this.snapshot();
+      // Optional capability probe: retained descriptors must not fabricate the new schema.
+      const query: unknown = Reflect.get(
+        snapshot.typedApi.constants.Governance,
+        'MaxCidBytes',
+      );
+      if (typeof query !== 'function') return null;
+      const value: unknown = await query();
+      return typeof value === 'number' &&
+        Number.isInteger(value) &&
+        value > 0 &&
+        value <= 0xffff_ffff
+        ? value
+        : null;
+    } catch {
+      return null;
+    }
   }
 
   async getProposalOpeningFee(

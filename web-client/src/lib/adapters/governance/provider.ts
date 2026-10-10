@@ -151,6 +151,10 @@ export class GovernanceUnavailableBlockchainProvider implements GovernanceBlockc
     throw new Error(this.unavailableReason);
   }
 
+  async getMaxCidBytes(): Promise<number | null> {
+    return null;
+  }
+
   async getProposalOpeningFee(
     _domainId: GovernanceDomainId,
     _payloadKind: GovernanceProposalPayloadKind,

@@ -22,8 +22,8 @@ macro_rules! update_actor_contract_partial {
 
 use crate::{Actors, Balances, Runtime, RuntimeOrigin, System, TokenMintingCurve};
 use pallet_deos_actors::{
-  ActorContract, ActorType, AmountResolution, AssetOps, CompletionPolicy, ContractSteps, DexOps,
-  Event, ExecutionContext, FundingSourcePolicy, OutcomeTotals, StepErrorPolicy, Task,
+  ActorContract, ActorType, AmountResolution, AssetOps, ContractSteps, DexOps, Event,
+  ExecutionContext, FundingSourcePolicy, OutcomeTotals, StepErrorPolicy, Task,
 };
 use polkadot_sdk::frame_support::{
   assert_noop, assert_ok,
@@ -37,7 +37,7 @@ use polkadot_sdk::sp_runtime::Perbill;
 use primitives::ecosystem::{actor_ids, protocol_tokens};
 use primitives::{AssetKind, GuaranteeStatus, TmctolConformanceStatus};
 
-use super::actors_integration_tests::has_actor_event;
+use super::actors_integration_tests::{ensure_actor_prepass_context, has_actor_event};
 
 fn all_preconditions(
   predicates: alloc::vec::Vec<
@@ -46,10 +46,6 @@ fn all_preconditions(
 ) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
   let clause = predicates
     .into_iter()
-    .map(|predicate| pallet_deos_actors::TimedPredicate {
-      timing: pallet_deos_actors::ObservationTiming::Current,
-      predicate,
-    })
     .collect::<alloc::vec::Vec<_>>()
     .try_into()
     .expect("runtime predicates fit");
@@ -73,7 +69,9 @@ fn activate_dormant_system(
       cooldown_blocks: primitives::ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
       window: None,
       steps,
-      completion: pallet_deos_actors::CompletionPolicy::Persistent,
+      on_unfunded: pallet_deos_actors::OnUnfunded::Close,
+      close_when: None,
+      parked_balance_activation: None,
       funding: FundingSourcePolicy::RuntimePolicy,
       auto_close_at_cycle_nonce: None,
     },
@@ -177,7 +175,9 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
         cooldown_blocks: 5,
         window: None,
         steps,
-        completion: pallet_deos_actors::CompletionPolicy::Persistent,
+        on_unfunded: pallet_deos_actors::OnUnfunded::Close,
+        close_when: None,
+        parked_balance_activation: None,
         funding: FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: None,
       },
@@ -257,59 +257,23 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
     assert_ok!(super::common::setup_deos_router_infrastructure());
     let foreign = AssetKind::Local(ASSET_A);
     let lp_asset = get_pool_lp_asset(AssetKind::Native, foreign);
-    let malformed_plan: ContractSteps<Runtime> = alloc::vec![
-      pallet_deos_actors::Step {
-        precondition: None,
-        task: Task::AddLiquidity {
-          asset_a: AssetKind::Native,
-          asset_b: foreign,
-          amount_a: AmountResolution::AllAvailable,
-          amount_b: AmountResolution::AllAvailable,
-          min_lp_out: 1,
-        },
-        on_error: StepErrorPolicy::ContinueNextStep,
-      },
-      pallet_deos_actors::Step {
-        precondition: None,
-        task: Task::SwapIn {
-          asset_in: foreign,
-          asset_out: AssetKind::Native,
-          amount_in: AmountResolution::AllAvailable,
-          slippage_tolerance: primitives::ecosystem::params::SYSTEM_ACTORS_MAX_SWAP_SLIPPAGE,
-        },
-        on_error: StepErrorPolicy::ContinueNextStep,
-      },
-      pallet_deos_actors::Step {
-        precondition: None,
-        task: Task::SplitTransfer {
-          asset: lp_asset,
-          amount: AmountResolution::AllAvailable,
-          legs: alloc::vec![
-            pallet_deos_actors::SplitLeg {
-              to: Actors::sovereign_account_id_system(actor_ids::TOL_BUCKET_A_ACTORS_ID),
-              share: Perbill::from_percent(40),
-            },
-            pallet_deos_actors::SplitLeg {
-              to: Actors::sovereign_account_id_system(actor_ids::TOL_BUCKET_B_ACTORS_ID),
-              share: Perbill::from_percent(20),
-            },
-            pallet_deos_actors::SplitLeg {
-              to: Actors::sovereign_account_id_system(actor_ids::TOL_BUCKET_C_ACTORS_ID),
-              share: Perbill::from_percent(20),
-            },
-            pallet_deos_actors::SplitLeg {
-              to: Actors::sovereign_account_id_system(actor_ids::TOL_BUCKET_D_ACTORS_ID),
-              share: Perbill::from_percent(20),
-            },
-          ]
-          .try_into()
-          .expect("split legs fit"),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      },
-    ]
-    .try_into()
-    .expect("malformed zap plan still fits runtime bounds");
+    let mut malformed_plan =
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_contract_steps(
+        foreign, lp_asset, 1,
+      );
+    for (index, share) in [40, 20, 20, 20].into_iter().enumerate() {
+      let Task::Transfer { amount, .. } = &mut malformed_plan[index + 2].task else {
+        panic!("distribution uses Transfer Steps")
+      };
+      *amount = if index == 0 {
+        AmountResolution::CaptureCycleBalance {
+          percent: Perbill::one(),
+          share: Perbill::from_percent(share),
+        }
+      } else {
+        AmountResolution::CycleBalancePercent(Perbill::from_percent(share))
+      };
+    }
     assert_ok!(activate_dormant_system(
       actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
       malformed_plan,
@@ -354,13 +318,58 @@ fn tmctol_guarantee_state_flags_anchor_mutation_as_violation() {
 fn tmctol_guarantee_state_rejects_orphan_unsignaled_anchor_control() {
   new_test_ext().execute_with(|| {
     let anchor_id = actor_ids::TOL_BUCKET_A_ACTORS_ID;
-    let (_, mut orphan) = Actors::actor_control_cell(actor_ids::BURN_ACTOR_ID)
-      .expect("genesis Burn Actor has canonical control");
-    orphan.actor_id = anchor_id;
     assert!(!pallet_deos_actors::ActorControlLocators::<Runtime>::contains_key(anchor_id));
-    // Deliberately corrupt only the directly keyed process owner: a sealed dormant
-    // Anchor must not be reported healthy merely because its locator is absent.
-    pallet_deos_actors::ActorUnsignaledControlCells::<Runtime>::insert(anchor_id, orphan);
+    // Deliberately corrupt only the retained directly keyed legacy owner: a sealed dormant
+    // Anchor must not be reported healthy merely because its locator is absent. Canonical
+    // genesis Actors intentionally provide no legacy control cell to clone.
+    pallet_deos_actors::ActorUnsignaledControlCells::<Runtime>::insert(
+      anchor_id,
+      pallet_deos_actors::ActorControlCell {
+        actor_id: anchor_id,
+        identity: pallet_deos_actors::ActorControlIdentity {
+          owner: ALICE,
+          actor_class: pallet_deos_actors::ActorClass::System {
+            sovereign_id: anchor_id,
+          },
+          mutability: pallet_deos_actors::Mutability::Mutable,
+          cycle_nonce: 0,
+          last_control_mutation_block: 0,
+        },
+        hot: pallet_deos_actors::ActorControlHotState {
+          lifecycle: pallet_deos_actors::ActiveLifecycle::Active,
+          cycle_state: pallet_deos_actors::CycleState::Idle,
+          trigger_runtime_state: pallet_deos_actors::TriggerRuntimeState::Stateless,
+          unsuccessful_attempt_streak: 0,
+          pending_signal: true,
+          wakeup_pointer: None,
+          trigger_wakeup_pointer: None,
+          terminal_at: None,
+          schedule_anchor: 0,
+          last_cycle_block: None,
+        },
+        pipeline_service_identity: [0; 32],
+        cursor: 0,
+        eligible_at: None,
+        admission: pallet_deos_actors::ActorAdmissionCertificate::new(
+          [1; 32],
+          [2; 32],
+          pallet_deos_actors::ActorWakeQualification {
+            family: pallet_deos_actors::TriggerFamily::Manual,
+            selector_commitment: [3; 32],
+            schedule_commitment: [4; 32],
+          },
+          1,
+          [5; 32],
+          1,
+          [6; 32],
+          Weight::from_parts(1, 1),
+        ),
+        resources: pallet_deos_actors::ActorStepResourceEnvelope {
+          control: Weight::from_parts(1, 1),
+          effect: Weight::from_parts(1, 1),
+        },
+      },
+    );
 
     let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
     assert!(state.tol_anchor.active_state_exists);
@@ -537,7 +546,6 @@ fn router_oracle_burn_success_path_commits_once_without_scheduler_or_reward_resi
     let burn_before = Actors::active_actor_state(burn_actor_id).expect("Burn Actor exists");
     let target_cycle_nonce = burn_before.identity.cycle_nonce.saturating_add(1);
     assert!(burn_before.contract.trigger.address_event_source_enabled());
-    assert_eq!(Actors::dirty_observation_feed_count(), 0);
 
     System::set_block_number(31);
     assert_ok!(crate::DeosRouter::swap(
@@ -609,7 +617,6 @@ fn router_oracle_burn_success_path_commits_once_without_scheduler_or_reward_resi
     assert!(hot.queue_ticket.is_none());
     assert!(hot.wakeup_pointer.is_none());
     assert!(Actors::actor_run_state(burn_actor_id).is_none());
-    assert_eq!(Actors::dirty_observation_feed_count(), 0);
     assert_eq!(
       crate::Staking::native_security_reward_liability(),
       reward_liability_before,
@@ -656,7 +663,7 @@ fn burn_actor_swaps_foreign_to_native_then_burns_via_updated_plan() {
         task: Task::SwapIn {
           asset_in: AssetKind::Local(super::common::ASSET_A),
           asset_out: AssetKind::Native,
-          amount_in: AmountResolution::AllAvailable,
+          amount_in: AmountResolution::Percent(Perbill::one()),
           slippage_tolerance: Perbill::from_percent(5),
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -668,7 +675,7 @@ fn burn_actor_swaps_foreign_to_native_then_burns_via_updated_plan() {
         },]),
         task: Task::Burn {
           asset: AssetKind::Native,
-          amount: AmountResolution::AllAvailable,
+          amount: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       },
@@ -678,7 +685,7 @@ fn burn_actor_swaps_foreign_to_native_then_burns_via_updated_plan() {
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       bm_id,
-      (new_steps, CompletionPolicy::Persistent,)
+      (new_steps, None,)
     ));
     let foreign_amount = 2 * primitives::ecosystem::params::PRECISION;
     assert_ok!(<crate::configs::actor_config::TmctolAssetOps as AssetOps<
@@ -886,7 +893,7 @@ fn swap_with_slippage_tolerance_succeeds_under_fair_conditions() {
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
-      (steps, CompletionPolicy::Persistent,)
+      (steps, None,)
     ));
     let balance_before = crate::Assets::balance(super::common::ASSET_A, &bm);
     System::set_block_number(11);
@@ -924,7 +931,7 @@ fn swap_without_pool_fails_contract_steps() {
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       bm_id,
-      (steps, CompletionPolicy::Persistent,)
+      (steps, None,)
     ));
     assert_ok!(<crate::configs::actor_config::TmctolAssetOps as AssetOps<
       crate::AccountId,
@@ -955,7 +962,7 @@ fn swap_without_pool_fails_contract_steps() {
 // --- Liquidity Actor ContractSteps ---
 
 #[test]
-fn zap_contract_steps_builder_produces_valid_3_step_contract_steps() {
+fn zap_contract_steps_builder_produces_two_actions_and_four_distribution_transfers() {
   use primitives::ecosystem::actor_ids;
   seeded_test_ext().execute_with(|| {
     let foreign = AssetKind::Local(ASSET_A);
@@ -964,7 +971,11 @@ fn zap_contract_steps_builder_produces_valid_3_step_contract_steps() {
     let steps = crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_contract_steps(
       foreign, lp_asset, dust,
     );
-    assert_eq!(steps.len(), 3, "Liquidity Actor steps must have 3 steps");
+    assert_eq!(
+      steps.len(),
+      6,
+      "Liquidity Actor has two producing and four distribution Steps"
+    );
     assert!(matches!(steps[0].task, Task::AddLiquidity { .. }));
     assert_eq!(
       steps[0]
@@ -986,33 +997,42 @@ fn zap_contract_steps_builder_produces_valid_3_step_contract_steps() {
     } else {
       panic!("Step 2 must be SwapIn");
     }
-    if let Task::SplitTransfer { asset, legs, .. } = &steps[2].task {
-      assert_eq!(*asset, lp_asset);
-      assert_eq!(legs.len(), 4, "Must split to 4 TOL buckets");
+    let recipients = [
+      (
+        actor_ids::TOL_BUCKET_A_ACTORS_ID,
+        primitives::ecosystem::params::TOL_BUCKET_A_ALLOCATION,
+      ),
+      (
+        actor_ids::TOL_BUCKET_B_ACTORS_ID,
+        primitives::ecosystem::params::TOL_BUCKET_B_ALLOCATION,
+      ),
+      (
+        actor_ids::TOL_BUCKET_C_ACTORS_ID,
+        primitives::ecosystem::params::TOL_BUCKET_C_ALLOCATION,
+      ),
+      (
+        actor_ids::TOL_BUCKET_D_ACTORS_ID,
+        primitives::ecosystem::params::TOL_BUCKET_D_ALLOCATION,
+      ),
+    ];
+    for (index, (id, share)) in recipients.into_iter().enumerate() {
+      let expected = if index == 0 {
+        AmountResolution::CaptureCycleBalance {
+          percent: Perbill::one(),
+          share,
+        }
+      } else {
+        AmountResolution::CycleBalancePercent(share)
+      };
       assert_eq!(
-        legs[0].to,
-        Actors::sovereign_account_id_system(actor_ids::TOL_BUCKET_A_ACTORS_ID)
+        steps[index + 2].task,
+        Task::Transfer {
+          to: Actors::sovereign_account_id_system(id),
+          asset: lp_asset,
+          amount: expected
+        }
       );
-      assert_eq!(
-        legs[1].to,
-        Actors::sovereign_account_id_system(actor_ids::TOL_BUCKET_B_ACTORS_ID)
-      );
-      assert_eq!(
-        legs[2].to,
-        Actors::sovereign_account_id_system(actor_ids::TOL_BUCKET_C_ACTORS_ID)
-      );
-      assert_eq!(
-        legs[3].to,
-        Actors::sovereign_account_id_system(actor_ids::TOL_BUCKET_D_ACTORS_ID)
-      );
-      let share_sum: u32 = legs.iter().map(|l| l.share.deconstruct()).sum();
-      assert_eq!(
-        share_sum,
-        Perbill::one().deconstruct(),
-        "Bucket shares must sum to 100%"
-      );
-    } else {
-      panic!("Step 3 must be SplitTransfer");
+      assert_eq!(steps[index + 2].precondition.is_some(), index == 0);
     }
   });
 }
@@ -1278,7 +1298,7 @@ fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       actor_ids::BURN_ACTOR_ID,
-      (burn_contract_steps, CompletionPolicy::Persistent,)
+      (burn_contract_steps, None,)
     ));
     assert_ok!(activate_dormant_system(
       actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
@@ -1423,7 +1443,10 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
         primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS,
       ));
       Actors::on_initialize(block);
+      ensure_actor_prepass_context();
+      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
       Actors::on_idle(block, budget);
+      Actors::on_finalize(block);
     }
 
     let bucket_lp = <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(lp_id, &bucket);
@@ -1511,10 +1534,70 @@ fn native_tmc_mint_routes_collateral_and_tokens_to_default_liquidity_actor_sink(
       hot.pending_signal,
       "TMC distribution must notify the liquidity actor directly"
     );
-    assert!(
-      hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some(),
-      "direct TMC ingress must retain exact scheduler readiness"
+    assert!(hot.queue_ticket.is_none());
+    assert!(hot.wakeup_pointer.is_none());
+    assert_eq!(
+      Actors::service_nodes(liquidity_actor_id)
+        .expect("direct TMC ingress publishes canonical Service work")
+        .eligible_from,
+      2
     );
+  });
+}
+
+#[test]
+fn frozen_producer_tmc_distribution_preserves_the_whole_mint_and_admits_after_thaw() {
+  seeded_test_ext().execute_with(|| {
+    let foreign_amount = 10 * primitives::ecosystem::params::PRECISION;
+    let liquidity_actor_id = actor_ids::LIQUIDITY_ACTOR_ACTORS_ID;
+    let steps = ContractSteps::<Runtime>::try_from(vec![pallet_deos_actors::StepOf::<Runtime> {
+      precondition: None,
+      task: Task::Transfer {
+        to: ALICE,
+        asset: AssetKind::Native,
+        amount: AmountResolution::Fixed(1),
+      },
+      on_error: StepErrorPolicy::AbortCycle,
+    }])
+    .unwrap();
+    assert_ok!(activate_dormant_system(liquidity_actor_id, steps));
+    assert_ok!(TokenMintingCurve::create_curve(
+      RuntimeOrigin::root(),
+      AssetKind::Native,
+      AssetKind::Local(ASSET_A),
+      primitives::ecosystem::params::PRECISION,
+      0
+    ));
+    assert_ok!(Actors::set_global_circuit_breaker(
+      RuntimeOrigin::root(),
+      true
+    ));
+    let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert_noop!(
+      TokenMintingCurve::mint_with_distribution(
+        &ALICE,
+        &ALICE,
+        AssetKind::Native,
+        AssetKind::Local(ASSET_A),
+        foreign_amount
+      ),
+      pallet_deos_actors::Error::<Runtime>::GlobalCircuitBreakerActive
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root
+    );
+    assert_ok!(Actors::set_global_circuit_breaker(
+      RuntimeOrigin::root(),
+      false
+    ));
+    assert_ok!(TokenMintingCurve::mint_with_distribution(
+      &ALICE,
+      &ALICE,
+      AssetKind::Native,
+      AssetKind::Local(ASSET_A),
+      foreign_amount
+    ));
   });
 }
 
@@ -1761,7 +1844,7 @@ fn bldr_splitter_distributes_to_liquidity_and_treasury() {
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       actor_ids::BLDR_SPLITTER_ACTORS_ID,
-      (steps, CompletionPolicy::Persistent,)
+      (steps, None,)
     ));
     assert_ok!(Actors::notify_address_event(
       actor_ids::BLDR_SPLITTER_ACTORS_ID,
@@ -1839,7 +1922,9 @@ fn bldr_full_e2e_router_tmc_splitter_liquidity_anchor() {
       (
         pallet_deos_actors::Trigger::address_event(
           pallet_deos_actors::SourceFilter::Any,
-          pallet_deos_actors::AssetFilter::Any,
+          pallet_deos_actors::AssetFilter::Whitelist(
+            alloc::vec![bldr_asset].try_into().expect("one asset fits"),
+          ),
         ),
         0,
         None,
@@ -1962,7 +2047,10 @@ fn treasury_b_buyback_burns_bldr() {
         primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS,
       ));
       Actors::on_initialize(block);
-      Actors::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
+      ensure_actor_prepass_context();
+      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+      Actors::on_idle(block, Weight::MAX);
+      Actors::on_finalize(block);
     }
     for block in 101..=108 {
       if Actors::actor_run_state(treasury_b_id).is_none() {
@@ -1973,7 +2061,10 @@ fn treasury_b_buyback_burns_bldr() {
         primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS,
       ));
       Actors::on_initialize(block);
-      Actors::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
+      ensure_actor_prepass_context();
+      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+      Actors::on_idle(block, Weight::MAX);
+      Actors::on_finalize(block);
     }
     // Verify at least one cycle executed
     assert!(
@@ -2263,7 +2354,7 @@ fn tol_bucket_drainage_pressure_respects_anchor_immutability() {
           lp_asset,
           asset_a,
           asset_b,
-          lp_amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(10)),
+          lp_amount: AmountResolution::Percent(Perbill::from_percent(10)),
           min_amount_a: 1,
           min_amount_b: 1,
         },
@@ -2273,11 +2364,7 @@ fn tol_bucket_drainage_pressure_respects_anchor_immutability() {
       .expect("steps must fit");
       if bucket_id == actor_ids::TOL_BUCKET_A_ACTORS_ID {
         assert_noop!(
-          update_actor_contract_partial!(
-            RuntimeOrigin::root(),
-            bucket_id,
-            (steps, CompletionPolicy::Persistent,)
-          ),
+          update_actor_contract_partial!(RuntimeOrigin::root(), bucket_id, (steps, None,)),
           pallet_deos_actors::Error::<Runtime>::ActorNotFound
         );
       } else {

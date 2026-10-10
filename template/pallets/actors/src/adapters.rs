@@ -30,23 +30,10 @@ pub trait SovereignAccountDeriver<AccountId> {
   fn system(pallet_id: PalletId, actor_id: crate::ActorId) -> AccountId;
 }
 
-/// Exact certified transition produced by one committed canonical observation update.
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
-)]
-pub struct ObservationTransition {
-  pub revision: u64,
-  pub previous: Option<u128>,
-  pub current: u128,
-}
-
-/// Certified bounded ingress for one externally owned observation transition.
-pub trait ObservationTransitionIngress<FeedId> {
-  fn note_observation_transition(
-    feed: FeedId,
-    transition: ObservationTransition,
-    cause_provenance: crate::TriggerCauseProvenance,
-  ) -> DispatchResult;
+/// Bounded causal accelerator for a committed total-owned asset mutation. Correctness retains the
+/// mandatory timed review unless the host separately certifies complete mutation coverage.
+pub trait BalanceTransitionIngress<AssetId> {
+  fn note_balance_transition(asset: AssetId) -> DispatchResult;
 }
 
 /// Minimal authoritative actor context for adapter operations whose policy depends on Actors type.
@@ -104,10 +91,10 @@ impl From<DispatchError> for TaskFailure {
   }
 }
 
-/// Typed rejection of one certified AddressEvent ingress movement (spec 6.2).
+/// Typed rejection of one certified AddressEvent ingress movement.
 ///
 /// `retry` carries the same closed classification as `TaskFailure`: recoverable
-/// queue/wakeup capacity or placement unavailability is Temporary, while monotonic
+/// queue/wakeup capacity, placement unavailability and machine freeze are Temporary, while monotonic
 /// ticket/index exhaustion, topology corruption, invalid provenance, and invariant
 /// failure are Permanent. A non-Actors producer maps the same failure to its outer
 /// dispatch error, which rejects and rolls back the certified movement.
@@ -256,9 +243,49 @@ impl<AccountId> FundingAuthority<AccountId> for () {
   }
 }
 
+/// Secures disjoint financial work through host-owned installation/producer fee composition.
+/// This is economic backing, independent of current-block Weight admission or state holds.
+pub trait FinancialWaitBackingProvider<AccountId, Balance> {
+  fn secure_at_time_installation(
+    owner: &AccountId,
+    actor: crate::ActorRef,
+    semantic_contract_id: [u8; 32],
+    minimum_fee: Balance,
+  ) -> DispatchResult;
+
+  /// Secures one future financial Service inspection/repark before a funded ingress return.
+  /// The producer owns payment; no parked-Actor fee, episode renewal or reusable ticket is created.
+  /// Success is scoped to this return and must roll back with the enclosing producer transaction.
+  /// The ingress Weight port must include this hook and funding operation. Due recovery retains
+  /// its independently secured fixed episode allowance; ordinary Step/Close owners remain separate.
+  fn secure_funded_ingress_return(
+    _source: Option<&AccountId>,
+    _provenance: Option<&crate::FundingProvenance>,
+    _receipt: crate::FinancialWaitReceipt,
+    _minimum_fee: Balance,
+  ) -> DispatchResult {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "Financial ingress return backing unavailable",
+    ))
+  }
+}
+
+impl<AccountId, Balance> FinancialWaitBackingProvider<AccountId, Balance> for () {
+  fn secure_at_time_installation(
+    _: &AccountId,
+    _: crate::ActorRef,
+    _: [u8; 32],
+    _: Balance,
+  ) -> DispatchResult {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "AtTime financial-wait backing unavailable",
+    ))
+  }
+}
+
 /// Asset mutations and queries.
 ///
-/// Covers Transfer, SplitTransfer, Burn, Mint, and balance queries. `mint` is privileged — the
+/// Covers Transfer, Burn, Mint, and balance queries. `mint` is privileged — the
 /// pallet rejects Mint tasks for User Actors at creation.
 pub trait AssetOps<AccountId, AssetId, Balance> {
   fn transfer(
@@ -275,13 +302,16 @@ pub trait AssetOps<AccountId, AssetId, Balance> {
   /// Adapter-visible transferable balance before Actors-local fee reservation.
   fn balance(who: &AccountId, asset: AssetId) -> Balance;
 
+  /// Authoritative total ownership used only by parked-balance activation. This must include held,
+  /// frozen, or reserved ownership and remain distinct from task-spendable `balance`.
+  fn total_balance(who: &AccountId, asset: AssetId) -> Balance;
+
   fn minimum_balance(asset: AssetId) -> Balance;
 
   /// Preflights the exact transfer consequence under unchanged ledger state.
   ///
   /// Implementations must account for source withdrawal rules and recipient depositability,
-  /// including provider/reference semantics for native balances. `SplitTransfer` preflights every
-  /// non-zero leg before mutation and retries the whole task on an explicitly temporary result.
+  /// including provider/reference semantics for native balances. Each Transfer is one atomic Task.
   fn preflight_transfer(
     from: &AccountId,
     to: &AccountId,
@@ -291,15 +321,21 @@ pub trait AssetOps<AccountId, AssetId, Balance> {
 }
 
 /// Runtime-owned non-semantic authority committed by an Actor admission certificate.
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
-)]
+#[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct AdmissionCertificateAuthority {
   pub runtime_actor_semantics_version: u32,
   pub production_weight_identity: [u8; 32],
   pub body_geometry_version: u32,
   pub configured_bounds_commitment: [u8; 32],
   pub maximum_lifecycle_weight: Weight,
+}
+
+impl MaxEncodedLen for AdmissionCertificateAuthority {
+  fn max_encoded_len() -> usize {
+    2 * u32::max_encoded_len()
+      + 2 * <[u8; 32]>::max_encoded_len()
+      + crate::types::weight_max_encoded_len()
+  }
 }
 
 impl AdmissionCertificateAuthority {
@@ -319,6 +355,44 @@ impl AdmissionCertificateAuthority {
 /// Fail-closed host boundary for the exact runtime authority used to admit Actor Contracts.
 pub trait AdmissionCertificateAuthorityProvider {
   fn current() -> Option<AdmissionCertificateAuthority>;
+
+  /// Complete additional destruction work for optional policy/monitor state, excluding ordinary
+  /// cleanup. Missing qualification forbids policy-bearing service and destruction.
+  fn behavior_close_additional_weight(_behavior: BehaviorControlWeightContext) -> Option<Weight> {
+    None
+  }
+
+  /// Complete publication work for a prepared financial source. This physical port alone does
+  /// not establish finite economic backing or enable public AwaitFunding admission.
+  fn financial_wait_entry_weight(_maximum_episode_bytes: u32) -> Option<Weight> {
+    None
+  }
+
+  /// Complete additional cleanup for optional financial state, excluding ordinary destruction.
+  fn financial_wait_close_additional_weight(_maximum_episode_bytes: u32) -> Option<Weight> {
+    None
+  }
+
+  /// Complete due inspection, including full source loading, ordinary terminal classification
+  /// and funded return to Service, excluding terminal destruction.
+  /// Missing qualification preserves the source; this port establishes no economic backing.
+  fn financial_wait_due_weight(_maximum_episode_bytes: u32) -> Option<Weight> {
+    None
+  }
+
+  /// Complete additional financial Service inspection, repark and episode-retirement work,
+  /// including current-time temporal rearm. Admission also covers reachable namespace cleanup.
+  /// Ordinary Step control/effects and final destruction retain their separate owners.
+  fn financial_wait_service_weight(_maximum_episode_bytes: u32) -> Option<Weight> {
+    None
+  }
+
+  /// Complete certified-producer preflight/consequence inspection and funded wait return.
+  /// Producers include this owner and reachable lifecycle cleanup in their declared transaction
+  /// or effect maximum; this port alone neither admits producer resources nor pays for work.
+  fn financial_wait_ingress_weight(_maximum_episode_bytes: u32) -> Option<Weight> {
+    None
+  }
 }
 
 impl AdmissionCertificateAuthorityProvider for () {
@@ -331,15 +405,34 @@ impl AdmissionCertificateAuthorityProvider for () {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
 )]
+pub struct BehaviorControlWeightContext {
+  pub policy_bytes: u32,
+  pub monitor_bytes: u32,
+  pub clauses: u32,
+  pub atoms: u32,
+  pub metrics: u32,
+  pub counter_slots: u32,
+  pub requires_clean_cycle: bool,
+}
+
+/// Physical geometry of one current Step without policy storage or monitoring.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
 pub struct StepControlWeightContext {
   pub cursor: u32,
   pub steps_in_fragment: u32,
   pub opening_tail_chunks: u32,
   pub predicate_evaluation_units: u32,
-  pub opening_snapshot_entries: u32,
-  pub opening_predicate_results: u32,
-  /// Configured bound for admission/Opening; retained count for a resumed head.
-  pub funding_snapshot_entries: u32,
+}
+
+/// Configured ceilings usable before optional policy or monitor storage is read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BehaviorServiceInspectionWeightContext {
+  pub maximum_policy_bytes: u32,
+  pub maximum_monitor_bytes: u32,
+  pub maximum_clauses: u32,
+  pub maximum_atoms: u32,
 }
 
 /// Runtime-owned maximum Actor-control Weight used by admission before semantic evaluation.
@@ -384,7 +477,51 @@ pub struct StepControlExecution {
   pub action_fee_collected: bool,
 }
 
+/// Economic-only declaration for one complete User Pipeline, independent of physical Step
+/// maxima and observed actual metering. The pallet owns Actor semantics and collection.
+/// Implementations must be bounded, deterministic and storage-free over the validated Contract
+/// and their code-static catalog; they must not select Actor transitions.
+pub trait PipelineControlWeightProvider<Contract> {
+  /// Bind model/domain, kernel tariff semantics and converter/rounding/denomination dependencies.
+  /// An unavailable catalog still has an identity; identity availability is not price availability.
+  fn production_weight_identity() -> [u8; 32];
+
+  /// Complete ordinary chargeable Control, including common inspection and selected suffix once,
+  /// uniformly over coherent funded/admitted opening states for this Contract and catalog.
+  /// Excludes Trigger work, Task effects, Creation-backed destruction and dedicated financial work.
+  /// None means unavailable qualification, never zero work or permission for a physical-max fallback.
+  fn maximum_pipeline_control_weight(contract: &Contract) -> Option<Weight>;
+}
+
+impl<Contract> PipelineControlWeightProvider<Contract> for () {
+  fn production_weight_identity() -> [u8; 32] {
+    frame::hashing::blake2_256(b"DEOS_ACTOR_PIPELINE_TARIFF_UNAVAILABLE_V1")
+  }
+
+  fn maximum_pipeline_control_weight(_: &Contract) -> Option<Weight> {
+    None
+  }
+}
+
 pub trait StepControlWeightProvider<Step> {
+  /// Additional complete Service inspection at configured bounds, before any policy companion
+  /// read. Separate from inner Step control; charged even when subsequent admission refuses.
+  fn maximum_behavior_service_inspection_weight(
+    _bounds: BehaviorServiceInspectionWeightContext,
+  ) -> Option<Weight> {
+    None
+  }
+
+  /// Complete zero-Step control for every admitted policy/monitor geometry within these
+  /// configured bounds, before either companion is read. This is an admission upper, not a fee
+  /// or a replacement for exact zero-Step control pricing. Missing qualification forbids the
+  /// optional inspection when financial recovery can reach a policy-bearing zero-Step cycle.
+  fn maximum_behavior_zero_step_service_weight(
+    _bounds: BehaviorServiceInspectionWeightContext,
+  ) -> Option<Weight> {
+    None
+  }
+
   fn production_weight_identity() -> Option<[u8; 32]>;
   fn maximum_control_weight(context: StepControlWeightContext, step: &Step) -> Option<Weight>;
   fn actual_control_weight(
@@ -393,6 +530,40 @@ pub trait StepControlWeightProvider<Step> {
     maximum: Weight,
     execution: StepControlExecution,
   ) -> Option<Weight>;
+
+  /// Complete current-Step control, including authenticated policy work, not a surcharge.
+  fn maximum_behavior_control_weight(
+    _context: StepControlWeightContext,
+    _step: &Step,
+    _behavior: BehaviorControlWeightContext,
+  ) -> Option<Weight> {
+    None
+  }
+
+  fn actual_behavior_control_weight(
+    _context: StepControlWeightContext,
+    _step: &Step,
+    _behavior: BehaviorControlWeightContext,
+    _maximum: Weight,
+    _execution: StepControlExecution,
+  ) -> Option<Weight> {
+    None
+  }
+
+  /// Complete zero-Step Opening/completion control; no Task or Action fee exists.
+  fn maximum_behavior_zero_step_control_weight(
+    _behavior: BehaviorControlWeightContext,
+  ) -> Option<Weight> {
+    None
+  }
+
+  fn actual_behavior_zero_step_control_weight(
+    _behavior: BehaviorControlWeightContext,
+    _maximum: Weight,
+    _closed: bool,
+  ) -> Option<Weight> {
+    None
+  }
 }
 
 impl<Step> StepControlWeightProvider<Step> for () {
@@ -539,6 +710,10 @@ impl<AccountId, AssetId, Balance: Default> AssetOps<AccountId, AssetId, Balance>
   }
 
   fn balance(_: &AccountId, _: AssetId) -> Balance {
+    Balance::default()
+  }
+
+  fn total_balance(_: &AccountId, _: AssetId) -> Balance {
     Balance::default()
   }
 

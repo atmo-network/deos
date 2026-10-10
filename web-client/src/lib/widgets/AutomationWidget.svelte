@@ -8,6 +8,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   import { Check, Copy, Plus } from '@lucide/svelte';
   import { onMount } from 'svelte';
 
+  import AutomationOutcomeEditor from '$lib/automation/AutomationOutcomeEditor.svelte';
   import AutomationStepEditor from '$lib/automation/AutomationStepEditor.svelte';
   import AutomationTriggerEditor from '$lib/automation/AutomationTriggerEditor.svelte';
   import {
@@ -22,12 +23,15 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     removeActorStep,
     validateActorAuthoringContract,
   } from '$lib/automation/authoring';
-  import type { ActorContractArtifact } from '$lib/automation/contract-artifact';
-  import type { ActorMaterializationProjection } from '$lib/automation/materialization';
+  import {
+    type ActorContractArtifact,
+    readActorBehaviorContractSchema,
+  } from '$lib/automation/contract-artifact';
   import type {
     ActorResourceProjection,
     ActorResourceWeight,
   } from '$lib/automation/resource';
+  import { automationResidenceLabel } from '$lib/automation/types';
   import type {
     AutomationActorSnapshot,
     AutomationAuthoringContext,
@@ -71,7 +75,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
   const automationProvenance = fromClientBoundedProjection(
     true,
-    'automationWidget <- bounded Actors control locator/cell projection + Actors.ActorContractHead + Actors.ActorRunHead + Actors.ActorFunding + System.Account + ActorEligibilityApi',
+    'automationWidget <- bounded Actors control locator/cell projection + Actors.ActorContractHead + Actors.ActorRunState + System.Account + ActorEligibilityApi',
   ).provenance;
 
   function syncViewport() {
@@ -93,7 +97,22 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
   const compactPane = $derived(viewport.width > 0 && viewport.width < 520);
   const densePane = $derived(viewport.width > 0 && viewport.width < 340);
-  const validation = $derived.by(() => validateActorAuthoringContract(draft));
+  const authoringLimits = $derived.by(() => {
+    let behavior = null;
+    if (artifactContext !== null) {
+      try {
+        behavior = readActorBehaviorContractSchema(
+          artifactContext.metadataBytes,
+        );
+      } catch {
+        /* Metadata mismatch is reported by artifact binding. */
+      }
+    }
+    return { ...DEOS_ACTORS_AUTHORING_LIMITS, behavior };
+  });
+  const validation = $derived.by(() =>
+    validateActorAuthoringContract(draft, authoringLimits),
+  );
   const maxSteps = DEOS_ACTORS_AUTHORING_LIMITS.maxContractSteps;
   const canAddStep = $derived(draft.steps.length < maxSteps);
   const rootIssues = $derived(
@@ -107,10 +126,6 @@ Zone: Presentation widget; composes system projections, automation capabilities,
         return 'Manual';
       case 'AddressEvent':
         return 'Address event';
-      case 'ObservationChange':
-        return 'Observation change';
-      case 'ObservationCrossing':
-        return `Observation crossing · ${trigger.direction}`;
       case 'AtTime':
         return `At time · after ${trigger.afterTicks} ticks`;
       case 'Cadenced':
@@ -119,6 +134,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   }
 
   function eligibilityLabel(actor: AutomationActorSnapshot): string {
+    if (actor.awaitingFunding) return 'AwaitFunding';
     const eligibility = actor.eligibility;
     if (eligibility == null) {
       return 'Unavailable';
@@ -152,32 +168,10 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   }
 
   function activationLabel(actor: AutomationActorSnapshot): string {
-    const eligibility = actor.eligibility;
-    if (eligibility?.type !== 'Active') return 'Unavailable';
-    const trigger = eligibility.trigger;
-    const placement = (() => {
-      switch (eligibility.placement.type) {
-        case 'Unplaced':
-          return eligibility.pendingSignal
-            ? 'pending · placement deferred'
-            : 'idle';
-        case 'Queue':
-          return `FIFO #${eligibility.placement.ticket}`;
-        case 'WakeupBlock':
-          return `wakeup block ${eligibility.placement.block}`;
-        case 'WakeupTick':
-          return `wakeup tick ${eligibility.placement.tick}`;
-      }
-    })();
-    if (trigger.type === 'ObservationCrossing') {
-      const phase = trigger.phase === 'Armed' ? 'armed' : 'waiting for rearm';
-      return `${trigger.direction} · ${phase} · fire ${trigger.threshold} / rearm ${trigger.rearmThreshold} · ${trigger.pendingRevisions} revision${trigger.pendingRevisions === 1 ? '' : 's'} · ${placement}`;
-    }
-    if (trigger.type === 'ObservationChange') {
-      const cost = trigger.subscriberCount >= 1_000 ? 'High fanout' : 'Broad';
-      return `${cost} · ${trigger.subscriberCount} subscriber${trigger.subscriberCount === 1 ? '' : 's'} · ${placement}`;
-    }
-    return placement;
+    if (actor.controlStatus === 'Dormant') return 'Dormant';
+    if (actor.controlStatus === 'NotRegistered') return 'Not registered';
+    const placement = automationResidenceLabel(actor.residence);
+    return actor.awaitingFunding ? `AwaitFunding · ${placement}` : placement;
   }
 
   function issuesForStep(index: number): ActorAuthoringIssue[] {
@@ -191,6 +185,9 @@ Zone: Presentation widget; composes system projections, automation capabilities,
       | 'User'
       | 'System';
     draft.actorType = actorType;
+    // AwaitFunding needs public runtime admission, which this line has not enabled yet, so a
+    // fresh draft always starts on the policy that can actually be submitted.
+    draft.onUnfunded = 'Close';
     draft.fundingPolicy =
       actorType === 'System'
         ? { type: 'RuntimePolicy' }
@@ -227,11 +224,6 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   async function bindArtifact() {
     artifactMessage = null;
     copiedPlanId = false;
-    const currentValidation = validateActorAuthoringContract(draft);
-    if (!currentValidation.valid) {
-      artifactMessage = 'Resolve the visible validation findings first.';
-      return;
-    }
     const loadContext = systemStore.adapter.getAutomationAuthoringContext;
     if (!loadContext) {
       artifactMessage =
@@ -241,10 +233,21 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     artifactBusy = true;
     try {
       const context = await loadContext.call(systemStore.adapter);
+      artifactContext = context;
+      const limits = {
+        ...DEOS_ACTORS_AUTHORING_LIMITS,
+        behavior: readActorBehaviorContractSchema(context.metadataBytes),
+      };
+      const currentValidation = validateActorAuthoringContract(draft, limits);
+      if (!currentValidation.valid) {
+        artifactMessage = 'Resolve the visible validation findings first.';
+        return;
+      }
       const nextArtifact = createActorArtifactFromAuthoring({
         contract: draft,
         metadataBytes: context.metadataBytes,
         runtime: context.runtime,
+        limits,
       });
       boundDraftFingerprint = draftFingerprint();
       artifactContext = context;
@@ -282,19 +285,10 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   async function loadObservationInspection(
     feed: ObservationFeedIdentity,
     maxAgeBlocks: number,
-    actorId?: number,
   ) {
     const load = systemStore.adapter.getObservationInspection;
     if (!load) throw new Error('Canonical observation state unavailable');
-    return await load.call(systemStore.adapter, feed, maxAgeBlocks, actorId);
-  }
-
-  async function loadActorMaterialization(
-    feed: ObservationFeedIdentity,
-  ): Promise<ActorMaterializationProjection> {
-    const load = systemStore.adapter.getActorMaterializationProjection;
-    if (!load) throw new Error('Actor materialization state unavailable');
-    return await load.call(systemStore.adapter, feed);
+    return await load.call(systemStore.adapter, feed, maxAgeBlocks);
   }
 
   $effect(() => {
@@ -475,6 +469,40 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                 ? 'grid gap-1 text-[10px]'
                 : 'grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]'}
             >
+              <div class="col-span-full grid gap-1">
+                <DetailRow
+                  label="User creation admission"
+                  value={resource.machineControl
+                    ? resource.machineControl.userCreationEnabled
+                      ? 'Enabled'
+                      : 'Disabled'
+                    : 'Unavailable'}
+                  valueClass="text-(--mono-text)"
+                />
+                <DetailRow
+                  label="Machine freeze"
+                  value={resource.machineControl
+                    ? resource.machineControl.machineFrozen
+                      ? 'On'
+                      : 'Off'
+                    : 'Unavailable'}
+                  valueClass="text-(--mono-text)"
+                />
+                <DetailRow
+                  label="Current block halt"
+                  value={resource.current
+                    ? resource.current.optionalActorWorkHalted
+                      ? 'On'
+                      : 'Off'
+                    : 'No current record'}
+                  valueClass="text-(--mono-text)"
+                />
+                {#if resource.machineControlUnavailableReason}
+                  <p class="col-span-full text-(--mono-muted)">
+                    {resource.machineControlUnavailableReason}
+                  </p>
+                {/if}
+              </div>
               <DetailRow
                 label="Actor control limit"
                 value={weightLabel(resource.budget.limits.actorControl)}
@@ -509,7 +537,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
               {:else}
                 <DetailRow
                   label="Current block state"
-                  value="Consumed at finalization"
+                  value="No current record"
                   valueClass="text-(--mono-muted)"
                 />
               {/if}
@@ -530,8 +558,8 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                   valueClass="tabnum text-(--mono-text)"
                 />
                 <DetailRow
-                  label="Fixed reserved"
-                  value={weightLabel(resource.finalized.fixedReserved)}
+                  label="Finalized fixed envelope"
+                  value={weightLabel(resource.finalized.budget.fixedEnvelope)}
                   valueClass="tabnum text-(--mono-text)"
                 />
               {/if}
@@ -575,8 +603,14 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                         : 'tmc'
                     : 'info'}
                 >
-                  {#if !actor.exists}
+                  {#if actor.controlStatus === 'Unavailable'}
+                    unavailable
+                  {:else if actor.controlStatus === 'Dormant'}
+                    dormant
+                  {:else if !actor.exists}
                     missing
+                  {:else if actor.awaitingFunding}
+                    awaiting funding
                   {:else if actor.paused}
                     paused
                   {:else if actor.runState === 'suspended'}
@@ -586,7 +620,11 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                   {/if}
                 </Badge>
               </div>
-              {#if compactPane}
+              {#if actor.controlUnavailableReason}
+                <p class="text-[10px] text-(--mono-muted)">
+                  {actor.controlUnavailableReason}
+                </p>
+              {:else if compactPane}
                 <div
                   class="grid gap-1 rounded-xl border bg-(--mono-bg) px-2.5 py-2 text-[10px] text-(--mono-muted)"
                 >
@@ -608,32 +646,15 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                     valueClass="text-(--mono-text)"
                   />
                   <DetailRow
-                    label="Activation"
-                    value={activationLabel(actor)}
-                    valueClass="text-(--mono-text)"
-                  />
-                  <DetailRow
                     label="Balance"
-                    value={`${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE'}`}
+                    value={actor.controlUnavailableReason
+                      ? 'Unavailable'
+                      : `${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE'}`}
                     valueClass="tabnum text-(--mono-text)"
                   />
                   <DetailRow
-                    label="FIFO"
-                    value={actor.queueTicket != null
-                      ? `ticket #${actor.queueTicket}`
-                      : 'not queued'}
-                    valueClass="text-(--mono-text)"
-                  />
-                  <DetailRow
-                    label="Funding"
-                    value={actor.fundingAccumulated.length > 0
-                      ? actor.fundingAccumulated
-                          .map(
-                            ([asset, amount]) =>
-                              `${fmt(toFloat(amount))} ${asset}`,
-                          )
-                          .join(' · ')
-                      : 'none'}
+                    label="Residence"
+                    value={activationLabel(actor)}
                     valueClass="text-(--mono-text)"
                   />
                 </div>
@@ -645,11 +666,59 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                     valueClass="text-(--mono-text)"
                   />
                   <DetailRow
-                    label="Completion"
-                    value={actor.completionPolicy ===
-                    'CloseAfterProductiveCycle'
-                      ? 'Close after committed effect'
-                      : (actor.completionPolicy ?? 'Unavailable')}
+                    label="Outcome condition"
+                    value={actor.hasCloseWhen === null
+                      ? 'Unavailable'
+                      : actor.hasCloseWhen
+                        ? 'Present'
+                        : 'Absent'}
+                    valueClass="text-(--mono-text)"
+                  />
+                  {#if actor.eligibility?.type === 'Active' && actor.eligibility.behaviorEpisode}
+                    {@const episode = actor.eligibility.behaviorEpisode}
+                    <DetailRow
+                      label="Behavior episode"
+                      value={`Generation ${episode.episodeStartedAtGeneration}`}
+                      valueClass="tabnum text-(--mono-text)"
+                    />
+                    <DetailRow
+                      label="Behavior tracking"
+                      value={episode.trackingMode === 'CurrentOutcome'
+                        ? 'Current outcome'
+                        : 'Accumulated · capped'}
+                      valueClass="text-(--mono-text)"
+                    />
+                    {#each episode.requirements as requirement (requirement.metric)}
+                      <DetailRow
+                        label={requirement.metric.replace(
+                          /([a-z])([A-Z])/g,
+                          '$1 $2',
+                        )}
+                        value={episode.trackingMode === 'CurrentOutcome'
+                          ? `Threshold ${requirement.threshold} · current outcome`
+                          : `${episode.monitor?.cappedValues.find((counter) => counter.metric === requirement.metric)?.value ?? 'Unavailable'} / ${requirement.threshold} · capped`}
+                        valueClass="tabnum text-(--mono-text)"
+                      />
+                    {/each}
+                    {#if episode.requirements.some((requirement) => requirement.metric === 'CycleCleanTotal')}
+                      <DetailRow
+                        label="Clean-Cycle flags"
+                        value={episode.monitor?.cleanCycle
+                          ? `Cycle ${episode.monitor.cleanCycle.cycleNonce} · ${episode.monitor.cleanCycle.possible ? 'Still possible' : 'Disqualified'} · ${episode.monitor.cleanCycle.economicSuccess ? 'Economic success seen' : 'No economic success yet'}`
+                          : 'No current flags'}
+                        valueClass="text-(--mono-text)"
+                      />
+                    {/if}
+                  {:else if actor.hasCloseWhen}
+                    <DetailRow
+                      label="Behavior monitor"
+                      value="Unavailable"
+                      valueClass="text-(--mono-muted)"
+                    />
+                  {/if}
+                  <DetailRow
+                    label="Fee shortfall"
+                    value={actor.onUnfunded ?? 'Unavailable'}
                     valueClass="text-(--mono-text)"
                   />
                   <DetailRow
@@ -663,11 +732,6 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                     valueClass="text-(--mono-text)"
                   />
                   <DetailRow
-                    label="Activation"
-                    value={activationLabel(actor)}
-                    valueClass="text-(--mono-text)"
-                  />
-                  <DetailRow
                     label="Continuation"
                     value={actor.continuation
                       ? `Unsuccessful ${actor.continuation.unsuccessfulAttemptsAtCursor} on step ${actor.continuation.cursor + 1} · block ${actor.continuation.lastAttemptBlock}`
@@ -676,26 +740,14 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                   />
                   <DetailRow
                     label="Native balance"
-                    value={`${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE'}`}
+                    value={actor.controlUnavailableReason
+                      ? 'Unavailable'
+                      : `${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE'}`}
                     valueClass="tabnum text-(--mono-text)"
                   />
                   <DetailRow
-                    label="FIFO"
-                    value={actor.queueTicket != null
-                      ? `ticket #${actor.queueTicket}`
-                      : 'not queued'}
-                    valueClass="text-(--mono-text)"
-                  />
-                  <DetailRow
-                    label="Funding"
-                    value={actor.fundingAccumulated.length > 0
-                      ? actor.fundingAccumulated
-                          .map(
-                            ([asset, amount]) =>
-                              `${fmt(toFloat(amount))} ${asset}`,
-                          )
-                          .join(' · ')
-                      : 'none'}
+                    label="Residence"
+                    value={activationLabel(actor)}
                     valueClass="text-(--mono-text)"
                   />
                   <DetailRow
@@ -713,16 +765,11 @@ Zone: Presentation widget; composes system projections, automation capabilities,
       <ObservationInspector
         refreshKey={systemStore.snapshot?.blockNumber ?? 0}
         compact={compactPane}
-        actorOptions={actors.map(({ actorId, label }) => ({ actorId, label }))}
         loadFeeds={systemStore.adapter.getObservationFeeds
           ? loadObservationFeeds
           : null}
         loadInspection={systemStore.adapter.getObservationInspection
           ? loadObservationInspection
-          : null}
-        loadMaterialization={systemStore.adapter
-          .getActorMaterializationProjection
-          ? loadActorMaterialization
           : null}
       />
     {:else}
@@ -734,7 +781,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
         <SectionCard
           title="Plan context"
-          subtitle="Choose the actor class and terminal intent; productive closure requires a committed effectful task."
+          subtitle="Choose the actor class, outcome condition and fee-shortfall policy."
         >
           <div class={compactPane ? 'grid gap-2' : 'grid grid-cols-2 gap-2'}>
             <SelectField
@@ -755,13 +802,13 @@ Zone: Presentation widget; composes system projections, automation capabilities,
               <option value="Immutable">Immutable</option>
             </SelectField>
             <SelectField
-              label="Completion"
-              bind:value={draft.completionPolicy}
+              label="Fee shortfall"
+              bind:value={draft.onUnfunded}
               selectClass="h-9 py-1.5 text-xs"
             >
-              <option value="Persistent">Persistent</option>
-              <option value="CloseAfterProductiveCycle"
-                >Close after productive cycle</option
+              <option value="Close">Close policy</option>
+              <option value="AwaitFunding" disabled
+                >Wait for funding · 28 days (unavailable)</option
               >
             </SelectField>
             <label class="grid gap-1 text-xs text-(--mono-muted)">
@@ -800,10 +847,10 @@ Zone: Presentation widget; composes system projections, automation capabilities,
               valueClass="text-(--mono-text)"
             />
             <DetailRow
-              label="Completion"
-              value={draft.completionPolicy === 'Persistent'
-                ? 'Persistent'
-                : 'Close after committed effect'}
+              label="Outcome condition"
+              value={draft.closeWhen === null
+                ? 'No outcome rule'
+                : `${draft.closeWhen.clauses.length} condition groups`}
               valueClass="text-(--mono-text)"
             />
             <DetailRow
@@ -819,6 +866,23 @@ Zone: Presentation widget; composes system projections, automation capabilities,
               valueClass="text-(--mono-text)"
             />
           </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Outcome lifetime"
+          subtitle="Keep one Contract episode; changing its semantics resets the counts."
+        >
+          <AutomationOutcomeEditor
+            bind:policy={draft.closeWhen}
+            limits={authoringLimits.behavior}
+            compact={compactPane}
+          />
+          <p class="mt-2 text-[11px] text-(--mono-muted)">
+            Funding waits for the original unpaid service. Top-ups do not
+            restart the 28-day grace or request another Cycle. Fee-shortfall
+            disposition depends on the unpaid boundary; System Actors do not use
+            financial waiting.
+          </p>
         </SectionCard>
 
         <AutomationTriggerEditor
@@ -851,7 +915,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
         <div class="grid gap-2">
           {#if draft.steps.length === 0}
             <Notice variant="muted">
-              Opening-only Contract: the Trigger completes a bounded lifecycle
+              Zero-Step Contract: the Trigger completes a bounded lifecycle
               without an Action.
             </Notice>
           {/if}

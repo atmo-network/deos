@@ -108,6 +108,17 @@ impl<T: Config> Pallet<T> {
         current_epoch,
       )?;
     }
+    if ProposalPendingEnactmentAt::<T>::get(domain, item_id).is_none()
+      && matches!(
+        FinalizedProposals::<T>::get(domain, item_id).map(|record| record.outcome),
+        Some(FinalizedProposalOutcome::Approved {
+          enactment: ProposalEnactmentOutcome::NotAttempted,
+          ..
+        })
+      )
+    {
+      Self::admit_pending_enactment(domain, item_id, current_epoch)?;
+    }
     Ok(())
   }
 
@@ -1688,19 +1699,17 @@ impl<T: Config> Pallet<T> {
     }
     let finalization = Self::finalized_proposal(domain, item_id)?;
     if let Some(enactment_epoch) = ProposalPendingEnactmentAt::<T>::get(domain, item_id) {
-      if T::EpochProvider::current_epoch() < enactment_epoch {
-        let FinalizedProposalOutcome::Approved {
-          approval,
-          enactment: ProposalEnactmentOutcome::NotAttempted,
-        } = &finalization.outcome
-        else {
-          return None;
-        };
-        return Some(ProposalStatus::PendingEnactment {
-          approval: approval.clone(),
-          enactment_epoch,
-        });
-      }
+      let FinalizedProposalOutcome::Approved {
+        approval,
+        enactment: ProposalEnactmentOutcome::NotAttempted,
+      } = &finalization.outcome
+      else {
+        return None;
+      };
+      return Some(ProposalStatus::PendingEnactment {
+        approval: approval.clone(),
+        enactment_epoch,
+      });
     }
     Some(ProposalStatus::Finalized(finalization.outcome))
   }

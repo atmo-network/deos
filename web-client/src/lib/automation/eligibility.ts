@@ -5,9 +5,14 @@ Excludes: Chain transport, storage reads, scheduler execution, and plan authorin
 Zone: Automation public contract; adapters and widgets import it, never reimplementing cadence,
 cooldown, window, retry backoff, breaker, or latch arithmetic.
 */
+import {
+  type ActorBehaviorEpisodeView,
+  projectActorBehaviorEpisode,
+} from './behavior-projection.ts';
+
 export const ACTORS_ELIGIBILITY_RUNTIME_API =
   'ActorEligibilityApi_actor_eligibility' as const;
-export const ACTORS_ELIGIBILITY_RUNTIME_API_VERSION = 6 as const;
+export const ACTORS_ELIGIBILITY_RUNTIME_API_VERSION = 8 as const;
 
 export type ActorEligibilityFailure =
   | 'ActorInvariant'
@@ -23,7 +28,8 @@ export const ACTOR_CLOSE_REASONS = [
   'CycleNonceExhausted',
   'AutoCloseNonceReached',
   'RetryAttemptsExhausted',
-  'ProductiveCycleCompleted',
+  'BehaviorPolicySatisfied',
+  'FundingGraceExpired',
   'SchedulerIndexExhausted',
 ] as const;
 
@@ -38,34 +44,44 @@ export type ActorExecutionPhase =
   | { type: 'WaitingBlock'; block: number }
   | { type: 'WaitingCadenceTick'; tick: number };
 
-export type ActorActivationPlacement =
-  | { type: 'Unplaced' }
-  | { type: 'Queue'; ticket: bigint }
-  | { type: 'WakeupBlock'; block: number }
-  | { type: 'WakeupTick'; tick: bigint };
+export type ActorActivationResidence =
+  | { type: 'Service'; kind: 'Live' | 'Pending' }
+  | { type: 'DeadlineBlock'; block: number }
+  | { type: 'DeadlineTick'; tick: bigint }
+  | { type: 'Parked'; reason: ActorParkReason; reviewAt: number | null }
+  | { type: 'Disabled' };
+
+export type ActorParkReason = 'ParkedBalanceBelowThreshold';
 
 export type ActorTriggerActivation =
   | { type: 'Manual' }
   | { type: 'AddressEvent' }
-  | {
-      type: 'ObservationChange';
-      feed: unknown;
-      subscriberCount: number;
-      pendingRevision: bigint | null;
-    }
-  | {
-      type: 'ObservationCrossing';
-      feed: unknown;
-      direction: 'Rising' | 'Falling';
-      threshold: bigint;
-      rearmThreshold: bigint;
-      phase: 'Armed' | 'WaitingForRearm';
-      installedAtRevision: bigint;
-      pendingRevisions: number;
-      processingRevision: bigint | null;
-    }
   | { type: 'AtTime'; afterTicks: bigint; consumed: boolean }
   | { type: 'Cadenced'; everyTicks: bigint };
+
+export type ActorUnpaidService =
+  | { type: 'AtTimeTrigger'; dueTick: bigint }
+  | { type: 'PipelineOpening'; cycleNonce: bigint }
+  | {
+      type: 'RunningAction';
+      cycleNonce: bigint;
+      cursor: number;
+    }
+  | {
+      type: 'SuspendedAction';
+      cycleNonce: bigint;
+      cursor: number;
+      unsuccessfulAttemptsAtCursor: number;
+    };
+
+export type ActorFinancialWaitView = {
+  unpaidService: ActorUnpaidService;
+  unpaidLiability: bigint;
+  currentServiceSpendability: bigint;
+  fundingShortfall: bigint;
+  enteredAtMillis: bigint;
+  expiryTick: bigint;
+};
 
 export type ActorEligibilityView =
   | { type: 'NotRegistered' }
@@ -74,7 +90,9 @@ export type ActorEligibilityView =
       type: 'Active';
       trigger: ActorTriggerActivation;
       pendingSignal: boolean;
-      placement: ActorActivationPlacement;
+      residence: ActorActivationResidence;
+      financialWait: ActorFinancialWaitView | null;
+      behaviorEpisode: ActorBehaviorEpisodeView | null;
       terminalReason: ActorCloseReason | null;
       executionPhase: ActorExecutionPhase;
     };
@@ -127,7 +145,7 @@ function asTick(value: unknown): number {
   return asBlock(value, 'WaitingCadenceTick tick');
 }
 
-function asU64(value: unknown, field: string): bigint {
+function asUnsigned(value: unknown, field: string): bigint {
   if (typeof value === 'bigint' && value >= 0n) return value;
   if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
     return BigInt(value);
@@ -135,40 +153,132 @@ function asU64(value: unknown, field: string): bigint {
   throw new Error(`${field} must be an unsigned runtime integer`);
 }
 
-function asU128(value: unknown, field: string): bigint {
-  const parsed = asU64(value, field);
-  if (parsed >= 1n << 128n) throw new Error(`${field} must fit u128`);
-  return parsed;
-}
-
-function asCount(value: unknown, field: string): number {
-  return asBlock(value, field);
-}
-
-function optionalU64(value: unknown, field: string): bigint | null {
-  return value === undefined ? null : asU64(value, field);
-}
-
-function projectPlacement(value: unknown): ActorActivationPlacement {
-  const placement = asVariant(value, 'ActiveActorActivation.placement');
-  if (placement.type === 'Unplaced') return { type: 'Unplaced' };
-  if (placement.type === 'Queue') {
-    return { type: 'Queue', ticket: asU64(placement.value, 'queue ticket') };
+function projectResidence(value: unknown): ActorActivationResidence {
+  const residence = asVariant(value, 'ActiveActorActivation.residence');
+  if (residence.type === 'Disabled') return { type: 'Disabled' };
+  if (residence.type === 'Service') {
+    const kind = asVariant(residence.value, 'Service residence kind').type;
+    if (kind !== 'Live' && kind !== 'Pending') {
+      throw new Error(`Unsupported runtime Service residence ${kind}`);
+    }
+    return { type: 'Service', kind };
   }
-  if (placement.type === 'Wakeup') {
-    const wakeup = asVariant(placement.value, 'activation wakeup');
-    if (wakeup.type === 'Block') {
+  if (residence.type === 'Deadline') {
+    const key = asVariant(residence.value, 'activation Deadline');
+    if (key.type === 'Block') {
       return {
-        type: 'WakeupBlock',
-        block: asBlock(wakeup.value, 'wakeup block'),
+        type: 'DeadlineBlock',
+        block: asBlock(key.value, 'Deadline block'),
       };
     }
-    if (wakeup.type === 'Tick') {
-      return { type: 'WakeupTick', tick: asU64(wakeup.value, 'wakeup tick') };
+    if (key.type === 'Tick') {
+      return {
+        type: 'DeadlineTick',
+        tick: asUnsigned(key.value, 'Deadline tick'),
+      };
     }
-    throw new Error(`Unsupported runtime wakeup placement ${wakeup.type}`);
+    throw new Error(`Unsupported runtime Deadline key ${key.type}`);
   }
-  throw new Error(`Unsupported runtime activation placement ${placement.type}`);
+  if (residence.type === 'Parked') {
+    const fields = asRecord(residence.value, 'Parked residence');
+    const reason = asVariant(fields.reason, 'Parked reason').type;
+    if (!['ParkedBalanceBelowThreshold'].includes(reason)) {
+      throw new Error(`Unsupported runtime Parked reason ${reason}`);
+    }
+    return {
+      type: 'Parked',
+      reason: reason as ActorParkReason,
+      reviewAt:
+        fields.review_at === undefined
+          ? null
+          : asBlock(fields.review_at, 'Parked review block'),
+    };
+  }
+  throw new Error(`Unsupported runtime activation residence ${residence.type}`);
+}
+
+function projectFinancialWait(value: unknown): ActorFinancialWaitView | null {
+  if (value === undefined) return null;
+  const wait = asRecord(value, 'ActiveActorActivation.financial_wait');
+  const service = asVariant(wait.unpaid_service, 'financial unpaid service');
+  const fields = asRecord(service.value, 'unpaid service fields');
+  let unpaidService: ActorUnpaidService;
+  if (service.type === 'AtTimeTrigger') {
+    unpaidService = {
+      type: service.type,
+      dueTick: asUnsigned(fields.due_tick, 'owed AtTime tick'),
+    };
+  } else if (
+    service.type === 'PipelineOpening' ||
+    service.type === 'RunningAction' ||
+    service.type === 'SuspendedAction'
+  ) {
+    const cycleNonce = asUnsigned(fields.cycle_nonce, 'unpaid Cycle nonce');
+    if (cycleNonce === 0n)
+      throw new Error('Unpaid Cycle nonce must be positive');
+    if (service.type === 'PipelineOpening') {
+      unpaidService = { type: service.type, cycleNonce };
+    } else {
+      const cursor = asBlock(fields.cursor, 'unpaid Action cursor');
+      if (cursor > 0xffff_ffff)
+        throw new Error('Unpaid Action cursor must fit u32');
+      if (service.type === 'SuspendedAction') {
+        const unsuccessfulAttemptsAtCursor = asBlock(
+          fields.unsuccessful_attempts_at_cursor,
+          'unpaid retry attempts',
+        );
+        if (unsuccessfulAttemptsAtCursor > 0xffff_ffff)
+          throw new Error('Unpaid retry attempts must fit u32');
+        unpaidService = {
+          type: service.type,
+          cycleNonce,
+          cursor,
+          unsuccessfulAttemptsAtCursor,
+        };
+      } else {
+        unpaidService = { type: service.type, cycleNonce, cursor };
+      }
+    }
+  } else {
+    throw new Error(`Unsupported runtime unpaid service ${service.type}`);
+  }
+  const unpaidLiability = asUnsigned(
+    wait.unpaid_liability,
+    'unpaid service liability',
+  );
+  const currentServiceSpendability = asUnsigned(
+    wait.current_service_spendability,
+    'current service spendability',
+  );
+  const fundingShortfall = asUnsigned(
+    wait.funding_shortfall,
+    'funding shortfall',
+  );
+  if (
+    unpaidLiability === 0n ||
+    unpaidLiability >= 1n << 128n ||
+    currentServiceSpendability >= 1n << 128n ||
+    fundingShortfall >= 1n << 128n ||
+    fundingShortfall !==
+      (unpaidLiability > currentServiceSpendability
+        ? unpaidLiability - currentServiceSpendability
+        : 0n)
+  ) {
+    throw new Error(
+      'Financial wait amounts must describe a valid u128 debt snapshot',
+    );
+  }
+  return {
+    unpaidService,
+    unpaidLiability,
+    currentServiceSpendability,
+    fundingShortfall,
+    enteredAtMillis: asUnsigned(
+      wait.entered_at_millis,
+      'financial wait entry time',
+    ),
+    expiryTick: asUnsigned(wait.expiry_tick, 'financial wait expiry tick'),
+  };
 }
 
 function projectTriggerActivation(value: unknown): ActorTriggerActivation {
@@ -180,61 +290,20 @@ function projectTriggerActivation(value: unknown): ActorTriggerActivation {
     trigger.value,
     `ActorTriggerActivation.${trigger.type}`,
   );
-  if (trigger.type === 'ObservationChange') {
-    return {
-      type: trigger.type,
-      feed: fields.feed,
-      subscriberCount: asCount(fields.subscriber_count, 'subscriber count'),
-      pendingRevision: optionalU64(fields.pending_revision, 'pending revision'),
-    };
-  }
-  if (trigger.type === 'ObservationCrossing') {
-    const direction = asVariant(fields.direction, 'Crossing direction').type;
-    if (direction !== 'Rising' && direction !== 'Falling') {
-      throw new Error(`Unsupported runtime Crossing direction ${direction}`);
-    }
-    const phase = asVariant(fields.phase, 'Crossing phase').type;
-    if (phase !== 'Armed' && phase !== 'WaitingForRearm') {
-      throw new Error(`Unsupported runtime Crossing phase ${phase}`);
-    }
-    return {
-      type: trigger.type,
-      feed: fields.feed,
-      direction,
-      threshold: asU128(fields.threshold, 'Crossing fire threshold'),
-      rearmThreshold: asU128(
-        fields.rearm_threshold,
-        'Crossing rearm threshold',
-      ),
-      phase,
-      installedAtRevision: asU64(
-        fields.installed_at_revision,
-        'Crossing installation revision',
-      ),
-      pendingRevisions: asCount(
-        fields.pending_revisions,
-        'pending Crossing revisions',
-      ),
-      processingRevision: optionalU64(
-        fields.processing_revision,
-        'processing Crossing revision',
-      ),
-    };
-  }
   if (trigger.type === 'AtTime') {
     if (typeof fields.consumed !== 'boolean') {
       throw new Error('AtTime consumed state must be boolean');
     }
     return {
       type: trigger.type,
-      afterTicks: asU64(fields.after_ticks, 'AtTime delay ticks'),
+      afterTicks: asUnsigned(fields.after_ticks, 'AtTime delay ticks'),
       consumed: fields.consumed,
     };
   }
   if (trigger.type === 'Cadenced') {
     return {
       type: trigger.type,
-      everyTicks: asU64(fields.every_ticks, 'cadence ticks'),
+      everyTicks: asUnsigned(fields.every_ticks, 'cadence ticks'),
     };
   }
   throw new Error(`Unsupported runtime trigger activation ${trigger.type}`);
@@ -304,7 +373,9 @@ export function projectActorEligibility(value: unknown): ActorEligibilityView {
     type: 'Active',
     trigger: projectTriggerActivation(activation.trigger),
     pendingSignal: activation.pending_signal,
-    placement: projectPlacement(activation.placement),
+    residence: projectResidence(activation.residence),
+    financialWait: projectFinancialWait(activation.financial_wait),
+    behaviorEpisode: projectActorBehaviorEpisode(activation.behavior_episode),
     terminalReason:
       classification.terminal_reason === undefined
         ? null

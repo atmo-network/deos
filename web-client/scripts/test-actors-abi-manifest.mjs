@@ -78,7 +78,9 @@ test('ActorContract owns the complete authored shape', () => {
       'window',
       'steps',
       'funding',
-      'completion',
+      'close_when',
+      'on_unfunded',
+      'parked_balance_activation',
       'auto_close_at_cycle_nonce',
     ],
   );

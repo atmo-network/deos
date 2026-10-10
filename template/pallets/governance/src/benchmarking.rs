@@ -220,34 +220,119 @@ where
   ProposalMaturityBuckets::<T>::insert(current_epoch, bucket);
 }
 
-fn seed_finalized_outcomes<T: Config>(domain: T::DomainId, current_epoch: T::Epoch, n: u32)
+fn seed_finalized_outcomes<T: Config>(
+  domain: T::DomainId,
+  current_epoch: T::Epoch,
+  n: u32,
+  maximum: (
+    ProposalMetadata<T::Hash>,
+    ProposalExecutionSuccessDetail<T::AccountId, T::DomainId, T::Hash, CidBytesOf<T>>,
+  ),
+) -> Result<(), BenchmarkError>
 where
   T::Epoch: From<u32>,
   T::WinningVoteItemId: From<u32>,
 {
-  let mut bucket = BoundedVec::default();
-  for index in 0..n {
-    let item_id = benchmark_item_id::<T>(2_000u32.saturating_add(index));
-    let push_result = bucket.try_push(FinalizedProposalTouch { domain, item_id });
-    if push_result.is_err() {
-      panic!("benchmark finalized outcome bucket must fit configured max")
-    }
-    FinalizedProposals::<T>::insert(
+  let per_epoch = T::MaxFinalizedProposalOutcomesPerEpoch::get();
+  let discovery_capacity = T::MaxRecentFinalizedProposalsPerDomain::get();
+  let retention = T::FinalizedProposalOutcomeRetentionEpochs::get();
+  if per_epoch == 0
+    || n == 0
+    || n > per_epoch
+    || n > T::MaxFinalizedProposalOutcomesPerBlock::get()
+    || n > discovery_capacity
+    || current_epoch
+      != Pallet::<T>::add_epochs(
+        Pallet::<T>::add_epochs(1u32.into(), T::ProposalEnactmentDelay::get())?,
+        retention.into(),
+      )?
+    || (discovery_capacity - n).div_ceil(per_epoch) > retention
+  {
+    return Err(BenchmarkError::Skip);
+  }
+  for index in 0..discovery_capacity {
+    let item_id = benchmark_item_id::<T>(
+      2_000u32
+        .checked_add(index)
+        .expect("benchmark finalized identities must fit u32"),
+    );
+    ProposalMetadataByItem::<T>::insert(domain, item_id, maximum.0.clone());
+    let approved_epoch: T::Epoch = if index < n {
+      1u32.into()
+    } else {
+      2u32
+        .checked_add((index - n) / per_epoch)
+        .expect("benchmark retained epochs must fit u32")
+        .into()
+    };
+    let finalized_epoch =
+      Pallet::<T>::add_epochs(approved_epoch, T::ProposalEnactmentDelay::get())?;
+    // Retained winning-option state is historical data, never pending execution authority.
+    let winning_option = match &maximum.1 {
+      ProposalExecutionSuccessDetail::TreasurySpendExecuted { scalar, .. } => match scalar {
+        ProposalTreasurySpendScalar::Amplify => ProposalPrimaryTrackOption::Amplify,
+        ProposalTreasurySpendScalar::Approve => ProposalPrimaryTrackOption::Approve,
+        ProposalTreasurySpendScalar::Reduce => ProposalPrimaryTrackOption::Reduce,
+      },
+      _ => ProposalPrimaryTrackOption::Aye,
+    };
+    ProposalWinningPrimaryOptionByItem::<T>::insert(domain, item_id, winning_option);
+    let outcome = FinalizedProposalOutcome::Approved {
+      approval: ProposalApproval {
+        approved_epoch,
+        winner_count: 1,
+      },
+      enactment: ProposalEnactmentOutcome::Enacted {
+        epoch: finalized_epoch,
+      },
+    };
+    Pallet::<T>::record_finalized_proposal_outcome(
       domain,
       item_id,
-      FinalizedProposalRecord {
-        outcome: FinalizedProposalOutcome::Approved {
-          approval: ProposalApproval {
-            approved_epoch: current_epoch,
-            winner_count: 1,
-          },
-          enactment: ProposalEnactmentOutcome::NotAttempted,
-        },
-        execution_detail: None,
-      },
-    );
+      outcome.clone(),
+      finalized_epoch,
+    )?;
+    Pallet::<T>::update_finalized_proposal(
+      domain,
+      item_id,
+      outcome,
+      Some(ProposalExecutionDetail::Succeeded(maximum.1.clone())),
+    )?;
   }
-  FinalizedProposalOutcomeExpiryBuckets::<T>::insert(current_epoch, bucket);
+  Ok(())
+}
+
+fn seed_maximum_finalized_outcomes<T: Config>(
+  n: u32,
+) -> Result<(T::DomainId, T::Epoch), BenchmarkError>
+where
+  T::Epoch: From<u32>,
+  T::WinningVoteItemId: From<u32>,
+{
+  let first_finalized_epoch =
+    Pallet::<T>::add_epochs(1u32.into(), T::ProposalEnactmentDelay::get())?;
+  let current_epoch = Pallet::<T>::add_epochs(
+    first_finalized_epoch,
+    T::FinalizedProposalOutcomeRetentionEpochs::get().into(),
+  )?;
+  let beneficiary = account::<T::AccountId>("finalized-beneficiary", 0, 0);
+  let (domain, payload_kind, payload_hash, detail) =
+    T::BenchmarkHelper::prepare_maximum_finalized_execution(&beneficiary)?;
+  if detail.encoded_size() != ProposalExecutionSuccessDetail::<T::AccountId, T::DomainId, T::Hash, CidBytesOf<T>>::max_encoded_len() {
+    return Err(BenchmarkError::Stop("finalized execution fixture must reach its declared encoded maximum"));
+  }
+  let metadata = ProposalMetadata {
+    cadence_mode: ProposalCadenceMode::Ordinary,
+    payload_kind,
+    payload_hash,
+  };
+  seed_finalized_outcomes::<T>(domain, current_epoch, n, (metadata, detail))?;
+  let record = FinalizedProposals::<T>::get(domain, benchmark_item_id::<T>(2_000))
+    .ok_or(BenchmarkError::Stop("finalized fixture record missing"))?;
+  if record.encoded_size() != FinalizedProposalRecord::<T::AccountId, T::DomainId, T::Hash, T::Epoch, CidBytesOf<T>>::max_encoded_len() {
+    return Err(BenchmarkError::Stop("finalized fixture must reach its declared record maximum"));
+  }
+  Ok((domain, current_epoch))
 }
 
 fn current_epoch_u32<T: Config>(epoch: T::Epoch) -> u32 {
@@ -705,47 +790,384 @@ mod benches {
     }
   }
   #[benchmark]
-  fn service_pending_enactments(n: Linear<1, 4>) {
-    let domain = benchmark_domain_id::<T>();
-    let current_epoch_u32 = 2u32;
-    let current_epoch: T::Epoch = current_epoch_u32.into();
-    let mut bucket = BoundedVec::default();
+  fn service_pending_enactments(n: Linear<1, 4>) -> Result<(), BenchmarkError> {
+    let current_epoch = Pallet::<T>::add_epochs(1u32.into(), T::ProposalEnactmentDelay::get())?;
+    let current_block = current_epoch_u32::<T>(current_epoch);
+    if T::Epoch::from(current_block) != current_epoch {
+      return Err(BenchmarkError::Skip);
+    }
+    let mut identities = Vec::new();
     for index in 0..n {
-      let item_id = benchmark_item_id::<T>(3_000u32.saturating_add(index));
-      bucket
-        .try_push(FinalizedProposalTouch { domain, item_id })
-        .expect("benchmark pending enactment bucket must fit");
-      ProposalPendingEnactmentAt::<T>::insert(domain, item_id, current_epoch);
-      FinalizedProposals::<T>::insert(
+      let proposer = account("pending", index, 0);
+      let (domain, payload_kind, payload_hash) =
+        T::BenchmarkHelper::prepare_pending_enactment(&proposer)
+          .expect("benchmark pending payload must be prepared by the host");
+      assert!(!matches!(
+        payload_kind,
+        ProposalPayloadKind::Intent | ProposalPayloadKind::L2SignalToL1
+      ));
+      assert!(T::ProposalPayloadExecutor::can_execute(payload_kind));
+      assert!(T::ProposalPayloadPreimageProvider::have_preimage(
+        &payload_hash
+      ));
+      let item_id = benchmark_item_id::<T>(index);
+      identities.push((domain, item_id));
+      ProposalMetadataByItem::<T>::insert(
         domain,
         item_id,
-        FinalizedProposalRecord {
-          outcome: FinalizedProposalOutcome::Approved {
-            approval: ProposalApproval {
-              approved_epoch: 1u32.into(),
-              winner_count: 1,
-            },
-            enactment: ProposalEnactmentOutcome::NotAttempted,
-          },
-          execution_detail: None,
+        ProposalMetadata {
+          cadence_mode: ProposalCadenceMode::Ordinary,
+          payload_kind,
+          payload_hash,
         },
       );
+      Pallet::<T>::record_finalized_proposal_outcome(
+        domain,
+        item_id,
+        FinalizedProposalOutcome::Approved {
+          approval: ProposalApproval {
+            approved_epoch: 1u32.into(),
+            winner_count: 1,
+          },
+          enactment: ProposalEnactmentOutcome::NotAttempted,
+        },
+        1u32.into(),
+      )
+      .expect("benchmark discovery capacity is available");
+      Pallet::<T>::admit_pending_enactment(domain, item_id, current_epoch)
+        .expect("benchmark global pending capacity is available");
     }
-    PendingEnactmentBuckets::<T>::insert(current_epoch, bucket);
+    frame_system::Pallet::<T>::set_block_number(current_block.into());
     #[block]
     {
-      let _ =
-        Pallet::<T>::service_pending_enactments(current_epoch_u32.saturating_sub(1), current_epoch);
+      let _ = Pallet::<T>::service_pending_enactments(current_epoch);
     }
-    assert!(PendingEnactmentBuckets::<T>::get(current_epoch).is_empty());
+    assert!(PendingEnactments::<T>::get().is_empty());
+    for (domain, item_id) in identities {
+      let finalized = FinalizedProposals::<T>::get(domain, item_id)
+        .expect("benchmark execution retains the finalized proposal");
+      assert_eq!(
+        finalized.outcome,
+        FinalizedProposalOutcome::Approved {
+          approval: ProposalApproval {
+            approved_epoch: 1u32.into(),
+            winner_count: 1
+          },
+          enactment: ProposalEnactmentOutcome::Enacted {
+            epoch: current_epoch
+          },
+        },
+      );
+      assert!(matches!(
+        finalized.execution_detail,
+        Some(ProposalExecutionDetail::Succeeded(_))
+      ));
+      assert!(!ProposalPendingEnactmentAt::<T>::contains_key(
+        domain, item_id
+      ));
+    }
+    Ok(())
+  }
+
+  #[benchmark(extra)]
+  fn service_pending_enactments_full_topology(f: Linear<0, 1>) -> Result<(), BenchmarkError> {
+    let current_epoch = Pallet::<T>::add_epochs(1u32.into(), T::ProposalEnactmentDelay::get())?;
+    let current_block = current_epoch_u32::<T>(current_epoch);
+    if T::Epoch::from(current_block) != current_epoch {
+      return Err(BenchmarkError::Skip);
+    }
+    let visits = T::MaxPendingEnactmentsPerBlock::get();
+    let pending_capacity = T::MaxPendingEnactments::get();
+    let cleanup_capacity = T::MaxFinalizedProposalOutcomesPerEpoch::get();
+    if visits == 0 || visits > pending_capacity || visits > cleanup_capacity {
+      return Err(BenchmarkError::Skip);
+    }
+    let first_due = pending_capacity - visits;
+    // Future ordinary obligations require an already-approved source at this service epoch.
+    if first_due > 0 && current_epoch < T::Epoch::from(2u32) {
+      return Err(BenchmarkError::Skip);
+    }
+    let future_due = Pallet::<T>::add_epochs(current_epoch, 1u32.into())?;
+    let proposer = account("pending-full", 0, 0);
+    let (domain, payload_kind, payload_hash) =
+      T::BenchmarkHelper::prepare_pending_enactment(&proposer)?;
+    assert!(!matches!(
+      payload_kind,
+      ProposalPayloadKind::Intent | ProposalPayloadKind::L2SignalToL1
+    ));
+    assert!(T::ProposalPayloadExecutor::can_execute(payload_kind));
+    assert!(T::ProposalPayloadPreimageProvider::have_preimage(
+      &payload_hash
+    ));
+    let peer_domain = benchmark_domain_id::<T>();
+    let cleanup_peers = cleanup_capacity - if f == 0 { visits } else { 0 };
+    let discovery_required = if peer_domain == domain {
+      pending_capacity.checked_add(cleanup_peers)
+    } else {
+      Some(pending_capacity.max(cleanup_peers))
+    };
+    if discovery_required.is_none_or(|count| count > T::MaxRecentFinalizedProposalsPerDomain::get())
+    {
+      return Err(BenchmarkError::Skip);
+    }
+    let cleanup_epoch = Pallet::<T>::add_epochs(
+      current_epoch,
+      T::FinalizedProposalOutcomeRetentionEpochs::get().into(),
+    )?;
+    for index in 0..cleanup_peers {
+      let item_id = benchmark_item_id::<T>(index);
+      ProposalMetadataByItem::<T>::insert(
+        peer_domain,
+        item_id,
+        benchmark_proposal_metadata::<T>(ProposalPayloadKind::Intent),
+      );
+      Pallet::<T>::record_finalized_proposal_outcome(
+        peer_domain,
+        item_id,
+        FinalizedProposalOutcome::Rejected {
+          finalized_epoch: current_epoch,
+          reason: ProposalRejectionReason::AdminRejected,
+        },
+        current_epoch,
+      )?;
+    }
+    let mut due_ids = Vec::new();
+    for index in 0..pending_capacity {
+      let item_id = benchmark_item_id::<T>(
+        cleanup_capacity
+          .checked_add(index)
+          .expect("benchmark pending identities must fit u32"),
+      );
+      ProposalMetadataByItem::<T>::insert(
+        domain,
+        item_id,
+        ProposalMetadata {
+          cadence_mode: ProposalCadenceMode::Ordinary,
+          payload_kind,
+          payload_hash,
+        },
+      );
+      let approved_epoch: T::Epoch = if index >= first_due { 1u32 } else { 2u32 }.into();
+      Pallet::<T>::record_finalized_proposal_outcome(
+        domain,
+        item_id,
+        FinalizedProposalOutcome::Approved {
+          approval: ProposalApproval {
+            approved_epoch,
+            winner_count: 1,
+          },
+          enactment: ProposalEnactmentOutcome::NotAttempted,
+        },
+        approved_epoch,
+      )?;
+      let due = if index >= first_due {
+        due_ids.push(item_id);
+        current_epoch
+      } else {
+        future_due
+      };
+      assert_eq!(
+        due,
+        Pallet::<T>::add_epochs(approved_epoch, T::ProposalEnactmentDelay::get())?
+      );
+      Pallet::<T>::admit_pending_enactment(domain, item_id, due)?;
+    }
+    PendingEnactmentCursor::<T>::put(first_due);
+    frame_system::Pallet::<T>::set_block_number(current_block.into());
+    let pending_before = PendingEnactments::<T>::get();
+    let peers_before = pending_before[..first_due as usize]
+      .iter()
+      .map(|touch| {
+        (
+          touch.clone(),
+          FinalizedProposals::<T>::get(touch.domain, touch.item_id),
+          ProposalMetadataByItem::<T>::get(touch.domain, touch.item_id),
+          ProposalPendingEnactmentAt::<T>::get(touch.domain, touch.item_id),
+        )
+      })
+      .collect::<Vec<_>>();
+    let cleanup_before = FinalizedProposalOutcomeExpiryBuckets::<T>::get(cleanup_epoch);
+    assert_eq!(pending_before.len(), pending_capacity as usize);
+    assert_eq!(cleanup_before.len(), cleanup_peers as usize);
+    // Normalize FRAME's level metadata as a prior public transaction would.
+    let initialized_transaction: Result<(), DispatchError> =
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+      });
+    initialized_transaction?;
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    #[block]
+    {
+      let _ = Pallet::<T>::service_pending_enactments(current_epoch);
+    }
+    assert_eq!(PendingEnactmentCursor::<T>::get(), 0);
+    let pending_after = PendingEnactments::<T>::get();
+    let cleanup_after = FinalizedProposalOutcomeExpiryBuckets::<T>::get(cleanup_epoch);
+    if f == 1 {
+      assert_eq!(pending_after, pending_before);
+      assert_eq!(cleanup_after, cleanup_before);
+      // The verification overlay must not change FRAME's level metadata.
+      polkadot_sdk::sp_io::storage::start_transaction();
+      PendingEnactmentCursor::<T>::put(first_due);
+      let restored_root =
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      polkadot_sdk::sp_io::storage::rollback_transaction();
+      assert_eq!(restored_root, root_before);
+    } else {
+      assert_eq!(
+        pending_after.as_slice(),
+        &pending_before[..first_due as usize]
+      );
+      assert_eq!(
+        &cleanup_after[..cleanup_peers as usize],
+        cleanup_before.as_slice()
+      );
+      assert_eq!(cleanup_after.len(), cleanup_capacity as usize);
+    }
+    for (touch, record, metadata, due) in peers_before {
+      assert_eq!(
+        FinalizedProposals::<T>::get(touch.domain, touch.item_id),
+        record
+      );
+      assert_eq!(
+        ProposalMetadataByItem::<T>::get(touch.domain, touch.item_id),
+        metadata
+      );
+      assert_eq!(
+        ProposalPendingEnactmentAt::<T>::get(touch.domain, touch.item_id),
+        due
+      );
+    }
+    for item_id in due_ids {
+      let finalized = FinalizedProposals::<T>::get(domain, item_id)
+        .expect("benchmark service retains the approval record");
+      assert_eq!(
+        finalized.outcome,
+        FinalizedProposalOutcome::Approved {
+          approval: ProposalApproval {
+            approved_epoch: 1u32.into(),
+            winner_count: 1
+          },
+          enactment: if f == 0 {
+            ProposalEnactmentOutcome::Enacted {
+              epoch: current_epoch,
+            }
+          } else {
+            ProposalEnactmentOutcome::NotAttempted
+          },
+        }
+      );
+      assert_eq!(
+        ProposalPendingEnactmentAt::<T>::get(domain, item_id),
+        if f == 0 { None } else { Some(current_epoch) }
+      );
+      if f == 0 {
+        assert!(matches!(
+          finalized.execution_detail,
+          Some(ProposalExecutionDetail::Succeeded(_))
+        ));
+      } else {
+        assert!(finalized.execution_detail.is_none());
+      }
+    }
+    Ok(())
+  }
+
+  #[cfg(feature = "std")]
+  impl<T: Config> Pallet<T>
+  where
+    T::DomainId: From<u32>,
+    T::WinningVoteItemId: From<u32>,
+    T::Epoch: From<u32>,
+    BlockNumberFor<T>: From<u32>,
+  {
+    /// Verify pending setup and execution without timing or ProofSize recording.
+    /// None selects the simple profile; Some selects full topology with cleanup refusal.
+    pub fn verify_pending_enactment_benchmark(
+      cleanup_refusal: Option<bool>,
+      before_service: &dyn Fn(),
+    ) -> Result<(), BenchmarkError> {
+      use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, BenchmarkingSetup};
+      if let Some(refused) = cleanup_refusal {
+        return <service_pending_enactments_full_topology as BenchmarkingSetup<T>>::test_instance(
+          &service_pending_enactments_full_topology,
+          &[(BenchmarkParameter::f, u32::from(refused))],
+          before_service,
+        );
+      }
+      let n = T::MaxPendingEnactmentsPerBlock::get();
+      let components = <service_pending_enactments as BenchmarkingSetup<T>>::components(
+        &service_pending_enactments,
+      );
+      if !components.iter().any(|(parameter, low, high)| {
+        *parameter == BenchmarkParameter::n && n >= *low && n <= *high
+      }) {
+        return Err(BenchmarkError::Stop(
+          "host pending maximum is outside benchmark component bounds",
+        ));
+      }
+      <service_pending_enactments as BenchmarkingSetup<T>>::test_instance(
+        &service_pending_enactments,
+        &[(BenchmarkParameter::n, n)],
+        before_service,
+      )
+    }
+
+    /// Verify this host's configured maximum without recording benchmark measurements.
+    pub fn verify_maximum_finalized_cleanup_benchmark() -> Result<(), BenchmarkError> {
+      use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, BenchmarkingSetup};
+      let n = T::MaxFinalizedProposalOutcomesPerBlock::get();
+      let components = <service_finalized_proposal_outcomes as BenchmarkingSetup<T>>::components(
+        &service_finalized_proposal_outcomes,
+      );
+      if !components.iter().any(|(parameter, low, high)| {
+        *parameter == BenchmarkParameter::n && n >= *low && n <= *high
+      }) {
+        return Err(BenchmarkError::Stop(
+          "host cleanup maximum is outside benchmark component bounds",
+        ));
+      }
+      <service_finalized_proposal_outcomes as BenchmarkingSetup<T>>::unit_test_instance(
+        &service_finalized_proposal_outcomes,
+        &[(BenchmarkParameter::n, n)],
+      )
+    }
   }
 
   #[benchmark]
-  fn service_finalized_proposal_outcomes(n: Linear<1, 1024>) {
-    let domain = benchmark_domain_id::<T>();
-    let current_epoch_u32 = T::FinalizedProposalOutcomeRetentionEpochs::get().saturating_add(1);
-    let current_epoch: T::Epoch = current_epoch_u32.into();
-    seed_finalized_outcomes::<T>(domain, current_epoch, n);
+  fn service_finalized_proposal_outcomes(n: Linear<1, 1024>) -> Result<(), BenchmarkError> {
+    let (domain, current_epoch) = seed_maximum_finalized_outcomes::<T>(n)?;
+    let current_epoch_u32 = current_epoch_u32::<T>(current_epoch);
+    let ids_before = FinalizedProposalIdsByDomain::<T>::get(domain);
+    let expiry_before = FinalizedProposalOutcomeExpiryBuckets::<T>::get(current_epoch);
+    assert_eq!(
+      ids_before.len(),
+      T::MaxRecentFinalizedProposalsPerDomain::get() as usize
+    );
+    assert_eq!(expiry_before.len(), n as usize);
+    let peers_before = ids_before[n as usize..]
+      .iter()
+      .map(|item_id| {
+        (
+          *item_id,
+          FinalizedProposals::<T>::get(domain, item_id),
+          ProposalMetadataByItem::<T>::get(domain, item_id),
+          ProposalWinningPrimaryOptionByItem::<T>::get(domain, item_id),
+        )
+      })
+      .collect::<Vec<_>>();
+    let future_expiry_before = (1..=T::FinalizedProposalOutcomeRetentionEpochs::get())
+      .map(|offset| {
+        let epoch = Pallet::<T>::add_epochs(current_epoch, offset.into())?;
+        Ok((
+          epoch,
+          FinalizedProposalOutcomeExpiryBuckets::<T>::get(epoch),
+        ))
+      })
+      .collect::<Result<Vec<_>, DispatchError>>()?;
+    let pending_before = PendingEnactments::<T>::get();
+    let pending_cursor_before = PendingEnactmentCursor::<T>::get();
     let previous_epoch: T::Epoch = current_epoch_u32.saturating_sub(1).into();
     LastProcessedEpoch::<T>::put(previous_epoch);
     frame_system::Pallet::<T>::set_block_number(current_epoch_u32.into());
@@ -761,7 +1183,41 @@ mod benches {
         domain,
         benchmark_item_id::<T>(2_000u32.saturating_add(index))
       ));
+      assert!(!ProposalMetadataByItem::<T>::contains_key(
+        domain,
+        benchmark_item_id::<T>(2_000u32.saturating_add(index))
+      ));
     }
+    for index in 0..n {
+      assert!(!ProposalWinningPrimaryOptionByItem::<T>::contains_key(
+        domain,
+        benchmark_item_id::<T>(2_000u32.saturating_add(index))
+      ));
+    }
+    assert_eq!(
+      FinalizedProposalIdsByDomain::<T>::get(domain).as_slice(),
+      &ids_before[n as usize..],
+    );
+    assert!(!FinalizedProposalOutcomeExpiryBuckets::<T>::contains_key(
+      current_epoch
+    ));
+    for (item_id, record, metadata, winning_option) in peers_before {
+      assert_eq!(FinalizedProposals::<T>::get(domain, item_id), record);
+      assert_eq!(ProposalMetadataByItem::<T>::get(domain, item_id), metadata);
+      assert_eq!(
+        ProposalWinningPrimaryOptionByItem::<T>::get(domain, item_id),
+        winning_option
+      );
+    }
+    for (epoch, bucket) in future_expiry_before {
+      assert_eq!(
+        FinalizedProposalOutcomeExpiryBuckets::<T>::get(epoch),
+        bucket
+      );
+    }
+    assert_eq!(PendingEnactments::<T>::get(), pending_before);
+    assert_eq!(PendingEnactmentCursor::<T>::get(), pending_cursor_before);
+    Ok(())
   }
 
   #[benchmark]
@@ -803,4 +1259,84 @@ mod benches {
   use crate::mock::{Test, new_test_ext};
   #[cfg(test)]
   impl_benchmark_test_suite!(Pallet, new_test_ext(), Test);
+}
+
+#[cfg(test)]
+mod fixture_tests {
+  use super::*;
+  use crate::mock::{Test, new_test_ext};
+
+  #[test]
+  fn pending_full_topology_requires_reachable_future_approval() {
+    for delay in [0u64, 1] {
+      for refused in [false, true] {
+        new_test_ext().execute_with(|| {
+          crate::mock::ProposalEnactmentDelay::set(delay);
+          let root =
+            || polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+          let before = root();
+          let observer = || {
+            let now = frame_system::Pallet::<Test>::block_number();
+            assert_eq!(now, 1 + delay);
+            for member in PendingEnactments::<Test>::get() {
+              let record = FinalizedProposals::<Test>::get(member.domain, member.item_id).unwrap();
+              let FinalizedProposalOutcome::Approved { approval, .. } = record.outcome else {
+                panic!("fixture requires approval")
+              };
+              assert!(approval.approved_epoch <= now);
+              assert_eq!(
+                ProposalPendingEnactmentAt::<Test>::get(member.domain, member.item_id),
+                Some(approval.approved_epoch + delay)
+              );
+            }
+          };
+          let result = Pallet::<Test>::verify_pending_enactment_benchmark(Some(refused), &observer);
+          if delay == 0 {
+            assert!(matches!(result, Err(BenchmarkError::Skip)));
+            assert_eq!(root(), before);
+          } else {
+            result.unwrap();
+          }
+        });
+      }
+    }
+  }
+
+  #[test]
+  fn finalized_cleanup_fixture_has_maximum_record() {
+    new_test_ext().execute_with(|| {
+      let (domain, epoch) = seed_maximum_finalized_outcomes::<Test>(1).unwrap();
+      let record = FinalizedProposals::<Test>::get(domain, 2_000).unwrap();
+      assert_eq!(
+        record.encoded_size(),
+        FinalizedProposalRecord::<
+          crate::mock::AccountId,
+          crate::mock::DomainId,
+          polkadot_sdk::sp_core::H256,
+          <Test as Config>::Epoch,
+          CidBytesOf<Test>,
+        >::max_encoded_len()
+      );
+      assert!(matches!(&record.execution_detail,
+        Some(ProposalExecutionDetail::Succeeded(ProposalExecutionSuccessDetail::TreasurySpendExecuted { invoice_cid, target_amount: 200, actual_amount: 150, capacity_limited: true, .. }))
+          if invoice_cid.len() == 96));
+      assert_eq!(ProposalMetadataByItem::<Test>::get(domain, 2_000).unwrap().payload_kind, ProposalPayloadKind::L2TreasurySpend);
+      let index = FinalizedProposalIdsByDomain::<Test>::get(domain);
+      let peer = FinalizedProposals::<Test>::get(domain, index[1]);
+      let future = FinalizedProposalOutcomeExpiryBuckets::<Test>::get(epoch + 1);
+      assert!(!future.is_empty());
+      let pending = PendingEnactments::<Test>::get();
+      let cursor = PendingEnactmentCursor::<Test>::get();
+      Pallet::<Test>::service_finalized_proposal_outcomes(current_epoch_u32::<Test>(epoch) - 1, epoch);
+      assert!(!FinalizedProposals::<Test>::contains_key(domain, 2_000));
+      assert!(!ProposalMetadataByItem::<Test>::contains_key(domain, 2_000));
+      assert!(!ProposalWinningPrimaryOptionByItem::<Test>::contains_key(domain, 2_000));
+      assert_eq!(ProposalWinningPrimaryOptionByItem::<Test>::get(domain, index[1]), Some(ProposalPrimaryTrackOption::Amplify));
+      assert_eq!(FinalizedProposalIdsByDomain::<Test>::get(domain).as_slice(), &index[1..]);
+      assert_eq!(FinalizedProposals::<Test>::get(domain, index[1]), peer);
+      assert_eq!(FinalizedProposalOutcomeExpiryBuckets::<Test>::get(epoch + 1), future);
+      assert_eq!(PendingEnactments::<Test>::get(), pending);
+      assert_eq!(PendingEnactmentCursor::<Test>::get(), cursor);
+    });
+  }
 }

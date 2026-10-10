@@ -1,3 +1,4 @@
+use super::actors_integration_tests::ensure_actor_prepass_context;
 use super::common::{
   ALICE, INITIAL_BALANCE, actor_fee_sink_account, new_test_ext, set_consensus_timestamp,
 };
@@ -29,7 +30,21 @@ use polkadot_sdk::frame_support::{
 #[cfg(not(feature = "runtime-benchmarks"))]
 use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 
-fn run_at_cadence_tick(key: WakeupKey<crate::BlockNumber>) {
+fn run_actor_block() {
+  let block = crate::System::block_number().saturating_add(1);
+  crate::System::set_block_number(block);
+  let _ = Actors::on_initialize(block);
+  ensure_actor_prepass_context();
+  assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+  let _ = Actors::on_idle(block, Weight::MAX);
+  Actors::on_finalize(block);
+  assert!(Balances::free_balance(actor_fee_sink_account()) >= crate::EXISTENTIAL_DEPOSIT);
+  #[cfg(feature = "try-runtime")]
+  <Actors as Hooks<crate::BlockNumber>>::try_state(block)
+    .expect("Fee Sink service preserves Actor invariants");
+}
+
+fn open_at_cadence_tick(key: WakeupKey<crate::BlockNumber>) {
   let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
   let key = if Actors::actor_hot(fee_sink_id).is_some_and(|hot| {
     matches!(
@@ -47,14 +62,21 @@ fn run_at_cadence_tick(key: WakeupKey<crate::BlockNumber>) {
   set_consensus_timestamp(
     tick.saturating_mul(primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS),
   );
-  let block = crate::System::block_number().saturating_add(1);
-  crate::System::set_block_number(block);
-  let _ = Actors::on_initialize(block);
-  let _ = Actors::on_idle(block, Weight::MAX);
-  let eligible_block = block.saturating_add(1);
-  crate::System::set_block_number(eligible_block);
-  let _ = Actors::on_initialize(eligible_block);
-  let _ = Actors::on_idle(eligible_block, Weight::MAX);
+  run_actor_block();
+  run_actor_block();
+}
+
+fn run_at_cadence_tick(key: WakeupKey<crate::BlockNumber>) {
+  open_at_cadence_tick(key);
+  let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
+  let steps = Actors::actor_contract(fee_sink_id)
+    .expect("Fee Sink retains its admitted Contract")
+    .steps
+    .len();
+  for _ in 1..steps {
+    run_actor_block();
+  }
+  assert!(Actors::actor_run_state(fee_sink_id).is_none());
 }
 
 fn cadence_key(actor_id: pallet_deos_actors::ActorId) -> WakeupKey<crate::BlockNumber> {
@@ -69,10 +91,7 @@ fn cadence_key(actor_id: pallet_deos_actors::ActorId) -> WakeupKey<crate::BlockN
 fn initialize_genesis_fee_sink_cadence(timestamp_millis: u64) -> WakeupKey<crate::BlockNumber> {
   let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
   set_consensus_timestamp(timestamp_millis);
-  let block = crate::System::block_number().saturating_add(1);
-  crate::System::set_block_number(block);
-  let _ = Actors::on_initialize(block);
-  let _ = Actors::on_idle(block, Weight::MAX);
+  run_actor_block();
   cadence_key(fee_sink_id)
 }
 
@@ -121,7 +140,38 @@ fn source_less_runtime_fee_credit_is_processed_by_fee_sink_cadence() {
     assert!(!Actors::pending_signal(fee_sink_id));
     let cadence_block = cadence_key(fee_sink_id);
 
-    run_at_cadence_tick(cadence_block);
+    open_at_cadence_tick(cadence_block);
+    let run = Actors::actor_run_state(fee_sink_id).expect("first allocation retains its suffix");
+    assert_eq!(run.cursor, 1);
+    assert_eq!(
+      run.balance_snapshot,
+      Some(pallet_deos_actors::CycleBalanceSnapshot {
+        asset: AssetKind::Native,
+        balance: 100_000_000_000,
+      })
+    );
+    assert_eq!(
+      Balances::free_balance(&staking_pool),
+      pool_before + 50_000_000_000
+    );
+    assert_eq!(
+      Balances::free_balance(&staking_liquidity_actor),
+      liquidity_before
+    );
+    let late_credit = amount / 2;
+    let credit = <Balances as Balanced<_>>::withdraw(
+      &ALICE,
+      late_credit,
+      Precision::Exact,
+      Preservation::Preserve,
+      Fortitude::Polite,
+    )
+    .expect("Alice funds inter-Step fee ingress");
+    RuntimeFeeCollector::on_unbalanced(credit);
+    assert_eq!(Actors::actor_run_state(fee_sink_id), Some(run));
+    assert!(!Actors::pending_signal(fee_sink_id));
+    run_actor_block();
+    assert!(Actors::actor_run_state(fee_sink_id).is_none());
 
     let pool_delta = Balances::free_balance(&staking_pool).saturating_sub(pool_before);
     let liquidity_delta =
@@ -134,6 +184,7 @@ fn source_less_runtime_fee_credit_is_processed_by_fee_sink_cadence() {
       Balances::free_balance(&fee_sink),
       crate::EXISTENTIAL_DEPOSIT.saturating_add(
         amount
+          .saturating_add(late_credit)
           .saturating_sub(primitives::ecosystem::params::FEE_SINK_BUFFER_PCT.mul_floor(amount),),
       )
     );
@@ -198,6 +249,17 @@ fn fee_sink_cadence_anchors_at_first_consensus_timestamp_and_never_executes_earl
     pallet_deos_actors::CurrentBlockResourceState::<crate::Runtime>::kill();
     assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
     let _ = Actors::on_idle(10_002, Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_state(fee_sink_id)
+        .expect("Fee Sink remains active")
+        .identity
+        .cycle_nonce,
+      0,
+    );
+    let run = Actors::actor_run_state(fee_sink_id).expect("second skipped Transfer remains");
+    assert_eq!(run.cursor, 1);
+    assert!(run.balance_snapshot.is_none());
+    run_actor_block();
     assert_eq!(
       Actors::active_actor_state(fee_sink_id)
         .expect("Fee Sink remains active")
@@ -273,6 +335,10 @@ fn fee_sink_threshold_admits_exactly_one_ed_per_permissioned_leg() {
 #[cfg(not(feature = "runtime-benchmarks"))]
 fn fee_sink_actor_splits_trusted_set_native_flow_to_staking_and_lp_ingress() {
   new_test_ext().execute_with(|| {
+    assert_eq!(
+      Staking::native_security_mode(),
+      pallet_staking::NativeSecurityMode::TrustedSet
+    );
     let native_asset_id = 0;
     assert_ok!(Assets::force_create(
       RuntimeOrigin::root(),
@@ -345,10 +411,7 @@ fn fee_sink_actor_splits_trusted_set_native_flow_to_staking_and_lp_ingress() {
     >>::mint(&fee_sink, AssetKind::Native, amount));
     let cadence = cadence_key(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID);
     run_at_cadence_tick(cadence);
-    let followup_block = crate::System::block_number().saturating_add(1);
-    crate::System::set_block_number(followup_block);
-    let _ = Actors::on_initialize(followup_block);
-    let _ = Actors::on_idle(followup_block, Weight::MAX);
+    run_actor_block();
     let lp_supply_after =
       <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolAssets::total_issuance(
         pool.lp_token,
@@ -372,6 +435,50 @@ fn fee_sink_actor_splits_trusted_set_native_flow_to_staking_and_lp_ingress() {
         amount
           .saturating_sub(primitives::ecosystem::params::FEE_SINK_BUFFER_PCT.mul_floor(amount),),
       )
+    );
+
+    let sink_before_failure = Balances::free_balance(&fee_sink);
+    let pool_before_failure = Balances::free_balance(&staking_pool);
+    let liquidity_before_failure = Balances::free_balance(&staking_liquidity_actor);
+    let next_cadence = cadence_key(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID);
+    open_at_cadence_tick(next_cadence);
+    let committed_share = 45_000_000_000;
+    assert_eq!(
+      Balances::free_balance(&fee_sink),
+      sink_before_failure - committed_share
+    );
+    assert_eq!(
+      Balances::free_balance(&staking_pool),
+      pool_before_failure + committed_share
+    );
+    // The first Step is committed. A frozen bridge asset makes only the second
+    // Step's native transfer and mint roll back; preceding custody stays final.
+    assert_ok!(Assets::freeze_asset(
+      RuntimeOrigin::signed(ALICE),
+      native_asset_id,
+    ));
+    run_actor_block();
+    assert!(crate::System::events().iter().any(|record| matches!(
+      &record.event,
+      crate::RuntimeEvent::Actors(pallet_deos_actors::Event::StepFailed {
+        actor_id,
+        error,
+        step_index: 1,
+        ..
+      }) if *actor_id == primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID
+        && *error == polkadot_sdk::pallet_assets::Error::<Runtime>::AssetNotLive.into()
+    )));
+    assert_eq!(
+      Balances::free_balance(&fee_sink),
+      sink_before_failure - committed_share
+    );
+    assert_eq!(
+      Balances::free_balance(&staking_pool),
+      pool_before_failure + committed_share
+    );
+    assert_eq!(
+      Balances::free_balance(&staking_liquidity_actor),
+      liquidity_before_failure
     );
   });
 }

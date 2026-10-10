@@ -1,6 +1,6 @@
 <!--
 Domain: Actors trigger authoring
-Owns: One scalar Manual, AddressEvent, ObservationChange, ObservationCrossing, AtTime, or Cadenced trigger control.
+Owns: One scalar Manual, AddressEvent, AtTime, or Cadenced trigger control.
 Excludes: Runtime admission, scheduler execution, conditions, graph control, and artifact encoding.
 Zone: Automation presentation helper; edits the canonical trigger draft without inventing another trigger model.
 -->
@@ -9,11 +9,9 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
 
   import {
     type ActorAuthoringAsset,
-    type ActorAuthoringObservationFeed,
     type ActorAuthoringTrigger,
     DEOS_ACTORS_AUTHORING_LIMITS,
   } from '$lib/automation/authoring';
-  import { actorReactiveCapacityFailureMessage } from '$lib/automation/capacity-failure';
   import {
     Badge,
     Button,
@@ -32,21 +30,6 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
   };
 
   let { trigger = $bindable(), compact = false }: Props = $props();
-  const crossingCapacityCopy = [
-    actorReactiveCapacityFailureMessage('CrossingUserCapacityExceeded'),
-    actorReactiveCapacityFailureMessage('CrossingIndexCapacityExceeded'),
-  ].join(' ');
-
-  function defaultObservationFeed(): ActorAuthoringObservationFeed {
-    return {
-      assetIn: { type: 'Native' },
-      assetOut: { type: 'Local', id: 0 },
-      method: 'PreExecutionSpot',
-      aggregation: { type: 'Ema', halfLifeBlocks: 100 },
-      scale: 12,
-    };
-  }
-
   function selectTriggerType(event: Event) {
     const type = (event.currentTarget as HTMLSelectElement)
       .value as ActorAuthoringTrigger['type'];
@@ -60,18 +43,6 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
           type,
           sourceFilter: { type: 'Any' },
           assetFilter: { type: 'Any' },
-        };
-        return;
-      case 'ObservationChange':
-        trigger = { type, feed: defaultObservationFeed() };
-        return;
-      case 'ObservationCrossing':
-        trigger = {
-          type,
-          feed: defaultObservationFeed(),
-          direction: 'Rising',
-          threshold: '1000000000000',
-          rearmThreshold: '900000000000',
         };
         return;
       case 'AtTime':
@@ -181,25 +152,6 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
       },
     };
   }
-
-  function selectObservationAggregation(event: Event) {
-    if (
-      trigger.type !== 'ObservationChange' &&
-      trigger.type !== 'ObservationCrossing'
-    )
-      return;
-    const type = (event.currentTarget as HTMLSelectElement).value;
-    trigger = {
-      ...trigger,
-      feed: {
-        ...trigger.feed,
-        aggregation:
-          type === 'Ema'
-            ? { type, halfLifeBlocks: 100 }
-            : { type: 'LastValue' },
-      },
-    };
-  }
 </script>
 
 <section
@@ -212,7 +164,8 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     </div>
     <p class="text-[10px] text-(--mono-muted)">
       Select one readiness source. Independent event sources require separate
-      Actors; composite conditions belong in step preconditions.
+      Actors; composite conditions, including observation comparisons, belong in
+      step preconditions and are evaluated at execution time.
     </p>
   </header>
 
@@ -225,8 +178,6 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     >
       <option value="Manual">Manual</option>
       <option value="AddressEvent">Address event</option>
-      <option value="ObservationChange">Observation change</option>
-      <option value="ObservationCrossing">Observation crossing</option>
       <option value="AtTime">At time</option>
       <option value="Cadenced">Cadenced</option>
     </SelectField>
@@ -345,92 +296,6 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
           {/each}
         </div>
       {/if}
-    </div>
-  {:else if trigger.type === 'ObservationChange' || trigger.type === 'ObservationCrossing'}
-    <div class="grid gap-2 rounded-xl bg-(--mono-bg) p-2.5">
-      {#if trigger.type === 'ObservationChange'}
-        <p class="text-[10px] text-(--mono-muted)">
-          Broad semantics: reconsider on every committed change to this feed.
-          Service cost scales boundedly with subscribed pages, so
-          high-cardinality feeds consume more materialization capacity.
-        </p>
-      {:else}
-        <p class="text-[10px] text-(--mono-muted)">
-          Sparse semantics: creation never retrofires, and one directional fire
-          must cross the opposite rearm boundary before it can fire again.
-          Repeated fires while already latched coalesce; shared FIFO
-          backpressure may defer service without creating duplicate placement.
-        </p>
-        <p class="text-[10px] text-(--mono-muted)">
-          {crossingCapacityCopy} Query <code>crossing_capacity</code> at the same
-          finalized block before submission.
-        </p>
-        <div class={compact ? 'grid gap-2' : 'grid grid-cols-3 gap-2'}>
-          <SelectField
-            label="Direction"
-            bind:value={trigger.direction}
-            selectClass="h-9 py-1.5 text-xs"
-          >
-            <option value="Rising">Rising</option>
-            <option value="Falling">Falling</option>
-          </SelectField>
-          <TextField
-            label="Fire threshold"
-            inputmode="numeric"
-            pattern="[0-9]*"
-            bind:value={trigger.threshold}
-            class="h-9 py-1.5 font-mono text-xs tabnum"
-          />
-          <TextField
-            label="Rearm threshold"
-            inputmode="numeric"
-            pattern="[0-9]*"
-            bind:value={trigger.rearmThreshold}
-            class="h-9 py-1.5 font-mono text-xs tabnum"
-          />
-        </div>
-      {/if}
-      <div class="grid gap-2 sm:grid-cols-2">
-        <AutomationAssetEditor
-          label="Input asset"
-          bind:asset={trigger.feed.assetIn}
-          {compact}
-        />
-        <AutomationAssetEditor
-          label="Output asset"
-          bind:asset={trigger.feed.assetOut}
-          {compact}
-        />
-      </div>
-      <div class="grid gap-2 sm:grid-cols-3">
-        <SelectField
-          label="Aggregation"
-          value={trigger.feed.aggregation.type}
-          onchange={selectObservationAggregation}
-          selectClass="h-9 py-1.5 text-xs"
-        >
-          <option value="LastValue">Last value</option>
-          <option value="Ema">EMA</option>
-        </SelectField>
-        <NumberInput
-          label="Scale"
-          min={0}
-          max={255}
-          step={1}
-          bind:value={trigger.feed.scale}
-          class="h-9 py-1.5 text-xs tabnum"
-        />
-        {#if trigger.feed.aggregation.type === 'Ema'}
-          <NumberInput
-            label="EMA half-life"
-            min={1}
-            max={4294967295}
-            step={1}
-            bind:value={trigger.feed.aggregation.halfLifeBlocks}
-            class="h-9 py-1.5 text-xs tabnum"
-          />
-        {/if}
-      </div>
     </div>
   {:else}
     <p class="rounded-xl bg-(--mono-bg) p-2.5 text-[10px] text-(--mono-muted)">

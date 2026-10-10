@@ -31,7 +31,7 @@ impl RuntimeAddressEventIngress {
     crate::Actors::sovereign_index(recipient)
   }
 
-  /// Sole certified-producer inventory accessor (spec 5.3). The generated ingress
+  /// Sole certified-producer inventory accessor. The generated ingress
   /// evidence parses the same constant; the runtime test binds both.
   #[allow(dead_code)] // evidence surface consumed by runtime tests and generated drift checks
   pub const fn certified_producer_inventory() -> &'static [AddressEventProducer] {
@@ -130,7 +130,7 @@ impl RuntimeAddressEventIngress {
   }
 }
 
-/// Certified movement ordering at the owning atomicity boundary (spec 5.3).
+/// Certified movement ordering at the owning atomicity boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)] // evidence surface consumed by runtime tests and generated drift checks
 pub enum CertifiedMovementProtocol {
@@ -139,7 +139,7 @@ pub enum CertifiedMovementProtocol {
   XcmTransactionalPrecommit,
 }
 
-/// One named certified AddressEvent movement path (spec 5.3).
+/// One named certified AddressEvent movement path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)] // evidence surface consumed by runtime tests and generated drift checks
 pub struct AddressEventProducer {
@@ -193,7 +193,7 @@ pub const ACTORS_ADDRESS_EVENT_PRODUCER_INVENTORY: &[AddressEventProducer] = &[
     preflight_owner: "TmctolAssetOps::transfer preflight",
     consequence_owner: "RuntimeAddressEventIngress::on_internal_inbound",
     rollback_owner: "Asset ops storage transaction",
-    weight_owner: "task_transfer/task_split_transfer generated weights",
+    weight_owner: "task_transfer generated weights",
   },
   AddressEventProducer {
     id: "TmctolAssetOps::mint",

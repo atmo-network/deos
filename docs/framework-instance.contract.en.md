@@ -61,6 +61,12 @@ The following DEOS surfaces are mechanisms, not mandatory policies for every for
 
 The framework may ship reference defaults and examples. Those defaults help a fork start safely, but they do not morally bind every downstream economy.
 
+Actor creation admission and machine freeze are reusable bounded controls under the Actors specification §10.6, not a product mandate. The DEOS reference genesis MUST start with `UserCreationEnabled = false` and `GlobalCircuitBreaker = false`: declared System topology may operate while every new User identity remains denied until governance enables creation. Existing User service remains independent of that admission flag. A downstream host owns its own explicit genesis choices.
+
+Protocol-domain `L2ParameterChange` MUST use `PrimaryEligibleSigned`: a signed proposer needs nonzero primary-track governance power, not protection-track power or an Actor identity. This authority covers the complete explicit L2 allowlist, including DEOS Router fee changes and both Actor flag setters. Submission grants only proposal initiation; ordinary witnessed-preimage admission, General capacity, author/maturity bounds, opening fees, voting, protection and enactment delay remain effective. User-creation admission and Actor machine freeze MUST NOT disable DEOS Governance.
+
+The reference runtime MUST admit both Actor flag setters only through the existing protocol-domain `L2ParameterChange` validation/execution allowlist. Both validators MUST recognize the same exact bounded calls, reject other domains/calls and trailing bytes, preserve ordinary governance admission/payment, and emit typed surface receipts. Public pallet calls retain their privileged origin; governance enactment uses only explicitly delegated `DomainParameters` setter logic, never a Root dispatcher or arbitrary Actor authority. The thaw setter remains executable while Actors is frozen.
+
 ## 5. Builder Pattern Boundary
 
 The builder pattern is an optional governance-mediated labor-funding primitive. [`builder-economy.contract.en.md`](./builder-economy.contract.en.md) owns the complete DEOS reference composition across second-order TMCTOL, `$BLDR` governance, invoices, BLDR Anchor, BLDR Treasury, and the parent-capital bridge.

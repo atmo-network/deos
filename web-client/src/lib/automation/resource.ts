@@ -5,6 +5,34 @@ Excludes: Runtime transport, scheduler reconstruction, archive history, and admi
 Zone: Automation domain; transport adapters lower finalized runtime API values into these contracts.
 */
 
+export const ACTORS_RESOURCE_RUNTIME_API_VERSION = 2 as const;
+
+export type ActorMachineControlFlags = {
+  userCreationEnabled: boolean;
+  machineFrozen: boolean;
+};
+
+export function projectActorMachineControlFlags(
+  value: unknown,
+): ActorMachineControlFlags {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Machine control flags must be a runtime object');
+  }
+  const fields = value as Record<string, unknown>;
+  if (
+    typeof fields.user_creation_enabled !== 'boolean' ||
+    typeof fields.machine_frozen !== 'boolean'
+  ) {
+    throw new Error(
+      'Machine control flags must carry both independent booleans',
+    );
+  }
+  return {
+    userCreationEnabled: fields.user_creation_enabled,
+    machineFrozen: fields.machine_frozen,
+  };
+}
+
 export type ActorResourceWeight = {
   refTime: bigint;
   proofSize: bigint;
@@ -41,18 +69,20 @@ export type CurrentActorResourceView = {
   phase: ActorResourcePhase;
   usage: ActorResourceUsageView;
   outstandingReservations: number;
-  finalizedFixedReserved: ActorResourceWeight | null;
+  budget: ActorResourceBudgetView | null;
   optionalActorWorkHalted: boolean;
 };
 
 export type FinalizedActorResourceView = {
   blockNumber: number;
-  fixedReserved: ActorResourceWeight;
+  budget: ActorResourceBudgetView;
   usage: ActorResourceUsageView;
   optionalActorWorkHalted: boolean;
 };
 
 export type ActorResourceProjection = {
+  machineControl: ActorMachineControlFlags | null;
+  machineControlUnavailableReason: string | null;
   budget: ActorResourceBudgetView;
   current: CurrentActorResourceView | null;
   finalized: FinalizedActorResourceView | null;

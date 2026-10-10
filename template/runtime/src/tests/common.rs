@@ -29,6 +29,28 @@ pub fn set_consensus_timestamp(timestamp_millis: u64) {
   Timestamp::set_timestamp(timestamp_millis);
 }
 
+pub fn close_when_action_and_normal_cycle() -> pallet_deos_actors::CloseWhenOf<Runtime> {
+  use pallet_deos_actors::{BehaviorAtom, BehaviorMetric, CloseWhen};
+  CloseWhen {
+    clauses: vec![
+      vec![
+        BehaviorAtom {
+          metric: BehaviorMetric::ActionSuccessTotal,
+          threshold: 1,
+        },
+        BehaviorAtom {
+          metric: BehaviorMetric::CycleCompletedTotal,
+          threshold: 1,
+        },
+      ]
+      .try_into()
+      .expect("two authored atoms fit"),
+    ]
+    .try_into()
+    .expect("one authored clause fits"),
+  }
+}
+
 pub fn update_actor_contract_partial(
   origin: RuntimeOrigin,
   actor_id: pallet_deos_actors::ActorId,
@@ -47,12 +69,12 @@ pub trait ActorContractReplacement {
 impl ActorContractReplacement
   for (
     pallet_deos_actors::ContractSteps<Runtime>,
-    pallet_deos_actors::CompletionPolicy,
+    Option<pallet_deos_actors::CloseWhenOf<Runtime>>,
   )
 {
   fn apply(self, contract: &mut pallet_deos_actors::ActorContractOf<Runtime>) {
     contract.steps = self.0;
-    contract.completion = self.1;
+    contract.close_when = self.1;
   }
 }
 
@@ -222,9 +244,12 @@ fn build_test_ext(actor_genesis: ActorTestGenesis) -> TestExternalities {
   .assimilate_storage(&mut t)
   .unwrap();
   if matches!(actor_genesis, ActorTestGenesis::Reference) {
-    pallet_deos_actors::GenesisConfig::<Runtime>::default()
-      .assimilate_storage(&mut t)
-      .unwrap();
+    pallet_deos_actors::GenesisConfig::<Runtime> {
+      user_creation_enabled: true,
+      ..Default::default()
+    }
+    .assimilate_storage(&mut t)
+    .unwrap();
   }
   pallet_governance::GenesisConfig::<Runtime>::default()
     .assimilate_storage(&mut t)
@@ -238,6 +263,7 @@ fn build_test_ext(actor_genesis: ActorTestGenesis) -> TestExternalities {
       let active_limit = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get()
         .min(<Runtime as pallet_deos_actors::Config>::MaxQueueLength::get());
       pallet_deos_actors::ActiveActorLimit::<Runtime>::put(active_limit);
+      pallet_deos_actors::UserCreationEnabled::<Runtime>::put(true);
       let next_id = GenesisActors::system_actors()
         .into_iter()
         .map(|(id, _, _, _)| id)

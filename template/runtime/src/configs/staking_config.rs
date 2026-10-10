@@ -33,17 +33,39 @@ parameter_types! {
   pub NativeSecurityCompoundMaxRatioDeviation: Perbill = Perbill::from_percent(1);
 }
 
+#[cfg(feature = "runtime-benchmarks")]
+pub(crate) const BENCHMARK_NATIVE_SECURITY_MODE_KEY: &[u8] =
+  b":deos:benchmark:native-security-mode";
+
+#[cfg(feature = "runtime-benchmarks")]
+pub(super) fn prepare_benchmark_native_security_mode(mode: pallet_staking::NativeSecurityMode) {
+  // The benchmark API whitelists this fixture input; production contains neither key nor read.
+  match mode {
+    pallet_staking::NativeSecurityMode::TrustedSet => {
+      polkadot_sdk::sp_io::storage::clear(BENCHMARK_NATIVE_SECURITY_MODE_KEY)
+    }
+    pallet_staking::NativeSecurityMode::LpBackedSelection => {
+      polkadot_sdk::sp_io::storage::set(BENCHMARK_NATIVE_SECURITY_MODE_KEY, &[1])
+    }
+  }
+}
+
 pub struct RuntimeNativeSecurityModeProvider;
 impl pallet_staking::NativeSecurityModeProvider for RuntimeNativeSecurityModeProvider {
   fn mode() -> pallet_staking::NativeSecurityMode {
     #[cfg(feature = "runtime-benchmarks")]
-    return pallet_staking::NativeSecurityMode::LpBackedSelection;
-    #[cfg(not(feature = "runtime-benchmarks"))]
+    if polkadot_sdk::sp_io::storage::get(BENCHMARK_NATIVE_SECURITY_MODE_KEY).as_deref()
+      == Some(&[1])
+    {
+      return pallet_staking::NativeSecurityMode::LpBackedSelection;
+    }
     pallet_staking::NativeSecurityMode::TrustedSet
   }
 
   #[cfg(feature = "runtime-benchmarks")]
-  fn benchmark_prepare_lp_backed_selection() {}
+  fn benchmark_prepare_lp_backed_selection() {
+    prepare_benchmark_native_security_mode(pallet_staking::NativeSecurityMode::LpBackedSelection);
+  }
 }
 
 pub struct RuntimeNativeOperatorValidator;

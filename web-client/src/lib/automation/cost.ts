@@ -19,13 +19,7 @@ export type ActorCostWeight = {
 };
 
 export type ActorTriggerFeeView = {
-  family:
-    | 'Manual'
-    | 'AddressEvent'
-    | 'ObservationChange'
-    | 'ObservationCrossing'
-    | 'AtTime'
-    | 'Cadenced';
+  family: 'Manual' | 'AddressEvent' | 'AtTime' | 'Cadenced';
   maximumWeight: ActorCostWeight;
   fee: bigint;
   productionWeightIdentity: string;
@@ -33,7 +27,6 @@ export type ActorTriggerFeeView = {
 
 export type ActorPipelineFeeView = {
   machineFee: bigint;
-  cleanupFee: bigint;
   totalFee: bigint;
   strategy: 'UpfrontBounded';
   admissionIdentity: string;
@@ -55,7 +48,6 @@ export type ActorStateHoldView = {
     contractHead: bigint;
     contractBody: bigint;
     detector: bigint;
-    funding: bigint;
     run: bigint;
   };
   total: bigint;
@@ -88,8 +80,6 @@ const COST_FAILURES: ReadonlySet<string> = new Set([
 const TRIGGER_FAMILIES: ReadonlySet<string> = new Set([
   'Manual',
   'AddressEvent',
-  'ObservationChange',
-  'ObservationCrossing',
   'AtTime',
   'Cadenced',
 ]);
@@ -182,14 +172,15 @@ function projectPipeline(value: unknown): ActorPipelineFeeView {
     pipeline.pipeline_machine_fee,
     'Pipeline Machine fee',
   );
-  const cleanupFee = asUnsigned(pipeline.cleanup_fee, 'Pipeline cleanup fee');
+  if ('cleanup_fee' in pipeline) {
+    throw new Error('Pipeline quote contains a retired cleanup fee');
+  }
   const totalFee = asUnsigned(pipeline.total_fee, 'Pipeline total fee');
-  if (machineFee + cleanupFee !== totalFee) {
-    throw new Error('Pipeline total must equal Machine plus cleanup fees');
+  if (machineFee !== totalFee) {
+    throw new Error('Pipeline total must equal the Machine fee');
   }
   return {
     machineFee,
-    cleanupFee,
     totalFee,
     strategy,
     admissionIdentity: asHash(
@@ -232,7 +223,6 @@ function projectStateHold(value: unknown): ActorStateHoldView {
     contractHead: asUnsigned(breakdown.contract_head, 'Contract head hold'),
     contractBody: asUnsigned(breakdown.contract_body, 'Contract body hold'),
     detector: asUnsigned(breakdown.detector, 'detector hold'),
-    funding: asUnsigned(breakdown.funding, 'funding hold'),
     run: asUnsigned(breakdown.run, 'run hold'),
   };
   const total = asUnsigned(hold.total, 'Actor state hold total');

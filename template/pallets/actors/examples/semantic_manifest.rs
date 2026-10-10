@@ -5,14 +5,13 @@ use pallet_deos_actors::contract::{
   RetryObservation, TaskAmountRole, TaskInstructionContract, TaskWeightOwner,
   describe_amount_resolution, describe_predicate, describe_task,
 };
-use pallet_deos_actors::{AmountResolution, InputLimit, Predicate, SplitLeg, Task};
-use polkadot_sdk::frame_support::{BoundedVec, traits::ConstU32};
+use pallet_deos_actors::{AmountResolution, InputLimit, Predicate, Task};
 use polkadot_sdk::sp_runtime::Perbill;
 use scale_info::{TypeDef, TypeInfo};
 use serde::Serialize;
 use std::{env, fs, path::Path};
 
-type ManifestTask = Task<u32, u128, u64, ConstU32<8>>;
+type ManifestTask = Task<u32, u128, u64>;
 type ManifestPredicate = Predicate<u32, u128, u32, u32>;
 type Contract = TaskInstructionContract<u32, u64>;
 type PredicateContract = PredicateInstructionContract<u32, u32>;
@@ -24,8 +23,6 @@ const ASSET_A: u32 = 14;
 const ASSET_B: u32 = 15;
 const LP_ASSET: u32 = 16;
 const TO: u64 = 21;
-const LEG_A: u64 = 22;
-const LEG_B: u64 = 23;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,19 +111,18 @@ fn fixed() -> AmountResolution<u128> {
 fn amount_resolution_cases() -> Vec<(&'static str, AmountResolution<u128>)> {
   vec![
     ("Fixed", AmountResolution::Fixed(10)),
+    ("Percent", AmountResolution::Percent(Perbill::one())),
     (
-      "PercentageOfCurrent",
-      AmountResolution::PercentageOfCurrent(Perbill::one()),
+      "CaptureCycleBalance",
+      AmountResolution::CaptureCycleBalance {
+        percent: Perbill::one(),
+        share: Perbill::from_percent(50),
+      },
     ),
     (
-      "PercentageAtOpening",
-      AmountResolution::PercentageAtOpening(Perbill::one()),
+      "CycleBalancePercent",
+      AmountResolution::CycleBalancePercent(Perbill::from_percent(50)),
     ),
-    (
-      "PercentageOfLastFunding",
-      AmountResolution::PercentageOfLastFunding(Perbill::one()),
-    ),
-    ("AllAvailable", AmountResolution::AllAvailable),
   ]
 }
 
@@ -204,17 +200,6 @@ fn predicate_cases() -> Vec<(&'static str, ManifestPredicate)> {
 }
 
 fn task_cases() -> Vec<(&'static str, ManifestTask)> {
-  let legs = BoundedVec::try_from(vec![
-    SplitLeg {
-      to: LEG_A,
-      share: Perbill::from_percent(40),
-    },
-    SplitLeg {
-      to: LEG_B,
-      share: Perbill::from_percent(60),
-    },
-  ])
-  .expect("manifest split legs fit");
   vec![
     (
       "Transfer",
@@ -222,14 +207,6 @@ fn task_cases() -> Vec<(&'static str, ManifestTask)> {
         to: TO,
         asset: ASSET,
         amount: fixed(),
-      },
-    ),
-    (
-      "SplitTransfer",
-      Task::SplitTransfer {
-        asset: ASSET,
-        amount: fixed(),
-        legs,
       },
     ),
     (
@@ -329,7 +306,6 @@ fn recipient(recipient: RecipientSurface<u64>) -> RecipientManifest {
   match recipient {
     RecipientSurface::ActorSovereign => RecipientManifest::ActorSovereign,
     RecipientSurface::Explicit(TO) => RecipientManifest::Explicit { path: "/to" },
-    RecipientSurface::Explicit(LEG_A | LEG_B) => RecipientManifest::Explicit { path: "/legs/*/to" },
     RecipientSurface::Explicit(account) => panic!("unknown manifest account sentinel {account}"),
     RecipientSurface::AdapterDerived => RecipientManifest::AdapterDerived,
   }
@@ -374,7 +350,6 @@ fn control(value: ClassifiedStepControl) -> &'static str {
 fn weight_owner(value: TaskWeightOwner) -> &'static str {
   match value {
     TaskWeightOwner::Transfer => "Transfer",
-    TaskWeightOwner::SplitTransfer => "SplitTransfer",
     TaskWeightOwner::Burn => "Burn",
     TaskWeightOwner::Mint => "Mint",
     TaskWeightOwner::DexSwapIn => "DexSwapIn",
@@ -391,7 +366,6 @@ fn weight_owner(value: TaskWeightOwner) -> &'static str {
 fn algorithm(value: BoundedInternalAlgorithm) -> &'static str {
   match value {
     BoundedInternalAlgorithm::None => "None",
-    BoundedInternalAlgorithm::PalletSplitFanout => "PalletSplitFanout",
     BoundedInternalAlgorithm::RuntimeAdapterContract => "RuntimeAdapterContract",
   }
 }
@@ -413,8 +387,7 @@ fn dependency(value: AmountDataDependency) -> &'static str {
   match value {
     AmountDataDependency::ArtifactValue => "ArtifactValue",
     AmountDataDependency::CurrentBalanceOrShares => "CurrentBalanceOrShares",
-    AmountDataDependency::OpeningSnapshot => "OpeningSnapshot",
-    AmountDataDependency::LastFundingSnapshot => "LastFundingSnapshot",
+    AmountDataDependency::CycleBalanceSnapshot => "CycleBalanceSnapshot",
     AmountDataDependency::TaskPolicyCapacity => "TaskPolicyCapacity",
   }
 }
@@ -428,7 +401,7 @@ fn context_dependency(value: ContextDependency) -> &'static str {
 fn observation_window(value: ObservationWindow) -> &'static str {
   match value {
     ObservationWindow::ArtifactTime => "ArtifactTime",
-    ObservationWindow::LogicalCycleStart => "LogicalCycleStart",
+    ObservationWindow::CaptureStepTime => "CaptureStepTime",
     ObservationWindow::StepAttemptTime => "StepAttemptTime",
   }
 }

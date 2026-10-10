@@ -94,6 +94,8 @@ export function executionFailureReasonLabel(reason?: string | null) {
       return 'Unsupported runtime call';
     case 'MissingWinningPrimaryOption':
       return 'Missing winning primary option';
+    case 'InsufficientTreasuryCapacity':
+      return 'Insufficient treasury capacity · no payout';
     case 'DispatchFailed':
       return 'Dispatch failed';
     default:
@@ -288,7 +290,16 @@ export function treasurySettlementLabel(
 }
 
 export function parameterChangeSurfaceLabel(surface?: string | null) {
-  return surface === 'RouterFee' ? 'DEOS Router fee' : 'Unavailable';
+  switch (surface) {
+    case 'RouterFee':
+      return 'DEOS Router fee';
+    case 'ActorUserCreationEnabled':
+      return 'User Actor creation';
+    case 'ActorGlobalCircuitBreaker':
+      return 'Actor machine freeze';
+    default:
+      return 'Unavailable';
+  }
 }
 
 export function treasurySpendScalarLabel(scalar?: string | null) {
@@ -351,8 +362,8 @@ export function finalizedExecutionDetailRows(
         case 'TreasurySpendExecuted':
           rows.push(
             {
-              label: 'Funding source',
-              value: accountIdentifierLabel(detail.detail.fundingSource),
+              label: 'Treasury account',
+              value: accountIdentifierLabel(detail.detail.treasuryAccount),
               mono: true,
             },
             {
@@ -374,8 +385,23 @@ export function finalizedExecutionDetailRows(
               value: treasurySpendScalarLabel(detail.detail.scalar),
             },
             {
-              label: 'Final amount',
-              value: detail.detail.finalAmount.toLocaleString(),
+              label: 'Target amount',
+              value: detail.detail.targetAmount.toLocaleString(),
+            },
+            {
+              label: 'Actual payout',
+              value: detail.detail.actualAmount.toLocaleString(),
+            },
+            {
+              label: 'Capacity limited',
+              value: detail.detail.capacityLimited
+                ? 'Yes · premium clipped, base preserved'
+                : 'No',
+            },
+            {
+              label: 'Invoice CID',
+              value: detail.detail.invoiceCid,
+              mono: true,
             },
             {
               label: 'Settlement kind',
@@ -678,7 +704,7 @@ export function finalizedExecutionDetailLabel(
         case 'ParameterChangeExecuted':
           return `Parameter change · ${parameterChangeSurfaceLabel(detail.detail.surface)}`;
         case 'TreasurySpendExecuted':
-          return `Treasury payout · ${treasurySpendScalarLabel(detail.detail.scalar)} · ${detail.detail.baseAmount.toLocaleString()} → ${detail.detail.finalAmount.toLocaleString()} · ${accountIdentifierLabel(detail.detail.fundingSource)}`;
+          return `Treasury payout · ${treasurySpendScalarLabel(detail.detail.scalar)} · target ${detail.detail.targetAmount.toLocaleString()} → paid ${detail.detail.actualAmount.toLocaleString()} · ${detail.detail.capacityLimited ? 'capacity limited' : 'full target'} · ${accountIdentifierLabel(detail.detail.treasuryAccount)}`;
       }
       break;
     case 'Failed':

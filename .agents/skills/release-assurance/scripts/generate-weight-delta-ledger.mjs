@@ -8,7 +8,7 @@ import process from 'node:process';
 
 const skill = path.resolve(import.meta.dirname, '..');
 const root = path.resolve(skill, '../../..');
-const baseline = 'v0.7.25';
+const baseline = 'v0.7.26';
 const candidate = '0.7.26';
 const output = path.join(skill, 'evidence/runtime-weight-delta-ledger.md');
 const check = process.argv.includes('--check');

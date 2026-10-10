@@ -5,21 +5,13 @@ Excludes: Adapter execution, asset discovery, quotes, balances, task semantics, 
 Zone: Automation presentation helper; binds one authoring task through finite UI Kit controls.
 -->
 <script lang="ts">
-  import { Plus, X } from '@lucide/svelte';
-
   import {
     ACTORS_AUTHORING_TASK_TYPES,
     type ActorAuthoringTask,
     createActorAuthoringTask,
   } from '$lib/automation/authoring';
   import type { ActorContractType } from '$lib/automation/contract-artifact';
-  import {
-    Button,
-    IconButton,
-    NumberInput,
-    SelectField,
-    TextField,
-  } from '$lib/ui';
+  import { NumberInput, SelectField, TextField } from '$lib/ui';
 
   import AutomationAmountEditor from './AutomationAmountEditor.svelte';
   import AutomationAssetEditor from './AutomationAssetEditor.svelte';
@@ -56,22 +48,6 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
           : { type: 'LiveQuote' },
     };
   }
-
-  function addSplitLeg() {
-    if (task.type !== 'SplitTransfer' || task.legs.length >= 8) return;
-    task = {
-      ...task,
-      legs: [...task.legs, { to: '', shareParts: 0 }],
-    };
-  }
-
-  function removeSplitLeg(index: number) {
-    if (task.type !== 'SplitTransfer') return;
-    task = {
-      ...task,
-      legs: task.legs.filter((_, candidate) => candidate !== index),
-    };
-  }
 </script>
 
 <div class="grid gap-3">
@@ -96,61 +72,11 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
       inputClass="h-9 py-1.5 font-mono text-[11px]"
     />
     <AutomationAssetEditor label="Asset" bind:asset={task.asset} {compact} />
-    <AutomationAmountEditor bind:amount={task.amount} {compact} />
-  {:else if task.type === 'SplitTransfer'}
-    <AutomationAssetEditor label="Asset" bind:asset={task.asset} {compact} />
-    <AutomationAmountEditor bind:amount={task.amount} {compact} />
-    <p class="text-[10px] leading-relaxed text-(--mono-muted)">
-      Every non-zero leg must accept its allocation at execution time. One
-      ineligible recipient fails the whole task atomically as a temporary error;
-      rejected value never becomes retained remainder.
-    </p>
-    <div class="grid gap-2">
-      <div class="flex items-center justify-between gap-2">
-        <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">
-          Transfer legs · {task.legs.length}/8
-        </div>
-        <Button
-          size="sm"
-          variant="ghost"
-          onclick={addSplitLeg}
-          disabled={task.legs.length >= 8}
-          class="inline-flex items-center gap-1"
-        >
-          <Plus size={12} /> Add leg
-        </Button>
-      </div>
-      {#each task.legs as leg, legIndex}
-        <div
-          class={compact
-            ? 'grid gap-2 rounded-xl bg-(--mono-bg) p-2'
-            : 'grid grid-cols-[minmax(0,1fr)_minmax(8rem,0.45fr)_2rem] items-end gap-2 rounded-xl bg-(--mono-bg) p-2'}
-        >
-          <TextField
-            label={`Recipient ${legIndex + 1}`}
-            placeholder="SS58 account"
-            bind:value={leg.to}
-            inputClass="h-9 py-1.5 font-mono text-[11px]"
-          />
-          <NumberInput
-            label="Share (perbill)"
-            min={0}
-            max={1000000000}
-            step={1}
-            bind:value={leg.shareParts}
-            class="h-9 py-1.5 text-xs tabnum"
-          />
-          <IconButton
-            label={`Remove transfer leg ${legIndex + 1}`}
-            onclick={() => removeSplitLeg(legIndex)}
-            disabled={task.legs.length <= 2}
-            class={compact ? 'justify-self-end' : 'mb-0.5'}
-          >
-            <X size={14} />
-          </IconButton>
-        </div>
-      {/each}
-    </div>
+    <AutomationAmountEditor
+      bind:amount={task.amount}
+      {compact}
+      allowCycleBalance
+    />
   {:else if task.type === 'SwapIn'}
     <div class={fieldGrid}>
       <AutomationAssetEditor

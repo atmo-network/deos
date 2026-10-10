@@ -163,9 +163,9 @@ async function finalizedState(client, api, feed) {
     throw new Error('foreign/Native pool reserves are unavailable');
   return {
     block,
-    identity: control.cell.identity,
-    actorHot: control.cell.hot,
-    actorLocation: control.location,
+    identity: control.record.identity,
+    actorHot: control.record.hot,
+    actorResidence: control.residence,
     aliceForeign: aliceForeign ?? 0n,
     burnNative: burnNative.data.free,
     aliceNative: aliceNative.data.free,
@@ -218,12 +218,12 @@ try {
   ]);
   if (
     control.status !== 'Active' ||
-    control.cell.identity.actor_class.type !== 'System'
+    control.record.identity.actor_class.type !== 'System'
   ) {
     throw new Error(`Burn Actor ${burnActorId} is not an active System Actor`);
   }
   burnActorAccount = deriveSystemActorSovereignAccount(
-    control.cell.identity.actor_class.value.sovereign_id,
+    control.record.identity.actor_class.value.sovereign_id,
   );
   const feed = feeds.find(matchesFeed);
   if (!feed)

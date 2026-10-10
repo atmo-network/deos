@@ -447,7 +447,7 @@ main() {
         "Governance shared approval identity is missing"
     require_anchor 'approval: ProposalApproval<Epoch>' "$governance_src/lib.rs" \
         "Governance pending enactment does not consume the shared approval identity"
-    require_anchor 'proposal_status_reports_pending_enactment_until_delay_expires' \
+    require_anchor 'proposal_status_remains_pending_after_due_time_until_a_result_commits' \
         "$governance_src/tests.rs" \
         "Governance pending-enactment outcome-algebra evidence is missing"
     require_anchor 'pending_enactment_projection_fails_closed_on_non_approval_outcome' \
@@ -455,7 +455,7 @@ main() {
         "Governance pending-enactment corruption evidence is missing"
     require_anchor 'struct ProposalIdentity<DomainId, ItemId>' "$governance_src/lib.rs" \
         "Governance canonical proposal identity is missing"
-    require_anchor 'struct FinalizedProposalRecord<AccountId, DomainId, Hash, Epoch>' \
+    require_anchor 'struct FinalizedProposalRecord<AccountId, DomainId, Hash, Epoch, Cid>' \
         "$governance_src/lib.rs" "Governance canonical finalized record is missing"
     require_anchor 'pub finalization: FinalizedProposalRecord' "$governance_src/lib.rs" \
         "Governance recent history no longer projects the canonical finalized record"
@@ -637,8 +637,6 @@ main() {
         "Actors canonical type facade no longer exports the Contract owner"
     require_anchor '^pub use lifecycle::\*;$' "$TEMPLATE_DIR/pallets/actors/src/types.rs" \
         "Actors canonical type facade no longer exports the Lifecycle owner"
-    require_anchor '^pub use observation::\*;$' "$TEMPLATE_DIR/pallets/actors/src/types.rs" \
-        "Actors canonical type facade no longer exports the Observation owner"
     require_anchor '^pub use scheduler::\*;$' "$TEMPLATE_DIR/pallets/actors/src/types.rs" \
         "Actors canonical type facade no longer exports the Scheduler owner"
     reject_pattern '^pub (?:struct|enum|type) ' \
@@ -651,8 +649,11 @@ main() {
         "Actors Contract type owner is missing the canonical Task surface"
     require_anchor 'pub struct ActorIdentity' "$actors_lifecycle_types" \
         "Actors Lifecycle type owner is missing canonical identity state"
-    require_anchor 'pub struct DirtyObservationState' "$actors_types/observation.rs" \
-        "Actors Observation type owner is missing canonical dirty state"
+    reject_pattern '\b(?:ObservationChange|ObservationCrossing|ObservationTransitionIngress|DirtyObservation\w*|ObservationSubscriber\w*|CrossingWorker\w*|IndexedTriggerDetectionDisabled)\b' \
+        "Retired push-reactive Actors observation surface reintroduced" \
+        --glob "!**/weights/**" --glob "!weights.rs" \
+        "$TEMPLATE_DIR/pallets/actors/src" "$TEMPLATE_DIR/pallets/actors/embedding-runtime" \
+        "$TEMPLATE_DIR/runtime/src"
     require_anchor 'pub struct WakeupBucketState' "$actors_types/scheduler.rs" \
         "Actors Scheduler type owner is missing canonical wakeup state"
     require_anchor 'task_failure_defaults_unknown_errors_to_permanent' "$actors_tests" \
@@ -661,8 +662,6 @@ main() {
         "Actors Mutable-only retry admission evidence is missing"
     require_anchor 'retry_later_aborts_permanent_failure_without_executing_suffix' "$actors_tests" \
         "Actors Permanent-failure no-retry evidence is missing"
-    require_anchor 'invalid_fresh_observation_fails_permanently_and_applies_step_policy' \
-        "$actors_tests" "Actors invalid-observation Permanent-failure evidence is missing"
     require_anchor 'completed_failed_and_suspended_attempts_update_failure_streak_once' \
         "$actors_tests" "Actors cross-attempt failure-streak transition evidence is missing"
     require_anchor 'fn transition_failure_streak\(' \
@@ -741,18 +740,18 @@ main() {
         "Retired simulation-only Actors outcome vocabulary reintroduced" \
         "$TEMPLATE_DIR/pallets/actors" "$TEMPLATE_DIR/runtime" "$PROJECT_ROOT/docs" \
         "$PROJECT_ROOT/wiki" "$PROJECT_ROOT/web-client"
-    require_anchor 'BoundedVec<Result<bool, PredicateError>, MaxOpeningPredicateResults>' \
-        "$actors_lifecycle_types" \
-        "Actors exact Opening predicate result storage is missing"
+    reject_pattern 'MaxOpeningPredicateResults|opening_predicate_results|ObservationTiming::Opening' \
+        "Retired Actors Opening predicate authority reintroduced" \
+        "$TEMPLATE_DIR/pallets/actors" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/web-client/src"
     reject_pattern '\bPredicateEvaluation\b' \
         "Tri-state Actors predicate evaluation reintroduced" \
         "$TEMPLATE_DIR/pallets/actors" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/web-client/src"
-    require_anchor 'opening_and_current_predicates_observe_distinct_step_state' "$actors_tests" \
-        "Actors explicit Opening/Current timing evidence is missing"
-    require_anchor 'opening_predicate_result_is_reused_by_run_state' "$actors_tests" \
-        "Actors frozen Opening truth evidence is missing"
-    require_anchor 'unavailable_observation_skips_without_incrementing_failures' "$actors_tests" \
-        "Actors false-precondition skip evidence is missing"
+    require_anchor 'predicates_observe_current_step_state' "$actors_tests" \
+        "Actors current predicate freshness evidence is missing"
+    require_anchor 'predicate_is_rechecked_from_current_state_after_retry' "$actors_tests" \
+        "Actors retry-time current predicate evidence is missing"
+    require_anchor 'predicates_observe_current_step_state' "$actors_tests" \
+        "Actors false-precondition current-state skip evidence is missing"
     require_anchor 'bounded_dnf_is_canonical_and_mode_distinct' "$actors_tests" \
         "Actors canonical bounded-DNF evidence is missing"
     require_anchor 'empty_outer_and_inner_precondition_forms_are_rejected' "$actors_tests" \
@@ -802,35 +801,13 @@ main() {
         "Actors AddressEvent occurrence charging evidence is missing"
     require_anchor 'underfunded_address_event_advances_without_fee_readiness_or_apoptosis' "$actors_tests" \
         "Actors automatic AddressEvent underfunding evidence is missing"
-    require_anchor 'address_event_collection_failure_preserves_source_progress_without_readiness' "$actors_tests" \
-        "Actors automatic AddressEvent collection-failure progression evidence is missing"
+    require_anchor 'TriggerFeeCollectionFailed' "$TEMPLATE_DIR/pallets/actors/src/lib.rs" \
+        "Actors Trigger collection failure is not distinct from underfunding"
+    require_anchor 'address_event_collection_failure_rolls_back_certified_movement_and_retries_once' "$actors_tests" \
+        "Actors certified AddressEvent collection-failure rollback evidence is missing"
     require_anchor 'address_event_trigger_occurrence' \
         "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
         "Actors generated AddressEvent Trigger Weight owner is missing"
-    require_anchor 'observation_change_charges_occurrence_before_pipeline_opening' \
-        "$TEMPLATE_DIR/pallets/actors/src/tests/observations.rs" \
-        "Actors ObservationChange occurrence charging evidence is missing"
-    require_anchor 'underfunded_observation_change_advances_without_fee_readiness_or_apoptosis' \
-        "$TEMPLATE_DIR/pallets/actors/src/tests/observations.rs" \
-        "Actors automatic ObservationChange underfunding evidence is missing"
-    require_anchor 'observation_change_trigger_occurrence' \
-        "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
-        "Actors generated ObservationChange Trigger Weight owner is missing"
-    require_anchor 'observation_crossing_fire_charges_before_readiness' \
-        "$TEMPLATE_DIR/pallets/actors/src/tests/crossing.rs" \
-        "Actors ObservationCrossing fire occurrence charging evidence is missing"
-    require_anchor 'underfunded_crossing_fire_advances_without_fee_readiness_or_apoptosis' \
-        "$TEMPLATE_DIR/pallets/actors/src/tests/crossing.rs" \
-        "Actors automatic ObservationCrossing underfunding evidence is missing"
-    require_anchor 'crossing_fire_collection_failure_advances_without_readiness' \
-        "$TEMPLATE_DIR/pallets/actors/src/tests/crossing.rs" \
-        "Actors automatic ObservationCrossing collection-failure progression evidence is missing"
-    require_anchor 'crossing_batch_falls_back_to_scalar_progress_for_an_underfunded_member' \
-        "$TEMPLATE_DIR/pallets/actors/src/tests/crossing.rs" \
-        "Actors ObservationCrossing batch underfunding progress evidence is missing"
-    require_anchor 'observation_crossing_trigger_occurrence' \
-        "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
-        "Actors generated ObservationCrossing Trigger Weight owner is missing"
     require_anchor 'at_time_occurrence_charges_once_consumes_deadline_and_latches_readiness' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors AtTime occurrence charging evidence is missing"
@@ -840,20 +817,23 @@ main() {
     require_anchor 'underfunded_at_time_occurrence_selects_prepaid_custody_neutral_apoptosis' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors automatic AtTime underfunded-apoptosis evidence is missing"
+    require_anchor 'temporal_collection_failure_preserves_exact_source_and_retries_once' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
+        "Actors temporal collection-failure source preservation evidence is missing"
     require_anchor 'at_time_trigger_occurrence' \
         "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
-        "Actors generated AtTime Trigger Weight owner is missing"
+        "Actors generated AtTime Trigger Weight owner is missing"}]}},{
     require_anchor 'cadenced_latch_disables_detection_until_pipeline_opening' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors Cadenced useful-latch disable/re-arm evidence is missing"
-    require_anchor 'busy_cadenced_occurrence_charges_and_preserves_independent_run_service' \
+    require_anchor 'busy_cadenced_occurrence_rearms_without_fees_or_future_cycle' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors busy Cadenced occurrence evidence is missing"
     require_anchor 'underfunded_cadenced_occurrence_advances_without_fee_readiness_or_apoptosis' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors automatic Cadenced underfunding evidence is missing"
-    require_anchor 'pipeline_and_trigger_temporal_memberships_coexist_and_drain_independently' \
-        "$TEMPLATE_DIR/pallets/actors/src/tests/wakeups.rs" \
+    require_anchor 'next_block_cadence_rearms_after_each_deferred_opening_without_late_fifo_tickets' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors independent Pipeline/Trigger temporal topology evidence is missing"
     require_anchor 'cadenced_trigger_occurrence' \
         "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
@@ -864,9 +844,6 @@ main() {
     reject_pattern '\bFresh (?:cohort|opportunity|opening|Active|activation|cycle)\b' \
         "Actors specification revived ambiguous Fresh scheduler vocabulary" \
         "$TEMPLATE_DIR/pallets/actors/docs/specification.en.md"
-    require_anchor 'observation_fanout_blocked_page' \
-        "$TEMPLATE_DIR/pallets/actors/src/lib.rs" \
-        "Actors ordinary fanout admission omits the measured blocked-fallback owner"
     require_anchor '`Attempt identity proof`' \
         "$TEMPLATE_DIR/pallets/actors/docs/architecture.en.md" \
         "Actors attempt-identity proof is missing from the implementation map"
@@ -898,8 +875,6 @@ main() {
         "Actors retry lookup table reintroduced" "$TEMPLATE_DIR/pallets/actors/src/scheduler.rs"
     require_anchor 'canonical_fifo_uses_one_physical_ticket_sequence' \
         "$actors_tests" "Actors single global FIFO evidence is missing"
-    require_anchor 'on_idle_fanout_feeds_the_existing_scheduler_without_direct_execution' \
-        "$actors_tests" "Actors fanout-to-canonical-scheduler evidence is missing"
     require_anchor 'Production and simulation share current-Step transition owners' \
         "$TEMPLATE_DIR/pallets/actors/docs/architecture.en.md" \
         "Actors single step/lifecycle transition owner is missing"

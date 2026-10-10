@@ -198,6 +198,7 @@ impl polkadot_sdk::pallet_assets::Config for Test {
   type Extra = ();
   type ReserveData = ();
   type CallbackHandle = ();
+  type AssetIdAllocator = ();
   type WeightInfo = ();
   type RemoveItemsLimit = ConstU32<5>;
   type Holder = ();
@@ -260,6 +261,8 @@ impl polkadot_sdk::pallet_asset_conversion::Config for Test {
   type PoolSetupFeeAsset = PoolSetupFeeAsset;
   type LiquidityWithdrawalFee = LiquidityWithdrawalFee;
   type LPFee = LiquidityWithdrawalFee;
+  type AdminOrigin = frame_system::EnsureNever<()>;
+  type MaxSwapFee = LiquidityWithdrawalFee;
   type PalletId = PalletIdStub;
   type MaxSwapPathLength = ConstU32<4>;
   type WeightInfo = ();

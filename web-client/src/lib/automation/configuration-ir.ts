@@ -15,7 +15,7 @@ import {
 
 export const ACTORS_CONFIGURATION_IR_FORMAT =
   'deos.actor.configuration-ir' as const;
-export const ACTORS_CONFIGURATION_IR_VERSION = 1 as const;
+export const ACTORS_CONFIGURATION_IR_VERSION = 2 as const;
 
 export type ActorConfigurationIrStep = Omit<ActorAuthoringStep, 'key'>;
 
@@ -45,7 +45,8 @@ export type ActorConfigurationIrDiff = {
 const FIELD_NAMES = [
   'actorType',
   'mutability',
-  'completionPolicy',
+  'closeWhen',
+  'onUnfunded',
   'autoCloseAtCycleNonce',
   'trigger',
   'cooldownBlocks',
@@ -127,7 +128,8 @@ export function authoringContractToConfigurationIr(
     formatVersion: ACTORS_CONFIGURATION_IR_VERSION,
     actorType: contract.actorType,
     mutability: contract.mutability,
-    completionPolicy: contract.completionPolicy,
+    closeWhen: contract.closeWhen,
+    onUnfunded: contract.onUnfunded,
     autoCloseAtCycleNonce: contract.autoCloseAtCycleNonce?.toString() ?? null,
     trigger: contract.trigger,
     cooldownBlocks: contract.cooldownBlocks,
@@ -148,7 +150,8 @@ export function configurationIrToAuthoringContract(
   return {
     actorType: ir.actorType,
     mutability: ir.mutability,
-    completionPolicy: ir.completionPolicy,
+    closeWhen: ir.closeWhen,
+    onUnfunded: ir.onUnfunded,
     autoCloseAtCycleNonce:
       ir.autoCloseAtCycleNonce == null
         ? null

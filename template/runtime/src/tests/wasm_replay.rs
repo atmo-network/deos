@@ -208,7 +208,7 @@ fn replay_block_inner(
   let verification_proof = proof_artifact(verification_proof, pre_state_root)?;
   let (decoded_proof, decoded_root) = verification_proof
     .compact_proof
-    .to_storage_proof::<Blake2Hasher>(Some(&pre_state_root))
+    .to_storage_proof::<Blake2Hasher>(&pre_state_root)
     .map_err(|error| format!("Compact proof decode: {error:?}"))?;
   if decoded_root != pre_state_root {
     return Err("Compact proof changed the pre-state root".into());
@@ -341,7 +341,9 @@ fn recorded_trie_keys(recorder: &Recorder<Blake2Hasher>) -> BTreeSet<(H256, Vec<
     .collect()
 }
 
-fn key_proof_overlap(recorder: &Recorder<Blake2Hasher>) -> Result<KeyProofOverlap, String> {
+pub(super) fn key_proof_overlap(
+  recorder: &Recorder<Blake2Hasher>,
+) -> Result<KeyProofOverlap, String> {
   let proof = recorder.to_storage_proof();
   let proof_nodes = proof.iter_nodes().collect::<BTreeSet<_>>();
   let db = proof.to_memory_db::<Blake2Hasher>();

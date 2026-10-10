@@ -54,8 +54,8 @@ Owner pages: [Routing and Minting Loop](routing-and-minting-loop.en.md), [DEOS R
 
 1. A System actor reaches its configured trigger: balance ingress for omnivorous actors or a bounded schedule for timer-driven actors.
 2. Actors scheduler admits the actor only if lifecycle, cooldown, fee, and bounded-execution rules allow it.
-3. The actor executes a typed plan such as swap, burn, add/remove liquidity, split transfer, stake, or unstake.
-4. Its output may land on another ingress-driven actor account and wake that actor.
+3. The actor executes a typed plan such as swap, burn, add/remove liquidity, transfer, stake, or unstake. Distribution uses separate Transfer Steps with one captured volume for the Cycle.
+4. Its output may land on another ingress-driven actor account and latch readiness while that actor is Idle. Running/Suspended ingress updates custody without requesting another Cycle.
 5. A larger protocol behavior emerges from small bounded steps, but remains inspectable as an actor graph.
 
 Owner pages: [Actors System](../overview/actor-system.en.md), [AA-Actor](../overview/actor.en.md), [Token-Driven Automation](token-driven-automation.en.md).
@@ -65,7 +65,7 @@ Owner pages: [Actors System](../overview/actor-system.en.md), [AA-Actor](../over
 1. A Mutable plan executes `SwapIn`, then attempts `AddLiquidity`, then intends to `Transfer` the result.
 2. The swap succeeds and commits. The liquidity adapter reports an explicitly Temporary failure.
 3. `RetryLater` rolls back only the failed task and stores a sparse Continuation at the `AddLiquidity` cursor.
-4. Cooldown re-enters the same FIFO/wakeup scheduler without a new external trigger. Retry charges and admits only `AddLiquidity → Transfer`.
+4. After the cooldown, the retry returns through the same Service ring and Deadline scheduler without a new external trigger. Retry charges and admits only `AddLiquidity → Transfer`.
 5. Success removes Continuation and emits one cumulative summary for the original logical-cycle nonce. Cancellation instead keeps the swap committed and performs no compensation.
 
 Current cursor and attempt are bounded chain truth. A long attempt timeline belongs to a materialized event index.

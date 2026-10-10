@@ -11,6 +11,8 @@ use polkadot_sdk::frame_support::weights::Weight;
 
 pub use pallet::*;
 
+pub type CidBytesOf<T> = polkadot_sdk::frame_support::BoundedVec<u8, <T as Config>::MaxCidBytes>;
+
 pub trait EpochProvider<Epoch> {
   fn current_epoch() -> Epoch;
 }
@@ -183,7 +185,6 @@ pub enum ProposalCapacityLane {
 pub enum EpochServicePhase {
   #[default]
   Maturing,
-  PendingEnactment,
   FinalizedOutcome,
   RewardExpiry,
 }
@@ -295,7 +296,23 @@ pub trait ProposalSubmissionEligibilityProvider<AccountId, DomainId> {
 impl<AccountId, DomainId> ProposalSubmissionEligibilityProvider<AccountId, DomainId> for () {}
 
 #[cfg(feature = "runtime-benchmarks")]
-pub trait BenchmarkHelper<AccountId, DomainId, Hash, LockId, Balance> {
+pub trait BenchmarkHelper<AccountId, DomainId, Hash, LockId, Balance, Cid> {
+  fn prepare_maximum_finalized_execution(
+    _account: &AccountId,
+  ) -> Result<
+    (
+      DomainId,
+      ProposalPayloadKind,
+      Hash,
+      ProposalExecutionSuccessDetail<AccountId, DomainId, Hash, Cid>,
+    ),
+    polkadot_sdk::sp_runtime::DispatchError,
+  > {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "GovernanceBenchmarkHelperNotConfigured",
+    ))
+  }
+
   fn prepare_primary_eligible_submitter(
     account: &AccountId,
   ) -> Result<(DomainId, Hash, Vec<u8>), polkadot_sdk::sp_runtime::DispatchError>;
@@ -303,6 +320,10 @@ pub trait BenchmarkHelper<AccountId, DomainId, Hash, LockId, Balance> {
   fn prepare_maximum_payload_witness(
     account: &AccountId,
   ) -> Result<(DomainId, ProposalPayloadKind, Hash, Vec<u8>), polkadot_sdk::sp_runtime::DispatchError>;
+
+  fn prepare_pending_enactment(
+    account: &AccountId,
+  ) -> Result<(DomainId, ProposalPayloadKind, Hash), polkadot_sdk::sp_runtime::DispatchError>;
 
   fn prepare_protection_voter(
     account: &AccountId,
@@ -314,8 +335,8 @@ pub trait BenchmarkHelper<AccountId, DomainId, Hash, LockId, Balance> {
 }
 
 #[cfg(feature = "runtime-benchmarks")]
-impl<AccountId, DomainId, Hash, LockId, Balance>
-  BenchmarkHelper<AccountId, DomainId, Hash, LockId, Balance> for ()
+impl<AccountId, DomainId, Hash, LockId, Balance, Cid>
+  BenchmarkHelper<AccountId, DomainId, Hash, LockId, Balance, Cid> for ()
 {
   fn prepare_primary_eligible_submitter(
     _account: &AccountId,
@@ -329,6 +350,14 @@ impl<AccountId, DomainId, Hash, LockId, Balance>
     _account: &AccountId,
   ) -> Result<(DomainId, ProposalPayloadKind, Hash, Vec<u8>), polkadot_sdk::sp_runtime::DispatchError>
   {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "GovernanceBenchmarkHelperNotConfigured",
+    ))
+  }
+
+  fn prepare_pending_enactment(
+    _account: &AccountId,
+  ) -> Result<(DomainId, ProposalPayloadKind, Hash), polkadot_sdk::sp_runtime::DispatchError> {
     Err(polkadot_sdk::sp_runtime::DispatchError::Other(
       "GovernanceBenchmarkHelperNotConfigured",
     ))
@@ -411,6 +440,8 @@ pub enum ProposalPreimageAdmissionError {
 )]
 pub enum ProposalParameterChangeSurface {
   RouterFee,
+  ActorUserCreationEnabled,
+  ActorGlobalCircuitBreaker,
 }
 
 #[derive(
@@ -438,13 +469,14 @@ pub enum ProposalExecutionFailureReason {
   UnsupportedDomain,
   UnsupportedCall,
   MissingWinningPrimaryOption,
+  InsufficientTreasuryCapacity,
   DispatchFailed,
 }
 
 #[derive(
   Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
 )]
-pub enum ProposalExecutionSuccessDetail<AccountId, DomainId, Hash> {
+pub enum ProposalExecutionSuccessDetail<AccountId, DomainId, Hash, Cid> {
   Generic,
   RuntimeUpgradeAuthorized {
     code_hash: Hash,
@@ -453,12 +485,15 @@ pub enum ProposalExecutionSuccessDetail<AccountId, DomainId, Hash> {
     surface: ProposalParameterChangeSurface,
   },
   TreasurySpendExecuted {
-    funding_source: AccountId,
+    invoice_cid: Cid,
+    treasury_account: AccountId,
     beneficiary: AccountId,
     payout_asset: DomainId,
     base_amount: u128,
     scalar: ProposalTreasurySpendScalar,
-    final_amount: u128,
+    target_amount: u128,
+    actual_amount: u128,
+    capacity_limited: bool,
     settlement_kind: ProposalTreasurySpendSettlementKind,
   },
 }
@@ -466,12 +501,12 @@ pub enum ProposalExecutionSuccessDetail<AccountId, DomainId, Hash> {
 #[derive(
   Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
 )]
-pub enum ProposalExecutionDetail<AccountId, DomainId, Hash> {
-  Succeeded(ProposalExecutionSuccessDetail<AccountId, DomainId, Hash>),
+pub enum ProposalExecutionDetail<AccountId, DomainId, Hash, Cid> {
+  Succeeded(ProposalExecutionSuccessDetail<AccountId, DomainId, Hash, Cid>),
   Failed(ProposalExecutionFailureReason),
 }
 
-pub enum ProposalExecutionReceipt<AccountId, DomainId, Hash> {
+pub enum ProposalExecutionReceipt<AccountId, DomainId, Hash, Cid> {
   Generic,
   RuntimeUpgradeAuthorized {
     code_hash: Hash,
@@ -480,17 +515,20 @@ pub enum ProposalExecutionReceipt<AccountId, DomainId, Hash> {
     surface: ProposalParameterChangeSurface,
   },
   TreasurySpendExecuted {
-    funding_source: AccountId,
+    invoice_cid: Cid,
+    treasury_account: AccountId,
     beneficiary: AccountId,
     payout_asset: DomainId,
     base_amount: u128,
     scalar: ProposalTreasurySpendScalar,
-    final_amount: u128,
+    target_amount: u128,
+    actual_amount: u128,
+    capacity_limited: bool,
     settlement_kind: ProposalTreasurySpendSettlementKind,
   },
 }
 
-pub trait ProposalPayloadExecutor<AccountId, DomainId, ItemId, Hash> {
+pub trait ProposalPayloadExecutor<AccountId, DomainId, ItemId, Hash, Cid> {
   fn can_execute(_payload_kind: ProposalPayloadKind) -> bool {
     false
   }
@@ -499,8 +537,10 @@ pub trait ProposalPayloadExecutor<AccountId, DomainId, ItemId, Hash> {
     _item_id: ItemId,
     _payload_kind: ProposalPayloadKind,
     _payload_hash: Hash,
-  ) -> Result<ProposalExecutionReceipt<AccountId, DomainId, Hash>, ProposalExecutionFailureReason>
-  {
+  ) -> Result<
+    ProposalExecutionReceipt<AccountId, DomainId, Hash, Cid>,
+    ProposalExecutionFailureReason,
+  > {
     Ok(ProposalExecutionReceipt::Generic)
   }
 }
@@ -535,8 +575,8 @@ impl<Hash, DomainId> ProposalPayloadPreimageProvider<Hash, DomainId> for () {
   }
 }
 
-impl<AccountId, DomainId, ItemId, Hash> ProposalPayloadExecutor<AccountId, DomainId, ItemId, Hash>
-  for ()
+impl<AccountId, DomainId, ItemId, Hash, Cid>
+  ProposalPayloadExecutor<AccountId, DomainId, ItemId, Hash, Cid> for ()
 {
 }
 
@@ -732,7 +772,7 @@ pub mod pallet {
     #[pallet::constant]
     type MaxMaturingProposalsPerEpoch: Get<u32>;
     #[pallet::constant]
-    type MaxPendingEnactmentsPerEpoch: Get<u32>;
+    type MaxPendingEnactments: Get<u32>;
     #[pallet::constant]
     type ProposalVotingPeriod: Get<Self::Epoch>;
     #[pallet::constant]
@@ -786,11 +826,14 @@ pub mod pallet {
         Self::Epoch,
       >;
     type ProposalPayloadPreimageProvider: crate::ProposalPayloadPreimageProvider<Self::Hash, Self::DomainId>;
+    #[pallet::constant]
+    type MaxCidBytes: Get<u32>;
     type ProposalPayloadExecutor: crate::ProposalPayloadExecutor<
         Self::AccountId,
         Self::DomainId,
         Self::WinningVoteItemId,
         Self::Hash,
+        crate::CidBytesOf<Self>,
       >;
     #[cfg(feature = "runtime-benchmarks")]
     type BenchmarkHelper: crate::BenchmarkHelper<
@@ -799,6 +842,7 @@ pub mod pallet {
         Self::Hash,
         Self::VotePowerLockId,
         BalanceOf<Self>,
+        crate::CidBytesOf<Self>,
       >;
     type WeightInfo: crate::WeightInfo;
   }
@@ -1097,9 +1141,9 @@ pub mod pallet {
   #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
   )]
-  pub struct FinalizedProposalRecord<AccountId, DomainId, Hash, Epoch> {
+  pub struct FinalizedProposalRecord<AccountId, DomainId, Hash, Epoch, Cid> {
     pub outcome: FinalizedProposalOutcome<Epoch>,
-    pub execution_detail: Option<crate::ProposalExecutionDetail<AccountId, DomainId, Hash>>,
+    pub execution_detail: Option<crate::ProposalExecutionDetail<AccountId, DomainId, Hash, Cid>>,
   }
 
   #[derive(
@@ -1117,9 +1161,9 @@ pub mod pallet {
   #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
   )]
-  pub struct RecentFinalizedProposal<AccountId, DomainId, ItemId, Hash, Epoch> {
+  pub struct RecentFinalizedProposal<AccountId, DomainId, ItemId, Hash, Epoch, Cid> {
     pub identity: ProposalIdentity<DomainId, ItemId>,
-    pub finalization: FinalizedProposalRecord<AccountId, DomainId, Hash, Epoch>,
+    pub finalization: FinalizedProposalRecord<AccountId, DomainId, Hash, Epoch, Cid>,
   }
 
   #[derive(
@@ -1482,7 +1526,7 @@ pub mod pallet {
     T::DomainId,
     Blake2_128Concat,
     T::WinningVoteItemId,
-    FinalizedProposalRecord<T::AccountId, T::DomainId, T::Hash, T::Epoch>,
+    FinalizedProposalRecord<T::AccountId, T::DomainId, T::Hash, T::Epoch, crate::CidBytesOf<T>>,
     OptionQuery,
   >;
 
@@ -1522,17 +1566,26 @@ pub mod pallet {
     OptionQuery,
   >;
 
+  /// Bounded discovery authority for retained approvals and terminal outcomes.
   #[pallet::storage]
-  pub type PendingEnactmentBuckets<T: Config> = StorageMap<
+  #[pallet::getter(fn finalized_proposal_ids)]
+  pub type FinalizedProposalIdsByDomain<T: Config> = StorageMap<
     _,
     Blake2_128Concat,
-    T::Epoch,
-    BoundedVec<
-      FinalizedProposalTouch<T::DomainId, T::WinningVoteItemId>,
-      T::MaxPendingEnactmentsPerEpoch,
-    >,
+    T::DomainId,
+    BoundedVec<T::WinningVoteItemId, T::MaxRecentFinalizedProposalsPerDomain>,
     ValueQuery,
   >;
+
+  #[pallet::storage]
+  pub type PendingEnactments<T: Config> = StorageValue<
+    _,
+    BoundedVec<FinalizedProposalTouch<T::DomainId, T::WinningVoteItemId>, T::MaxPendingEnactments>,
+    ValueQuery,
+  >;
+
+  #[pallet::storage]
+  pub type PendingEnactmentCursor<T: Config> = StorageValue<_, u32, ValueQuery>;
 
   /// Epoch at which a proposal entered the confirm period.
   /// Present only when `ProposalConfirmPeriod > 0` and the proposal is sustaining approval.
@@ -1716,12 +1769,15 @@ pub mod pallet {
       item_id: T::WinningVoteItemId,
       approved_epoch: T::Epoch,
       executed_epoch: T::Epoch,
-      funding_source: T::AccountId,
+      invoice_cid: crate::CidBytesOf<T>,
+      treasury_account: T::AccountId,
       beneficiary: T::AccountId,
       payout_asset: T::DomainId,
       base_amount: u128,
       scalar: crate::ProposalTreasurySpendScalar,
-      final_amount: u128,
+      target_amount: u128,
+      actual_amount: u128,
+      capacity_limited: bool,
       settlement_kind: crate::ProposalTreasurySpendSettlementKind,
     },
     ProposalExecutionFailed {
@@ -1775,6 +1831,8 @@ pub mod pallet {
   pub enum Error<T> {
     ZeroLookbackWindow,
     ProposalAlreadyActive,
+    ProposalAlreadyFinalized,
+    FinalizedProposalIndexFull,
     ProposalNotActive,
     ProposalWinnerSetEmpty,
     ProposalVotingWindowStillOpen,
@@ -1801,7 +1859,7 @@ pub mod pallet {
     ActiveProposalAuthorMissing,
     ActiveProposalCountUnderflow,
     ProposalMaturityBucketFull,
-    PendingEnactmentBucketFull,
+    PendingEnactmentsFull,
     FinalizedProposalOutcomeExpiryBucketFull,
     ZeroProposalVotingPeriod,
     EpochVoteCapReached,
@@ -1816,12 +1874,15 @@ pub mod pallet {
     EpochArithmeticOverflow,
     ProposalMetadataMissing,
     FinalizedProposalMissing,
+    ProposalExecutionNotPending,
   }
 
   #[pallet::hooks]
   impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
     fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
-      Self::service_current_epoch(T::EpochProvider::current_epoch())
+      Self::service_pending_enactments(T::EpochProvider::current_epoch()).saturating_add(
+        Self::service_current_epoch(T::EpochProvider::current_epoch()),
+      )
     }
 
     #[cfg(feature = "try-runtime")]
@@ -1839,6 +1900,10 @@ pub mod pallet {
         "PayloadAdmissionWitnessDeposit must be nonzero"
       );
       assert!(
+        T::FinalizedProposalOutcomeRetentionEpochs::get() > 0,
+        "terminal history retention must be nonzero",
+      );
+      assert!(
         T::MaxEpochCatchUpPerBlock::get() == crate::MAX_EPOCH_CATCH_UP_HARD_LIMIT,
         "MaxEpochCatchUpPerBlock must equal the one-epoch measured service bound"
       );
@@ -1846,7 +1911,7 @@ pub mod pallet {
         T::MaxMaturingProposalsPerBlock::get() > 0
           && T::MaxMaturingProposalsPerBlock::get() <= T::MaxMaturingProposalsPerEpoch::get()
           && T::MaxPendingEnactmentsPerBlock::get() > 0
-          && T::MaxPendingEnactmentsPerBlock::get() <= T::MaxPendingEnactmentsPerEpoch::get()
+          && T::MaxPendingEnactmentsPerBlock::get() <= T::MaxPendingEnactments::get()
           && T::MaxFinalizedProposalOutcomesPerBlock::get() > 0
           && T::MaxFinalizedProposalOutcomesPerBlock::get()
             <= T::MaxFinalizedProposalOutcomesPerEpoch::get()
@@ -1856,7 +1921,6 @@ pub mod pallet {
       );
       for per_epoch_bound in [
         T::MaxMaturingProposalsPerEpoch::get(),
-        T::MaxPendingEnactmentsPerEpoch::get(),
         T::MaxFinalizedProposalOutcomesPerEpoch::get(),
         T::MaxExpiringAccountsPerEpoch::get(),
       ] {
@@ -2205,7 +2269,14 @@ pub mod pallet {
     pub fn recent_finalized_proposals(
       domain: T::DomainId,
     ) -> BoundedVec<
-      RecentFinalizedProposal<T::AccountId, T::DomainId, T::WinningVoteItemId, T::Hash, T::Epoch>,
+      RecentFinalizedProposal<
+        T::AccountId,
+        T::DomainId,
+        T::WinningVoteItemId,
+        T::Hash,
+        T::Epoch,
+        crate::CidBytesOf<T>,
+      >,
       T::MaxRecentFinalizedProposalsPerDomain,
     > {
       Self::do_recent_finalized_proposals(domain)
@@ -2331,7 +2402,9 @@ pub mod pallet {
     pub fn proposal_execution_detail(
       domain: T::DomainId,
       item_id: T::WinningVoteItemId,
-    ) -> Option<crate::ProposalExecutionDetail<T::AccountId, T::DomainId, T::Hash>> {
+    ) -> Option<
+      crate::ProposalExecutionDetail<T::AccountId, T::DomainId, T::Hash, crate::CidBytesOf<T>>,
+    > {
       FinalizedProposals::<T>::get(domain, item_id)?.execution_detail
     }
   }
