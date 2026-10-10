@@ -23,7 +23,7 @@ parameter_types! {
   pub const StrategicProposalReserve: u32 = 1;
   pub const MaxActiveProposalsPerAuthor: u32 = 16;
   pub const MaxMaturingProposalsPerEpoch: u32 = 4;
-  pub const MaxPendingEnactmentsPerEpoch: u32 = 4;
+  pub const MaxPendingEnactments: u32 = 128;
   pub const ProposalVotingPeriod: BlockNumber = 7 * 24 * HOURS;
   pub const ProposalLeadInPeriod: BlockNumber = 3 * 24 * HOURS;
   pub const ProposalProtectionPeriod: BlockNumber = 7 * 24 * HOURS;
@@ -52,15 +52,12 @@ parameter_types! {
 }
 
 parameter_types! {
-  /// Worst reachable one-block Governance hook branch: catch-up plus one bounded service phase.
+  /// The independent pending pass runs alongside catch-up and one bounded epoch phase.
   pub GovernanceFixedWeight: Weight = {
     type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
     let phase = [
       <W as pallet_governance::WeightInfo>::service_maturing_proposals(
         MaxGovernanceMaturingProposalsPerBlock::get(),
-      ),
-      <W as pallet_governance::WeightInfo>::service_pending_enactments(
-        MaxGovernancePendingEnactmentsPerBlock::get(),
       ),
       <W as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(
         MaxGovernanceFinalizedOutcomesPerBlock::get(),
@@ -76,7 +73,11 @@ parameter_types! {
         left.proof_size().max(right.proof_size()),
       )
     });
-    <W as pallet_governance::WeightInfo>::service_epoch_catch_up().saturating_add(phase)
+    <W as pallet_governance::WeightInfo>::service_pending_enactments(
+      MaxGovernancePendingEnactmentsPerBlock::get(),
+    )
+    .saturating_add(<W as pallet_governance::WeightInfo>::service_epoch_catch_up())
+    .saturating_add(phase)
   };
 }
 
@@ -540,6 +541,7 @@ impl pallet_governance::ProposalSubmissionAuthorityProvider<AssetId>
       && matches!(
         payload_kind,
         pallet_governance::ProposalPayloadKind::L1RootAction
+          | pallet_governance::ProposalPayloadKind::L2ParameterChange
           | pallet_governance::ProposalPayloadKind::Intent
       )
     {
@@ -639,6 +641,33 @@ impl pallet_governance::BenchmarkHelper<AccountId, AssetId, Hash, AssetId, Balan
       pallet_governance::ProposalPayloadKind::Intent,
       payload_hash,
       payload,
+    ))
+  }
+
+  fn prepare_pending_enactment(
+    account: &AccountId,
+  ) -> Result<
+    (AssetId, pallet_governance::ProposalPayloadKind, Hash),
+    polkadot_sdk::sp_runtime::DispatchError,
+  > {
+    use polkadot_sdk::frame_support::traits::Currency;
+    crate::Actors::apply_user_creation_enabled(false);
+    let payload =
+      RuntimeCall::Actors(pallet_deos_actors::Call::set_user_creation_enabled { enabled: true })
+        .encode();
+    let hash = <Runtime as frame_system::Config>::Hashing::hash(&payload);
+    if !<crate::Preimage as PreimageProvider<Hash>>::have_preimage(&hash) {
+      let _ = <crate::Balances as Currency<AccountId>>::deposit_creating(
+        account,
+        primitives::ecosystem::params::PRECISION,
+      );
+      crate::Preimage::note_preimage(RuntimeOrigin::signed(account.clone()), payload)
+        .map_err(|error| error.error)?;
+    }
+    Ok((
+      protocol_governance_domain(),
+      pallet_governance::ProposalPayloadKind::L2ParameterChange,
+      hash,
     ))
   }
 
@@ -771,6 +800,44 @@ fn validate_advisory_payload(
   Ok(())
 }
 
+enum ProtocolParameterChange {
+  RouterFee(polkadot_sdk::sp_runtime::Perbill),
+  UserCreationEnabled(bool),
+  GlobalCircuitBreaker(bool),
+}
+
+fn decode_protocol_parameter_change(
+  domain: AssetId,
+  bytes: &[u8],
+) -> Result<ProtocolParameterChange, pallet_governance::ProposalExecutionFailureReason> {
+  use pallet_governance::ProposalExecutionFailureReason as Error;
+  if domain != protocol_governance_domain() {
+    return Err(Error::UnsupportedDomain);
+  }
+  if bytes.len()
+    > proposal_payload_length_ceiling(pallet_governance::ProposalPayloadKind::L2ParameterChange)
+  {
+    return Err(Error::InvalidPreimage);
+  }
+  let mut input = bytes;
+  let call = RuntimeCall::decode(&mut input).map_err(|_| Error::InvalidPreimage)?;
+  if !input.is_empty() {
+    return Err(Error::InvalidPreimage);
+  }
+  match call {
+    RuntimeCall::DeosRouter(pallet_deos_router::Call::update_router_fee { new_fee }) => {
+      Ok(ProtocolParameterChange::RouterFee(new_fee))
+    }
+    RuntimeCall::Actors(pallet_deos_actors::Call::set_user_creation_enabled { enabled }) => {
+      Ok(ProtocolParameterChange::UserCreationEnabled(enabled))
+    }
+    RuntimeCall::Actors(pallet_deos_actors::Call::set_global_circuit_breaker { paused }) => {
+      Ok(ProtocolParameterChange::GlobalCircuitBreaker(paused))
+    }
+    _ => Err(Error::UnsupportedCall),
+  }
+}
+
 pub struct RuntimeProposalPayloadPreimageProvider;
 impl pallet_governance::ProposalPayloadPreimageProvider<Hash, AssetId>
   for RuntimeProposalPayloadPreimageProvider
@@ -814,14 +881,11 @@ impl pallet_governance::ProposalPayloadPreimageProvider<Hash, AssetId>
           StrategicRuntimeUpgradePayload::decode(&mut input).map_err(|_| Error::Invalid)?;
       }
       pallet_governance::ProposalPayloadKind::L2ParameterChange => {
-        let call = RuntimeCall::decode(&mut input).map_err(|_| Error::Invalid)?;
-        if !matches!(
-          call,
-          RuntimeCall::DeosRouter(pallet_deos_router::Call::update_router_fee { .. })
-        ) || domain != protocol_governance_domain()
-        {
-          return Err(Error::Incompatible);
-        }
+        decode_protocol_parameter_change(domain, bytes).map_err(|error| match error {
+          pallet_governance::ProposalExecutionFailureReason::InvalidPreimage => Error::Invalid,
+          _ => Error::Incompatible,
+        })?;
+        input = &[];
       }
       pallet_governance::ProposalPayloadKind::L2TreasurySpend => {
         if domain != tactical_governance_domain() {
@@ -1010,22 +1074,22 @@ impl pallet_governance::ProposalPayloadExecutor<AccountId, AssetId, u32, Hash>
         .map_err(|_| pallet_governance::ProposalExecutionFailureReason::DispatchFailed)
       }
       pallet_governance::ProposalPayloadKind::L2ParameterChange => {
-        let call = RuntimeCall::decode(&mut &bytes[..])
-          .map_err(|_| pallet_governance::ProposalExecutionFailureReason::InvalidPreimage)?;
-        match call {
-          RuntimeCall::DeosRouter(pallet_deos_router::Call::update_router_fee { new_fee })
-            if domain == protocol_governance_domain() =>
-          {
+        let surface = match decode_protocol_parameter_change(domain, &bytes)? {
+          ProtocolParameterChange::RouterFee(new_fee) => {
             crate::DeosRouter::apply_router_fee_update(new_fee)
-              .map(
-                |_| pallet_governance::ProposalExecutionReceipt::ParameterChangeExecuted {
-                  surface: pallet_governance::ProposalParameterChangeSurface::RouterFee,
-                },
-              )
-              .map_err(|_| pallet_governance::ProposalExecutionFailureReason::DispatchFailed)
+              .map_err(|_| pallet_governance::ProposalExecutionFailureReason::DispatchFailed)?;
+            pallet_governance::ProposalParameterChangeSurface::RouterFee
           }
-          _ => Err(pallet_governance::ProposalExecutionFailureReason::UnsupportedCall),
-        }
+          ProtocolParameterChange::UserCreationEnabled(enabled) => {
+            crate::Actors::apply_user_creation_enabled(enabled);
+            pallet_governance::ProposalParameterChangeSurface::ActorUserCreationEnabled
+          }
+          ProtocolParameterChange::GlobalCircuitBreaker(paused) => {
+            crate::Actors::apply_global_circuit_breaker(paused);
+            pallet_governance::ProposalParameterChangeSurface::ActorGlobalCircuitBreaker
+          }
+        };
+        Ok(pallet_governance::ProposalExecutionReceipt::ParameterChangeExecuted { surface })
       }
       pallet_governance::ProposalPayloadKind::L2TreasurySpend => {
         if domain != tactical_governance_domain() {
@@ -1100,7 +1164,7 @@ impl pallet_governance::Config for Runtime {
   type StrategicProposalReserve = StrategicProposalReserve;
   type MaxActiveProposalsPerAuthor = MaxActiveProposalsPerAuthor;
   type MaxMaturingProposalsPerEpoch = MaxMaturingProposalsPerEpoch;
-  type MaxPendingEnactmentsPerEpoch = MaxPendingEnactmentsPerEpoch;
+  type MaxPendingEnactments = MaxPendingEnactments;
   type ProposalVotingPeriod = ProposalVotingPeriod;
   type ProposalLeadInPeriod = ProposalLeadInPeriod;
   type ProposalProtectionPeriod = ProposalProtectionPeriod;

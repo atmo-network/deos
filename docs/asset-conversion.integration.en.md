@@ -20,7 +20,15 @@ Canonical admission permits `Local(id)` only outside the `TYPE_FOREIGN` namespac
 
 `pallet-asset-conversion` remains the underlying pool, liquidity, quote, reserve, and swap engine. Asset Conversion `Pools<Runtime>` is authoritative pool existence. DEOS does not infer existence from a quote, `PoolEmpty`, an Oracle feed, or an LP binding.
 
-The runtime carries the minimal full-balance correction from Polkadot SDK PR `#12408`, merge commit `408895c27a5aff4bac99e956df5426983566f8cb`. Provenance, exact source digests, removal condition, and review expiry are recorded in `template/vendor/pallet-asset-conversion/DEOS-PATCH.md`. Cargo resolves exactly one implementation.
+The selected SDK graph resolves upstream `pallet-asset-conversion 32.0.0` from crates.io, with no local override. It includes the full-balance reserve correction from [Polkadot SDK PR #12408](https://github.com/paritytech/polkadot-sdk/pull/12408), merge `408895c27a5aff4bac99e956df5426983566f8cb`. The unused 31.0.0 vendor copy is removed; Cargo resolves exactly one implementation. Runtime upgrade/caller acceptance remains owned by the [SDK dependency line](./actors.integration.en.md#sdk-dependency-line), not implied by this retirement.
+
+The retired backport changed only reserve reads to full `Assets::balance` and routed liquidity withdrawal plus exact-input/exact-output quote reserves through `get_reserves`. Its corrected `src/lib.rs` matched the upstream post-merge file. The original archive and source identities below preserve its provenance without retaining another buildable implementation.
+
+| Historical input | SHA-256 |
+| --- | --- |
+| Crates.io 31.0.0 archive | `9372e01886c4a9b625929c2549ac50d67cfe0f8e4daf232d884aecc843fe2557` |
+| Original `src/lib.rs` | `060af0ccea54c6d970a67b6f65af94c952d995f22885ed27861f9095ec54a010` |
+| Corrected upstream/vendor `src/lib.rs` | `cc2cd2d15e190d03b19b564c529ee06f0fe6987979c2c08fd532ca40d734c2f0` |
 
 Quote, liquidity withdrawal, and execution reserve calculations use full physical pool balances. Withdrawability remains a separate execution constraint; full reserve truth is not a promise that every unit can be withdrawn under `Preserve`.
 

@@ -142,7 +142,10 @@ export type GovernanceProposalExecutionFailureReason =
   | 'UnsupportedCall'
   | 'MissingWinningPrimaryOption'
   | 'DispatchFailed';
-export type GovernanceProposalParameterChangeSurface = 'RouterFee';
+export type GovernanceProposalParameterChangeSurface =
+  | 'RouterFee'
+  | 'ActorUserCreationEnabled'
+  | 'ActorGlobalCircuitBreaker';
 export type GovernanceProposalTreasurySpendSettlementKind =
   'InvoiceScalarTransfer';
 export type GovernanceProposalTreasurySpendScalar =

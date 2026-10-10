@@ -5,8 +5,9 @@ Excludes: Runtime queries, simulation, governance submission, and browser render
 Zone: Web-client validation entrypoint; imports the automation public contract only.
 */
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+
+import { readActorsTestMetadata } from './actors-test-metadata.mjs';
 
 import {
   createActorContractArtifact,
@@ -15,9 +16,7 @@ import {
   inspectActorContractArtifact,
 } from '../src/lib/automation/contract-artifact.ts';
 
-const metadataBytes = new Uint8Array(
-  await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
-);
+const metadataBytes = await readActorsTestMetadata();
 const runtime = {
   genesisHash: `0x${'11'.repeat(32)}`,
   specVersion: 1,
@@ -41,7 +40,8 @@ function canonicalArtifact() {
           on_error: { type: 'AbortCycle', value: undefined },
         },
       ],
-      completion: { type: 'Persistent', value: undefined },
+      close_when: undefined,
+      on_unfunded: { type: 'Close', value: undefined },
       funding: { type: 'OwnerOnly', value: undefined },
       auto_close_at_cycle_nonce: undefined,
     }),
@@ -58,11 +58,8 @@ test('ActorContract encodes and projects every nested value losslessly', () => {
         precondition: [
           [
             {
-              timing: { type: 'Current', value: undefined },
-              predicate: {
-                type: 'BlockNumberAbove',
-                value: { threshold: 1 },
-              },
+              type: 'BlockNumberAbove',
+              value: { threshold: 1 },
             },
           ],
         ],
@@ -77,7 +74,8 @@ test('ActorContract encodes and projects every nested value losslessly', () => {
         on_error: { type: 'AbortCycle', value: undefined },
       },
     ],
-    completion: { type: 'Persistent', value: undefined },
+    close_when: undefined,
+    on_unfunded: { type: 'Close', value: undefined },
     funding: { type: 'OwnerOnly', value: undefined },
   });
   const artifact = createActorContractArtifact({
@@ -101,21 +99,15 @@ test('ActorContract encodes and projects every nested value losslessly', () => {
   }
 });
 
-test('DNF timing and clause topology change canonical identity and remain diff-visible', () => {
-  const makeArtifact = (timing, separateClauses = false) => {
+test('DNF predicate and clause topology change canonical identity and remain diff-visible', () => {
+  const makeArtifact = (predicateType, separateClauses = false) => {
     const predicate = {
-      timing: { type: timing, value: undefined },
-      predicate: {
-        type: 'BlockNumberAbove',
-        value: { threshold: 1 },
-      },
+      type: predicateType,
+      value: { threshold: 1 },
     };
     const second = {
-      timing: { type: 'Current', value: undefined },
-      predicate: {
-        type: 'BlockNumberBelow',
-        value: { threshold: 10 },
-      },
+      type: 'BlockNumberBelow',
+      value: { threshold: 10 },
     };
     const precondition = separateClauses
       ? [[predicate], [second]]
@@ -136,15 +128,16 @@ test('DNF timing and clause topology change canonical identity and remain diff-v
             on_error: { type: 'AbortCycle', value: undefined },
           },
         ],
-        completion: { type: 'Persistent', value: undefined },
+        close_when: undefined,
+        on_unfunded: { type: 'Close', value: undefined },
         funding: { type: 'OwnerOnly', value: undefined },
       }),
     });
   };
   const inspected = [
-    makeArtifact('Opening'),
-    makeArtifact('Current'),
-    makeArtifact('Current', true),
+    makeArtifact('BlockNumberAbove'),
+    makeArtifact('BlockNumberBelow'),
+    makeArtifact('BlockNumberAbove', true),
   ].map((artifact) => {
     const inspection = inspectActorContractArtifact(
       artifact,
@@ -167,9 +160,9 @@ test('DNF timing and clause topology change canonical identity and remain diff-v
       changedMode.changes.some(
         (change) =>
           change.kind === 'replace' &&
-          change.path.includes('/precondition/0/0/timing/type') &&
-          change.before === 'Opening' &&
-          change.after === 'Current',
+          change.path.includes('/precondition/0/0/type') &&
+          change.before === 'BlockNumberAbove' &&
+          change.after === 'BlockNumberBelow',
       ),
     );
   }
@@ -193,7 +186,8 @@ test('trigger admission diff stays inside the trigger tree and never invents con
             on_error: { type: 'AbortCycle', value: undefined },
           },
         ],
-        completion: { type: 'Persistent', value: undefined },
+        close_when: undefined,
+        on_unfunded: { type: 'Close', value: undefined },
         funding: { type: 'OwnerOnly', value: undefined },
       }),
     });
@@ -207,39 +201,6 @@ test('trigger admission diff stays inside the trigger tree and never invents con
     return inspection;
   };
   const manual = inspectTrigger({ type: 'Manual', value: undefined });
-  const observation = inspectTrigger({
-    type: 'ObservationChange',
-    value: {
-      feed: {
-        asset_in: { type: 'Native', value: undefined },
-        asset_out: { type: 'Local', value: 7 },
-        method: { type: 'PreExecutionSpot', value: undefined },
-        aggregation: {
-          type: 'Ema',
-          value: { half_life_blocks: 100 },
-        },
-        scale: 12,
-      },
-    },
-  });
-  const observationTrigger = observation.projection.trigger;
-  assert.equal(observationTrigger.type, 'ObservationChange');
-  assert.deepEqual(Object.keys(observationTrigger.value), ['feed']);
-  assert.equal(observationTrigger.value.feed.aggregation.type, 'Ema');
-  assert.equal(
-    observationTrigger.value.feed.aggregation.value.half_life_blocks.$integer,
-    '100',
-  );
-  assert.equal(observationTrigger.value.feed.scale.$integer, '12');
-  const observationDiff = diffActorContractArtifacts(manual, observation);
-  assert.equal(observationDiff.compatible, true);
-  if (observationDiff.compatible) {
-    assert(
-      observationDiff.changes.every((change) =>
-        ('path' in change ? change.path : change.from).startsWith('/trigger'),
-      ),
-    );
-  }
   const cadenced = inspectTrigger({
     type: 'Cadenced',
     value: { every_ticks: 10n },

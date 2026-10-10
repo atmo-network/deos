@@ -60,6 +60,10 @@ construct_runtime!(
   }
 );
 
+polkadot_sdk::frame_support::parameter_types! {
+  pub static TestMaxQueueEntriesScannedPerBlock: u32 = 1024;
+}
+
 impl polkadot_sdk::frame_system::Config for Test {
   type BaseCallFilter = polkadot_sdk::frame_support::traits::Everything;
   type BlockWeights = ();
@@ -125,9 +129,7 @@ impl Get<TestAsset> for NativeAsset {
 }
 
 thread_local! {
-  static ASSET_BALANCES: RefCell<alloc::collections::BTreeMap<(AccountId, TestAsset), Balance>> =
-    RefCell::new(alloc::collections::BTreeMap::new());
-
+  static CADENCE_TICK_MILLIS: RefCell<u64> = const { RefCell::new(500) };
   static BURNED: RefCell<alloc::collections::BTreeMap<TestAsset, Balance>> =
     RefCell::new(alloc::collections::BTreeMap::new());
 
@@ -150,18 +152,39 @@ thread_local! {
 
   static GUARANTEED_ON_IDLE_WEIGHT: RefCell<polkadot_sdk::sp_weights::Weight> =
     RefCell::new(polkadot_sdk::sp_weights::Weight::MAX);
+  static BLOCK_RESOURCE_BUDGET_OVERRIDE: RefCell<Option<crate::BlockResourceBudget>> =
+    const { RefCell::new(None) };
+  static PREPASS_RESOURCE_BUDGET: RefCell<Option<(u64, Result<crate::BlockResourceBudget, crate::BlockResourceError>)>> =
+    const { RefCell::new(None) };
+  static PREPASS_RESOURCE_BUDGET_READS: RefCell<u32> = const { RefCell::new(0) };
+  #[cfg(feature = "runtime-benchmarks")]
+  static ADMISSION_AUTHORITY_CALLS: RefCell<u32> = const { RefCell::new(0) };
   static STEP_CONTROL_ACTUAL_WEIGHT_OVERRIDE: RefCell<Option<polkadot_sdk::sp_weights::Weight>> =
     RefCell::new(None);
   static LAST_STEP_CONTROL_EXECUTION: RefCell<Option<crate::StepControlExecution>> =
     RefCell::new(None);
   static MISSING_STEP_CONTROL_ACTUAL_WEIGHT: RefCell<bool> = RefCell::new(false);
+  static MISSING_BEHAVIOR_CONTROL_WEIGHT: RefCell<bool> = RefCell::new(false);
+  static MISSING_BEHAVIOR_CLOSE_WEIGHT: RefCell<bool> = RefCell::new(false);
+  static MISSING_BEHAVIOR_INSPECTION_WEIGHT: RefCell<bool> = RefCell::new(false);
+  static PREPARED_BEHAVIOR_LIFECYCLE_WEIGHT: RefCell<bool> = const { RefCell::new(false) };
+  static PREPARED_FINANCIAL_WAIT_WEIGHTS: RefCell<bool> = RefCell::new(false);
+  static PREPARED_FINANCIAL_WAIT_DUE_WEIGHT: RefCell<bool> = RefCell::new(false);
+  static PREPARED_FINANCIAL_WAIT_SERVICE_WEIGHT: RefCell<bool> = RefCell::new(false);
+  static PREPARED_FINANCIAL_WAIT_INGRESS_WEIGHT: RefCell<bool> = RefCell::new(false);
+  static PREPARED_AT_TIME_BACKING: RefCell<bool> = RefCell::new(false);
+  static ADMISSION_AUTHORITY_OVERRIDE: RefCell<Option<crate::AdmissionCertificateAuthority>> =
+    const { RefCell::new(None) };
+  static FINANCIAL_RETURN_BACKING: RefCell<TestFinancialReturnBacking> =
+    RefCell::new(TestFinancialReturnBacking::Unavailable);
   static TASK_EFFECT_ACTUAL_WEIGHT_OVERRIDE: RefCell<Option<polkadot_sdk::sp_weights::Weight>> =
     RefCell::new(None);
   static MISSING_TASK_EFFECT_ACTUAL_WEIGHT: RefCell<bool> = RefCell::new(false);
   static FEE_COLLECTIONS: RefCell<alloc::vec::Vec<Balance>> = RefCell::new(alloc::vec::Vec::new());
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
-  static FAIL_TRANSFER_TO: RefCell<Option<AccountId>> = RefCell::new(None);
+  static FAIL_FEE_SINK_TRANSFER_FROM: RefCell<Option<AccountId>> = RefCell::new(None);
+  static FAIL_TRANSFER_TO: RefCell<Option<(AccountId, crate::RetryClass)>> = RefCell::new(None);
   static ASSET_MINIMUM_BALANCE: RefCell<Balance> = RefCell::new(1);
   static OBSERVATIONS: RefCell<
     alloc::collections::BTreeMap<u32, crate::ScalarObservationState<u64>>,
@@ -169,10 +192,12 @@ thread_local! {
   static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_DEX_FAILURE: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_ADD_LIQUIDITY_FAILURE: RefCell<bool> = RefCell::new(false);
+  static INVALID_LIQUIDITY_OUTCOME: RefCell<bool> = RefCell::new(false);
   static LAST_DEX_ACTORS_TYPE: RefCell<Option<ActorType>> = RefCell::new(None);
   static MAX_CONSECUTIVE_FAILURES: RefCell<u32> = RefCell::new(3);
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_AFTER_BURN: RefCell<bool> = RefCell::new(false);
+  static STAKING_NATIVE_CHARGE: RefCell<Balance> = const { RefCell::new(0) };
   static STAKING_SHARE_ASSET_AVAILABLE: RefCell<bool> = RefCell::new(true);
   static FAIL_ADD_LIQUIDITY_AFTER_FIRST_DEBIT: RefCell<bool> = RefCell::new(false);
   static FAIL_REMOVE_LIQUIDITY_AFTER_FIRST_CREDIT: RefCell<bool> = RefCell::new(false);
@@ -230,9 +255,10 @@ pub fn register_lp_pair(lp_asset: TestAsset, asset_a: TestAsset, asset_b: TestAs
 }
 
 pub fn reset_mock_adapters() {
+  CADENCE_TICK_MILLIS.with(|value| *value.borrow_mut() = 500);
   #[cfg(feature = "runtime-benchmarks")]
   BENCHMARK_OBSERVATION_REVISIONS.with(|revisions| revisions.borrow_mut().clear());
-  ASSET_BALANCES.with(|b| b.borrow_mut().clear());
+  let _ = polkadot_sdk::sp_io::storage::clear_prefix(b"mock-asset-balance", None);
   BURNED.with(|b| b.borrow_mut().clear());
   MINTED.with(|b| b.borrow_mut().clear());
   POOL_RESERVES.with(|b| b.borrow_mut().clear());
@@ -241,24 +267,41 @@ pub fn reset_mock_adapters() {
   UNSTAKED.with(|b| b.borrow_mut().clear());
   DONATED_LIQUIDITY.with(|b| b.borrow_mut().clear());
   GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow_mut() = polkadot_sdk::sp_weights::Weight::MAX);
+  BLOCK_RESOURCE_BUDGET_OVERRIDE.with(|v| *v.borrow_mut() = None);
+  PREPASS_RESOURCE_BUDGET.with(|v| *v.borrow_mut() = None);
+  PREPASS_RESOURCE_BUDGET_READS.with(|v| *v.borrow_mut() = 0);
   STEP_CONTROL_ACTUAL_WEIGHT_OVERRIDE.with(|v| *v.borrow_mut() = None);
   LAST_STEP_CONTROL_EXECUTION.with(|v| *v.borrow_mut() = None);
   MISSING_STEP_CONTROL_ACTUAL_WEIGHT.with(|v| *v.borrow_mut() = false);
+  MISSING_BEHAVIOR_CONTROL_WEIGHT.with(|v| *v.borrow_mut() = false);
+  MISSING_BEHAVIOR_CLOSE_WEIGHT.with(|v| *v.borrow_mut() = false);
+  MISSING_BEHAVIOR_INSPECTION_WEIGHT.with(|v| *v.borrow_mut() = false);
+  PREPARED_BEHAVIOR_LIFECYCLE_WEIGHT.with(|v| *v.borrow_mut() = false);
+  PREPARED_FINANCIAL_WAIT_WEIGHTS.with(|v| *v.borrow_mut() = false);
+  PREPARED_FINANCIAL_WAIT_DUE_WEIGHT.with(|v| *v.borrow_mut() = false);
+  PREPARED_FINANCIAL_WAIT_SERVICE_WEIGHT.with(|v| *v.borrow_mut() = false);
+  PREPARED_FINANCIAL_WAIT_INGRESS_WEIGHT.with(|v| *v.borrow_mut() = false);
+  PREPARED_AT_TIME_BACKING.with(|v| *v.borrow_mut() = false);
+  ADMISSION_AUTHORITY_OVERRIDE.with(|v| *v.borrow_mut() = None);
+  FINANCIAL_RETURN_BACKING.with(|v| *v.borrow_mut() = TestFinancialReturnBacking::Unavailable);
   TASK_EFFECT_ACTUAL_WEIGHT_OVERRIDE.with(|v| *v.borrow_mut() = None);
   MISSING_TASK_EFFECT_ACTUAL_WEIGHT.with(|v| *v.borrow_mut() = false);
   FEE_COLLECTIONS.with(|v| v.borrow_mut().clear());
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
+  FAIL_FEE_SINK_TRANSFER_FROM.with(|v| *v.borrow_mut() = None);
   FAIL_TRANSFER_TO.with(|v| *v.borrow_mut() = None);
   ASSET_MINIMUM_BALANCE.with(|v| *v.borrow_mut() = 1);
   OBSERVATIONS.with(|values| values.borrow_mut().clear());
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
   TEMPORARY_DEX_FAILURE.with(|v| *v.borrow_mut() = false);
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = false);
+  INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow_mut() = false);
   LAST_DEX_ACTORS_TYPE.with(|value| *value.borrow_mut() = None);
   MAX_CONSECUTIVE_FAILURES.with(|v| *v.borrow_mut() = 3);
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = false);
+  STAKING_NATIVE_CHARGE.with(|v| *v.borrow_mut() = 0);
   STAKING_SHARE_ASSET_AVAILABLE.with(|v| *v.borrow_mut() = true);
   FAIL_ADD_LIQUIDITY_AFTER_FIRST_DEBIT.with(|v| *v.borrow_mut() = false);
   FAIL_REMOVE_LIQUIDITY_AFTER_FIRST_CREDIT.with(|v| *v.borrow_mut() = false);
@@ -322,10 +365,114 @@ impl FeeCollector<AccountId, TestAsset, Balance> for MockFeeCollector {
 
 pub struct MockAssetOps;
 
+pub struct MockFinancialWaitBacking;
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum TestFinancialReturnBacking {
+  Unavailable,
+  Prepaid,
+  SignedProducer,
+  ActorCustody,
+}
+
+pub fn set_financial_return_backing(mode: TestFinancialReturnBacking) {
+  FINANCIAL_RETURN_BACKING.with(|v| *v.borrow_mut() = mode);
+}
+
+pub fn financial_return_backings() -> alloc::vec::Vec<(crate::FinancialWaitReceipt, Balance)> {
+  polkadot_sdk::sp_io::storage::get(b"mock-financial-return-backings")
+    .and_then(|encoded| Decode::decode(&mut &encoded[..]).ok())
+    .unwrap_or_default()
+}
+
+impl crate::FinancialWaitBackingProvider<AccountId, Balance> for MockFinancialWaitBacking {
+  fn secure_at_time_installation(
+    owner: &AccountId,
+    actor: crate::ActorRef,
+    semantic_contract_id: [u8; 32],
+    minimum_fee: Balance,
+  ) -> DispatchResult {
+    if !PREPARED_AT_TIME_BACKING.with(|enabled| *enabled.borrow()) {
+      return Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "AtTime financial-wait backing unavailable",
+      ));
+    }
+    MockFeeCollector::collect_fee(owner, &TestFeeSink::get(), TestAsset::Native, minimum_fee)?;
+    polkadot_sdk::sp_io::storage::set(
+      &at_time_backing_key(actor, semantic_contract_id),
+      &minimum_fee.encode(),
+    );
+    Ok(())
+  }
+
+  fn secure_funded_ingress_return(
+    source: Option<&AccountId>,
+    provenance: Option<&crate::FundingProvenance>,
+    receipt: crate::FinancialWaitReceipt,
+    minimum_fee: Balance,
+  ) -> DispatchResult {
+    let mode = FINANCIAL_RETURN_BACKING.with(|v| *v.borrow());
+    if mode == TestFinancialReturnBacking::Unavailable {
+      return Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "Return backing unavailable",
+      ));
+    }
+    if matches!(
+      mode,
+      TestFinancialReturnBacking::SignedProducer | TestFinancialReturnBacking::ActorCustody
+    ) {
+      let payer = if mode == TestFinancialReturnBacking::ActorCustody {
+        crate::Pallet::<Test>::actor_identity(receipt.actor.actor_id)
+          .unwrap()
+          .sovereign_account
+      } else {
+        *source
+          .filter(|_| provenance == Some(&crate::FundingProvenance::Signed))
+          .ok_or(polkadot_sdk::sp_runtime::DispatchError::Other(
+            "Signed producer required",
+          ))?
+      };
+      MockAssetOps::transfer(&payer, &TestFeeSink::get(), TestAsset::Native, minimum_fee)
+        .map_err(|failure| failure.error)?;
+    }
+    let mut backing = financial_return_backings();
+    backing.push((receipt, minimum_fee));
+    polkadot_sdk::sp_io::storage::set(b"mock-financial-return-backings", &backing.encode());
+    Ok(())
+  }
+}
+
+pub fn at_time_backing_key(
+  actor: crate::ActorRef,
+  semantic_contract_id: [u8; 32],
+) -> alloc::vec::Vec<u8> {
+  (b"mock-at-time-backing", actor, semantic_contract_id).encode()
+}
+
+impl MockAssetOps {
+  fn asset_balance_key(who: &AccountId, asset: TestAsset) -> alloc::vec::Vec<u8> {
+    (b"mock-asset-balance", who, asset).encode()
+  }
+
+  fn stored_asset_balance(who: &AccountId, asset: TestAsset) -> Option<Balance> {
+    polkadot_sdk::sp_io::storage::get(&Self::asset_balance_key(who, asset))
+      .map(|encoded| Balance::decode(&mut &encoded[..]).expect("mock balance is encoded Balance"))
+  }
+
+  fn store_asset_balance(who: &AccountId, asset: TestAsset, balance: Balance) {
+    // Keep zero entries: account existence is distinct from spendable balance.
+    polkadot_sdk::sp_io::storage::set(&Self::asset_balance_key(who, asset), &balance.encode());
+  }
+}
+
 #[cfg(feature = "runtime-benchmarks")]
 impl MockAssetOps {
   fn frozen_account_key(who: &AccountId, asset: TestAsset) -> alloc::vec::Vec<u8> {
     (b"mock-asset-account-freeze", who, asset).encode()
+  }
+
+  fn minimum_balance_key(asset: TestAsset) -> alloc::vec::Vec<u8> {
+    (b"mock-asset-minimum-balance", asset).encode()
   }
 
   fn account_is_frozen(who: &AccountId, asset: TestAsset) -> bool {
@@ -344,12 +491,20 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
     if amount > 0 && Self::account_is_frozen(from, asset) {
       return Err(DispatchError::Token(polkadot_sdk::sp_runtime::TokenError::Frozen).into());
     }
-    if FAIL_TRANSFER_TO.with(|target| *target.borrow() == Some(*to)) {
-      return Err(DispatchError::Other("MockTransferTargetFailed").into());
+    if let Some((target, retry)) = FAIL_TRANSFER_TO.with(|target| *target.borrow())
+      && target == *to
+    {
+      return Err(crate::TaskFailure {
+        error: DispatchError::Other("MockTransferTargetFailed"),
+        retry,
+      });
     }
     match asset {
       TestAsset::Native => {
-        if *to == TestFeeSink::get() && FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow()) {
+        if *to == TestFeeSink::get()
+          && (FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow())
+            || FAIL_FEE_SINK_TRANSFER_FROM.with(|v| *v.borrow() == Some(*from)))
+        {
           return Err(DispatchError::Other("MockFeeSinkTransferFailed").into());
         }
         use polkadot_sdk::frame_support::traits::Currency;
@@ -360,19 +515,18 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
           polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
         )?;
       }
-      _ => ASSET_BALANCES.with(|b| {
-        let mut map = b.borrow_mut();
-        let src = map.get(&(*from, asset)).copied().unwrap_or(0);
+      _ => {
+        let src = Self::stored_asset_balance(from, asset).unwrap_or(0);
         if src < amount {
-          return Err(DispatchError::Token(
-            polkadot_sdk::sp_runtime::TokenError::FundsUnavailable,
-          ));
+          return Err(
+            DispatchError::Token(polkadot_sdk::sp_runtime::TokenError::FundsUnavailable).into(),
+          );
         }
-        map.insert((*from, asset), src - amount);
-        let dst = map.get(&(*to, asset)).copied().unwrap_or(0);
-        map.insert((*to, asset), dst + amount);
-        Ok(())
-      })?,
+        Self::store_asset_balance(from, asset, src - amount);
+        // Read after debit so self-transfer retains the original balance.
+        let dst = Self::stored_asset_balance(to, asset).unwrap_or(0);
+        Self::store_asset_balance(to, asset, dst + amount);
+      }
     }
     #[cfg(feature = "runtime-benchmarks")]
     if BENCHMARK_ASSET_OPS_INGRESS.with(|enabled| *enabled.borrow()) {
@@ -399,24 +553,21 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
         }
         Ok(())
       }
-      _ => ASSET_BALANCES
-        .with(|b| -> Result<(), DispatchError> {
-          let mut map = b.borrow_mut();
-          let bal = map.get(&(*who, asset)).copied().unwrap_or(0);
-          if bal < amount {
-            return Err(DispatchError::Token(
-              polkadot_sdk::sp_runtime::TokenError::FundsUnavailable,
-            ));
-          }
-          map.insert((*who, asset), bal - amount);
-          BURNED.with(|br| {
-            let mut bm = br.borrow_mut();
-            let prev = bm.get(&asset).copied().unwrap_or(0);
-            bm.insert(asset, prev + amount);
-          });
-          Ok(())
-        })
-        .map_err(TaskFailure::from),
+      _ => {
+        let bal = Self::stored_asset_balance(who, asset).unwrap_or(0);
+        if bal < amount {
+          return Err(
+            DispatchError::Token(polkadot_sdk::sp_runtime::TokenError::FundsUnavailable).into(),
+          );
+        }
+        Self::store_asset_balance(who, asset, bal - amount);
+        BURNED.with(|br| {
+          let mut bm = br.borrow_mut();
+          let prev = bm.get(&asset).copied().unwrap_or(0);
+          bm.insert(asset, prev + amount);
+        });
+        Ok(())
+      }
     }
   }
 
@@ -426,16 +577,15 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
         use polkadot_sdk::frame_support::traits::Currency;
         let _ = <Balances as Currency<AccountId>>::deposit_creating(to, amount);
       }
-      _ => ASSET_BALANCES.with(|b| {
-        let mut map = b.borrow_mut();
-        let bal = map.get(&(*to, asset)).copied().unwrap_or(0);
-        map.insert((*to, asset), bal + amount);
+      _ => {
+        let bal = Self::stored_asset_balance(to, asset).unwrap_or(0);
+        Self::store_asset_balance(to, asset, bal + amount);
         MINTED.with(|m| {
           let mut mm = m.borrow_mut();
           let prev = mm.get(&asset).copied().unwrap_or(0);
           mm.insert(asset, prev + amount);
         });
-      }),
+      }
     }
     #[cfg(feature = "runtime-benchmarks")]
     if BENCHMARK_ASSET_OPS_INGRESS.with(|enabled| *enabled.borrow())
@@ -463,11 +613,25 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
           Fortitude::Polite,
         )
       }
-      _ => ASSET_BALANCES.with(|b| b.borrow().get(&(*who, asset)).copied().unwrap_or(0)),
+      _ => Self::stored_asset_balance(who, asset).unwrap_or(0),
+    }
+  }
+
+  fn total_balance(who: &AccountId, asset: TestAsset) -> Balance {
+    match asset {
+      TestAsset::Native => {
+        use polkadot_sdk::frame_support::traits::fungible::Inspect as NativeInspect;
+        <Balances as NativeInspect<AccountId>>::total_balance(who)
+      }
+      _ => Self::stored_asset_balance(who, asset).unwrap_or(0),
     }
   }
 
   fn minimum_balance(_asset: TestAsset) -> Balance {
+    #[cfg(feature = "runtime-benchmarks")]
+    if let Some(encoded) = polkadot_sdk::sp_io::storage::get(&Self::minimum_balance_key(_asset)) {
+      return Balance::decode(&mut &encoded[..]).expect("mock asset minimum is encoded Balance");
+    }
     ASSET_MINIMUM_BALANCE.with(|value| *value.borrow())
   }
 
@@ -495,13 +659,13 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
         .into_result()
         .map_err(|_| TaskFailure::temporary(crate::Error::<Test>::RecipientDepositUnavailable));
     }
-    let source = ASSET_BALANCES.with(|b| b.borrow().get(&(*from, asset)).copied().unwrap_or(0));
+    let source = Self::stored_asset_balance(from, asset).unwrap_or(0);
     if source < amount {
       return Err(TaskFailure::permanent(DispatchError::Token(
         polkadot_sdk::sp_runtime::TokenError::FundsUnavailable,
       )));
     }
-    let recipient = ASSET_BALANCES.with(|b| b.borrow().get(&(*to, asset)).copied().unwrap_or(0));
+    let recipient = Self::stored_asset_balance(to, asset).unwrap_or(0);
     if recipient == 0 && amount < Self::minimum_balance(asset) {
       return Err(TaskFailure::temporary(
         crate::Error::<Test>::RecipientDepositUnavailable,
@@ -533,7 +697,15 @@ pub fn donated_liquidity(
 }
 
 pub fn set_fail_transfer_to(target: Option<AccountId>) {
-  FAIL_TRANSFER_TO.with(|value| *value.borrow_mut() = target);
+  FAIL_TRANSFER_TO.with(|value| {
+    *value.borrow_mut() = target.map(|account| (account, crate::RetryClass::Permanent))
+  });
+}
+
+pub fn set_temporary_transfer_failure_to(target: Option<AccountId>) {
+  FAIL_TRANSFER_TO.with(|value| {
+    *value.borrow_mut() = target.map(|account| (account, crate::RetryClass::Temporary))
+  });
 }
 
 pub fn set_fail_dex_after_input_transfer(value: bool) {
@@ -546,6 +718,10 @@ pub fn set_temporary_dex_failure(value: bool) {
 
 pub fn set_temporary_add_liquidity_failure(value: bool) {
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = value);
+}
+
+pub fn set_invalid_liquidity_outcome(value: bool) {
+  INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow_mut() = value);
 }
 
 pub fn last_dex_actor_type() -> Option<ActorType> {
@@ -564,6 +740,11 @@ pub fn set_fail_staking_after_burn(value: bool) {
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = value);
 }
 
+pub fn set_staking_native_charge(value: Balance) {
+  STAKING_NATIVE_CHARGE.with(|charge| *charge.borrow_mut() = value);
+}
+
+#[cfg(feature = "runtime-benchmarks")]
 pub fn set_staking_share_asset_available(value: bool) {
   STAKING_SHARE_ASSET_AVAILABLE.with(|v| *v.borrow_mut() = value);
 }
@@ -696,6 +877,10 @@ impl StakingOps<AccountId, TestAsset, Balance> for MockStakingOps {
     if FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow()) {
       return Err(DispatchError::Other("MockStakingAfterBurnFailed").into());
     }
+    let native_charge = STAKING_NATIVE_CHARGE.with(|charge| *charge.borrow());
+    if native_charge > 0 {
+      MockAssetOps::transfer(who, &TestFeeSink::get(), TestAsset::Native, native_charge)?;
+    }
     STAKED.with(|s| {
       let mut map = s.borrow_mut();
       let current = map.get(&(*who, asset)).copied().unwrap_or(0);
@@ -769,6 +954,9 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
         "MinimumLpOutputNotMet",
       )));
     }
+    if INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow()) {
+      return Ok((amount_a.saturating_add(1), amount_b, lp_minted));
+    }
     Ok((amount_a, amount_b, lp_minted))
   }
 
@@ -792,6 +980,12 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
     if half < min_amount_a || half < min_amount_b {
       return Err(DispatchError::Other("MinimumLiquidityOutputNotMet").into());
     }
+    if INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow()) {
+      return Ok((min_amount_a.saturating_sub(1), half));
+    }
+    MockAssetOps::burn(who, lp_asset, lp_amount)?;
+    MockAssetOps::mint(who, asset_a, half)?;
+    MockAssetOps::mint(who, asset_b, half)?;
     Ok((half, half))
   }
 
@@ -832,6 +1026,9 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
         ),
       );
     });
+    if INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow()) {
+      return Ok((max_amount_a.saturating_add(1), amount));
+    }
     Ok((amount, amount))
   }
 }
@@ -853,15 +1050,6 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
       let revision = revision
         .checked_add(1)
         .ok_or(DispatchError::Other("BenchmarkRevisionOverflow"))?;
-      Actors::note_observation_transition_with_provenance(
-        feed,
-        crate::ObservationTransition {
-          revision,
-          previous: Some(previous),
-          current: value,
-        },
-        crate::TriggerCauseProvenance::ExternalPhase,
-      )?;
       BENCHMARK_OBSERVATION_REVISIONS
         .with(|revisions| revisions.borrow_mut().insert(feed, revision));
     }
@@ -886,6 +1074,10 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
   fn finalize_scheduler_clock() -> DispatchResult {
     Ok(())
   }
+  fn asset_account_exists(who: &AccountId, asset: TestAsset) -> Option<bool> {
+    (asset != TestAsset::Native).then(|| MockAssetOps::stored_asset_balance(who, asset).is_some())
+  }
+
   fn set_asset_account_frozen(
     _owner: &AccountId,
     who: &AccountId,
@@ -895,7 +1087,7 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
     if asset == TestAsset::Native {
       return Err(DispatchError::Other("BenchmarkAssetFreezeUnsupported"));
     }
-    if !ASSET_BALANCES.with(|balances| balances.borrow().contains_key(&(*who, asset))) {
+    if MockAssetOps::stored_asset_balance(who, asset).is_none() {
       return Err(DispatchError::Other("BenchmarkAssetAccountMissing"));
     }
     // Externalities own the flag so FRAME storage wipes reset it between repetitions.
@@ -922,13 +1114,13 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
 
   fn setup_donate_liquidity(
     owner: &AccountId,
-  ) -> Result<(TestAsset, TestAsset, Balance), DispatchError> {
+  ) -> Result<(TestAsset, TestAsset, Balance, Balance, Balance), DispatchError> {
     let asset_a = TestAsset::Local(1);
     let asset_b = TestAsset::Local(2);
     let amount = 1_000_000;
     MockAssetOps::mint(owner, asset_a, amount).map_err(|failure| failure.error)?;
     MockAssetOps::mint(owner, asset_b, amount).map_err(|failure| failure.error)?;
-    Ok((asset_a, asset_b, amount))
+    Ok((asset_a, asset_b, amount, amount, amount))
   }
 
   fn setup_stake(owner: &AccountId) -> Result<(TestAsset, Balance), DispatchError> {
@@ -944,21 +1136,6 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
     let shares = 1_000_000;
     MockAssetOps::mint(owner, asset, shares).map_err(|failure| failure.error)?;
     Ok((asset, shares))
-  }
-
-  fn setup_max_encoded_staking_positions(
-    owner: &AccountId,
-    max: u32,
-  ) -> Result<alloc::vec::Vec<(TestAsset, Balance)>, DispatchError> {
-    set_staking_share_asset_available(true);
-    (1..=max)
-      .map(|index| {
-        let asset = TestAsset::Local(index);
-        let shares = 1_000_000;
-        MockAssetOps::mint(owner, asset, shares).map_err(|failure| failure.error)?;
-        Ok((asset, MockStakingOps::share_balance(owner, asset)))
-      })
-      .collect()
   }
 
   fn remove_empty_staking_receipt(_owner: &AccountId, asset: TestAsset) -> DispatchResult {
@@ -1005,6 +1182,22 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
         }
       })
       .collect()
+  }
+
+  fn setup_temporary_transfer(
+    owner: &AccountId,
+    actor: &AccountId,
+  ) -> Result<(TestAsset, Balance, AccountId), DispatchError> {
+    let asset = TestAsset::Local(1);
+    let recipient = polkadot_sdk::frame_benchmarking::account("temporary-transfer-recipient", 0, 0);
+    polkadot_sdk::sp_io::storage::set(&MockAssetOps::minimum_balance_key(asset), &2u128.encode());
+    MockAssetOps::mint(owner, asset, 4).map_err(|failure| failure.error)?;
+    MockAssetOps::mint(actor, asset, 4).map_err(|failure| failure.error)?;
+    ensure!(
+      MockAssetOps::balance(&recipient, asset) == 0,
+      DispatchError::Other("RecipientNotEmpty")
+    );
+    Ok((asset, 1, recipient))
   }
 
   fn setup_predicate_assets(
@@ -1220,20 +1413,6 @@ impl Get<u32> for TestMaxIdleStarvationBlocks {
   }
 }
 
-pub struct TestObservationFanoutWeightLimit;
-impl Get<polkadot_sdk::sp_weights::Weight> for TestObservationFanoutWeightLimit {
-  fn get() -> polkadot_sdk::sp_weights::Weight {
-    polkadot_sdk::sp_weights::Weight::from_parts(1_000_000_000_000, 100_000_000)
-  }
-}
-
-pub struct TestCrossingWorkerWeightLimit;
-impl Get<polkadot_sdk::sp_weights::Weight> for TestCrossingWorkerWeightLimit {
-  fn get() -> polkadot_sdk::sp_weights::Weight {
-    polkadot_sdk::sp_weights::Weight::from_parts(10_000_000_000, 2_000_000)
-  }
-}
-
 pub struct TestWakeupWeightLimit;
 impl Get<polkadot_sdk::sp_weights::Weight> for TestWakeupWeightLimit {
   fn get() -> polkadot_sdk::sp_weights::Weight {
@@ -1273,11 +1452,44 @@ impl Get<Balance> for TestMinUserBalance {
   }
 }
 
+pub fn set_block_resource_budget(budget: crate::BlockResourceBudget) {
+  BLOCK_RESOURCE_BUDGET_OVERRIDE.with(|value| *value.borrow_mut() = Some(budget));
+}
+
+pub fn set_prepass_resource_budget(
+  block: u64,
+  budget: Result<crate::BlockResourceBudget, crate::BlockResourceError>,
+) {
+  PREPASS_RESOURCE_BUDGET.with(|value| *value.borrow_mut() = Some((block, budget)));
+}
+
+pub fn prepass_resource_budget_reads() -> u32 {
+  PREPASS_RESOURCE_BUDGET_READS.with(|value| *value.borrow())
+}
+
 pub struct TestBlockResourceBudget;
+impl crate::BlockResourceBudgetProvider<u64> for TestBlockResourceBudget {
+  fn for_prepass(
+    now: u64,
+    configured: crate::BlockResourceBudget,
+  ) -> Result<crate::BlockResourceBudget, crate::BlockResourceError> {
+    PREPASS_RESOURCE_BUDGET_READS.with(|reads| *reads.borrow_mut() += 1);
+    match PREPASS_RESOURCE_BUDGET.with(|value| *value.borrow()) {
+      Some((block, budget)) if block == now => budget,
+      Some(_) => Err(crate::BlockResourceError::WrongBlock),
+      None => Ok(configured),
+    }
+  }
+}
 impl Get<crate::BlockResourceBudget> for TestBlockResourceBudget {
   fn get() -> crate::BlockResourceBudget {
+    if let Some(budget) = BLOCK_RESOURCE_BUDGET_OVERRIDE.with(|value| *value.borrow()) {
+      return budget;
+    }
     crate::BlockResourceBudget::new(
-      Weight::from_parts(1_000_000_000_000, 5_000_000),
+      // Synthetic tests admit the fixed hook plus both mandatory deadline frontiers and one
+      // maximum canonical Step; production runtimes derive their own measured budget.
+      Weight::from_parts(1_000_000_000_000, 50_000_000),
       Weight::zero(),
     )
     .unwrap_or_else(|_| crate::BlockResourceBudget::fail_closed(Weight::zero()))
@@ -1332,15 +1544,127 @@ impl crate::adapters::SovereignAccountPolicy<AccountId> for MockSovereignAccount
 
 pub struct MockAdmissionCertificateAuthority;
 
+fn behavior_close_model_weight(
+  atoms: u32,
+  metrics: u32,
+  policy_bytes: u32,
+  monitor_bytes: u32,
+) -> Weight {
+  Weight::from_parts(
+    u64::from(atoms) + u64::from(metrics) + 1,
+    u64::from(policy_bytes) + u64::from(monitor_bytes),
+  )
+}
+
+const ADMISSION_SEMANTICS_VERSION_KEY: &[u8] = b"mock-admission-semantics-version";
+
+pub fn set_admission_semantics_version(version: u32) {
+  polkadot_sdk::sp_io::storage::set(ADMISSION_SEMANTICS_VERSION_KEY, &version.encode());
+}
+
+pub fn set_prepared_behavior_lifecycle_weight(enabled: bool) {
+  PREPARED_BEHAVIOR_LIFECYCLE_WEIGHT.with(|value| *value.borrow_mut() = enabled);
+}
+
+pub fn set_admission_authority_override(authority: Option<crate::AdmissionCertificateAuthority>) {
+  ADMISSION_AUTHORITY_OVERRIDE.with(|value| *value.borrow_mut() = authority);
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub fn take_admission_authority_calls() -> u32 {
+  ADMISSION_AUTHORITY_CALLS.with(|calls| core::mem::take(&mut *calls.borrow_mut()))
+}
+
 impl crate::AdmissionCertificateAuthorityProvider for MockAdmissionCertificateAuthority {
+  fn financial_wait_service_weight(bytes: u32) -> Option<Weight> {
+    PREPARED_FINANCIAL_WAIT_SERVICE_WEIGHT
+      .with(|enabled| (*enabled.borrow()).then_some(Weight::from_parts(300, u64::from(bytes))))
+  }
+
+  fn financial_wait_due_weight(bytes: u32) -> Option<Weight> {
+    PREPARED_FINANCIAL_WAIT_DUE_WEIGHT
+      .with(|enabled| (*enabled.borrow()).then_some(Weight::from_parts(200, u64::from(bytes))))
+  }
+
+  fn financial_wait_ingress_weight(bytes: u32) -> Option<Weight> {
+    PREPARED_FINANCIAL_WAIT_INGRESS_WEIGHT
+      .with(|enabled| (*enabled.borrow()).then_some(Weight::from_parts(400, u64::from(bytes))))
+  }
+
+  fn financial_wait_entry_weight(bytes: u32) -> Option<Weight> {
+    // Opt-in native model only; no economic backing or production coefficient is asserted.
+    PREPARED_FINANCIAL_WAIT_WEIGHTS
+      .with(|enabled| (*enabled.borrow()).then_some(Weight::from_parts(100, u64::from(bytes))))
+  }
+
+  fn financial_wait_close_additional_weight(bytes: u32) -> Option<Weight> {
+    PREPARED_FINANCIAL_WAIT_WEIGHTS
+      .with(|enabled| (*enabled.borrow()).then_some(Weight::from_parts(10, u64::from(bytes))))
+  }
+
+  fn behavior_close_additional_weight(
+    behavior: crate::BehaviorControlWeightContext,
+  ) -> Option<Weight> {
+    if MISSING_BEHAVIOR_CLOSE_WEIGHT.with(|missing| *missing.borrow()) {
+      return None;
+    }
+    // Native model only; this is not a production coefficient or lifecycle certificate.
+    Some(behavior_close_model_weight(
+      behavior.atoms,
+      behavior.metrics,
+      behavior.policy_bytes,
+      behavior.monitor_bytes,
+    ))
+  }
+
   fn current() -> Option<crate::AdmissionCertificateAuthority> {
+    #[cfg(feature = "runtime-benchmarks")]
+    ADMISSION_AUTHORITY_CALLS.with(|calls| *calls.borrow_mut() += 1);
+    if let Some(authority) = ADMISSION_AUTHORITY_OVERRIDE.with(|value| *value.borrow()) {
+      return Some(authority);
+    }
+    let runtime_actor_semantics_version =
+      polkadot_sdk::sp_io::storage::get(ADMISSION_SEMANTICS_VERSION_KEY)
+        .and_then(|encoded| u32::decode(&mut &encoded[..]).ok())
+        .unwrap_or(1);
+    let financial = PREPARED_FINANCIAL_WAIT_WEIGHTS.with(|enabled| *enabled.borrow());
+    let behavior = PREPARED_BEHAVIOR_LIFECYCLE_WEIGHT.with(|enabled| *enabled.borrow());
+    let maximum_lifecycle_weight = if financial || behavior {
+      let bounds = crate::Pallet::<Test>::behavior_service_inspection_bounds()?;
+      // Distinct metrics never exceed referenced atoms; bound both through configured ceilings.
+      let policy = behavior_close_model_weight(
+        bounds.maximum_atoms,
+        bounds.maximum_atoms,
+        bounds.maximum_policy_bytes,
+        bounds.maximum_monitor_bytes,
+      );
+      <crate::weights::TestWeightInfo as crate::weights::WeightInfo>::close_actor()
+        .checked_add(&if financial {
+          Weight::from_parts(
+            10,
+            crate::FinancialWaitEpisode::<Balance>::max_encoded_len() as u64,
+          )
+        } else {
+          Weight::zero()
+        })?
+        .checked_add(&policy)?
+        .max(Weight::from_parts(7_777, 8_888))
+    } else {
+      Weight::from_parts(77, 88)
+    };
     Some(crate::AdmissionCertificateAuthority {
-      runtime_actor_semantics_version: 1,
+      runtime_actor_semantics_version,
       production_weight_identity:
         crate::AdmissionCertificateAuthority::compose_production_weight_identity([41; 32], [42; 32]),
       body_geometry_version: 1,
-      configured_bounds_commitment: [6; 32],
-      maximum_lifecycle_weight: Weight::from_parts(77, 88),
+      configured_bounds_commitment: if financial {
+        [80; 32]
+      } else if behavior {
+        [81; 32]
+      } else {
+        [6; 32]
+      },
+      maximum_lifecycle_weight,
     })
   }
 }
@@ -1359,7 +1683,66 @@ pub fn set_missing_step_control_actual_weight(missing: bool) {
 
 pub struct MockStepControlWeight;
 
+pub fn set_missing_behavior_control_weight(missing: bool) {
+  MISSING_BEHAVIOR_CONTROL_WEIGHT.with(|value| *value.borrow_mut() = missing);
+}
+
+pub fn set_missing_behavior_close_weight(missing: bool) {
+  MISSING_BEHAVIOR_CLOSE_WEIGHT.with(|value| *value.borrow_mut() = missing);
+}
+
+pub fn set_missing_behavior_inspection_weight(missing: bool) {
+  MISSING_BEHAVIOR_INSPECTION_WEIGHT.with(|value| *value.borrow_mut() = missing);
+}
+
+pub fn set_prepared_financial_wait_weights(enabled: bool) {
+  PREPARED_FINANCIAL_WAIT_WEIGHTS.with(|value| *value.borrow_mut() = enabled);
+}
+
+pub fn set_prepared_financial_wait_due_weight(enabled: bool) {
+  PREPARED_FINANCIAL_WAIT_DUE_WEIGHT.with(|value| *value.borrow_mut() = enabled);
+}
+
+pub fn set_prepared_financial_wait_service_weight(enabled: bool) {
+  PREPARED_FINANCIAL_WAIT_SERVICE_WEIGHT.with(|value| *value.borrow_mut() = enabled);
+}
+
+pub fn set_prepared_financial_wait_ingress_weight(enabled: bool) {
+  PREPARED_FINANCIAL_WAIT_INGRESS_WEIGHT.with(|value| *value.borrow_mut() = enabled);
+}
+
+pub fn set_prepared_at_time_backing(enabled: bool) {
+  PREPARED_AT_TIME_BACKING.with(|value| *value.borrow_mut() = enabled);
+}
+
 impl crate::StepControlWeightProvider<crate::StepOf<Test>> for MockStepControlWeight {
+  fn maximum_behavior_zero_step_service_weight(
+    bounds: crate::BehaviorServiceInspectionWeightContext,
+  ) -> Option<Weight> {
+    Self::maximum_behavior_zero_step_control_weight(crate::BehaviorControlWeightContext {
+      policy_bytes: bounds.maximum_policy_bytes,
+      monitor_bytes: bounds.maximum_monitor_bytes,
+      clauses: bounds.maximum_clauses,
+      atoms: bounds.maximum_atoms,
+      metrics: bounds.maximum_atoms,
+      counter_slots: bounds.maximum_atoms,
+      requires_clean_cycle: true,
+    })
+  }
+
+  fn maximum_behavior_service_inspection_weight(
+    bounds: crate::BehaviorServiceInspectionWeightContext,
+  ) -> Option<Weight> {
+    if MISSING_BEHAVIOR_INSPECTION_WEIGHT.with(|missing| *missing.borrow()) {
+      return None;
+    }
+    // Native model only; encoded ceilings are not trie-proof coefficients.
+    Some(Weight::from_parts(
+      u64::from(bounds.maximum_clauses) + u64::from(bounds.maximum_atoms) + 1,
+      u64::from(bounds.maximum_policy_bytes) + u64::from(bounds.maximum_monitor_bytes),
+    ))
+  }
+
   fn production_weight_identity() -> Option<[u8; 32]> {
     Some([41; 32])
   }
@@ -1372,10 +1755,7 @@ impl crate::StepControlWeightProvider<crate::StepOf<Test>> for MockStepControlWe
       100_000_011u64
         .saturating_add(u64::from(context.cursor))
         .saturating_add(u64::from(context.opening_tail_chunks))
-        .saturating_add(u64::from(context.predicate_evaluation_units))
-        .saturating_add(u64::from(context.opening_snapshot_entries))
-        .saturating_add(u64::from(context.opening_predicate_results))
-        .saturating_add(u64::from(context.funding_snapshot_entries)),
+        .saturating_add(u64::from(context.predicate_evaluation_units)),
       100_022u64.saturating_add(u64::from(context.steps_in_fragment)),
     ))
   }
@@ -1388,6 +1768,64 @@ impl crate::StepControlWeightProvider<crate::StepOf<Test>> for MockStepControlWe
   ) -> Option<Weight> {
     LAST_STEP_CONTROL_EXECUTION.with(|value| *value.borrow_mut() = Some(execution));
     if MISSING_STEP_CONTROL_ACTUAL_WEIGHT.with(|missing| *missing.borrow()) {
+      return None;
+    }
+    STEP_CONTROL_ACTUAL_WEIGHT_OVERRIDE
+      .with(|override_weight| (*override_weight.borrow()).or(Some(maximum)))
+  }
+
+  fn maximum_behavior_control_weight(
+    context: crate::StepControlWeightContext,
+    step: &crate::StepOf<Test>,
+    behavior: crate::BehaviorControlWeightContext,
+  ) -> Option<Weight> {
+    if MISSING_BEHAVIOR_CONTROL_WEIGHT.with(|missing| *missing.borrow()) {
+      return None;
+    }
+    // Native model coordinates only; these are not measured RefTime or trie-proof coefficients.
+    Self::maximum_control_weight(context, step)?.checked_add(&Weight::from_parts(
+      u64::from(behavior.atoms)
+        + u64::from(behavior.metrics)
+        + u64::from(behavior.counter_slots)
+        + 1,
+      u64::from(behavior.policy_bytes) + u64::from(behavior.monitor_bytes),
+    ))
+  }
+
+  fn actual_behavior_control_weight(
+    context: crate::StepControlWeightContext,
+    step: &crate::StepOf<Test>,
+    _behavior: crate::BehaviorControlWeightContext,
+    maximum: Weight,
+    execution: crate::StepControlExecution,
+  ) -> Option<Weight> {
+    if MISSING_BEHAVIOR_CONTROL_WEIGHT.with(|missing| *missing.borrow()) {
+      return None;
+    }
+    Self::actual_control_weight(context, step, maximum, execution)
+  }
+
+  fn maximum_behavior_zero_step_control_weight(
+    behavior: crate::BehaviorControlWeightContext,
+  ) -> Option<Weight> {
+    if MISSING_BEHAVIOR_CONTROL_WEIGHT.with(|missing| *missing.borrow()) {
+      return None;
+    }
+    // Native model coordinates; no production RefTime or trie-proof coefficient is supplied.
+    <crate::weights::TestWeightInfo as crate::weights::WeightInfo>::scheduler_inner_zero_step_complete().checked_add(&Weight::from_parts(
+      u64::from(behavior.atoms) + u64::from(behavior.metrics) + u64::from(behavior.counter_slots) + 1,
+      u64::from(behavior.policy_bytes) + u64::from(behavior.monitor_bytes),
+    ))
+  }
+
+  fn actual_behavior_zero_step_control_weight(
+    _behavior: crate::BehaviorControlWeightContext,
+    maximum: Weight,
+    _closed: bool,
+  ) -> Option<Weight> {
+    if MISSING_BEHAVIOR_CONTROL_WEIGHT.with(|missing| *missing.borrow())
+      || MISSING_STEP_CONTROL_ACTUAL_WEIGHT.with(|missing| *missing.borrow())
+    {
       return None;
     }
     STEP_CONTROL_ACTUAL_WEIGHT_OVERRIDE
@@ -1434,6 +1872,18 @@ impl crate::TaskEffectWeightProvider<crate::TaskOf<Test>> for MockTaskEffectWeig
 
 pub struct MockTime;
 
+pub struct TestCadenceTickMillis;
+
+impl Get<u64> for TestCadenceTickMillis {
+  fn get() -> u64 {
+    CADENCE_TICK_MILLIS.with(|value| *value.borrow())
+  }
+}
+
+pub fn set_cadence_tick_millis(value: u64) {
+  CADENCE_TICK_MILLIS.with(|period| *period.borrow_mut() = value);
+}
+
 impl Time for MockTime {
   type Moment = u64;
 
@@ -1449,6 +1899,7 @@ impl pallet_deos_actors::Config for Test {
   type AssetOps = MockAssetOps;
   type AdmissionCertificateAuthority = MockAdmissionCertificateAuthority;
   type StepControlWeight = MockStepControlWeight;
+  type PipelineControlWeight = ();
   type TaskEffectWeight = MockTaskEffectWeight;
   type ObservationFeedId = u32;
   type ObservationProvider = MockObservationProvider;
@@ -1459,15 +1910,16 @@ impl pallet_deos_actors::Config for Test {
   type StakingOps = MockStakingOps;
   type LiquidityOps = MockLiquidityOps;
   type Time = MockTime;
-  type CadenceTickMillis = ConstU64<500>;
+  type CadenceTickMillis = TestCadenceTickMillis;
   type MinWindowLength = frame::traits::ConstU64<100>;
   type PalletId = ActorsPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
+  type MaxParkedBalanceWatches = ConstU32<4>;
   type MaxContractSteps = ConstU32<12>;
+  type MaxBehaviorClauses = ConstU32<4>;
+  type MaxBehaviorAtomsPerClause = ConstU32<4>;
   type MaxFundingTrackedAssets = ConstU32<10>;
-  type MaxOpeningSnapshotEntries = ConstU32<24>;
-  type MaxOpeningPredicateResults = ConstU32<48>;
   type MaxPreconditionClauses = ConstU32<4>;
   type MaxPredicatesPerClause = ConstU32<4>;
   type MaxPredicatesPerStep = ConstU32<4>;
@@ -1476,39 +1928,11 @@ impl pallet_deos_actors::Config for Test {
   type MaxQueueLength = ConstU32<1024>;
   type QueuePageSize = ConstU32<32>;
   type WakeupPageSize = ConstU32<32>;
-  type ObservationPageSize = ConstU32<16>;
-  #[cfg(not(feature = "runtime-benchmarks"))]
-  type CrossingPageSize = ConstU32<16>;
-  #[cfg(feature = "runtime-benchmarks")]
-  type CrossingPageSize = ConstU32<128>;
-  type MaxCrossingTransitionsPerFeed = ConstU32<4>;
-  type MaxCrossingMembersPerFeed = ConstU32<10_000>;
-  #[cfg(not(feature = "runtime-benchmarks"))]
-  type MaxUserCrossingMembersPerFeed = ConstU32<8>;
-  #[cfg(feature = "runtime-benchmarks")]
-  type MaxUserCrossingMembersPerFeed = ConstU32<128>;
-  type MaxCrossingTransitionsPerBlock = ConstU32<4>;
-  #[cfg(not(feature = "runtime-benchmarks"))]
-  type MaxCrossingLeavesPerBlock = ConstU32<8>;
-  #[cfg(feature = "runtime-benchmarks")]
-  type MaxCrossingLeavesPerBlock = ConstU32<64>;
-  #[cfg(not(feature = "runtime-benchmarks"))]
-  type MaxCrossingPagesPerBlock = ConstU32<8>;
-  #[cfg(feature = "runtime-benchmarks")]
-  type MaxCrossingPagesPerBlock = ConstU32<64>;
-  #[cfg(not(feature = "runtime-benchmarks"))]
-  type MaxCrossingActorsPerBlock = ConstU32<16>;
-  #[cfg(feature = "runtime-benchmarks")]
-  type MaxCrossingActorsPerBlock = ConstU32<128>;
-  type CrossingWorkerWeightLimit = TestCrossingWorkerWeightLimit;
-  type MaxQueueEntriesScannedPerBlock = ConstU32<1024>;
-  type MaxObservationFanoutPagesPerBlock = ConstU32<64>;
-  type ObservationFanoutWeightLimit = TestObservationFanoutWeightLimit;
+  type MaxQueueEntriesScannedPerBlock = TestMaxQueueEntriesScannedPerBlock;
   type WakeupWeightLimit = TestWakeupWeightLimit;
   type MaxWakeupsPerBlock = ConstU32<64>;
   type MaxSweepBatch = TestMaxSweepBatch;
   type MaxWhitelistSize = ConstU32<16>;
-  type MaxSplitTransferLegs = ConstU32<8>;
   type TargetBlockTime = ConstU64<63_116>;
   type MaxExecutionDelayBlocks = TestMaxExecutionDelayBlocks;
   type MaxTemporalDelayTicks = TestMaxTemporalDelayTicks;
@@ -1526,6 +1950,7 @@ impl pallet_deos_actors::Config for Test {
   type WeightToFee = TestWeightToFee;
   type FeeSink = TestFeeSink;
   type FeeCollector = MockFeeCollector;
+  type FinancialWaitBacking = MockFinancialWaitBacking;
   type MaxConsecutiveFailures = TestMaxConsecutiveFailures;
   type MaxRetryAttempts = ConstU32<10>;
   type MinUserBalance = TestMinUserBalance;
@@ -1541,6 +1966,7 @@ impl pallet_deos_actors::Config for Test {
 pub const TEST_INITIAL_BALANCE: Balance = 10_000_000_000_000;
 
 pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
+  TestMaxQueueEntriesScannedPerBlock::set(1024);
   let mut t = polkadot_sdk::frame_system::GenesisConfig::<Test>::default()
     .build_storage()
     .unwrap();
@@ -1559,15 +1985,53 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
   .assimilate_storage(&mut t)
   .unwrap();
 
-  crate::GenesisConfig::<Test>::default()
-    .assimilate_storage(&mut t)
-    .unwrap();
+  crate::GenesisConfig::<Test> {
+    user_creation_enabled: true,
+    ..Default::default()
+  }
+  .assimilate_storage(&mut t)
+  .unwrap();
 
   let mut ext = polkadot_sdk::sp_io::TestExternalities::new(t);
   ext.execute_with(|| {
     reset_mock_adapters();
   });
   ext
+}
+
+#[test]
+fn mock_asset_balances_preserve_presence_self_transfer_and_nested_rollback() {
+  new_test_ext().execute_with(|| {
+    let asset = TestAsset::Local(901);
+    MockAssetOps::mint(&ALICE, asset, 10).unwrap();
+    assert_eq!(MockAssetOps::stored_asset_balance(&BOB, asset), None);
+    MockAssetOps::transfer(&ALICE, &ALICE, asset, 3).unwrap();
+    assert_eq!(MockAssetOps::total_balance(&ALICE, asset), 10);
+    let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      MockAssetOps::transfer(&ALICE, &BOB, asset, 10).unwrap();
+      assert_eq!(MockAssetOps::stored_asset_balance(&ALICE, asset), Some(0));
+      assert_eq!(MockAssetOps::stored_asset_balance(&BOB, asset), Some(10));
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        MockAssetOps::transfer(&BOB, &ALICE, asset, 4).unwrap();
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+      assert_eq!(MockAssetOps::balance(&ALICE, asset), 4);
+      assert_eq!(MockAssetOps::balance(&BOB, asset), 6);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(MockAssetOps::balance(&ALICE, asset), 10);
+    assert_eq!(MockAssetOps::stored_asset_balance(&BOB, asset), None);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root
+    );
+    assert!(MockAssetOps::transfer(&ALICE, &BOB, asset, 11).is_err());
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root
+    );
+  });
 }
 
 pub fn set_fail_create_checkpoint(value: bool) {
@@ -1584,6 +2048,10 @@ pub fn clear_fee_collections() {
 
 pub fn set_fail_fee_sink_transfer(value: bool) {
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = value);
+}
+
+pub fn set_fail_fee_sink_transfer_from(value: Option<AccountId>) {
+  FAIL_FEE_SINK_TRANSFER_FROM.with(|v| *v.borrow_mut() = value);
 }
 
 pub(crate) fn control_atomicity_checkpoint(_actor_id: u64) -> DispatchResult {

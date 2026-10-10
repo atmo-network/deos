@@ -54,15 +54,6 @@ pub const VERSION: sp_version::RuntimeVersion = sp_version::RuntimeVersion {
   transaction_version: 1,
 };
 
-/// The version information used to identify this runtime when compiled natively.
-#[cfg(feature = "std")]
-pub fn native_version() -> sp_version::NativeVersion {
-  sp_version::NativeVersion {
-    runtime_version: VERSION,
-    can_author_with: Default::default(),
-  }
-}
-
 #[cfg(test)]
 mod runtime_version_tests {
   use super::VERSION;
@@ -74,6 +65,7 @@ mod runtime_version_tests {
     assert_eq!(VERSION.authoring_version, 1);
     assert_eq!(VERSION.impl_version, 1);
     assert_eq!(VERSION.system_version, 3);
+    assert_eq!(VERSION.state_version(), super::sp_version::StateVersion::V1);
     assert_eq!(VERSION.spec_version, 1);
     assert_eq!(VERSION.transaction_version, 1);
   }
@@ -154,7 +146,7 @@ mod async_backing_params {
 pub(crate) use async_backing_params::*;
 
 pub const HOURS: BlockNumber = 600;
-pub const MAXIMUM_BLOCK_WEIGHT: Weight = Weight::from_parts(2_000_000_000_000, 5_000_000);
+pub const MAXIMUM_BLOCK_WEIGHT: Weight = Weight::from_parts(2_000_000_000_000, 10_485_760);
 pub const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(50);
 pub const MIN_ON_IDLE_RESERVE_RATIO: Perbill = Perbill::from_percent(50);
 pub const AVERAGE_ON_INITIALIZE_RATIO: Perbill = Perbill::from_percent(10);

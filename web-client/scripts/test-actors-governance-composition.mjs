@@ -5,8 +5,9 @@ Excludes: Signing, preimage noting, proposal submission, voting, enactment, and 
 Zone: Web-client validation entrypoint; imports automation domain contracts only.
 */
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+
+import { readActorsTestMetadata } from './actors-test-metadata.mjs';
 
 import { ACTORS_MAX_OWNER_SLOTS } from '../src/lib/automation/actors-protocol-bounds.ts';
 import {
@@ -15,9 +16,7 @@ import {
 } from '../src/lib/automation/contract-artifact.ts';
 import { composeActorRuntimeCall } from '../src/lib/automation/governance-composition.ts';
 
-const metadataBytes = new Uint8Array(
-  await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
-);
+const metadataBytes = await readActorsTestMetadata();
 const runtime = {
   genesisHash: `0x${'11'.repeat(32)}`,
   specVersion: 1,
@@ -35,7 +34,8 @@ const defaultContractScale = encodeActorContractValue(metadataBytes, {
       on_error: { type: 'AbortCycle', value: undefined },
     },
   ],
-  completion: { type: 'Persistent', value: undefined },
+  close_when: undefined,
+  on_unfunded: { type: 'Close', value: undefined },
   funding: { type: 'OwnerOnly', value: undefined },
 });
 
@@ -109,11 +109,8 @@ test('System Actors composition exposes exact Root call but denies current gover
         precondition: [
           [
             {
-              timing: { type: 'Current', value: undefined },
-              predicate: {
-                type: 'BlockNumberAbove',
-                value: { threshold: 1 },
-              },
+              type: 'BlockNumberAbove',
+              value: { threshold: 1 },
             },
           ],
         ],
@@ -127,10 +124,19 @@ test('System Actors composition exposes exact Root call but denies current gover
         on_error: { type: 'AbortCycle', value: undefined },
       },
     ],
-    completion: {
-      type: 'CloseAfterProductiveCycle',
-      value: undefined,
-    },
+    close_when: [
+      [
+        {
+          metric: { type: 'ActionSuccessTotal', value: undefined },
+          threshold: 1,
+        },
+        {
+          metric: { type: 'CycleCompletedTotal', value: undefined },
+          threshold: 1,
+        },
+      ],
+    ],
+    on_unfunded: { type: 'Close', value: undefined },
     funding: { type: 'OwnerOnly', value: undefined },
   });
   const composed = composeActorRuntimeCall({

@@ -93,6 +93,7 @@ impl polkadot_sdk::pallet_assets::Config for Test {
   type WeightInfo = ();
   type RemoveItemsLimit = ConstU32<1000>;
   type CallbackHandle = ();
+  type AssetIdAllocator = ();
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = ();
   type Holder = ();

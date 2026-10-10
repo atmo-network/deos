@@ -161,6 +161,7 @@ impl pallet_assets::Config for Runtime {
   // only lifecycle (created/destroyed) hooks. Liquidity actors use pending-intake
   // storage to decouple scanning (on_initialize) from execution (on_idle).
   type CallbackHandle = ();
+  type AssetIdAllocator = ();
   type CreateOrigin = AssetsCreateOrigin;
   type Currency = Balances;
   type Extra = ();
@@ -342,6 +343,8 @@ impl pallet_asset_conversion::Config for Runtime {
   type HigherPrecisionBalance = polkadot_sdk::sp_core::U256;
   type LiquidityWithdrawalFee = LiquidityWithdrawalFee;
   type LPFee = XykLpFee;
+  type AdminOrigin = polkadot_sdk::frame_system::EnsureNever<()>;
+  type MaxSwapFee = XykLpFee;
   type MaxSwapPathLength = ConstU32<4>;
   type MintMinLiquidity = MintMinLiquidity;
   type PalletId = AssetConversionPalletId;

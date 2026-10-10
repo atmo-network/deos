@@ -14,7 +14,7 @@ usage() {
     cat <<'EOF'
 Usage: bootstrap-local-network.sh [OPTIONS]
 
-Runs the local bootstrap chain for Zombienet: tools -> runtime build -> chain spec -> network spawn. Polkadot and Omni Node binaries must already be available in PATH or ./bin.
+Runs the local bootstrap chain for Zombienet: binaries -> tools -> runtime build -> chain spec -> network spawn. A qualified Omni must be selected through script 01 before building or spawning.
 
 Options:
   --skip-download    Skip 01-download-binaries.sh
@@ -30,6 +30,8 @@ Environment:
   SKIP_CHAINSPEC=0|1
   CHAIN_TYPE=Development|Local
   WEB_CLIENT_PORT=<port>  Web-client dev server port to display (default: 5173)
+  DEOS_OMNI_NODE_PATH=<path>   Qualified source-built Omni for script 01
+  DEOS_OMNI_NODE_SHA256=<sha>  Required expected digest with that path
 EOF
 }
 
@@ -68,7 +70,8 @@ display_endpoints() {
     log_info "Network endpoints (once started):"
     echo "  Relay Chain (Alice): ws://localhost:9944"
     echo "  Relay Chain (Bob):   ws://localhost:9955"
-    echo "  Parachain (Charlie): ws://localhost:9988"
+    echo "  Parachain (Alice collator): ws://localhost:9988"
+    echo "  Parachain (Bob collator):   ws://localhost:9999"
     echo ""
     echo "  Polkadot.js Apps:"
     echo "    Relay: https://polkadot.js.org/apps/?rpc=ws://localhost:9944"
@@ -86,6 +89,9 @@ run_bootstrap_steps() {
     else
         log_warning "Skipping step 1: Download node binaries"
     fi
+
+    hydrate_local_tool_paths
+    verify_deos_omni_node "$(command -v polkadot-omni-node-deos || true)"
 
     if (( SKIP_TOOLS == 0 )); then
         phase_banner "2/5: Install cargo tools"
@@ -112,7 +118,7 @@ run_bootstrap_steps() {
 check_spawn_prerequisites() {
     phase_banner "Step 4: Spawn preflight"
     hydrate_local_tool_paths
-    require_commands polkadot polkadot-omni-node zombienet
+    require_commands polkadot polkadot-omni-node-deos zombienet
     log_success "Spawn prerequisites verified"
 }
 

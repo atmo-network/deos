@@ -1,4 +1,10 @@
-use super::{contract::ActorContractCommitment, lifecycle::ActorId};
+use super::{
+  contract::ActorContractCommitment,
+  lifecycle::{
+    ActorId, ActorRef, CloseReason, ParkedBalanceCertificationError, ParkedBalanceWatch,
+    ProcessPublicationError, ServiceResidenceKind,
+  },
+};
 use frame::prelude::*;
 
 pub type QueueTicket = u64;
@@ -7,6 +13,639 @@ pub type WakeupPageId = u64;
 pub type WakeupSlot = u32;
 pub type WakeupCursorIndex = u32;
 pub type SchedulerTick = u64;
+
+/// Canonical header for the actor-keyed persistent Service ring.
+///
+/// `cursor` is the next member to encounter and `count` is exact occupancy.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ServiceHeaderRecord<BlockNumber> {
+  pub round_block: Option<BlockNumber>,
+  pub cursor: Option<ActorRef>,
+  pub count: u32,
+}
+
+impl<BlockNumber> Default for ServiceHeaderRecord<BlockNumber> {
+  fn default() -> Self {
+    Self {
+      round_block: None,
+      cursor: None,
+      count: 0,
+    }
+  }
+}
+
+/// One generation-bound member of the canonical Live/Pending Service ring.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ServiceNode<BlockNumber> {
+  pub generation: u64,
+  pub previous: ActorRef,
+  pub next: ActorRef,
+  pub kind: ServiceResidenceKind,
+  pub eligible_from: BlockNumber,
+  pub last_considered: BlockNumber,
+}
+
+/// Rejected transaction-local mutations of the canonical Service ring.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceRingMutationError {
+  TransactionRequired,
+  LegacyAuthorityPresent,
+  ProcessMissing,
+  ProcessResidenceMismatch,
+  MemberAlreadyExists,
+  MemberMissing,
+  StaleGeneration,
+  CorruptRing,
+  CapacityExceeded,
+  BlockNumberOverflow,
+}
+
+/// Failure of one atomic process-publication and service-ring insertion owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServicePublicationError {
+  Process(ProcessPublicationError),
+  Ring(ServiceRingMutationError),
+}
+
+/// Failure of one atomic service-ring unlink and synchronous process reclamation owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceRetirementError {
+  Ring(ServiceRingMutationError),
+}
+
+/// Read-only classification of the current Service-round frontier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceRoundEncounter {
+  Empty,
+  Closed,
+  /// The round finalized an eligible head through the atomic terminal close owner; carries the
+  /// applied close reason so a rolling-back viability simulation can project the same disposition.
+  TerminallyClosed(CloseReason),
+  AlreadyAttempted(ActorRef),
+  Eligible(ActorRef),
+  /// The eligible head holds no admitted work this round; its Idle residence was retained and the
+  /// bounded cursor advanced without executing a Step or recording an attempt.
+  NoWork(ActorRef),
+  /// The global circuit breaker is active, so the eligible head keeps its exact placement and no
+  /// Step effect or ordinary automatic terminal close runs this round.
+  BreakerRefused(ActorRef),
+}
+
+/// Rejected transaction-local operations on the Service-round frontier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceRoundError {
+  /// No discovery was admitted; the caller has no evidence about the current frontier.
+  DiscoveryUnavailable,
+  InsufficientWeight,
+  ResourceUnavailable,
+  TransactionRequired,
+  RoundFromFuture,
+  RoundNotStarted,
+  CorruptRing,
+  StaleGeneration,
+  ProcessMissing,
+  ProcessResidenceMismatch,
+  FutureMemberUnmarked,
+  AttemptFromFuture,
+  FeeCollection,
+}
+
+pub type DependencySourceId = u64;
+pub type DependencyRevision = u64;
+pub type PlanRevision = u64;
+
+/// Monotone allocator for collision-free scalar dependency-source identities.
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Default,
+  Encode,
+  Eq,
+  PartialEq,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub struct DependencySourceAllocator {
+  pub next: DependencySourceId,
+  pub exhausted: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencySourceMutation {
+  Allocated(DependencySourceId),
+  Existing(DependencySourceId),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencySourceError {
+  TransactionRequired,
+  Exhausted,
+  ReverseMissing,
+  ReverseMismatch,
+  SourceOccupied,
+}
+
+/// Checked monotone state owned by one event-complete dependency source.
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Default,
+  Encode,
+  Eq,
+  PartialEq,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub struct DependencyRevisionState {
+  pub revision: DependencyRevision,
+  pub scan_target: Option<DependencyRevision>,
+  pub scan_cursor: u64,
+  pub scan_end: u64,
+  pub exhausted: bool,
+}
+
+/// Bounded occupancy and fair next-source cursor for active dependency scans.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyScanSourceList {
+  pub cursor: Option<DependencySourceId>,
+  pub count: u32,
+}
+
+impl Default for DependencyScanSourceList {
+  fn default() -> Self {
+    Self {
+      cursor: None,
+      count: 0,
+    }
+  }
+}
+
+/// Exact intrusive links retained only while one source owns an active scan.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyScanSourceNode {
+  pub previous: DependencySourceId,
+  pub next: DependencySourceId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyScanSourceMutation {
+  Inserted,
+  AlreadyActive,
+  Removed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyScanSourceError {
+  TransactionRequired,
+  CapacityExceeded,
+  Missing,
+  ScanInactive,
+  CorruptTopology,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyPublicationError {
+  Revision(DependencyRevisionError),
+  SourceCarrier(DependencyScanSourceError),
+}
+
+/// One coalesced activation-check obligation bound to exact semantic authority.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct PendingCheckOwner {
+  pub actor: ActorRef,
+  pub plan_revision: PlanRevision,
+}
+
+/// Fixed-anchor evidence retained for exactly one generation/plan-bound parked episode.
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+#[scale_info(skip_type_params(MaxWatches))]
+pub struct ParkedBalanceEpisode<AssetId, Balance, MaxWatches: Get<u32>> {
+  pub owner: PendingCheckOwner,
+  pub watches: BoundedVec<ParkedBalanceWatch<AssetId, Balance>, MaxWatches>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParkedBalanceTransitionError {
+  Certification(ParkedBalanceCertificationError),
+  Dependency(DependencyRegistrationError),
+  InvalidReviewClock,
+  EpisodeAlreadyExists,
+}
+
+/// One exact event cause retained after source traversal publishes Pending authority.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct PendingDependencyEvent {
+  pub owner: PendingCheckOwner,
+  pub source: DependencySourceId,
+  pub revision: DependencyRevision,
+}
+
+/// Exact reverse handle for one event-complete dependency registration.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyRegistrationHandle {
+  pub actor: ActorRef,
+  pub plan_revision: PlanRevision,
+  pub acknowledged_revision: DependencyRevision,
+}
+
+/// Source-owned append position for one exact registration handle.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyRegistrationPosition {
+  pub page: u64,
+  pub slot: u8,
+}
+
+/// One source snapshot in an explicitly complete negative-evaluation plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DependencyPlanSource {
+  pub source: DependencySourceId,
+  pub observed_revision: DependencyRevision,
+}
+
+/// Exact retained registration owned by one complete dependency plan.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyPlanRegistration {
+  pub source: DependencySourceId,
+  pub handle: DependencyRegistrationHandle,
+}
+
+/// Exact optional timed-review authority retained with one complete dependency plan.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyTimedReview<BlockNumber> {
+  pub owner: PendingCheckOwner,
+  pub deadline: WakeupKey<BlockNumber>,
+}
+
+/// Bounded result of publishing one due timed review into durable Pending authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyDueReviewMutation {
+  Published,
+  AlreadyPending,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyDueReviewError {
+  TransactionRequired,
+  PendingOwnerMissing,
+  PendingOwnerMismatch,
+  ReviewMissing,
+  ReviewMismatch,
+  DestinationOccupied,
+  NotDue,
+  ClockUnavailable,
+}
+
+/// Transaction-local temporal failure; carrier cause remains distinct from dispatch aliases.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TemporalOccurrenceError {
+  Deadline(DeadlineMutationError),
+  Dispatch(DispatchError),
+}
+
+impl From<DispatchError> for TemporalOccurrenceError {
+  fn from(error: DispatchError) -> Self {
+    Self::Dispatch(error)
+  }
+}
+
+impl From<TemporalOccurrenceError> for DependencyReviewWorkerError {
+  fn from(error: TemporalOccurrenceError) -> Self {
+    match error {
+      TemporalOccurrenceError::Deadline(error) => Self::Deadline(error),
+      TemporalOccurrenceError::Dispatch(_) => Self::TemporalOccurrence,
+    }
+  }
+}
+
+/// Refusal from one resource-admitted due-review publication and interpretation attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyReviewWorkerError {
+  InsufficientWeight,
+  Deadline(DeadlineMutationError),
+  Publication(DependencyDueReviewError),
+  Interpretation(DependencyRegistrationError),
+  TemporalOccurrence,
+  TerminalCleanup,
+  FinancialWait(super::FinancialWaitDueError),
+}
+
+/// One resource-classified member from the shared block-deadline frontier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DueBlockDeadlineBranch {
+  Retry(ActorRef),
+  Review(ActorRef),
+  TemporalTrigger(ActorRef),
+  TemporalTriggerBusy(ActorRef),
+  FinancialWait(ActorRef),
+}
+
+/// One classified transition from the shared block-deadline frontier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DueBlockDeadlineMutation {
+  RetryReturned(ActorRef),
+  ReviewProcessed(ActorRef, DependencyReviewMutation),
+}
+
+/// One retained transition from the shared tick-deadline frontier. Tick deadlines own timed Park
+/// reviews, financial expiry and independent temporal Trigger occurrences; execution retries remain
+/// block-clock members. Financial return retains the original unpaid boundary until Service commits it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DueTickDeadlineMutation {
+  TemporalTriggerProcessed(ActorRef),
+  FinancialWaitReturned(super::FinancialWaitReceipt),
+  FinancialWaitClosed(super::FinancialWaitReceipt),
+}
+
+/// One bounded mandatory-service pass over the independent Block and Tick deadline frontiers.
+/// Each frontier receives one attempt even when its peer is absent or rejects retained state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DueDeadlineServicePass {
+  pub block: Result<DueBlockDeadlineMutation, DependencyReviewWorkerError>,
+  pub tick: Result<DueTickDeadlineMutation, DependencyReviewWorkerError>,
+}
+
+/// Result supplied by one bounded current-state interpretation of a Pending due review.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyReviewInterpretation {
+  Positive,
+  Negative,
+}
+
+/// Durable transition selected from one exact due-review interpretation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyReviewMutation {
+  Woke,
+  Rearmed(DependencyPlanMutation),
+  Closed,
+}
+
+/// Timed-review part of one complete dependency-plan replacement.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DependencyTimedReviewMutation {
+  #[default]
+  None,
+  Installed,
+  Retained,
+  Replaced,
+  Removed,
+}
+
+/// Bounded result of replacing one complete dependency plan.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DependencyPlanMutation {
+  pub installed: u32,
+  pub retained: u32,
+  pub replaced: u32,
+  pub removed: u32,
+  pub timed_review: DependencyTimedReviewMutation,
+}
+
+/// Bounded topology owner for one source's retained registration pages.
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Default,
+  Encode,
+  Eq,
+  PartialEq,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub struct DependencyRegistrationHeader {
+  pub next_index: u64,
+  pub count: u32,
+  pub free_count: u64,
+  pub first_page: Option<u64>,
+  pub last_page: Option<u64>,
+}
+
+/// One linked C32 source page; holes stay stable during scans and empty pages are reclaimed.
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyRegistrationPage {
+  pub entries: BoundedVec<Option<DependencyRegistrationHandle>, ConstU32<32>>,
+  pub previous: Option<u64>,
+  pub next: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyRegistrationMutation {
+  Installed,
+  Unchanged,
+  Replaced,
+  Removed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyRegistrationError {
+  TransactionRequired,
+  PendingOwnerMissing,
+  PendingOwnerMismatch,
+  SourceExhausted,
+  SourceUninitialized,
+  RevisionFromFuture,
+  RevisionMismatch,
+  RegistrationAlreadyExists,
+  RegistrationMissing,
+  CurrentRegistrationMismatch,
+  PositionMissing,
+  PositionMismatch,
+  CorruptTopology,
+  CapacityExceeded,
+  DeadlineNamespaceExhausted,
+  PlanTooLarge,
+  DuplicateSource,
+  StoredPlanMismatch,
+  PendingEventMissing,
+  PendingEventMismatch,
+  PendingReviewMissing,
+  PendingReviewMismatch,
+  DeadlineNotFuture,
+  ClockUnavailable,
+  ParkedBalanceMinimumChanged,
+  ParkedBalanceThresholdOverflow,
+  OccurrenceFailed(DispatchError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyRevisionMutation {
+  Advanced(DependencyRevision),
+  Exhausted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyRevisionError {
+  TransactionRequired,
+  CorruptTopology,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyPublicationMutation {
+  Begun(DependencyRevision),
+  Coalesced {
+    revision: DependencyRevision,
+    active_target: DependencyRevision,
+  },
+  Exhausted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyScanMutation {
+  Begun(DependencyRevision),
+  Advanced(u64),
+  Completed,
+  HandedOff(DependencyRevision),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyScanWorkerError {
+  InsufficientWeight,
+  Source(DependencyScanSourceError),
+  Scan(DependencyScanError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyScanError {
+  TransactionRequired,
+  SourceExhausted,
+  ScanAlreadyActive,
+  ScanMissing,
+  TargetMismatch,
+  CursorMismatch,
+  CursorExhausted,
+  PendingAuthorityMissing,
+  PendingAuthorityMismatch,
+  PendingDestinationMismatch,
+  CorruptRegistrationPosition,
+  ScanComplete,
+  CorruptTopology,
+}
+
+/// Bucket-level ownership for retained fixed-width deadline pages.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DeadlineHeader {
+  pub first_page: u64,
+  pub last_page: u64,
+  pub next_page: u64,
+  pub first_vacant_page: Option<u64>,
+  pub page_count: u32,
+  pub count: u32,
+}
+
+/// One retained C32 deadline page. Empty interior slots are reusable without moving members.
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DeadlinePage {
+  pub previous_page: Option<u64>,
+  pub next_page: Option<u64>,
+  pub previous_vacant_page: Option<u64>,
+  pub next_vacant_page: Option<u64>,
+  pub live_entries: u8,
+  pub entries: BoundedVec<Option<ActorRef>, ConstU32<32>>,
+}
+
+/// Generation-bound reverse index for exact arbitrary deadline removal.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DeadlineHandle<BlockNumber> {
+  pub actor: ActorRef,
+  pub key: WakeupKey<BlockNumber>,
+  pub page: u64,
+  pub slot: u8,
+}
+
+/// Rejected transaction-local mutations of the canonical Deadline carrier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeadlineMutationError {
+  TransactionRequired,
+  LegacyAuthorityPresent,
+  ProcessMissing,
+  ProcessResidenceMismatch,
+  MemberAlreadyExists,
+  MemberMissing,
+  StaleGeneration,
+  InvalidDestination,
+  PageFull,
+  CorruptCarrier,
+  CapacityExceeded,
+  NamespaceExhausted,
+}
+
+impl From<DeadlineMutationError> for DependencyRegistrationError {
+  fn from(error: DeadlineMutationError) -> Self {
+    match error {
+      DeadlineMutationError::NamespaceExhausted => Self::DeadlineNamespaceExhausted,
+      DeadlineMutationError::CapacityExceeded => Self::CapacityExceeded,
+      _ => Self::StoredPlanMismatch,
+    }
+  }
+}
+
+/// Rejected transaction-local mutations of the canonical Deadline-key min-heaps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeadlineIndexMutationError {
+  TransactionRequired,
+  LegacyAuthorityPresent,
+  HeaderMissing,
+  KeyAlreadyExists,
+  KeyMissing,
+  StaleIndex,
+  CorruptHeader,
+  CorruptHeap,
+  CapacityExceeded,
+}
+
+impl From<DeadlineIndexMutationError> for DeadlineMutationError {
+  fn from(error: DeadlineIndexMutationError) -> Self {
+    match error {
+      DeadlineIndexMutationError::TransactionRequired => Self::TransactionRequired,
+      DeadlineIndexMutationError::LegacyAuthorityPresent => Self::LegacyAuthorityPresent,
+      DeadlineIndexMutationError::CapacityExceeded => Self::CapacityExceeded,
+      DeadlineIndexMutationError::HeaderMissing
+      | DeadlineIndexMutationError::KeyAlreadyExists
+      | DeadlineIndexMutationError::KeyMissing
+      | DeadlineIndexMutationError::StaleIndex
+      | DeadlineIndexMutationError::CorruptHeader
+      | DeadlineIndexMutationError::CorruptHeap => Self::CorruptCarrier,
+    }
+  }
+}
 
 #[derive(
   Clone,
@@ -48,15 +687,6 @@ pub enum WakeupKey<BlockNumber> {
   Tick(SchedulerTick),
 }
 
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
-)]
-pub struct WakeupWorkerFault<BlockNumber> {
-  pub key: WakeupKey<BlockNumber>,
-  pub page: WakeupPageId,
-  pub class: super::observation::CrossingWorkerFaultClass,
-}
-
 impl<BlockNumber> WakeupKey<BlockNumber> {
   pub fn clock(&self) -> WakeupClock {
     match self {
@@ -82,6 +712,40 @@ pub fn scheduler_tick_ceil(timestamp_millis: u64, tick_millis: u64) -> Option<Sc
   } else {
     quotient.checked_add(1)
   }
+}
+
+pub const FUNDING_GRACE_MILLIS: u64 = 2_419_200_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FinancialWaitClockError {
+  InvalidTickDuration,
+  ClockOverflow,
+  TemporalDelayExceeded,
+}
+
+/// Converts the absolute 28-day grace endpoint, including its phase, into a reachable Tick.
+pub fn financial_wait_expiry_tick(
+  timestamp_millis: u64,
+  tick_millis: u64,
+  max_delay_ticks: SchedulerTick,
+) -> Result<SchedulerTick, FinancialWaitClockError> {
+  let current_tick = scheduler_tick_floor(timestamp_millis, tick_millis)
+    .ok_or(FinancialWaitClockError::InvalidTickDuration)?;
+  let grace_endpoint = timestamp_millis
+    .checked_add(FUNDING_GRACE_MILLIS)
+    .ok_or(FinancialWaitClockError::ClockOverflow)?;
+  let expiry_tick = scheduler_tick_ceil(grace_endpoint, tick_millis)
+    .ok_or(FinancialWaitClockError::ClockOverflow)?;
+  expiry_tick
+    .checked_mul(tick_millis)
+    .ok_or(FinancialWaitClockError::ClockOverflow)?;
+  let delay = expiry_tick
+    .checked_sub(current_tick)
+    .ok_or(FinancialWaitClockError::ClockOverflow)?;
+  if delay > max_delay_ticks {
+    return Err(FinancialWaitClockError::TemporalDelayExceeded);
+  }
+  Ok(expiry_tick)
 }
 
 /// Anchors a newly admitted cadence so its first deadline is never earlier than one full period.
@@ -235,6 +899,17 @@ pub struct WakeupBucketState {
 }
 
 pub type QueueEntry<BlockNumber> = ActorStepTicket<BlockNumber, ActorContractCommitment<[u8; 32]>>;
+
+/// Generation-bound execution authority shared by legacy queue and canonical residence paths.
+/// Unlike `ActorStepTicket`, it carries no queue-position authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActorStepAuthority<BlockNumber, ContractCommitment> {
+  pub actor_id: ActorId,
+  pub cycle_nonce: u64,
+  pub cursor: u32,
+  pub eligible_at: BlockNumber,
+  pub contract_commitment: ContractCommitment,
+}
 
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,

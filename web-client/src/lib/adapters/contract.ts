@@ -5,7 +5,6 @@ Excludes: Concrete provider implementations, widget composition, and domain stor
 Zone: Adapter public contract; may reference domain projection types but must not import concrete adapters/widgets.
 */
 import type { DeosChainConnectionState } from '$lib/adapters/blockchain/deos';
-import type { ActorMaterializationProjection } from '$lib/automation/materialization';
 import type { ActorResourceProjection } from '$lib/automation/resource';
 import type {
   AutomationActorSnapshot,
@@ -76,9 +75,6 @@ export type AutomationAdapter = {
   getActorResourceProjection?():
     | ActorResourceProjection
     | Promise<ActorResourceProjection>;
-  getActorMaterializationProjection?(
-    feed: ObservationFeedIdentity,
-  ): ActorMaterializationProjection | Promise<ActorMaterializationProjection>;
 };
 
 export type MarketAdapter = {

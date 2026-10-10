@@ -2,8 +2,8 @@ use super::common::{
   ALICE, BOB, actor_fee_sink_account, create_test_asset, mint_tokens, new_test_ext,
 };
 use crate::configs::governance_config::{
-  RuntimeProposalPayloadExecutor, StrategicRuntimeUpgradePayload, TacticalTreasuryFundingSource,
-  TacticalTreasuryInvoicePayload,
+  RuntimeProposalPayloadExecutor, RuntimeProposalPayloadPreimageProvider,
+  StrategicRuntimeUpgradePayload, TacticalTreasuryFundingSource, TacticalTreasuryInvoicePayload,
 };
 use crate::{
   Actors, Address, Assets, Balances, DeosRouter, Executive, Governance, Preimage, Runtime,
@@ -11,7 +11,7 @@ use crate::{
   UncheckedExtrinsic,
 };
 use codec::{Encode, MaxEncodedLen};
-use pallet_governance::ProposalPayloadExecutor;
+use pallet_governance::{ProposalPayloadExecutor, ProposalPayloadPreimageProvider};
 use polkadot_sdk::frame_support::traits::{
   fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
   tokens::Preservation,
@@ -54,7 +54,7 @@ fn governance_0_7_22_storage_schema_is_a_fresh_genesis_baseline() {
   });
 }
 
-fn approved_outcome(
+pub(super) fn approved_outcome(
   approved_epoch: u32,
   winner_count: u32,
   enactment: pallet_governance::ProposalEnactmentOutcome<u32>,
@@ -209,19 +209,21 @@ fn governance_epoch_catch_up_services_one_chronological_epoch_per_runtime_block(
     let one_empty_epoch =
       <GovernanceWeights as pallet_governance::WeightInfo>::service_epoch_catch_up();
     let maximum_block = crate::configs::RuntimeBlockWeights::get().max_block;
+    // Declared coefficients only: pending service now adds to every historical branch.
+    // Physical qualification of the changed owners remains a separate gate.
+    let pending =
+      <GovernanceWeights as pallet_governance::WeightInfo>::service_pending_enactments(4);
     for branch in [
-      one_empty_epoch.saturating_add(
+      one_empty_epoch.saturating_add(pending).saturating_add(
         <GovernanceWeights as pallet_governance::WeightInfo>::service_maturing_proposals(3),
       ),
-      one_empty_epoch.saturating_add(
-        <GovernanceWeights as pallet_governance::WeightInfo>::service_pending_enactments(4),
-      ),
-      one_empty_epoch.saturating_add(
+      one_empty_epoch.saturating_add(pending),
+      one_empty_epoch.saturating_add(pending).saturating_add(
         <GovernanceWeights as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(
           1024,
         ),
       ),
-      one_empty_epoch.saturating_add(
+      one_empty_epoch.saturating_add(pending).saturating_add(
         <GovernanceWeights as pallet_governance::WeightInfo>::service_expiring_accounts(512),
       ),
     ] {
@@ -637,6 +639,764 @@ fn authorized_runtime_upgrade_can_be_applied_by_external_origin_after_governance
 }
 
 #[test]
+fn l2_router_fee_uses_shared_exact_decoder_without_mutating_actor_controls() {
+  use pallet_governance::{
+    ProposalExecutionReceipt, ProposalParameterChangeSurface as Surface,
+    ProposalPayloadKind as Kind,
+  };
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    assert_ok!(Actors::set_user_creation_enabled(
+      RuntimeOrigin::root(),
+      false
+    ));
+    assert_ok!(Actors::set_global_circuit_breaker(
+      RuntimeOrigin::root(),
+      true
+    ));
+    let new_fee = polkadot_sdk::sp_runtime::Perbill::from_percent(1);
+    let call: RuntimeCall =
+      pallet_deos_router::Call::<Runtime>::update_router_fee { new_fee }.into();
+    let bytes = call.encode();
+    let hash = <Runtime as frame_system::Config>::Hashing::hash(&bytes);
+    assert_ok!(Preimage::note_preimage(
+      RuntimeOrigin::signed(ALICE),
+      bytes.clone()
+    ));
+    assert!(
+      RuntimeProposalPayloadPreimageProvider::validate_for_witness(
+        PROTOCOL_GOVERNANCE_DOMAIN,
+        Kind::L2ParameterChange,
+        &hash,
+        &bytes,
+      )
+      .is_ok()
+    );
+    let receipt = RuntimeProposalPayloadExecutor::execute(
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      0,
+      Kind::L2ParameterChange,
+      hash,
+    )
+    .unwrap_or_else(|reason| panic!("Router parameter execution failed: {reason:?}"));
+    assert!(matches!(
+      receipt,
+      ProposalExecutionReceipt::ParameterChangeExecuted {
+        surface: Surface::RouterFee,
+      }
+    ));
+    assert_eq!(DeosRouter::router_fee(), new_fee);
+    assert!(!Actors::user_creation_enabled());
+    assert!(Actors::global_circuit_breaker());
+  });
+}
+
+#[test]
+fn l2_actor_controls_share_witness_and_direct_executor_allowlist() {
+  use pallet_governance::{
+    ProposalExecutionAuthority, ProposalExecutionReceipt,
+    ProposalParameterChangeSurface as Surface, ProposalPayloadKind as Kind,
+  };
+  for frozen in [false, true] {
+    for value in [false, true] {
+      for creation in [false, true] {
+        new_test_ext().execute_with(|| {
+          System::set_block_number(1);
+          assert_ok!(Actors::set_user_creation_enabled(
+            RuntimeOrigin::root(),
+            !value
+          ));
+          assert_ok!(Actors::set_global_circuit_breaker(
+            RuntimeOrigin::root(),
+            frozen
+          ));
+          let next_id = Actors::next_actor_id();
+          let count = Actors::active_actor_count();
+          let call: RuntimeCall = if creation {
+            pallet_deos_actors::Call::<Runtime>::set_user_creation_enabled { enabled: value }.into()
+          } else {
+            pallet_deos_actors::Call::<Runtime>::set_global_circuit_breaker { paused: value }.into()
+          };
+          let bytes = call.encode();
+          let hash = <Runtime as frame_system::Config>::Hashing::hash(&bytes);
+          assert_ok!(Preimage::note_preimage(
+            RuntimeOrigin::signed(ALICE),
+            bytes.clone()
+          ));
+          let validated = RuntimeProposalPayloadPreimageProvider::validate_for_witness(
+            PROTOCOL_GOVERNANCE_DOMAIN,
+            Kind::L2ParameterChange,
+            &hash,
+            &bytes,
+          )
+          .expect("exact bounded protocol control is witnessable");
+          assert_eq!(
+            validated.execution_authority,
+            ProposalExecutionAuthority::DomainParameters
+          );
+          let surface = if creation {
+            Surface::ActorUserCreationEnabled
+          } else {
+            Surface::ActorGlobalCircuitBreaker
+          };
+          let receipt = RuntimeProposalPayloadExecutor::execute(
+            PROTOCOL_GOVERNANCE_DOMAIN,
+            0,
+            Kind::L2ParameterChange,
+            hash,
+          )
+          .unwrap_or_else(|reason| panic!("bounded control execution failed: {reason:?}"));
+          assert!(matches!(
+            receipt,
+            ProposalExecutionReceipt::ParameterChangeExecuted { surface: actual }
+              if actual == surface
+          ));
+          assert_eq!(
+            Actors::user_creation_enabled(),
+            if creation { value } else { !value }
+          );
+          assert_eq!(
+            Actors::global_circuit_breaker(),
+            if creation { frozen } else { value }
+          );
+          assert_eq!(Actors::next_actor_id(), next_id);
+          assert_eq!(Actors::active_actor_count(), count);
+          System::assert_last_event(RuntimeEvent::Actors(if creation {
+            pallet_deos_actors::Event::UserCreationEnabledSet { enabled: value }
+          } else {
+            pallet_deos_actors::Event::GlobalCircuitBreakerSet { paused: value }
+          }));
+        });
+      }
+    }
+  }
+}
+
+#[test]
+fn l2_parameter_allowlist_refuses_wrong_domains_calls_and_nonexact_bytes_without_effects() {
+  use pallet_governance::{
+    ProposalExecutionFailureReason as Failure, ProposalPayloadKind as Kind,
+    ProposalPreimageAdmissionError as Admission,
+  };
+  let control: RuntimeCall =
+    pallet_deos_actors::Call::<Runtime>::set_user_creation_enabled { enabled: true }.into();
+  let canonical = control.encode();
+  let mut trailing = canonical.clone();
+  trailing.push(0);
+  let mut truncated = canonical.clone();
+  truncated.pop();
+  let unsupported_actor: RuntimeCall =
+    pallet_deos_actors::Call::<Runtime>::set_active_actor_limit { new_limit: 1 }.into();
+  let unsupported_system: RuntimeCall =
+    frame_system::Call::<Runtime>::remark { remark: vec![] }.into();
+  let fee_sink_debit: RuntimeCall =
+    polkadot_sdk::pallet_balances::Call::<Runtime>::force_set_balance {
+      who: MultiAddress::Id(actor_fee_sink_account()),
+      new_free: 0,
+    }
+    .into();
+  for (domain, bytes, admission, failure) in [
+    (
+      TACTICAL_GOVERNANCE_DOMAIN,
+      canonical,
+      Admission::Incompatible,
+      Failure::UnsupportedDomain,
+    ),
+    (
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      unsupported_actor.encode(),
+      Admission::Incompatible,
+      Failure::UnsupportedCall,
+    ),
+    (
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      unsupported_system.encode(),
+      Admission::Incompatible,
+      Failure::UnsupportedCall,
+    ),
+    (
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      trailing,
+      Admission::Invalid,
+      Failure::InvalidPreimage,
+    ),
+    (
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      truncated,
+      Admission::Invalid,
+      Failure::InvalidPreimage,
+    ),
+    (
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      fee_sink_debit.encode(),
+      Admission::Oversized,
+      Failure::InvalidPreimage,
+    ),
+  ] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      assert_ok!(Actors::set_global_circuit_breaker(
+        RuntimeOrigin::root(),
+        true
+      ));
+      let hash = <Runtime as frame_system::Config>::Hashing::hash(&bytes);
+      assert_ok!(Preimage::note_preimage(
+        RuntimeOrigin::signed(ALICE),
+        bytes.clone()
+      ));
+      let before = polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version());
+      assert_eq!(
+        RuntimeProposalPayloadPreimageProvider::validate_for_witness(
+          domain,
+          Kind::L2ParameterChange,
+          &hash,
+          &bytes
+        )
+        .err(),
+        Some(admission)
+      );
+      assert_eq!(
+        RuntimeProposalPayloadExecutor::execute(domain, 0, Kind::L2ParameterChange, hash).err(),
+        Some(failure)
+      );
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version()),
+        before
+      );
+    });
+  }
+}
+
+// This scenario requires the production vote-power provider; benchmarking replaces it with 1.
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_l2_actor_admission_enacts_after_real_ordinary_delay_on_declared_presets() {
+  exercise_signed_l2_actor_admission(false);
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_l2_actor_admission_matches_complete_prefix_governance_chronology() {
+  exercise_signed_l2_actor_admission(true);
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_l2_actor_admission_then_parked_churn_imports_complete_blocks() {
+  let pair = sr25519::Pair::from_string("//Alice", None).unwrap();
+  for preset in crate::genesis_config_presets::preset_names() {
+    let (storage, parent) = super::production_block_replay::signed_l2_admission_from_genesis(
+      &pair,
+      &preset,
+      PROTOCOL_GOVERNANCE_DOMAIN,
+    );
+    polkadot_sdk::sp_io::TestExternalities::new(storage).execute_with(|| {
+      super::production_block_replay::replay_signed_parked_user_epoch_churn(&pair, parent);
+    });
+    eprintln!("Signed governance/churn complete: {preset}");
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn exercise_signed_l2_actor_admission(prepare_one_call_per_block: bool) {
+  use pallet_governance::{ProposalEnactmentOutcome as Outcome, ProposalPayloadKind as Kind};
+  let pair = sr25519::Pair::from_string("//Alice", None).unwrap();
+  let signer = crate::AccountId::from(pair.public());
+  for preset in crate::genesis_config_presets::preset_names() {
+    let storage = super::production_block_replay::preset_genesis_storage(&[], &preset);
+    polkadot_sdk::sp_io::TestExternalities::new(storage).execute_with(|| {
+      System::set_block_number(1);
+      Governance::on_initialize(1);
+      assert!(!Actors::user_creation_enabled());
+      assert!(!Actors::global_circuit_breaker());
+      let system_count = Actors::active_actor_count();
+      let system_next = Actors::next_actor_id();
+      assert_noop!(
+        Actors::create_user_actor(
+          RuntimeOrigin::signed(signer.clone()),
+          pallet_deos_actors::Mutability::Mutable,
+          None
+        ),
+        pallet_deos_actors::Error::<Runtime>::UserCreationDisabled
+      );
+
+      // Use the preset's existing asset, registration and endowment, without genesis overrides.
+      let prepare_governance_block = |block| {
+        if prepare_one_call_per_block {
+          System::set_block_number(block);
+          Governance::on_initialize(block);
+        }
+      };
+      let mut nonce = 0;
+      let mut apply = |call: RuntimeCall| {
+        super::actors_integration_tests::ensure_actor_prepass_context();
+        let extrinsic = signed_extrinsic(&pair, nonce, call);
+        if !Actors::block_resource_state()
+          .is_some_and(|state| state.ensure_block(System::block_number()).is_ok())
+        {
+          assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+        }
+        assert!(matches!(Executive::apply_extrinsic(extrinsic), Ok(Ok(()))));
+        nonce += 1;
+      };
+      apply(RuntimeCall::Staking(pallet_staking::Call::stake {
+        asset_id: 0,
+        amount: 1_000,
+      }));
+      let call: RuntimeCall =
+        pallet_deos_actors::Call::<Runtime>::set_user_creation_enabled { enabled: true }.into();
+      let bytes = call.encode();
+      let hash = <Runtime as frame_system::Config>::Hashing::hash(&bytes);
+      prepare_governance_block(2);
+      apply(RuntimeCall::Preimage(
+        polkadot_sdk::pallet_preimage::Call::note_preimage {
+          bytes: bytes.clone(),
+        },
+      ));
+      prepare_governance_block(3);
+      apply(RuntimeCall::Governance(
+        pallet_governance::Call::prepare_payload_admission_witness {
+          domain: PROTOCOL_GOVERNANCE_DOMAIN,
+          payload_kind: Kind::L2ParameterChange,
+          payload_hash: hash,
+          payload: bytes.try_into().unwrap(),
+        },
+      ));
+      prepare_governance_block(4);
+      apply(RuntimeCall::Governance(
+        pallet_governance::Call::submit_signed_proposal {
+          domain: PROTOCOL_GOVERNANCE_DOMAIN,
+          item_id: 120,
+          cadence_mode: pallet_governance::ProposalCadenceMode::Ordinary,
+          payload_kind: Kind::L2ParameterChange,
+          payload_hash: hash,
+        },
+      ));
+      assert_eq!(
+        Governance::proposal_author(PROTOCOL_GOVERNANCE_DOMAIN, 120),
+        Some(signer.clone())
+      );
+      let timing = Governance::proposal_timing(PROTOCOL_GOVERNANCE_DOMAIN, 120).unwrap();
+      let open = timing.ordinary_primary_open_epoch;
+      let close = timing.ordinary_primary_close_epoch;
+      let delay = crate::configs::governance_config::ProposalEnactmentDelay::get();
+      assert_eq!(delay, 43_200);
+      let due = close.checked_add(delay).unwrap();
+      if prepare_one_call_per_block {
+        assert_eq!(close, 144_004);
+        assert_eq!(due, 187_204);
+      }
+      for block in System::block_number() + 1..=open {
+        System::set_block_number(block);
+        Governance::on_initialize(block);
+      }
+      apply(RuntimeCall::Governance(
+        pallet_governance::Call::cast_vote {
+          domain: PROTOCOL_GOVERNANCE_DOMAIN,
+          item_id: 120,
+          vote: pallet_governance::ProposalVoteKind::Aye,
+        },
+      ));
+      assert!(
+        Governance::proposal_vote_tally(PROTOCOL_GOVERNANCE_DOMAIN, 120)
+          .unwrap()
+          .aye_weight
+          >= 200
+      );
+      for block in open + 1..due {
+        System::set_block_number(block);
+        Governance::on_initialize(block);
+        assert!(!Actors::user_creation_enabled());
+        if block >= close {
+          assert_eq!(
+            Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, 120),
+            Some(approved_outcome(close, 1, Outcome::NotAttempted))
+          );
+          assert_eq!(
+            pallet_governance::ProposalPendingEnactmentAt::<Runtime>::get(
+              PROTOCOL_GOVERNANCE_DOMAIN,
+              120
+            ),
+            Some(due)
+          );
+          assert!(Governance::finalized_proposal_outcome_expiry_bucket(block).is_empty());
+        }
+      }
+      System::set_block_number(due);
+      Governance::on_initialize(due);
+      assert!(Actors::user_creation_enabled());
+      assert!(!Actors::global_circuit_breaker());
+      assert_eq!(Actors::active_actor_count(), system_count);
+      assert_eq!(Actors::next_actor_id(), system_next);
+      assert_eq!(
+        Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, 120),
+        Some(approved_outcome(close, 1, Outcome::Enacted { epoch: due }))
+      );
+      assert!(pallet_governance::PendingEnactments::<Runtime>::get().is_empty());
+      assert!(pallet_governance::ActiveProposals::<Runtime>::iter_keys().next().is_none());
+      assert!(pallet_governance::ProposalMaturityBuckets::<Runtime>::iter().all(|(_, bucket)| bucket.is_empty()));
+      assert!(pallet_governance::ExpiryBuckets::<Runtime>::iter().all(|(_, bucket)| bucket.is_empty()));
+      assert_eq!(pallet_governance::CurrentEpochServicePhase::<Runtime>::get(), pallet_governance::EpochServicePhase::Maturing);
+      assert_eq!(pallet_governance::LastProcessedEpoch::<Runtime>::get(), due - 1);
+      assert!(System::events().iter().any(|record| matches!(record.event,
+        RuntimeEvent::Governance(pallet_governance::Event::ProposalParameterChangeExecuted {
+          domain: PROTOCOL_GOVERNANCE_DOMAIN, item_id: 120,
+          surface: pallet_governance::ProposalParameterChangeSurface::ActorUserCreationEnabled,
+          executed_epoch, ..
+        }) if executed_epoch == due)));
+      apply(RuntimeCall::Actors(
+        pallet_deos_actors::Call::create_user_actor {
+          mutability: pallet_deos_actors::Mutability::Mutable,
+          contract: None,
+        },
+      ));
+      assert_eq!(Actors::next_actor_id(), system_next + 1);
+      let retention =
+        crate::configs::governance_config::FinalizedProposalOutcomeRetentionEpochs::get();
+      let expiry = due + retention;
+      assert_eq!(
+        Governance::finalized_proposal_outcome_expiry_bucket(expiry).len(),
+        1
+      );
+      for block in due + 1..=expiry {
+        System::set_block_number(block);
+        Governance::on_initialize(block);
+      }
+      // Chronological history cleanup may need additional opportunities, never an early deadline.
+      for block in expiry + 1..=expiry + 4 {
+        if Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, 120).is_none() {
+          break;
+        }
+        System::set_block_number(block);
+        Governance::on_initialize(block);
+      }
+      assert!(Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, 120).is_none());
+      assert!(Governance::proposal_metadata(PROTOCOL_GOVERNANCE_DOMAIN, 120).is_none());
+      assert!(Governance::recent_finalized_proposals(PROTOCOL_GOVERNANCE_DOMAIN).is_empty());
+      assert!(Actors::user_creation_enabled());
+      // Complete the empty successor phase left by terminal-history cleanup.
+      let finish_phase_block = System::block_number() + 1;
+      System::set_block_number(finish_phase_block);
+      Governance::on_initialize(finish_phase_block);
+      assert!(pallet_governance::PendingEnactments::<Runtime>::get().is_empty());
+      assert!(pallet_governance::ProposalPendingEnactmentAt::<Runtime>::iter_keys().next().is_none());
+      assert!(pallet_governance::ActiveProposals::<Runtime>::iter_keys().next().is_none());
+      assert!(pallet_governance::ProposalMaturityBuckets::<Runtime>::iter().all(|(_, bucket)| bucket.is_empty()));
+      assert!(pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::iter().all(|(_, bucket)| bucket.is_empty()));
+      assert!(pallet_governance::ExpiryBuckets::<Runtime>::iter().all(|(_, bucket)| bucket.is_empty()));
+      assert_eq!(pallet_governance::CurrentEpochServicePhase::<Runtime>::get(), pallet_governance::EpochServicePhase::Maturing);
+      let cursor_lag = System::block_number()
+        .checked_sub(pallet_governance::LastProcessedEpoch::<Runtime>::get())
+        .unwrap();
+      let system_prefix = polkadot_sdk::sp_io::hashing::twox_128(b"System");
+      let cursor_key = pallet_governance::LastProcessedEpoch::<Runtime>::hashed_key();
+      let preserved_state = || {
+        let mut storage = super::production_block_replay::current_top_storage();
+        storage.top.retain(|key, _| !key.starts_with(&system_prefix) && key.as_slice() != cursor_key.as_slice());
+        (
+          storage.top,
+          frame_system::Account::<Runtime>::iter().collect::<std::collections::BTreeMap<_, _>>(),
+        )
+      };
+      let state_before = preserved_state();
+      let quiet_start = System::block_number();
+      for block in quiet_start + 1..=quiet_start + 32 {
+        System::set_block_number(block);
+        Governance::on_initialize(block);
+        assert_eq!(pallet_governance::LastProcessedEpoch::<Runtime>::get(), block - cursor_lag);
+        assert_eq!(preserved_state(), state_before);
+      }
+      println!("Construction Governance: preset={preset} prepare_one_call_per_block={prepare_one_call_per_block} due={due} quiet_start={quiet_start} quiet_blocks=32 cursor_lag={cursor_lag}");
+    });
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_l2_breaker_freeze_and_thaw_enact_on_declared_presets_without_root_recovery() {
+  exercise_signed_l2_breaker_freeze_and_thaw(false);
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_l2_breaker_thaw_imports_complete_blocks_on_declared_presets() {
+  exercise_signed_l2_breaker_freeze_and_thaw(true);
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn exercise_signed_l2_breaker_freeze_and_thaw(complete_thaw_blocks: bool) {
+  use pallet_governance::{ProposalEnactmentOutcome as Outcome, ProposalPayloadKind as Kind};
+  let pair = sr25519::Pair::from_string("//Alice", None).unwrap();
+  let signer = crate::AccountId::from(pair.public());
+  for preset in crate::genesis_config_presets::preset_names() {
+    let storage = super::production_block_replay::preset_genesis_storage(&[], &preset);
+    polkadot_sdk::sp_io::TestExternalities::new(storage).execute_with(|| {
+      System::set_block_number(1);
+      Governance::on_initialize(1);
+      assert!(!Actors::user_creation_enabled());
+      assert!(!Actors::global_circuit_breaker());
+      let system_count = Actors::active_actor_count();
+      let system_next = Actors::next_actor_id();
+      let mut nonce = 0;
+      let mut apply = |call: RuntimeCall| {
+        super::actors_integration_tests::ensure_actor_prepass_context();
+        let extrinsic = signed_extrinsic(&pair, nonce, call);
+        if !Actors::block_resource_state()
+          .is_some_and(|state| state.ensure_block(System::block_number()).is_ok())
+        {
+          assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+        }
+        let result = Executive::apply_extrinsic(extrinsic);
+        assert!(
+          matches!(result, Ok(Ok(()))),
+          "signed call failed: {result:?}"
+        );
+        nonce += 1;
+      };
+      apply(RuntimeCall::Staking(pallet_staking::Call::stake {
+        asset_id: 0,
+        amount: 1_000,
+      }));
+      for (item_id, paused) in [(121, true), (122, false)] {
+        let before = !paused;
+        assert_eq!(Actors::global_circuit_breaker(), before);
+        let sink = actor_fee_sink_account();
+        let fees_before = Balances::free_balance(&sink);
+        let call: RuntimeCall =
+          pallet_deos_actors::Call::<Runtime>::set_global_circuit_breaker { paused }.into();
+        let bytes = call.encode();
+        let hash = <Runtime as frame_system::Config>::Hashing::hash(&bytes);
+        apply(RuntimeCall::Preimage(
+          polkadot_sdk::pallet_preimage::Call::note_preimage {
+            bytes: bytes.clone(),
+          },
+        ));
+        apply(RuntimeCall::Governance(
+          pallet_governance::Call::prepare_payload_admission_witness {
+            domain: PROTOCOL_GOVERNANCE_DOMAIN,
+            payload_kind: Kind::L2ParameterChange,
+            payload_hash: hash,
+            payload: bytes.try_into().unwrap(),
+          },
+        ));
+        apply(RuntimeCall::Governance(
+          pallet_governance::Call::submit_signed_proposal {
+            domain: PROTOCOL_GOVERNANCE_DOMAIN,
+            item_id,
+            cadence_mode: pallet_governance::ProposalCadenceMode::Ordinary,
+            payload_kind: Kind::L2ParameterChange,
+            payload_hash: hash,
+          },
+        ));
+        assert_eq!(Actors::global_circuit_breaker(), before);
+        assert!(
+          Balances::free_balance(&sink) > fees_before,
+          "Governance and transaction fees remain ledger-only while the breaker is set"
+        );
+        assert_eq!(
+          Governance::proposal_author(PROTOCOL_GOVERNANCE_DOMAIN, item_id),
+          Some(signer.clone())
+        );
+        let timing = Governance::proposal_timing(PROTOCOL_GOVERNANCE_DOMAIN, item_id).unwrap();
+        let open = timing.ordinary_primary_open_epoch;
+        let close = timing.ordinary_primary_close_epoch;
+        for block in System::block_number() + 1..=open {
+          System::set_block_number(block);
+          Governance::on_initialize(block);
+          assert_eq!(Actors::global_circuit_breaker(), before);
+        }
+        apply(RuntimeCall::Governance(
+          pallet_governance::Call::cast_vote {
+            domain: PROTOCOL_GOVERNANCE_DOMAIN,
+            item_id,
+            vote: pallet_governance::ProposalVoteKind::Aye,
+          },
+        ));
+        let mut approved = None;
+        // Retained historical phases may delay maturity service; keep the real cursor intact.
+        for block in open + 1..=close + 8 {
+          System::set_block_number(block);
+          Governance::on_initialize(block);
+          assert_eq!(Actors::global_circuit_breaker(), before);
+          assert!(!Actors::user_creation_enabled());
+          if let Some(pallet_governance::FinalizedProposalOutcome::Approved {
+            approval,
+            enactment: Outcome::NotAttempted,
+          }) = Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, item_id)
+          {
+            approved = Some(approval.approved_epoch);
+            break;
+          }
+        }
+        let approved = approved.expect("ordinary maturity obtains a bounded service opportunity");
+        assert!(approved >= close);
+        let delay = crate::configs::governance_config::ProposalEnactmentDelay::get();
+        assert_eq!(delay, 43_200);
+        let due = approved.checked_add(delay).unwrap();
+        assert_eq!(
+          pallet_governance::ProposalPendingEnactmentAt::<Runtime>::get(
+            PROTOCOL_GOVERNANCE_DOMAIN,
+            item_id
+          ),
+          Some(due)
+        );
+        let native_end = if complete_thaw_blocks && !paused {
+          due - 1
+        } else {
+          due
+        };
+        for block in System::block_number() + 1..native_end {
+          System::set_block_number(block);
+          Governance::on_initialize(block);
+          assert_eq!(Actors::global_circuit_breaker(), before);
+          assert!(!Actors::user_creation_enabled());
+          assert_eq!(
+            pallet_governance::ProposalPendingEnactmentAt::<Runtime>::get(
+              PROTOCOL_GOVERNANCE_DOMAIN,
+              item_id
+            ),
+            Some(due)
+          );
+        }
+        if complete_thaw_blocks && !paused {
+          super::production_block_replay::replay_pending_governance_thaw_blocks(
+            &pair,
+            due,
+            PROTOCOL_GOVERNANCE_DOMAIN,
+            item_id,
+          );
+          return;
+        }
+        System::set_block_number(due);
+        Governance::on_initialize(due);
+        assert_eq!(Actors::global_circuit_breaker(), paused);
+        assert!(!Actors::user_creation_enabled());
+        assert_eq!(Actors::active_actor_count(), system_count);
+        assert_eq!(Actors::next_actor_id(), system_next);
+        assert_eq!(
+          Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, item_id),
+          Some(approved_outcome(
+            approved,
+            1,
+            Outcome::Enacted { epoch: due }
+          ))
+        );
+        assert!(matches!(
+          Governance::proposal_execution_detail(PROTOCOL_GOVERNANCE_DOMAIN, item_id),
+          Some(pallet_governance::ProposalExecutionDetail::Succeeded(
+            pallet_governance::ProposalExecutionSuccessDetail::ParameterChangeExecuted {
+              surface: pallet_governance::ProposalParameterChangeSurface::ActorGlobalCircuitBreaker,
+            }
+          ))
+        ));
+        assert!(pallet_governance::PendingEnactments::<Runtime>::get().is_empty());
+        if paused {
+          assert_noop!(
+            Actors::create_user_actor(
+              RuntimeOrigin::signed(signer.clone()),
+              pallet_deos_actors::Mutability::Mutable,
+              None
+            ),
+            pallet_deos_actors::Error::<Runtime>::GlobalCircuitBreakerActive
+          );
+        }
+      }
+      assert_noop!(
+        Actors::create_user_actor(
+          RuntimeOrigin::signed(signer.clone()),
+          pallet_deos_actors::Mutability::Mutable,
+          None
+        ),
+        pallet_deos_actors::Error::<Runtime>::UserCreationDisabled
+      );
+    });
+  }
+}
+
+#[test]
+fn l2_signed_submission_requires_primary_power_and_keeps_general_fee_admission_while_frozen() {
+  use pallet_governance::{
+    ProposalCapacityLane, ProposalPayloadKind as Kind, ProposalSubmissionAuthority,
+  };
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    assert_ok!(Actors::set_user_creation_enabled(
+      RuntimeOrigin::root(),
+      false
+    ));
+    assert_ok!(Actors::set_global_circuit_breaker(
+      RuntimeOrigin::root(),
+      true
+    ));
+    let call: RuntimeCall =
+      pallet_deos_actors::Call::<Runtime>::set_user_creation_enabled { enabled: true }.into();
+    let bytes = call.encode();
+    let hash = <Runtime as frame_system::Config>::Hashing::hash(&bytes);
+    assert_ok!(Preimage::note_preimage(RuntimeOrigin::signed(ALICE), bytes));
+    prepare_payload_witness(
+      ALICE,
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      Kind::L2ParameterChange,
+      hash,
+    );
+    let policy = Governance::proposal_admission_policy_view(
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      Kind::L2ParameterChange,
+    );
+    assert_eq!(
+      policy.authority,
+      ProposalSubmissionAuthority::PrimaryEligibleSigned
+    );
+    assert_eq!(policy.capacity_lane, ProposalCapacityLane::General);
+    let fee = crate::configs::governance_config::ProposalOpeningFee::get();
+    assert_eq!(policy.opening_fee, Some(fee));
+    let veto_asset = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
+    assert_ok!(<Assets as FungiblesMutate<_>>::mint_into(
+      veto_asset, &ALICE, 100
+    ));
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(ALICE),
+        PROTOCOL_GOVERNANCE_DOMAIN,
+        119,
+        pallet_governance::ProposalCadenceMode::Ordinary,
+        Kind::L2ParameterChange,
+        hash
+      ),
+      pallet_governance::Error::<Runtime>::ProposalSubmitterNotPrimaryEligible
+    );
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 500));
+    let payer_before = Balances::free_balance(BOB);
+    let sink_before = Balances::free_balance(actor_fee_sink_account());
+    assert_ok!(Governance::submit_signed_proposal(
+      RuntimeOrigin::signed(BOB),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      119,
+      pallet_governance::ProposalCadenceMode::Ordinary,
+      Kind::L2ParameterChange,
+      hash
+    ));
+    assert_eq!(Balances::free_balance(BOB), payer_before - fee);
+    assert_eq!(
+      Balances::free_balance(actor_fee_sink_account()),
+      sink_before + fee
+    );
+    assert_eq!(
+      Governance::proposal_author(PROTOCOL_GOVERNANCE_DOMAIN, 119),
+      Some(BOB)
+    );
+    assert!(
+      !Actors::user_creation_enabled(),
+      "submission has no parameter effect"
+    );
+    assert!(Actors::global_circuit_breaker());
+  });
+}
+
+#[test]
 fn l2_parameter_change_updates_router_fee_via_governance_executor() {
   new_test_ext().execute_with(|| {
     let approved_epoch = 1;
@@ -825,7 +1585,12 @@ fn l2_treasury_spend_transfers_bldr_from_bldr_treasury_account() {
       polkadot_sdk::frame_support::BoundedVec::try_from(vec![ALICE])
         .expect("proposal winners must fit runtime bound"),
     ));
+    let fee_sink = actor_fee_sink_account();
+    assert_ne!(treasury_account, fee_sink);
+    let fee_sink_before = System::account(&fee_sink);
+    assert!(fee_sink_before.data.free >= crate::EXISTENTIAL_DEPOSIT);
     service_pending_enactment(TACTICAL_GOVERNANCE_DOMAIN, 103);
+    assert_eq!(System::account(&fee_sink), fee_sink_before);
     assert_eq!(
       Governance::finalized_proposal_outcome(TACTICAL_GOVERNANCE_DOMAIN, 103),
       Some(approved_outcome(
@@ -937,7 +1702,12 @@ fn l2_treasury_spend_transfers_non_bldr_asset_from_same_treasury_account() {
       polkadot_sdk::frame_support::BoundedVec::try_from(vec![ALICE])
         .expect("proposal winners must fit runtime bound"),
     ));
+    let fee_sink = actor_fee_sink_account();
+    assert_ne!(treasury_account, fee_sink);
+    let fee_sink_before = System::account(&fee_sink);
+    assert!(fee_sink_before.data.free >= crate::EXISTENTIAL_DEPOSIT);
     service_pending_enactment(TACTICAL_GOVERNANCE_DOMAIN, 104);
+    assert_eq!(System::account(&fee_sink), fee_sink_before);
     assert_eq!(
       Governance::finalized_proposal_outcome(TACTICAL_GOVERNANCE_DOMAIN, 104),
       Some(approved_outcome(
@@ -1226,6 +1996,121 @@ fn urgent_policy_is_runtime_upgrade_only_on_current_launch_line() {
       Some(false)
     );
   });
+}
+
+#[test]
+fn fresh_genesis_preimage_tickets_preserve_fee_sink() {
+  use polkadot_sdk::frame_support::{
+    storage::storage_prefix,
+    traits::{QueryPreimage, StorePreimage, fungible::InspectHold},
+  };
+  use polkadot_sdk::pallet_preimage::{RequestStatus, RequestStatusFor};
+  use polkadot_sdk::sp_io::{TestExternalities, storage};
+  use polkadot_sdk::sp_keyring::Sr25519Keyring;
+
+  let payer = Sr25519Keyring::Alice.to_account_id();
+  let other = Sr25519Keyring::Bob.to_account_id();
+  let sink = actor_fee_sink_account();
+  let reason =
+    crate::RuntimeHoldReason::Preimage(polkadot_sdk::pallet_preimage::HoldReason::Preimage);
+  let legacy_prefix = storage_prefix(b"Preimage", b"StatusFor");
+  let bytes = vec![0xa5; 32];
+  let hash = <Runtime as frame_system::Config>::Hashing::hash(&bytes);
+  let deposit = crate::configs::preimage_config::PreimageBaseDeposit::get()
+    + crate::configs::preimage_config::PreimageByteDeposit::get() * bytes.len() as u128;
+  assert_ne!(payer, sink);
+  assert_ne!(other, sink);
+  for preset in crate::genesis_config_presets::preset_names() {
+    let genesis = super::production_block_replay::preset_genesis_storage(&[], &preset);
+    TestExternalities::new(genesis).execute_with(|| {
+      let sink_before = System::account(&sink);
+      let issuance_before = Balances::total_issuance();
+      let payer_before = Balances::free_balance(&payer);
+      let preserved = || {
+        // Inspect raw keys so malformed legacy entries cannot look like an empty map.
+        assert!(storage::get(&legacy_prefix).is_none());
+        assert!(
+          storage::next_key(&legacy_prefix).is_none_or(|key| !key.starts_with(&legacy_prefix))
+        );
+        assert_eq!(System::account(&sink), sink_before);
+        assert_eq!(Balances::balance_on_hold(&reason, &sink), 0);
+        assert_eq!(Balances::total_issuance(), issuance_before);
+      };
+      preserved();
+      assert!(RequestStatusFor::<Runtime>::get(hash).is_none());
+      assert_ok!(Preimage::note_preimage(
+        RuntimeOrigin::signed(payer.clone()),
+        bytes.clone(),
+      ));
+      let ticket = RequestStatusFor::<Runtime>::get(hash).unwrap();
+      assert!(matches!(
+        &ticket,
+        RequestStatus::Unrequested { ticket: (owner, _), len }
+          if owner == &payer && *len == bytes.len() as u32
+      ));
+      assert_eq!(Balances::free_balance(&payer), payer_before - deposit);
+      assert_eq!(Balances::balance_on_hold(&reason, &payer), deposit);
+      preserved();
+      assert_noop!(
+        Preimage::note_preimage(RuntimeOrigin::signed(other.clone()), bytes.clone()),
+        polkadot_sdk::pallet_preimage::Error::<Runtime>::AlreadyNoted
+      );
+      assert_ok!(Preimage::ensure_updated(
+        RuntimeOrigin::signed(other.clone()),
+        vec![hash],
+      ));
+      assert_eq!(RequestStatusFor::<Runtime>::get(hash), Some(ticket));
+      assert_eq!(
+        <Preimage as QueryPreimage>::len(&hash),
+        Some(bytes.len() as u32)
+      );
+      assert_eq!(
+        <Preimage as QueryPreimage>::fetch(&hash, None)
+          .unwrap()
+          .as_ref(),
+        bytes.as_slice()
+      );
+      assert!(!<Preimage as QueryPreimage>::is_requested(&hash));
+      preserved();
+      <Preimage as QueryPreimage>::request(&hash);
+      <Preimage as QueryPreimage>::request(&hash);
+      assert!(matches!(
+        RequestStatusFor::<Runtime>::get(hash),
+        Some(RequestStatus::Requested { maybe_ticket: Some((owner, _)), count: 2, .. })
+          if owner == payer
+      ));
+      assert_eq!(Balances::balance_on_hold(&reason, &payer), deposit);
+      preserved();
+      assert_ok!(Preimage::unrequest_preimage(RuntimeOrigin::root(), hash));
+      <Preimage as QueryPreimage>::unrequest(&hash);
+      assert_noop!(
+        Preimage::unnote_preimage(RuntimeOrigin::signed(other.clone()), hash),
+        polkadot_sdk::pallet_preimage::Error::<Runtime>::NotAuthorized
+      );
+      assert_ok!(Preimage::unnote_preimage(
+        RuntimeOrigin::signed(payer.clone()),
+        hash
+      ));
+      assert_eq!(Balances::free_balance(&payer), payer_before);
+      assert_eq!(Balances::balance_on_hold(&reason, &payer), 0);
+      assert!(RequestStatusFor::<Runtime>::get(hash).is_none());
+      preserved();
+      let system_hash = <Preimage as StorePreimage>::note(bytes.clone().into()).unwrap();
+      assert_eq!(system_hash, hash);
+      assert!(matches!(
+        RequestStatusFor::<Runtime>::get(hash),
+        Some(RequestStatus::Requested {
+          maybe_ticket: None,
+          count: 1,
+          ..
+        })
+      ));
+      <Preimage as StorePreimage>::unnote(&hash);
+      assert_eq!(Balances::free_balance(&payer), payer_before);
+      assert!(RequestStatusFor::<Runtime>::get(hash).is_none());
+      preserved();
+    });
+  }
 }
 
 #[test]
@@ -1541,7 +2426,7 @@ fn maximum_signed_governance_proposal_passes_real_check_weight_validation() {
     let validation_block = now.saturating_add(1);
     let mut validation_state = pallet_deos_actors::BlockResourceState::new(validation_block);
     validation_state
-      .begin_prepass()
+      .begin_prepass(crate::configs::BlockResourceBudgetValue::get())
       .expect("validation phase opens");
     validation_state
       .open_external_phase()

@@ -112,7 +112,7 @@ run_self_tests() {
     printf '%s\n' 'Evaluation fees derive from generated WeightInfo through WeightToFee.' > "$fixture_dir/accepted.md"
     check_paths_with_pattern "$removed_surface_pattern" "$fixture_dir/accepted.md"
     for legacy in \
-        'PercentageOfCurrentBalance' \
+        'PercentBalance' \
         'ProductiveRun' \
         'CurrentCacheEpoch' \
         'stepBaseFee' \

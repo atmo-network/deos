@@ -5,8 +5,9 @@ Excludes: Runtime execution, RPC transport, signing, submission, and chain mutat
 Zone: Web-client validation entrypoint; imports automation domain contracts only.
 */
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+
+import { readActorsTestMetadata } from './actors-test-metadata.mjs';
 
 import {
   getDeosActorFinalizedAuthoringContext,
@@ -22,9 +23,7 @@ import {
   encodeActorRuntimeSimulationResult,
 } from '../src/lib/automation/runtime-simulation-codec.ts';
 
-const metadataBytes = new Uint8Array(
-  await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
-);
+const metadataBytes = await readActorsTestMetadata();
 const runtime = {
   genesisHash: `0x${'11'.repeat(32)}`,
   specVersion: 1,
@@ -38,23 +37,20 @@ const step = {
   precondition: [
     [
       {
-        timing: { type: 'Opening', value: undefined },
-        predicate: {
-          type: 'ObservationBelow',
-          value: {
-            feed: {
-              asset_in: { type: 'Native', value: undefined },
-              asset_out: { type: 'Local', value: 7 },
-              method: { type: 'PreExecutionSpot', value: undefined },
-              aggregation: {
-                type: 'Ema',
-                value: { half_life_blocks: 100 },
-              },
-              scale: 12,
+        type: 'ObservationBelow',
+        value: {
+          feed: {
+            asset_in: { type: 'Native', value: undefined },
+            asset_out: { type: 'Local', value: 7 },
+            method: { type: 'PreExecutionSpot', value: undefined },
+            aggregation: {
+              type: 'Ema',
+              value: { half_life_blocks: 100 },
             },
-            threshold: 1n,
-            max_age_blocks: 12,
+            scale: 12,
           },
+          threshold: 1n,
+          max_age_blocks: 12,
         },
       },
     ],
@@ -73,7 +69,8 @@ const contractScale = encodeActorContractValue(metadataBytes, {
   cooldown_blocks: 0,
   window: undefined,
   steps: [step, step],
-  completion: { type: 'Persistent', value: undefined },
+  close_when: undefined,
+  on_unfunded: { type: 'Close', value: undefined },
   funding: { type: 'RuntimePolicy', value: undefined },
 });
 const artifact = createActorContractArtifact({
@@ -120,7 +117,10 @@ const suspendedRuntimeValue = {
     steps: [
       {
         step_index: 1,
-        outcome: { type: 'FundingUnavailable', value: undefined },
+        outcome: {
+          type: 'FundingUnavailable',
+          value: { type: 'ServiceFee', value: undefined },
+        },
       },
     ],
   },
@@ -143,7 +143,7 @@ const suspendedOutcome = {
   steps: [
     {
       stepIndex: 1,
-      outcome: { type: 'FundingUnavailable' },
+      outcome: { type: 'FundingUnavailable', reason: 'ServiceFee' },
     },
   ],
   resultScale: encodeActorRuntimeSimulationResult(
@@ -226,7 +226,7 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
       ...suspendedRuntimeValue.value,
       status: {
         type: 'Closed',
-        value: { type: 'ProductiveCycleCompleted', value: undefined },
+        value: { type: 'BehaviorPolicySatisfied', value: undefined },
       },
       run_cursor: undefined,
       unsuccessful_attempts_at_cursor: undefined,
@@ -236,7 +236,7 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
   assert.equal(closed.success, true);
   if (closed.success) {
     assert.equal(closed.outcome.status, 'Closed');
-    assert.equal(closed.outcome.closeReason, 'ProductiveCycleCompleted');
+    assert.equal(closed.outcome.closeReason, 'BehaviorPolicySatisfied');
     assert.equal(closed.outcome.runCursor, null);
     assert.equal(closed.outcome.unsuccessfulAttemptsAtCursor, null);
   }

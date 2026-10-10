@@ -13,12 +13,13 @@ use polkadot_sdk::{
 };
 
 #[cfg(any(test, feature = "runtime-benchmarks"))]
-use frame_support::traits::tokens::imbalance::{
-  ImbalanceAccounting, UnsafeConstructorDestructor, UnsafeManualAccounting,
-};
+use frame_support::traits::tokens::imbalance::{ImbalanceAccounting, UnsafeConstructorDestructor};
 use frame_support::{
   parameter_types,
-  traits::{ConstU32, Contains, ContainsPair, Everything, Nothing},
+  traits::{
+    ConstU32, Contains, ContainsPair, Everything, Imbalance, Nothing, TryDrop, fungible, fungibles,
+    tokens::{Precision, imbalance::UnsafeManualAccounting},
+  },
   weights::Weight,
 };
 use frame_system::EnsureRoot;
@@ -39,7 +40,7 @@ use xcm_builder::{
 };
 use xcm_executor::{
   AssetsInHolding, XcmExecutor,
-  traits::{ConvertLocation, JustTry, TransactAsset},
+  traits::{ConvertLocation, TransactAsset},
 };
 
 parameter_types! {
@@ -111,7 +112,12 @@ impl polkadot_sdk::sp_runtime::traits::Convert<Location, u32> for LocationToAsse
 
 pub type ForeignAssetsTransactor = FungiblesAdapter<
   Assets,
-  ConvertedConcreteId<u32, Balance, AssetRegistry, JustTry>,
+  ConvertedConcreteId<
+    u32,
+    Balance,
+    AssetRegistry,
+    polkadot_sdk::sp_runtime::traits::TryConvertInto,
+  >,
   LocationToAccountId,
   AccountId,
   NoChecking,
@@ -180,8 +186,8 @@ impl ActorAwareAssetTransactor {
     .map_err(|_| XcmError::FailedToTransactAsset("Actors ingress preflight failed"))
   }
 
-  /// Commit the Actors consequence before consuming the non-cloneable XCM holding.
-  /// The enclosing storage transaction rolls this precommit back if the deposit fails.
+  /// Notify against the credited ledger before consuming the incoming holding.
+  /// The transaction restores both ledger and consequence if notification refuses.
   fn precommit_ingress(
     what: &Asset,
     who: &Location,
@@ -206,6 +212,88 @@ impl ActorAwareAssetTransactor {
     }
     RuntimeAddressEventIngress::on_inbound_without_source(&recipient, asset, amount)
       .map_err(|_| XcmError::FailedToTransactAsset("Actors ingress precommit failed"))
+  }
+
+  fn deposit_native(
+    mut what: AssetsInHolding,
+    asset: &Asset,
+    recipient: &AccountId,
+    who: &Location,
+    context: Option<&XcmContext>,
+    amount: Balance,
+  ) -> Result<(), (AssetsInHolding, XcmError)> {
+    let debt = match <Balances as fungible::Balanced<AccountId>>::deposit(
+      recipient,
+      amount,
+      Precision::Exact,
+    ) {
+      Ok(debt) => debt,
+      Err(_) => return Err((what, XcmError::FailedToTransactAsset(""))),
+    };
+    if let Err(error) = Self::precommit_ingress(asset, who, context) {
+      // Debt must drop inside the caller's transaction, before its storage rollback.
+      drop(debt);
+      return Err((what, error));
+    }
+    let Some(incoming) = what.fungible.remove(&asset.id) else {
+      drop(debt);
+      return Err((
+        what,
+        XcmError::FailedToTransactAsset("Missing incoming credit"),
+      ));
+    };
+    let mut credit = fungible::Credit::<AccountId, Balances>::zero();
+    credit.saturating_subsume(incoming);
+    let result = credit.offset(debt).try_drop();
+    debug_assert!(
+      result.is_ok(),
+      "Exact deposit debt equals the incoming credit"
+    );
+    Ok(())
+  }
+
+  fn deposit_foreign(
+    mut what: AssetsInHolding,
+    asset: &Asset,
+    recipient: &AccountId,
+    who: &Location,
+    context: Option<&XcmContext>,
+    asset_id: u32,
+    amount: Balance,
+  ) -> Result<(), (AssetsInHolding, XcmError)> {
+    let debt = match <Assets as fungibles::Balanced<AccountId>>::deposit(
+      asset_id,
+      recipient,
+      amount,
+      Precision::Exact,
+    ) {
+      Ok(debt) => debt,
+      Err(_) => return Err((what, XcmError::FailedToTransactAsset(""))),
+    };
+    if let Err(error) = Self::precommit_ingress(asset, who, context) {
+      drop(debt);
+      return Err((what, error));
+    }
+    let Some(incoming) = what.fungible.remove(&asset.id) else {
+      drop(debt);
+      return Err((
+        what,
+        XcmError::FailedToTransactAsset("Missing incoming credit"),
+      ));
+    };
+    let mut credit = fungibles::Credit::<AccountId, Assets>::zero(asset_id);
+    credit.saturating_subsume(incoming);
+    match credit.offset(debt) {
+      Ok(result) => {
+        let result = result.try_drop();
+        debug_assert!(
+          result.is_ok(),
+          "Exact deposit debt equals the incoming credit"
+        );
+      }
+      Err(_) => debug_assert!(false, "Deposit and credit use the same asset identity"),
+    }
+    Ok(())
   }
 }
 
@@ -316,53 +404,39 @@ impl TransactAsset for ActorAwareAssetTransactor {
     who: &Location,
     context: Option<&XcmContext>,
   ) -> Result<(), (AssetsInHolding, XcmError)> {
-    let notified_assets = what.assets_iter().collect::<Vec<_>>();
-    for asset in &notified_assets {
-      if let Err(error) = Self::preflight_ingress(asset, who, context) {
-        return Err((what, error));
-      }
+    if what.len() != 1 {
+      return Err((
+        what,
+        XcmError::FailedToTransactAsset("Expected one held asset"),
+      ));
     }
-    // One non-recursive layer preserves the non-cloneable holding on precommit failure.
+    let Some(asset) = what.assets_iter().next() else {
+      return Err((what, XcmError::FailedToTransactAsset("Missing held asset")));
+    };
+    let Some((kind, amount)) = Self::to_asset_kind_and_amount(&asset) else {
+      return BaseAssetTransactor::deposit_asset(what, who, context);
+    };
+    let Some(recipient) =
+      <LocationToAccountId as ConvertLocation<AccountId>>::convert_location(who)
+    else {
+      return BaseAssetTransactor::deposit_asset(what, who, context);
+    };
+    if let Err(error) = Self::preflight_ingress(&asset, who, context) {
+      return Err((what, error));
+    }
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      for asset in &notified_assets {
-        if let Err(error) = Self::precommit_ingress(asset, who, context) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err((
-            what, error,
-          )));
+      let result = match kind {
+        AssetKind::Native => Self::deposit_native(what, &asset, &recipient, who, context, amount),
+        AssetKind::Foreign(asset_id) => {
+          Self::deposit_foreign(what, &asset, &recipient, who, context, asset_id, amount)
         }
-      }
-      match BaseAssetTransactor::deposit_asset(what, who, context) {
+        _ => Err((
+          what,
+          XcmError::FailedToTransactAsset("Unsupported held asset"),
+        )),
+      };
+      match result {
         Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
-        Err(error) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-        }
-      }
-    })
-  }
-
-  fn deposit_asset_with_surplus(
-    what: AssetsInHolding,
-    who: &Location,
-    context: Option<&XcmContext>,
-  ) -> Result<Weight, (AssetsInHolding, XcmError)> {
-    let notified_assets = what.assets_iter().collect::<Vec<_>>();
-    for asset in &notified_assets {
-      if let Err(error) = Self::preflight_ingress(asset, who, context) {
-        return Err((what, error));
-      }
-    }
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      for asset in &notified_assets {
-        if let Err(error) = Self::precommit_ingress(asset, who, context) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err((
-            what, error,
-          )));
-        }
-      }
-      match BaseAssetTransactor::deposit_asset_with_surplus(what, who, context) {
-        Ok(surplus) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(surplus))
-        }
         Err(error) => {
           polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
         }
@@ -572,6 +646,7 @@ mod tests {
       traits::{Contains, OriginTrait},
     },
     sp_runtime::DispatchError,
+    staging_xcm::VersionedXcm,
     staging_xcm_executor::traits::{ConvertOrigin, Properties, ShouldExecute},
   };
   use primitives::assets::{AssetInspector, TYPE_FOREIGN};
@@ -590,6 +665,36 @@ mod tests {
       <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::xcm_asset_deposit()
     );
     assert!(UnitWeightCost::get().proof_size() > 0);
+  }
+
+  #[cfg(feature = "runtime-benchmarks")]
+  #[test]
+  fn xcm_byte_benchmark_without_batching_does_not_attain_its_input_domain() {
+    use pallet_xcm::benchmarking::{Config, helpers};
+
+    let smallest = helpers::worst_case_weighable_message::<Runtime>(0);
+    // The SDK's private benchmark endpoint is 8 KiB, not a DEOS production bound.
+    for target_bytes in [1, 1_024, 8 * 1_024] {
+      let bytes = helpers::worst_case_weighable_message::<Runtime>(target_bytes);
+      assert_eq!(bytes, smallest);
+      assert!(
+        VersionedXcm::<RuntimeCall>::decode_all_with_mem_and_depth_limit(&mut &bytes[..]).is_ok(),
+        "the fallback is decodable but does not scale with the target"
+      );
+    }
+    assert!(smallest.len() < 8 * 1_024);
+    assert!(<Runtime as Config>::batch_call(vec![]).is_none());
+  }
+
+  #[test]
+  fn xcm_payment_query_uses_instruction_weight_not_precompile_byte_tariff() {
+    crate::tests::common::seeded_test_ext().execute_with(|| {
+      let query = VersionedXcm::from(Xcm::<()>(vec![ClearOrigin, ClearError]));
+      assert_eq!(
+        crate::PolkadotXcm::query_xcm_weight(query),
+        Ok(UnitWeightCost::get().saturating_mul(2))
+      );
+    });
   }
 
   #[test]
@@ -1022,6 +1127,9 @@ mod tests {
       RuntimeCall::Staking(pallet_staking::Call::register_staking_asset { asset_id: 1 });
     let queue_control_call =
       RuntimeCall::XcmpQueue(cumulus_pallet_xcmp_queue::Call::suspend_xcm_execution {});
+    let raw_storage_call = RuntimeCall::System(frame_system::Call::set_storage {
+      items: vec![(vec![0xfe; 713], vec![7])],
+    });
     assert!(
       !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
         &user_call,
@@ -1035,6 +1143,11 @@ mod tests {
     assert!(
       !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
         &queue_control_call,
+      )
+    );
+    assert!(
+      !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
+        &raw_storage_call,
       )
     );
   }

@@ -13,7 +13,11 @@ import {
   unifyMetadata,
 } from '@polkadot-api/substrate-bindings';
 
-import type { ActorContractHex } from './contract-artifact.ts';
+import {
+  type ActorContractHex,
+  readActorBehaviorContractSchema,
+} from './contract-artifact.ts';
+import { ACTOR_CLOSE_REASONS, type ActorCloseReason } from './eligibility.ts';
 
 export const ACTORS_SIMULATION_RUNTIME_API =
   'ActorSimulationApi_simulate_current_contract' as const;
@@ -29,11 +33,17 @@ export type ActorRuntimeSimulationBudget = {
   sharedEconomic: ActorRuntimeSimulationWeight;
 };
 
+export type ActorFundingUnavailableReason = 'ServiceFee' | 'TaskInput';
 export type ActorRuntimeStepOutcome =
   | { type: 'Executed' }
   | { type: 'Stopped' }
-  | { type: 'Skipped'; reason: string }
-  | { type: 'FundingUnavailable' }
+  | { type: 'Skipped'; reason: 'PreconditionFalse' | 'ResolutionSkipped' }
+  | {
+      type: 'Skipped';
+      reason: 'FundingUnavailable';
+      fundingReason: ActorFundingUnavailableReason;
+    }
+  | { type: 'FundingUnavailable'; reason: ActorFundingUnavailableReason }
   | {
       type: 'Failed';
       retryClass: string;
@@ -42,7 +52,7 @@ export type ActorRuntimeStepOutcome =
 
 export type ActorDecodedRuntimeSimulationOutcome = {
   status: 'Completed' | 'Continued' | 'Failed' | 'Suspended' | 'Closed';
-  closeReason: string | null;
+  closeReason: ActorCloseReason | null;
   cycleNonce: bigint;
   startCursor: number;
   runCursor: number | null;
@@ -95,6 +105,7 @@ function hexToBytes(value: ActorContractHex): Uint8Array {
 }
 
 function metadataMethod(metadataBytes: Uint8Array) {
+  readActorBehaviorContractSchema(metadataBytes);
   const metadata = unifyMetadata(decAnyMetadata(metadataBytes));
   const apis = metadata.apis.filter(
     (candidate) => candidate.name === 'ActorSimulationApi',
@@ -151,6 +162,17 @@ function asOptionalIndex(value: unknown, field: string): number | null {
   return value === undefined ? null : asIndex(value, field);
 }
 
+function fundingReason(value: unknown): ActorFundingUnavailableReason {
+  const reason = asVariant(value, 'funding-unavailable reason');
+  if (
+    (reason.type !== 'ServiceFee' && reason.type !== 'TaskInput') ||
+    reason.value !== undefined
+  ) {
+    throw new Error('Unsupported funding-unavailable reason');
+  }
+  return reason.type;
+}
+
 function projectStepOutcome(value: unknown): ActorRuntimeStepOutcome {
   const variant = asVariant(value, 'step.outcome');
   switch (variant.type) {
@@ -158,13 +180,29 @@ function projectStepOutcome(value: unknown): ActorRuntimeStepOutcome {
       return { type: 'Executed' };
     case 'Stopped':
       return { type: 'Stopped' };
-    case 'Skipped':
-      return {
-        type: 'Skipped',
-        reason: asVariant(variant.value, 'step.outcome.reason').type,
-      };
+    case 'Skipped': {
+      const skipped = asVariant(variant.value, 'step.outcome.reason');
+      if (skipped.type === 'FundingUnavailable') {
+        return {
+          type: 'Skipped',
+          reason: 'FundingUnavailable',
+          fundingReason: fundingReason(skipped.value),
+        };
+      }
+      if (
+        (skipped.type !== 'PreconditionFalse' &&
+          skipped.type !== 'ResolutionSkipped') ||
+        skipped.value !== undefined
+      ) {
+        throw new Error('Unsupported runtime skipped reason');
+      }
+      return { type: 'Skipped', reason: skipped.type };
+    }
     case 'FundingUnavailable':
-      return { type: 'FundingUnavailable' };
+      return {
+        type: 'FundingUnavailable',
+        reason: fundingReason(variant.value),
+      };
     case 'Failed': {
       const failure = asRecord(variant.value, 'step.outcome.failure');
       return {
@@ -189,10 +227,17 @@ function projectOutcome(value: unknown): ActorDecodedRuntimeSimulationOutcome {
   ) {
     throw new Error(`Unsupported runtime simulation status ${status}`);
   }
-  const closeReason =
-    status === 'Closed'
-      ? asVariant(parsedStatus.value, 'simulation close reason').type
-      : null;
+  let closeReason: ActorCloseReason | null = null;
+  if (status === 'Closed') {
+    const reason = asVariant(parsedStatus.value, 'simulation close reason');
+    if (
+      !ACTOR_CLOSE_REASONS.some((known) => known === reason.type) ||
+      reason.value !== undefined
+    ) {
+      throw new Error(`Unsupported runtime Close reason ${reason.type}`);
+    }
+    closeReason = reason.type as ActorCloseReason;
+  }
   if (typeof outcome.cycle_nonce !== 'bigint' || outcome.cycle_nonce < 0n) {
     throw new Error('cycle_nonce must be a non-negative bigint');
   }

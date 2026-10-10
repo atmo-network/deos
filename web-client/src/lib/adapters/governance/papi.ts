@@ -66,6 +66,9 @@ const FIXED_U128_SCALE = 10n ** 18n;
 type GovernanceSnapshot = DeosChainSnapshot;
 
 type GovernanceEnum<T extends Record<string, unknown>> = PapiRuntimeEnum<T>;
+type GovernanceParameterChangeSurface = GovernanceEnum<
+  Record<GovernanceProposalParameterChangeSurface, undefined>
+>;
 
 function unavailableWriteSurface(
   reason: string,
@@ -351,9 +354,7 @@ function mapProposalTiming(
 }
 
 function mapProposalParameterChangeSurface(
-  surface: GovernanceEnum<{
-    RouterFee: undefined;
-  }>,
+  surface: GovernanceParameterChangeSurface,
 ): GovernanceProposalParameterChangeSurface {
   return surface.type;
 }
@@ -383,9 +384,7 @@ function mapProposalExecutionSuccessDetail(
       code_hash: string;
     };
     ParameterChangeExecuted: {
-      surface: GovernanceEnum<{
-        RouterFee: undefined;
-      }>;
+      surface: GovernanceParameterChangeSurface;
     };
     TreasurySpendExecuted: {
       funding_source: GovernanceAccountId;
@@ -440,7 +439,7 @@ function mapProposalExecutionDetail(
           Generic: undefined;
           RuntimeUpgradeAuthorized: { code_hash: string };
           ParameterChangeExecuted: {
-            surface: GovernanceEnum<{ RouterFee: undefined }>;
+            surface: GovernanceParameterChangeSurface;
           };
           TreasurySpendExecuted: {
             funding_source: GovernanceAccountId;

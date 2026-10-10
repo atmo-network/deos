@@ -4,6 +4,7 @@ Owns: System Actor snapshots plus portable plan-authoring policy shapes.
 Excludes: Runtime actor scheduling, adapter transport, transaction composition, and widget rendering.
 Zone: Automation public contract; safe for adapters, stores, and widgets to import.
 */
+import type { ActorOnUnfunded } from './behavior-policy.ts';
 import type {
   ActorContractHex,
   ActorContractRuntimeIdentity,
@@ -45,25 +46,52 @@ export type AutomationAuthoringContext = {
   };
 };
 
+export type AutomationActorResidence =
+  | { type: 'Service'; kind: 'Live' | 'Pending' }
+  | {
+      type: 'Deadline';
+      key: { type: 'Block'; value: number } | { type: 'Tick'; value: bigint };
+    }
+  | { type: 'Parked'; reason: string }
+  | { type: 'Disabled' };
+
+export function automationResidenceLabel(
+  residence: AutomationActorResidence | null,
+): string {
+  if (residence === null) return 'Unavailable';
+  switch (residence.type) {
+    case 'Service':
+      return `Service · ${residence.kind}`;
+    case 'Deadline':
+      return `${residence.key.type === 'Tick' ? 'Tick' : 'Block'} ${residence.key.value}`;
+    case 'Parked':
+      return `Parked · ${residence.reason}`;
+    case 'Disabled':
+      return 'Disabled';
+  }
+}
+
 export type AutomationActorSnapshot = {
   actorId: number;
   label: string;
   role: string;
   exists: boolean;
-  /** Actor class from the identity locator: 'System' or 'User'. */
+  /** Actor class from the canonical semantic identity: 'System' or 'User'. */
   actorClass: 'System' | 'User' | null;
   paused: boolean;
   runState: AutomationRunState;
   cycleNonce: bigint;
   continuation: AutomationContinuationSnapshot | null;
   lastCycleBlock: number | null;
-  completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle' | null;
+  /** Header presence only; the cold expression and monitor are separate owners. */
+  hasCloseWhen: boolean | null;
+  onUnfunded: ActorOnUnfunded | null;
   triggerLabel: string;
   nativeBalance: bigint;
-  /** One-FIFO membership: the live queue ticket, or null when the actor is not queued. */
-  queueTicket: bigint | null;
-  /** Bounded per-asset funding accumulator awaiting the next cycle open. */
-  fundingAccumulated: ReadonlyArray<[string, bigint]>;
+  controlStatus: 'NotRegistered' | 'Dormant' | 'Active' | 'Unavailable';
+  residence: AutomationActorResidence | null;
+  controlUnavailableReason: string | null;
+  awaitingFunding: boolean;
   /** Funding source policy as a typed variant label. */
   fundingSourcePolicy: string | null;
   /**
@@ -74,3 +102,30 @@ export type AutomationActorSnapshot = {
    */
   eligibility: ActorEligibilityView | null;
 };
+
+export function projectActorOutcomeHeader(header: unknown): {
+  hasCloseWhen: boolean;
+  onUnfunded: ActorOnUnfunded;
+} {
+  if (header === null || typeof header !== 'object' || Array.isArray(header)) {
+    throw new Error('Actor outcome header is unavailable');
+  }
+  const record = header as Record<string, unknown>;
+  const funding = record.on_unfunded;
+  if (
+    typeof record.has_close_when !== 'boolean' ||
+    funding === null ||
+    typeof funding !== 'object' ||
+    Array.isArray(funding)
+  ) {
+    throw new Error('Actor outcome header requires current metadata');
+  }
+  const variant = funding as Record<string, unknown>;
+  if (
+    (variant.type !== 'Close' && variant.type !== 'AwaitFunding') ||
+    variant.value !== undefined
+  ) {
+    throw new Error('Unsupported Actor fee-shortfall policy');
+  }
+  return { hasCloseWhen: record.has_close_when, onUnfunded: variant.type };
+}

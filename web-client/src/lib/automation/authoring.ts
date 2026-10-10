@@ -16,11 +16,18 @@ import {
   ACTORS_MAX_TEMPORAL_DELAY_TICKS,
 } from './actors-protocol-bounds.ts';
 import {
+  type ActorBehaviorLimits,
+  type ActorCloseWhen,
+  type ActorOnUnfunded,
+  validateActorCloseWhen,
+} from './behavior-policy.ts';
+import {
   type ActorContractArtifact,
   type ActorContractRuntimeIdentity,
   type ActorContractType,
   createActorContractArtifact,
   encodeActorContractValue,
+  readActorBehaviorContractSchema,
 } from './contract-artifact.ts';
 import type {
   AutomationMutability,
@@ -33,14 +40,8 @@ export type ActorAuthoringAsset =
 
 export type ActorAuthoringAmount =
   | { type: 'Fixed'; value: string }
-  | {
-      type:
-        | 'PercentageOfCurrent'
-        | 'PercentageAtOpening'
-        | 'PercentageOfLastFunding';
-      parts: number;
-    }
-  | { type: 'AllAvailable' };
+  | { type: 'Percent' | 'CycleBalancePercent'; parts: number }
+  | { type: 'CaptureCycleBalance'; percentParts: number; shareParts: number };
 
 export type ActorAuthoringObservationFeed = {
   assetIn: ActorAuthoringAsset;
@@ -85,12 +86,6 @@ export type ActorAuthoringTask =
       to: string;
       asset: ActorAuthoringAsset;
       amount: ActorAuthoringAmount;
-    }
-  | {
-      type: 'SplitTransfer';
-      asset: ActorAuthoringAsset;
-      amount: ActorAuthoringAmount;
-      legs: Array<{ to: string; shareParts: number }>;
     }
   | {
       type: 'SwapIn';
@@ -145,7 +140,6 @@ export type ActorAuthoringTask =
 
 export const ACTORS_AUTHORING_TASK_TYPES = [
   'Transfer',
-  'SplitTransfer',
   'SwapIn',
   'SwapOut',
   'AddLiquidity',
@@ -171,10 +165,7 @@ export const ACTORS_AUTHORING_CONDITION_TYPES = [
   'ObservationNotEquals',
 ] as const satisfies readonly ActorAuthoringPredicate['type'][];
 
-export type ActorAuthoringTimedPredicate = {
-  timing: 'Opening' | 'Current';
-  predicate: ActorAuthoringPredicate;
-};
+export type ActorAuthoringTimedPredicate = ActorAuthoringPredicate;
 
 export type ActorAuthoringPrecondition = {
   clauses: ActorAuthoringTimedPredicate[][];
@@ -205,25 +196,14 @@ export type ActorAuthoringTrigger =
         | { type: 'Any' }
         | { type: 'Whitelist'; assets: ActorAuthoringAsset[] };
     }
-  | { type: 'ObservationChange'; feed: ActorAuthoringObservationFeed }
-  | {
-      type: 'ObservationCrossing';
-      feed: ActorAuthoringObservationFeed;
-      direction: 'Rising' | 'Falling';
-      threshold: string;
-      rearmThreshold: string;
-    }
   | { type: 'AtTime'; afterTicks: number }
   | { type: 'Cadenced'; everyTicks: number };
-
-export type ActorAuthoringCompletionPolicy =
-  | 'Persistent'
-  | 'CloseAfterProductiveCycle';
 
 export type ActorAuthoringContract = {
   actorType: ActorContractType;
   mutability: AutomationMutability;
-  completionPolicy: ActorAuthoringCompletionPolicy;
+  closeWhen: ActorCloseWhen | null;
+  onUnfunded: ActorOnUnfunded;
   autoCloseAtCycleNonce: bigint | null;
   trigger: ActorAuthoringTrigger;
   cooldownBlocks: number;
@@ -233,6 +213,7 @@ export type ActorAuthoringContract = {
 };
 
 export type ActorAuthoringLimits = {
+  behavior: ActorBehaviorLimits | null;
   maxContractSteps: number;
   maxExecutionDelayBlocks: number;
   maxTemporalTicks: number;
@@ -240,11 +221,11 @@ export type ActorAuthoringLimits = {
   maxPreconditionClauses: number;
   maxPredicatesPerClause: number;
   maxConditionsPerStep: number;
-  maxSplitTransferLegs: number;
   maxWhitelistSize: number;
 };
 
 export const DEOS_ACTORS_AUTHORING_LIMITS: ActorAuthoringLimits = {
+  behavior: null,
   maxContractSteps: ACTORS_MAX_CONTRACT_STEPS,
   maxExecutionDelayBlocks: ACTORS_MAX_EXECUTION_DELAY_BLOCKS,
   maxTemporalTicks: ACTORS_MAX_TEMPORAL_DELAY_TICKS,
@@ -252,7 +233,6 @@ export const DEOS_ACTORS_AUTHORING_LIMITS: ActorAuthoringLimits = {
   maxPreconditionClauses: ACTORS_MAX_PRECONDITION_CLAUSES,
   maxPredicatesPerClause: ACTORS_MAX_PREDICATES_PER_CLAUSE,
   maxConditionsPerStep: ACTORS_MAX_PREDICATES_PER_STEP,
-  maxSplitTransferLegs: 8,
   maxWhitelistSize: 16,
 };
 
@@ -274,16 +254,6 @@ export function createActorAuthoringTask(
   switch (type) {
     case 'Transfer':
       return { type, to: '', asset: native(), amount: fixed() };
-    case 'SplitTransfer':
-      return {
-        type,
-        asset: native(),
-        amount: fixed(),
-        legs: [
-          { to: '', shareParts: 500_000_000 },
-          { to: '', shareParts: 500_000_000 },
-        ],
-      };
     case 'SwapIn':
       return {
         type,
@@ -386,7 +356,8 @@ export function createActorAuthoringContract(): ActorAuthoringContract {
   return {
     actorType: 'User',
     mutability: 'Mutable',
-    completionPolicy: 'Persistent',
+    closeWhen: null,
+    onUnfunded: 'Close',
     autoCloseAtCycleNonce: null,
     trigger: { type: 'Manual' },
     cooldownBlocks: 0,
@@ -458,7 +429,15 @@ function validateAmount(
   amount: ActorAuthoringAmount,
   path: string,
   issues: ActorAuthoringIssue[],
+  transfer = false,
 ) {
+  if (
+    !transfer &&
+    (amount.type === 'CaptureCycleBalance' ||
+      amount.type === 'CycleBalancePercent')
+  ) {
+    issues.push({ path, message: 'Cycle balance amounts are Transfer-only' });
+  }
   switch (amount.type) {
     case 'Fixed':
       if (!UNSIGNED_INTEGER.test(amount.value)) {
@@ -478,9 +457,17 @@ function validateAmount(
         });
       }
       return;
-    case 'PercentageOfCurrent':
-    case 'PercentageAtOpening':
-    case 'PercentageOfLastFunding':
+    case 'CaptureCycleBalance':
+      validatePerbill(amount.percentParts, `${path}.percentParts`, issues);
+      validatePerbill(amount.shareParts, `${path}.shareParts`, issues);
+      if (amount.percentParts === 0 || amount.shareParts === 0)
+        issues.push({
+          path,
+          message: 'Capture percentage and share must be nonzero',
+        });
+      return;
+    case 'CycleBalancePercent':
+    case 'Percent':
       validatePerbill(amount.parts, `${path}.parts`, issues);
       if (amount.parts === 0) {
         issues.push({
@@ -488,8 +475,6 @@ function validateAmount(
           message: 'Percentage amount must be nonzero',
         });
       }
-      return;
-    case 'AllAvailable':
       return;
   }
 }
@@ -634,53 +619,8 @@ function validateTask(
     case 'Transfer':
       validateAddress(task.to, `${path}.to`, issues);
       validateAsset(task.asset, `${path}.asset`, issues);
-      validateAmount(task.amount, `${path}.amount`, issues);
+      validateAmount(task.amount, `${path}.amount`, issues, true);
       return;
-    case 'SplitTransfer': {
-      validateAsset(task.asset, `${path}.asset`, issues);
-      validateAmount(task.amount, `${path}.amount`, issues);
-      if (
-        task.legs.length < 2 ||
-        task.legs.length > limits.maxSplitTransferLegs
-      ) {
-        issues.push({
-          path: `${path}.legs`,
-          message: `SplitTransfer requires 2..${limits.maxSplitTransferLegs} legs`,
-        });
-      }
-      let total = 0;
-      const recipients = new Set<string>();
-      task.legs.forEach((leg, index) => {
-        validateAddress(leg.to, `${path}.legs[${index}].to`, issues);
-        validatePerbill(
-          leg.shareParts,
-          `${path}.legs[${index}].shareParts`,
-          issues,
-        );
-        if (leg.shareParts === 0) {
-          issues.push({
-            path: `${path}.legs[${index}].shareParts`,
-            message: 'Split share must be nonzero',
-          });
-        }
-        total += leg.shareParts;
-        const recipient = leg.to.trim();
-        if (recipients.has(recipient)) {
-          issues.push({
-            path: `${path}.legs[${index}].to`,
-            message: 'Split recipients must be unique',
-          });
-        }
-        recipients.add(recipient);
-      });
-      if (total > PERBILL_MAX) {
-        issues.push({
-          path: `${path}.legs`,
-          message: 'Split shares cannot exceed 1,000,000,000 parts',
-        });
-      }
-      return;
-    }
     case 'SwapIn':
       validateAsset(task.assetIn, `${path}.assetIn`, issues);
       validateAsset(task.assetOut, `${path}.assetOut`, issues);
@@ -838,50 +778,6 @@ function validateTrigger(
         });
       }
       return;
-    case 'ObservationChange':
-      validateObservationFeed(trigger.feed, 'trigger.feed', issues);
-      return;
-    case 'ObservationCrossing': {
-      validateObservationFeed(trigger.feed, 'trigger.feed', issues);
-      const threshold = validateObservationValue(
-        trigger.threshold,
-        'trigger.threshold',
-        'Fire threshold',
-        issues,
-      );
-      const rearm = validateObservationValue(
-        trigger.rearmThreshold,
-        'trigger.rearmThreshold',
-        'Rearm threshold',
-        issues,
-      );
-      if (threshold != null && rearm != null) {
-        const valid =
-          trigger.direction === 'Rising'
-            ? rearm < threshold
-            : trigger.direction === 'Falling' && rearm > threshold;
-        if (!valid) {
-          issues.push({
-            path: 'trigger.rearmThreshold',
-            message:
-              trigger.direction === 'Rising'
-                ? 'Rising crossings require the rearm threshold below the fire threshold'
-                : trigger.direction === 'Falling'
-                  ? 'Falling crossings require the rearm threshold above the fire threshold'
-                  : 'Crossing direction must be Rising or Falling',
-          });
-        }
-      } else if (
-        trigger.direction !== 'Rising' &&
-        trigger.direction !== 'Falling'
-      ) {
-        issues.push({
-          path: 'trigger.direction',
-          message: 'Crossing direction must be Rising or Falling',
-        });
-      }
-      return;
-    }
     case 'AtTime':
       if (
         !Number.isSafeInteger(trigger.afterTicks) ||
@@ -905,6 +801,12 @@ function validateTrigger(
           message: `Cadence must be within 1..${limits.maxTemporalTicks} timestamp ticks`,
         });
       }
+      return;
+    default:
+      issues.push({
+        path: 'trigger.type',
+        message: 'Trigger must be Manual, AddressEvent, AtTime, or Cadenced',
+      });
   }
 }
 
@@ -914,14 +816,67 @@ export function validateActorAuthoringContract(
 ): ActorAuthoringValidation {
   const issues: ActorAuthoringIssue[] = [];
   const maxSteps = limits.maxContractSteps;
+  if (contract.actorType !== 'User' && contract.actorType !== 'System') {
+    issues.push({
+      path: 'actorType',
+      message: 'Actor class must be User or System',
+    });
+  }
   if (
-    contract.completionPolicy !== 'Persistent' &&
-    contract.completionPolicy !== 'CloseAfterProductiveCycle'
+    contract.mutability !== 'Mutable' &&
+    contract.mutability !== 'Immutable'
   ) {
     issues.push({
+      path: 'mutability',
+      message: 'Mutability must be Mutable or Immutable',
+    });
+  }
+  if ('completionPolicy' in contract) {
+    issues.push({
       path: 'completionPolicy',
+      message: 'Legacy completion is unsupported; author closeWhen explicitly',
+    });
+  }
+  if (contract.closeWhen === undefined) {
+    issues.push({
+      path: 'closeWhen',
       message:
-        'Completion policy must be Persistent or CloseAfterProductiveCycle',
+        'closeWhen must be explicitly null or a canonical outcome condition',
+    });
+  } else if (contract.closeWhen !== null) {
+    if (limits.behavior == null) {
+      issues.push({
+        path: 'closeWhen',
+        message:
+          'Matching runtime metadata is required for outcome-policy limits',
+      });
+    } else {
+      try {
+        validateActorCloseWhen(contract.closeWhen, limits.behavior);
+      } catch (error) {
+        issues.push({
+          path: 'closeWhen',
+          message:
+            error instanceof Error ? error.message : 'Invalid outcome policy',
+        });
+      }
+    }
+  }
+  if (
+    contract.onUnfunded !== 'Close' &&
+    contract.onUnfunded !== 'AwaitFunding'
+  ) {
+    issues.push({
+      path: 'onUnfunded',
+      message: 'Fee shortfall policy must be Close or AwaitFunding',
+    });
+  } else if (
+    contract.actorType === 'System' &&
+    contract.onUnfunded === 'AwaitFunding'
+  ) {
+    issues.push({
+      path: 'onUnfunded',
+      message: 'AwaitFunding is User-only; System Actors are fee-exempt',
     });
   }
   if (
@@ -990,6 +945,8 @@ export function validateActorAuthoringContract(
       limits.maxWhitelistSize,
     );
   }
+  let snapshotAsset: string | null = null;
+  let snapshotShares = 0;
   const keys = new Set<string>();
   contract.steps.forEach((step, index) => {
     const path = `steps[${index}]`;
@@ -1036,16 +993,10 @@ export function validateActorAuthoringContract(
           message: `A precondition clause supports at most ${limits.maxPredicatesPerClause} predicates`,
         });
       }
-      clause.forEach((timed, predicateIndex) => {
-        if (timed.timing !== 'Opening' && timed.timing !== 'Current') {
-          issues.push({
-            path: `${path}.precondition.clauses[${clauseIndex}][${predicateIndex}].timing`,
-            message: 'Predicate timing must be Opening or Current',
-          });
-        }
+      clause.forEach((predicate, predicateIndex) => {
         validatePredicate(
-          timed.predicate,
-          `${path}.precondition.clauses[${clauseIndex}][${predicateIndex}].predicate`,
+          predicate,
+          `${path}.precondition.clauses[${clauseIndex}][${predicateIndex}]`,
           issues,
         );
       });
@@ -1070,7 +1021,44 @@ export function validateActorAuthoringContract(
         message: `RetryLater max attempts must be within 2..${limits.maxRetryAttempts}`,
       });
     }
+    if (!ACTORS_AUTHORING_TASK_TYPES.includes(step.task.type)) {
+      issues.push({
+        path: `${path}.task`,
+        message:
+          'Unsupported Task; use individual Transfer Steps for distribution',
+      });
+      return;
+    }
     validateTask(step.task, `${path}.task`, issues, limits, contract.actorType);
+    if (
+      step.task.type === 'Transfer' &&
+      !issues.some((issue) => issue.path.startsWith(`${path}.task.asset`))
+    ) {
+      const amount = step.task.amount;
+      if (amount.type === 'CaptureCycleBalance') {
+        const asset = bytesKey(assetCanonicalBytes(step.task.asset));
+        if (snapshotAsset !== null)
+          issues.push({
+            path: `${path}.task.amount`,
+            message: 'A Contract supports one cycle balance capture',
+          });
+        snapshotAsset = asset;
+        snapshotShares = amount.shareParts;
+      } else if (amount.type === 'CycleBalancePercent') {
+        const asset = bytesKey(assetCanonicalBytes(step.task.asset));
+        if (snapshotAsset !== asset)
+          issues.push({
+            path: `${path}.task.amount`,
+            message: 'Use a preceding capture of the same asset',
+          });
+        snapshotShares += amount.parts;
+        if (snapshotShares > PERBILL_MAX)
+          issues.push({
+            path: `${path}.task.amount`,
+            message: 'Cycle balance shares cannot exceed 100%',
+          });
+      }
+    }
   });
   return issues.length === 0
     ? { valid: true, issues: [] }
@@ -1153,12 +1141,14 @@ function lowerAmount(amount: ActorAuthoringAmount) {
   switch (amount.type) {
     case 'Fixed':
       return runtimeVariant('Fixed', BigInt(amount.value));
-    case 'PercentageOfCurrent':
-    case 'PercentageAtOpening':
-    case 'PercentageOfLastFunding':
+    case 'CaptureCycleBalance':
+      return runtimeVariant(amount.type, {
+        percent: amount.percentParts,
+        share: amount.shareParts,
+      });
+    case 'CycleBalancePercent':
+    case 'Percent':
       return runtimeVariant(amount.type, amount.parts);
-    case 'AllAvailable':
-      return runtimeVariant('AllAvailable');
   }
 }
 
@@ -1209,15 +1199,6 @@ function lowerTask(task: ActorAuthoringTask) {
         to: task.to,
         asset: lowerAsset(task.asset),
         amount: lowerAmount(task.amount),
-      });
-    case 'SplitTransfer':
-      return runtimeVariant('SplitTransfer', {
-        asset: lowerAsset(task.asset),
-        amount: lowerAmount(task.amount),
-        legs: task.legs.map((leg) => ({
-          to: leg.to,
-          share: leg.shareParts,
-        })),
       });
     case 'SwapIn':
       return runtimeVariant('SwapIn', {
@@ -1353,17 +1334,6 @@ function lowerTrigger(trigger: ActorAuthoringTrigger) {
         asset_filter: assetFilter,
       });
     }
-    case 'ObservationChange':
-      return runtimeVariant('ObservationChange', {
-        feed: lowerObservationFeed(trigger.feed),
-      });
-    case 'ObservationCrossing':
-      return runtimeVariant('ObservationCrossing', {
-        feed: lowerObservationFeed(trigger.feed),
-        direction: runtimeVariant(trigger.direction),
-        threshold: BigInt(trigger.threshold),
-        rearm_threshold: BigInt(trigger.rearmThreshold),
-      });
     case 'AtTime':
       return runtimeVariant('AtTime', {
         after_ticks: BigInt(trigger.afterTicks),
@@ -1420,10 +1390,7 @@ export function lowerActorAuthoringContract(
         step.precondition === null
           ? undefined
           : step.precondition.clauses.map((clause) =>
-              clause.map((timed) => ({
-                timing: runtimeVariant(timed.timing),
-                predicate: lowerPredicate(timed.predicate),
-              })),
+              clause.map(lowerPredicate),
             ),
       task: lowerTask(step.task),
       on_error:
@@ -1433,7 +1400,17 @@ export function lowerActorAuthoringContract(
             })
           : runtimeVariant(step.errorPolicy.type),
     })),
-    completion: runtimeVariant(contract.completionPolicy),
+    close_when:
+      contract.closeWhen === null
+        ? undefined
+        : contract.closeWhen.clauses.map((clause) =>
+            clause.map((atom) => ({
+              metric: runtimeVariant(atom.metric),
+              threshold: atom.threshold,
+            })),
+          ),
+    on_unfunded: runtimeVariant(contract.onUnfunded),
+    parked_balance_activation: undefined,
     funding: lowerFundingPolicy(contract.fundingPolicy),
     auto_close_at_cycle_nonce: contract.autoCloseAtCycleNonce ?? undefined,
   };
@@ -1445,10 +1422,10 @@ export function createActorArtifactFromAuthoring(input: {
   runtime: ActorContractRuntimeIdentity;
   limits?: ActorAuthoringLimits;
 }): ActorContractArtifact {
-  const runtimeValue = lowerActorAuthoringContract(
-    input.contract,
-    input.limits ?? DEOS_ACTORS_AUTHORING_LIMITS,
-  );
+  const runtimeValue = lowerActorAuthoringContract(input.contract, {
+    ...(input.limits ?? DEOS_ACTORS_AUTHORING_LIMITS),
+    behavior: readActorBehaviorContractSchema(input.metadataBytes),
+  });
   const contractScale = encodeActorContractValue(
     input.metadataBytes,
     runtimeValue,

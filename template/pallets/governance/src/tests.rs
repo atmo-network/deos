@@ -275,6 +275,140 @@ fn epoch_catch_up_is_bounded_chronological_and_eventually_reaches_the_observed_e
 }
 
 #[test]
+fn epoch_service_advancing_clock_profiles_expiry_bursts_and_catch_up_debt() {
+  for (accounts, hook_interval) in [(0u64, 1u64), (512, 1), (513, 1), (1024, 1), (0, 4)] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let lookback: u32 = <Test as crate::Config>::WinningVoteLookbackEpochs::get();
+      let service_limit: u32 = <Test as crate::Config>::MaxExpiringAccountsPerBlock::get();
+      let expiry_epoch = 1 + u64::from(lookback);
+      for (batch, start) in (0..accounts).step_by(256).enumerate() {
+        let winners = (start..(start + 256).min(accounts)).collect::<Vec<_>>();
+        assert_ok!(Governance::record_winning_vote_batch(
+          RuntimeOrigin::root(),
+          7 + batch as u32,
+          100,
+          BoundedVec::try_from(winners).expect("bounded winner batch"),
+        ));
+      }
+      assert_eq!(ExpiryBuckets::<Test>::get(expiry_epoch).len() as u64, accounts);
+      let mut trace = Vec::new();
+      for invocation in 1..=8u64 {
+        let block = invocation * hook_interval;
+        System::set_block_number(block);
+        let before = ExpiryBuckets::<Test>::get(expiry_epoch).len();
+        Governance::on_initialize(block);
+        let after = ExpiryBuckets::<Test>::get(expiry_epoch).len();
+        let processed = before - after;
+        let completed_epoch = LastProcessedEpoch::<Test>::get();
+        assert!(processed <= service_limit as usize);
+        let expected_debt = if hook_interval > 1 {
+          block - invocation
+        } else {
+          u64::from(accounts > 512 && block >= expiry_epoch)
+        };
+        assert_eq!(block - completed_epoch, expected_debt);
+        trace.push((block, completed_epoch, processed));
+      }
+      let busy_blocks = trace
+        .iter()
+        .filter_map(|(block, _, processed)| (*processed > 0).then_some(*block))
+        .collect::<Vec<_>>();
+      let expected_busy_blocks = match accounts {
+        0 => vec![],
+        1..=512 => vec![expiry_epoch],
+        _ => vec![expiry_epoch, expiry_epoch + 1],
+      };
+      assert_eq!(busy_blocks, expected_busy_blocks);
+      assert_eq!(trace.iter().map(|(_, _, processed)| *processed).sum::<usize>(), accounts as usize);
+      assert!(ExpiryBuckets::<Test>::get(expiry_epoch).is_empty());
+      for (batch, start) in (0..accounts).step_by(256).enumerate() {
+        for account in start..(start + 256).min(accounts) {
+          assert!(!WinningVoteWindows::<Test>::contains_key(7 + batch as u32, account));
+        }
+      }
+      println!("accounts={accounts} hook_interval={hook_interval} (block, completed_epoch, expired)={trace:?}");
+    });
+  }
+}
+
+#[test]
+fn epoch_service_bounded_windows_separate_burst_recovery_from_sustained_overload() {
+  // Test-only service opportunities, not an Executive block mode or a Weight comparison.
+  for (consecutive, scan, sustained) in [
+    (1u64, 1u32, false),
+    (1, 2, false),
+    (1, 3, false),
+    (2, 1, false),
+    (2, 2, false),
+    (1, 3, true),
+    (2, 2, true),
+  ] {
+    new_test_ext().execute_with(|| {
+      MaxEpochCatchUpPerBlock::set(scan);
+      let mut longest_run = 0;
+      let mut run = 0;
+      let mut first_recovery = None;
+      let mut due_at_midpoint = 0;
+      let mut due_at_end = 0;
+      let mut calls = 0;
+      let mut trace = Vec::new();
+      for block in 1..=24u64 {
+        System::set_block_number(block);
+        let arrivals = if sustained { 512 } else if block == 1 { 513 } else { 0 };
+        for (batch, start) in (0..arrivals).step_by(256).enumerate() {
+          let winners = (start..(start + 256).min(arrivals))
+            .map(|account| block * 1024 + account)
+            .collect::<Vec<_>>();
+          assert_ok!(Governance::record_winning_vote_batch(
+            RuntimeOrigin::root(),
+            7 + batch as u32,
+            block as u32,
+            BoundedVec::try_from(winners).expect("bounded winner batch"),
+          ));
+        }
+        let service_opportunity = (block - 1) % (consecutive + 1) < consecutive;
+        let before = LastProcessedEpoch::<Test>::get();
+        if service_opportunity {
+          Governance::on_initialize(block);
+          calls += 1;
+          run += 1;
+          longest_run = longest_run.max(run);
+        } else {
+          run = 0;
+          assert_eq!(LastProcessedEpoch::<Test>::get(), before);
+        }
+        assert!(run <= consecutive);
+        let completed_epoch = LastProcessedEpoch::<Test>::get();
+        let due = (1..=block)
+          .map(|epoch| ExpiryBuckets::<Test>::get(epoch).len())
+          .sum::<usize>();
+        if block > 4 && completed_epoch == block && first_recovery.is_none() {
+          first_recovery = Some(block);
+        }
+        if block == 12 {
+          due_at_midpoint = due;
+        }
+        due_at_end = due;
+        trace.push((block, completed_epoch, due));
+      }
+      assert_eq!(calls, 24 * consecutive / (consecutive + 1));
+      assert_eq!(longest_run, consecutive);
+      if sustained {
+        assert!(due_at_end > due_at_midpoint);
+        assert!(LastProcessedEpoch::<Test>::get() < System::block_number());
+      } else {
+        assert_eq!(due_at_end, 0);
+        assert_eq!(first_recovery.is_some(), u64::from(scan) * consecutive > consecutive + 1);
+      }
+      println!(
+        "consecutive={consecutive} scan={scan} sustained={sustained} calls={calls} first_recovery={first_recovery:?} due_mid={due_at_midpoint} due_end={due_at_end} (block, completed_epoch, due)={trace:?}"
+      );
+    });
+  }
+}
+
+#[test]
 #[cfg(feature = "try-runtime")]
 fn try_state_rejects_epoch_phase_advancing_past_an_owned_bucket() {
   new_test_ext().execute_with(|| {
@@ -286,7 +420,7 @@ fn try_state_rejects_epoch_phase_advancing_past_an_owned_bucket() {
       }])
       .expect("one maturity touch fits"),
     );
-    CurrentEpochServicePhase::<Test>::put(EpochServicePhase::PendingEnactment);
+    CurrentEpochServicePhase::<Test>::put(EpochServicePhase::FinalizedOutcome);
     assert!(Governance::do_try_state().is_err());
   });
 }
@@ -591,7 +725,7 @@ fn terminal_cleanup_fails_closed_when_active_index_is_corrupt() {
 }
 
 #[test]
-fn finalized_outcome_is_stored_and_later_expires() {
+fn pending_approval_survives_history_retention_without_an_executor() {
   new_test_ext().execute_with(|| {
     let winners =
       BoundedVec::try_from(vec![10u64, 11u64]).expect("proposal winners must fit configured bound");
@@ -626,8 +760,8 @@ fn finalized_outcome_is_stored_and_later_expires() {
     assert_eq!(recent[0].finalization.execution_detail, None);
     System::set_block_number(4);
     service_governance_through(4);
-    assert!(Governance::finalized_proposal_outcome(7, 100).is_none());
-    assert!(Governance::recent_finalized_proposals(7).is_empty());
+    assert!(Governance::finalized_proposal_outcome(7, 100).is_some());
+    assert_eq!(Governance::recent_finalized_proposals(7).len(), 1);
   });
 }
 
@@ -717,7 +851,72 @@ fn recent_finalized_proposals_are_sorted_newest_first_per_domain() {
 }
 
 #[test]
-fn recent_finalized_projection_truncates_overbound_storage_without_panicking() {
+fn finalized_discovery_capacity_refuses_resolution_atomically_and_releases_on_cleanup() {
+  new_test_ext().execute_with(|| {
+    let max = <Test as crate::Config>::MaxRecentFinalizedProposalsPerDomain::get();
+    let per_epoch: u32 = <Test as crate::Config>::MaxFinalizedProposalOutcomesPerEpoch::get();
+    for item_id in 0..max {
+      // Capacity setup uses the real finalization owner, not a timing replay.
+      let epoch = u64::from(item_id / per_epoch + 1);
+      assert_ok!(Governance::record_finalized_proposal_outcome(
+        7,
+        item_id,
+        rejected_outcome(epoch, ProposalRejectionReason::AdminRejected),
+        epoch,
+      ));
+    }
+    assert_eq!(Governance::finalized_proposal_ids(7).len(), max as usize);
+    System::set_block_number(4);
+    assert_ok!(submit_test_proposal(7, max, DEFAULT_PROPOSER));
+    assert_noop!(
+      Governance::reject_proposal(RuntimeOrigin::root(), 7, max),
+      Error::<Test>::FinalizedProposalIndexFull
+    );
+    assert!(ActiveProposals::<Test>::contains_key(7, max));
+    assert!(!FinalizedProposals::<Test>::contains_key(7, max));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
+
+    Governance::service_finalized_proposal_outcomes(3, 4);
+    assert_eq!(
+      Governance::finalized_proposal_ids(7).len(),
+      (max - per_epoch) as usize
+    );
+    assert_ok!(Governance::reject_proposal(RuntimeOrigin::root(), 7, max));
+    assert!(Governance::finalized_proposal_ids(7).contains(&max));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
+  });
+}
+
+#[test]
+fn retained_finalized_identity_cannot_be_resubmitted_before_cleanup() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    assert_ok!(Governance::reject_proposal(RuntimeOrigin::root(), 7, 100));
+    assert_noop!(
+      submit_test_proposal(7, 100, DEFAULT_PROPOSER),
+      Error::<Test>::ProposalAlreadyFinalized
+    );
+    System::set_block_number(4);
+    Governance::service_finalized_proposal_outcomes(3, 4);
+    assert!(Governance::finalized_proposal_ids(7).is_empty());
+    assert!(!crate::FinalizedProposalIdsByDomain::<Test>::contains_key(
+      7
+    ));
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    assert_ok!(Governance::reject_proposal(RuntimeOrigin::root(), 7, 100));
+    assert_eq!(
+      Governance::finalized_proposal_ids(7).into_inner(),
+      vec![100]
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
+  });
+}
+
+#[test]
+fn recent_finalized_projection_reads_only_bounded_discovery_authority() {
   new_test_ext().execute_with(|| {
     let max = <Test as crate::Config>::MaxRecentFinalizedProposalsPerDomain::get();
     for item_id in 0..=max {
@@ -730,16 +929,23 @@ fn recent_finalized_projection_truncates_overbound_storage_without_panicking() {
         },
       );
     }
+    crate::FinalizedProposalIdsByDomain::<Test>::insert(
+      7,
+      BoundedVec::<_, <Test as crate::Config>::MaxRecentFinalizedProposalsPerDomain>::try_from(
+        (0..max).collect::<Vec<_>>(),
+      )
+      .unwrap(),
+    );
 
     let recent = Governance::recent_finalized_proposals(7).into_inner();
     assert_eq!(recent.len(), max as usize);
     assert_eq!(
       recent.first().map(|proposal| proposal.identity.item_id),
-      Some(max)
+      Some(max - 1)
     );
     assert_eq!(
       recent.last().map(|proposal| proposal.identity.item_id),
-      Some(1)
+      Some(0)
     );
     #[cfg(feature = "try-runtime")]
     assert!(Governance::do_try_state().is_err());
@@ -909,7 +1115,7 @@ fn same_epoch_maturity_bucket_retains_fifo_remainder_until_bounded_follow_up() {
     assert!(!ActiveProposals::<Test>::contains_key(7, 103));
     assert_eq!(
       CurrentEpochServicePhase::<Test>::get(),
-      EpochServicePhase::PendingEnactment
+      EpochServicePhase::FinalizedOutcome
     );
     service_governance_through(3);
     assert_eq!(LastProcessedEpoch::<Test>::get(), 3);
@@ -1156,11 +1362,13 @@ fn proposal_query_helpers_report_weighted_tally_and_resolution_state() {
     ));
     assert_eq!(
       Governance::proposal_status(7, 100),
-      Some(crate::ProposalStatus::Finalized(approved_outcome(
-        3,
-        1,
-        crate::ProposalEnactmentOutcome::NotAttempted,
-      )))
+      Some(crate::ProposalStatus::PendingEnactment {
+        approval: crate::ProposalApproval {
+          approved_epoch: 3,
+          winner_count: 1
+        },
+        enactment_epoch: 3,
+      })
     );
     assert_eq!(
       Governance::proposal_vote_power_profile(7, 100, ProposalVoteKind::Aye),
@@ -1702,6 +1910,289 @@ fn executable_payload_records_execution_failed_when_executor_errors() {
         reason: crate::ProposalExecutionFailureReason::DispatchFailed,
       }))
     );
+  });
+}
+
+#[test]
+fn approval_rolls_back_when_global_pending_destination_is_full() {
+  new_test_ext().execute_with(|| {
+    ProposalEnactmentDelay::set(5);
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    let capacity: u32 = <Test as crate::Config>::MaxPendingEnactments::get();
+    crate::PendingEnactments::<Test>::put(
+      BoundedVec::try_from(
+        (0..capacity)
+          .map(|item_id| crate::FinalizedProposalTouch { domain: 8, item_id })
+          .collect::<Vec<_>>(),
+      )
+      .unwrap(),
+    );
+    assert_noop!(
+      Governance::resolve_proposal(
+        RuntimeOrigin::root(),
+        7,
+        100,
+        BoundedVec::try_from(vec![10u64]).unwrap()
+      ),
+      Error::<Test>::PendingEnactmentsFull
+    );
+    assert!(ActiveProposals::<Test>::contains_key(7, 100));
+    assert!(!FinalizedProposals::<Test>::contains_key(7, 100));
+    assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
+  });
+}
+
+#[test]
+fn late_epoch_service_executes_before_later_scheduled_history_expiry() {
+  new_test_ext().execute_with(|| {
+    let payload_hash = H256::repeat_byte(14);
+    set_payload_preimage_state(payload_hash, true, false);
+    set_payload_executor_enabled(true);
+    ProposalEnactmentDelay::set(2);
+    assert_ok!(Governance::submit_proposal(
+      RuntimeOrigin::root(),
+      7,
+      100,
+      DEFAULT_PROPOSER,
+      ProposalCadenceMode::Ordinary,
+      ProposalPayloadKind::L1RootAction,
+      payload_hash,
+    ));
+    assert_ok!(Governance::resolve_proposal(
+      RuntimeOrigin::root(),
+      7,
+      100,
+      BoundedVec::try_from(vec![10u64]).expect("one winner fits"),
+    ));
+    assert_eq!(ProposalPendingEnactmentAt::<Test>::get(7, 100), Some(3));
+    assert_eq!(
+      Governance::finalized_proposal_outcome_expiry_bucket(4).len(),
+      0
+    );
+    let mut executed_at = None;
+    let mut removed_at = None;
+    for block in 20..=60 {
+      System::set_block_number(block);
+      Governance::on_initialize(block);
+      match Governance::finalized_proposal_outcome(7, 100) {
+        Some(FinalizedProposalOutcome::Approved {
+          enactment: crate::ProposalEnactmentOutcome::Enacted { epoch },
+          ..
+        }) => {
+          assert_eq!(epoch, 20);
+          assert_eq!(
+            Governance::finalized_proposal_outcome_expiry_bucket(23).len(),
+            1
+          );
+          executed_at.get_or_insert(block);
+        }
+        None => {
+          assert!(
+            executed_at.is_some(),
+            "late service must not erase unexecuted approval"
+          );
+          removed_at.get_or_insert(block);
+        }
+        _ => {}
+      }
+    }
+    let executed_at = executed_at.expect("late enactment was serviced");
+    let removed_at = removed_at.expect("later history expiry was serviced");
+    assert!(executed_at < removed_at);
+    assert!(removed_at >= executed_at + 3);
+    assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
+    assert!(!ProposalMetadataByItem::<Test>::contains_key(7, 100));
+    println!(
+      "late service: actual execution block={executed_at}, actual cleanup block={removed_at}"
+    );
+  });
+}
+
+fn approve_pending_payload(item_id: u32, kind: ProposalPayloadKind, hash: H256) {
+  assert_ok!(Governance::submit_proposal(
+    RuntimeOrigin::root(),
+    7,
+    item_id,
+    DEFAULT_PROPOSER,
+    ProposalCadenceMode::Ordinary,
+    kind,
+    hash
+  ));
+  assert_ok!(Governance::resolve_proposal(
+    RuntimeOrigin::root(),
+    7,
+    item_id,
+    BoundedVec::try_from(vec![10u64 + u64::from(item_id)]).unwrap()
+  ));
+}
+
+#[test]
+fn pending_execution_survives_long_delay_and_unavailability_then_gets_full_terminal_retention() {
+  new_test_ext().execute_with(|| {
+    ProposalEnactmentDelay::set(5);
+    let hash = H256::repeat_byte(71);
+    set_payload_preimage_state(hash, true, false);
+    approve_pending_payload(100, ProposalPayloadKind::L1RootAction, hash);
+    for block in 2..=8 {
+      System::set_block_number(block);
+      service_governance_through(block);
+      assert_eq!(ProposalPendingEnactmentAt::<Test>::get(7, 100), Some(6));
+      assert_eq!(crate::PendingEnactments::<Test>::get().len(), 1);
+      assert!(ProposalMetadataByItem::<Test>::contains_key(7, 100));
+      assert!(Governance::finalized_proposal_outcome_expiry_bucket(block).is_empty());
+      assert_eq!(LastProcessedEpoch::<Test>::get(), block);
+      #[cfg(feature = "try-runtime")]
+      assert_ok!(Governance::do_try_state());
+    }
+    assert_eq!(payload_execution_calls(), 0);
+    set_payload_executor_enabled(true);
+    System::set_block_number(9);
+    Governance::on_initialize(9);
+    assert_eq!(payload_execution_calls(), 1);
+    assert_eq!(
+      Governance::finalized_proposal_outcome(7, 100),
+      Some(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::Enacted { epoch: 9 }
+      ))
+    );
+    assert!(crate::PendingEnactments::<Test>::get().is_empty());
+    assert_eq!(
+      Governance::finalized_proposal_outcome_expiry_bucket(12).len(),
+      1
+    );
+    for block in 10..=11 {
+      System::set_block_number(block);
+      service_governance_through(block);
+      assert!(FinalizedProposals::<Test>::contains_key(7, 100));
+    }
+    System::set_block_number(12);
+    service_governance_through(12);
+    assert!(!FinalizedProposals::<Test>::contains_key(7, 100));
+    assert!(!ProposalMetadataByItem::<Test>::contains_key(7, 100));
+    assert!(Governance::finalized_proposal_ids(7).is_empty());
+    assert_eq!(payload_execution_calls(), 1);
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
+  });
+}
+
+#[test]
+fn terminal_cleanup_refusal_precedes_effect_and_retains_the_original_pending_authority() {
+  new_test_ext().execute_with(|| {
+    ProposalEnactmentDelay::set(5);
+    let hash = H256::repeat_byte(72);
+    set_payload_preimage_state(hash, true, false);
+    approve_pending_payload(100, ProposalPayloadKind::L1RootAction, hash);
+    set_payload_executor_enabled(true);
+    System::set_block_number(9);
+    for item_id in 0..<Test as crate::Config>::MaxFinalizedProposalOutcomesPerEpoch::get() {
+      assert_ok!(Governance::record_finalized_proposal_outcome(
+        8,
+        item_id,
+        rejected_outcome(9, ProposalRejectionReason::AdminRejected),
+        9
+      ));
+    }
+    assert_noop!(
+      Governance::maybe_execute_proposal_payload(7, 100, 1, 1, 9),
+      Error::<Test>::FinalizedProposalOutcomeExpiryBucketFull
+    );
+    assert_eq!(payload_execution_calls(), 0);
+    assert_eq!(ProposalPendingEnactmentAt::<Test>::get(7, 100), Some(6));
+    System::set_block_number(10);
+    Governance::on_initialize(10);
+    assert_eq!(payload_execution_calls(), 1);
+    assert_eq!(
+      Governance::finalized_proposal_outcome_expiry_bucket(13).len(),
+      1
+    );
+    assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
+  });
+}
+
+#[test]
+fn executor_failure_rolls_back_its_effect_but_commits_failure_and_cleanup() {
+  new_test_ext().execute_with(|| {
+    ProposalEnactmentDelay::set(2);
+    let hash = H256::repeat_byte(73);
+    set_payload_preimage_state(hash, true, false);
+    set_payload_executor_enabled(true);
+    set_payload_execution_result(hash, false);
+    approve_pending_payload(100, ProposalPayloadKind::L1RootAction, hash);
+    System::set_block_number(3);
+    Governance::on_initialize(3);
+    assert_eq!(payload_execution_calls(), 1);
+    assert_eq!(
+      polkadot_sdk::frame_support::storage::unhashed::get::<H256>(
+        b"mock-governance-payload-effect"
+      ),
+      None
+    );
+    assert_eq!(
+      Governance::finalized_proposal_outcome(7, 100),
+      Some(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::ExecutionFailed { epoch: 3 }
+      ))
+    );
+    assert_eq!(
+      Governance::finalized_proposal_outcome_expiry_bucket(6).len(),
+      1
+    );
+    assert!(crate::PendingEnactments::<Test>::get().is_empty());
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
+  });
+}
+
+#[test]
+fn bounded_pending_rotation_visits_other_members_while_executable_hosts_are_unavailable() {
+  new_test_ext().execute_with(|| {
+    ProposalEnactmentDelay::set(4);
+    for item_id in 0..6 {
+      System::set_block_number(if item_id < 4 { 1 } else { 2 });
+      let hash = H256::repeat_byte(80 + item_id as u8);
+      set_payload_preimage_state(hash, true, false);
+      approve_pending_payload(
+        item_id,
+        if item_id < 4 {
+          ProposalPayloadKind::L1RootAction
+        } else {
+          ProposalPayloadKind::Intent
+        },
+        hash,
+      );
+    }
+    System::set_block_number(6);
+    Governance::on_initialize(6);
+    assert_eq!(crate::PendingEnactmentCursor::<Test>::get(), 4);
+    System::set_block_number(7);
+    Governance::on_initialize(7);
+    for item_id in 4..6 {
+      assert_eq!(
+        Governance::finalized_proposal_outcome(7, item_id),
+        Some(approved_outcome(
+          2,
+          1,
+          crate::ProposalEnactmentOutcome::AdvisoryFinalized { epoch: 7 }
+        ))
+      );
+    }
+    assert_eq!(crate::PendingEnactments::<Test>::get().len(), 4);
+    assert_eq!(payload_execution_calls(), 0);
+    set_payload_executor_enabled(true);
+    System::set_block_number(8);
+    Governance::on_initialize(8);
+    assert_eq!(payload_execution_calls(), 4);
+    assert!(crate::PendingEnactments::<Test>::get().is_empty());
+    assert_eq!(crate::PendingEnactmentCursor::<Test>::get(), 0);
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
   });
 }
 
@@ -2833,7 +3324,7 @@ fn ordinary_votes_are_rejected_during_lead_in_while_protection_votes_still_work(
 }
 
 #[test]
-fn proposal_status_reports_pending_enactment_until_delay_expires() {
+fn proposal_status_remains_pending_after_due_time_until_a_result_commits() {
   new_test_ext().execute_with(|| {
     ProposalEnactmentDelay::set(2);
     let winners = BoundedVec::try_from(vec![10u64]).expect("single winner must fit");
@@ -2857,11 +3348,13 @@ fn proposal_status_reports_pending_enactment_until_delay_expires() {
     System::set_block_number(3);
     assert_eq!(
       Governance::proposal_status(7, 100),
-      Some(crate::ProposalStatus::Finalized(approved_outcome(
-        1,
-        1,
-        crate::ProposalEnactmentOutcome::NotAttempted,
-      )))
+      Some(crate::ProposalStatus::PendingEnactment {
+        approval: crate::ProposalApproval {
+          approved_epoch: 1,
+          winner_count: 1
+        },
+        enactment_epoch: 3,
+      })
     );
   });
 }
@@ -2914,7 +3407,7 @@ fn urgent_authorized_resolution_bypasses_final_protection_gate_and_enactment_del
       7,
       102,
     ));
-    assert_eq!(ProposalPendingEnactmentAt::<Test>::get(7, 102), None);
+    assert_eq!(ProposalPendingEnactmentAt::<Test>::get(7, 102), Some(2));
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 102),
       Some(approved_outcome(

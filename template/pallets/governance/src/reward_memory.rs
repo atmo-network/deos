@@ -402,18 +402,65 @@ impl<T: Config> Pallet<T> {
       }
     }
 
-    let mut finalized_by_domain = BTreeMap::<T::DomainId, u32>::new();
+    let mut indexed_finalizations = BTreeSet::new();
+    let indices = FinalizedProposalIdsByDomain::<T>::iter(); // deos-bypass: bounded-iter — try-runtime-only full reconciliation
+    for (domain, ids) in indices {
+      if ids.is_empty() {
+        return Err(TryRuntimeError::Other("Empty finalized discovery index"));
+      }
+      for item_id in ids {
+        if !indexed_finalizations.insert((domain, item_id))
+          || !FinalizedProposals::<T>::contains_key(domain, item_id)
+        {
+          return Err(TryRuntimeError::Other(
+            "Finalized discovery index is not bijective",
+          ));
+        }
+      }
+    }
     let finalized = FinalizedProposals::<T>::iter(); // deos-bypass: bounded-iter — try-runtime-only full reconciliation
-    for (domain, _, _) in finalized {
-      let count = finalized_by_domain.entry(domain).or_default();
-      *count = count.checked_add(1).ok_or(TryRuntimeError::Other(
-        "Finalized proposal count overflowed",
-      ))?;
-      if *count > T::MaxRecentFinalizedProposalsPerDomain::get() {
+    let mut expected_cleanup = BTreeMap::new();
+    for (domain, item_id, record) in finalized {
+      if !indexed_finalizations.remove(&(domain, item_id)) {
         return Err(TryRuntimeError::Other(
-          "Finalized proposals exceed the bounded recent projection",
+          "Finalized record lacks discovery authority",
         ));
       }
+      if matches!(
+        record.outcome,
+        FinalizedProposalOutcome::Approved {
+          enactment: ProposalEnactmentOutcome::NotAttempted,
+          ..
+        }
+      ) {
+        if !ProposalPendingEnactmentAt::<T>::contains_key(domain, item_id) {
+          return Err(TryRuntimeError::Other(
+            "Unattempted approval lacks pending authority",
+          ));
+        }
+      } else {
+        let expiry = Self::add_epochs(
+          Self::finalized_outcome_epoch(&record.outcome),
+          T::FinalizedProposalOutcomeRetentionEpochs::get().into(),
+        )
+        .map_err(|_| TryRuntimeError::Other("Terminal retention horizon is not representable"))?;
+        expected_cleanup.insert((domain, item_id), expiry);
+      }
+    }
+    let cleanup_buckets = FinalizedProposalOutcomeExpiryBuckets::<T>::iter(); // deos-bypass: bounded-iter — try-runtime-only full reconciliation
+    for (expiry, touches) in cleanup_buckets {
+      for touch in touches {
+        if expected_cleanup.remove(&(touch.domain, touch.item_id)) != Some(expiry) {
+          return Err(TryRuntimeError::Other(
+            "Terminal cleanup authority is not bijective",
+          ));
+        }
+      }
+    }
+    if !expected_cleanup.is_empty() {
+      return Err(TryRuntimeError::Other(
+        "Terminal outcome lacks cleanup authority",
+      ));
     }
 
     let mut aggregate_custody = BTreeMap::<T::VotePowerLockId, BalanceOf<T>>::new();
@@ -521,6 +568,39 @@ impl<T: Config> Pallet<T> {
       }
     }
 
+    let pending = PendingEnactments::<T>::get();
+    let cursor = PendingEnactmentCursor::<T>::get() as usize;
+    if (pending.is_empty() && cursor != 0) || (!pending.is_empty() && cursor >= pending.len()) {
+      return Err(TryRuntimeError::Other(
+        "Pending enactment cursor is out of range",
+      ));
+    }
+    let mut pending_ids = BTreeSet::new();
+    for touch in pending {
+      if !pending_ids.insert((touch.domain, touch.item_id))
+        || ProposalPendingEnactmentAt::<T>::get(touch.domain, touch.item_id).is_none()
+        || !matches!(
+          FinalizedProposals::<T>::get(touch.domain, touch.item_id).map(|record| record.outcome),
+          Some(FinalizedProposalOutcome::Approved {
+            enactment: ProposalEnactmentOutcome::NotAttempted,
+            ..
+          })
+        )
+      {
+        return Err(TryRuntimeError::Other(
+          "Pending enactment authority is not bijective",
+        ));
+      }
+    }
+    let pending_pointers = ProposalPendingEnactmentAt::<T>::iter(); // deos-bypass: bounded-iter — try-runtime-only full reconciliation
+    for (domain, item_id, due) in pending_pointers {
+      if !pending_ids.remove(&(domain, item_id)) || Self::epoch_to_u32(due).is_err() {
+        return Err(TryRuntimeError::Other(
+          "Pending enactment pointer lacks bounded membership",
+        ));
+      }
+    }
+
     let phase = CurrentEpochServicePhase::<T>::get();
     if phase != EpochServicePhase::Maturing {
       let last_processed = Self::epoch_to_u32(LastProcessedEpoch::<T>::get())
@@ -533,15 +613,6 @@ impl<T: Config> Pallet<T> {
       if !ProposalMaturityBuckets::<T>::get(next_epoch).is_empty() {
         return Err(TryRuntimeError::Other(
           "epoch service advanced past a nonempty maturity bucket",
-        ));
-      }
-      if matches!(
-        phase,
-        EpochServicePhase::FinalizedOutcome | EpochServicePhase::RewardExpiry
-      ) && !PendingEnactmentBuckets::<T>::get(next_epoch).is_empty()
-      {
-        return Err(TryRuntimeError::Other(
-          "epoch service advanced past a nonempty enactment bucket",
         ));
       }
       if phase == EpochServicePhase::RewardExpiry

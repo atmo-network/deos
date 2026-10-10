@@ -59,6 +59,7 @@ std = [
   "sp-api/std",
 ]
 runtime-benchmarks = [
+  "polkadot-sdk/sp-io",
   "polkadot-sdk/runtime-benchmarks",
   "frame/runtime-benchmarks",
 ]

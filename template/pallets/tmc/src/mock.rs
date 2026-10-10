@@ -71,6 +71,7 @@ impl polkadot_sdk::pallet_assets::Config for Test {
   type Extra = ();
   type ReserveData = ();
   type CallbackHandle = ();
+  type AssetIdAllocator = ();
   type WeightInfo = ();
   type RemoveItemsLimit = ConstU32<5>;
   type Holder = ();

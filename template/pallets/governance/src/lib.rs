@@ -183,7 +183,6 @@ pub enum ProposalCapacityLane {
 pub enum EpochServicePhase {
   #[default]
   Maturing,
-  PendingEnactment,
   FinalizedOutcome,
   RewardExpiry,
 }
@@ -304,6 +303,10 @@ pub trait BenchmarkHelper<AccountId, DomainId, Hash, LockId, Balance> {
     account: &AccountId,
   ) -> Result<(DomainId, ProposalPayloadKind, Hash, Vec<u8>), polkadot_sdk::sp_runtime::DispatchError>;
 
+  fn prepare_pending_enactment(
+    account: &AccountId,
+  ) -> Result<(DomainId, ProposalPayloadKind, Hash), polkadot_sdk::sp_runtime::DispatchError>;
+
   fn prepare_protection_voter(
     account: &AccountId,
   ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError>;
@@ -329,6 +332,14 @@ impl<AccountId, DomainId, Hash, LockId, Balance>
     _account: &AccountId,
   ) -> Result<(DomainId, ProposalPayloadKind, Hash, Vec<u8>), polkadot_sdk::sp_runtime::DispatchError>
   {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "GovernanceBenchmarkHelperNotConfigured",
+    ))
+  }
+
+  fn prepare_pending_enactment(
+    _account: &AccountId,
+  ) -> Result<(DomainId, ProposalPayloadKind, Hash), polkadot_sdk::sp_runtime::DispatchError> {
     Err(polkadot_sdk::sp_runtime::DispatchError::Other(
       "GovernanceBenchmarkHelperNotConfigured",
     ))
@@ -411,6 +422,8 @@ pub enum ProposalPreimageAdmissionError {
 )]
 pub enum ProposalParameterChangeSurface {
   RouterFee,
+  ActorUserCreationEnabled,
+  ActorGlobalCircuitBreaker,
 }
 
 #[derive(
@@ -732,7 +745,7 @@ pub mod pallet {
     #[pallet::constant]
     type MaxMaturingProposalsPerEpoch: Get<u32>;
     #[pallet::constant]
-    type MaxPendingEnactmentsPerEpoch: Get<u32>;
+    type MaxPendingEnactments: Get<u32>;
     #[pallet::constant]
     type ProposalVotingPeriod: Get<Self::Epoch>;
     #[pallet::constant]
@@ -1522,17 +1535,26 @@ pub mod pallet {
     OptionQuery,
   >;
 
+  /// Bounded discovery authority for retained approvals and terminal outcomes.
   #[pallet::storage]
-  pub type PendingEnactmentBuckets<T: Config> = StorageMap<
+  #[pallet::getter(fn finalized_proposal_ids)]
+  pub type FinalizedProposalIdsByDomain<T: Config> = StorageMap<
     _,
     Blake2_128Concat,
-    T::Epoch,
-    BoundedVec<
-      FinalizedProposalTouch<T::DomainId, T::WinningVoteItemId>,
-      T::MaxPendingEnactmentsPerEpoch,
-    >,
+    T::DomainId,
+    BoundedVec<T::WinningVoteItemId, T::MaxRecentFinalizedProposalsPerDomain>,
     ValueQuery,
   >;
+
+  #[pallet::storage]
+  pub type PendingEnactments<T: Config> = StorageValue<
+    _,
+    BoundedVec<FinalizedProposalTouch<T::DomainId, T::WinningVoteItemId>, T::MaxPendingEnactments>,
+    ValueQuery,
+  >;
+
+  #[pallet::storage]
+  pub type PendingEnactmentCursor<T: Config> = StorageValue<_, u32, ValueQuery>;
 
   /// Epoch at which a proposal entered the confirm period.
   /// Present only when `ProposalConfirmPeriod > 0` and the proposal is sustaining approval.
@@ -1775,6 +1797,8 @@ pub mod pallet {
   pub enum Error<T> {
     ZeroLookbackWindow,
     ProposalAlreadyActive,
+    ProposalAlreadyFinalized,
+    FinalizedProposalIndexFull,
     ProposalNotActive,
     ProposalWinnerSetEmpty,
     ProposalVotingWindowStillOpen,
@@ -1801,7 +1825,7 @@ pub mod pallet {
     ActiveProposalAuthorMissing,
     ActiveProposalCountUnderflow,
     ProposalMaturityBucketFull,
-    PendingEnactmentBucketFull,
+    PendingEnactmentsFull,
     FinalizedProposalOutcomeExpiryBucketFull,
     ZeroProposalVotingPeriod,
     EpochVoteCapReached,
@@ -1816,12 +1840,15 @@ pub mod pallet {
     EpochArithmeticOverflow,
     ProposalMetadataMissing,
     FinalizedProposalMissing,
+    ProposalExecutionNotPending,
   }
 
   #[pallet::hooks]
   impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
     fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
-      Self::service_current_epoch(T::EpochProvider::current_epoch())
+      Self::service_pending_enactments(T::EpochProvider::current_epoch()).saturating_add(
+        Self::service_current_epoch(T::EpochProvider::current_epoch()),
+      )
     }
 
     #[cfg(feature = "try-runtime")]
@@ -1839,6 +1866,10 @@ pub mod pallet {
         "PayloadAdmissionWitnessDeposit must be nonzero"
       );
       assert!(
+        T::FinalizedProposalOutcomeRetentionEpochs::get() > 0,
+        "terminal history retention must be nonzero",
+      );
+      assert!(
         T::MaxEpochCatchUpPerBlock::get() == crate::MAX_EPOCH_CATCH_UP_HARD_LIMIT,
         "MaxEpochCatchUpPerBlock must equal the one-epoch measured service bound"
       );
@@ -1846,7 +1877,7 @@ pub mod pallet {
         T::MaxMaturingProposalsPerBlock::get() > 0
           && T::MaxMaturingProposalsPerBlock::get() <= T::MaxMaturingProposalsPerEpoch::get()
           && T::MaxPendingEnactmentsPerBlock::get() > 0
-          && T::MaxPendingEnactmentsPerBlock::get() <= T::MaxPendingEnactmentsPerEpoch::get()
+          && T::MaxPendingEnactmentsPerBlock::get() <= T::MaxPendingEnactments::get()
           && T::MaxFinalizedProposalOutcomesPerBlock::get() > 0
           && T::MaxFinalizedProposalOutcomesPerBlock::get()
             <= T::MaxFinalizedProposalOutcomesPerEpoch::get()
@@ -1856,7 +1887,6 @@ pub mod pallet {
       );
       for per_epoch_bound in [
         T::MaxMaturingProposalsPerEpoch::get(),
-        T::MaxPendingEnactmentsPerEpoch::get(),
         T::MaxFinalizedProposalOutcomesPerEpoch::get(),
         T::MaxExpiringAccountsPerEpoch::get(),
       ] {

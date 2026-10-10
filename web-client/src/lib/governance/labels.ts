@@ -288,7 +288,16 @@ export function treasurySettlementLabel(
 }
 
 export function parameterChangeSurfaceLabel(surface?: string | null) {
-  return surface === 'RouterFee' ? 'DEOS Router fee' : 'Unavailable';
+  switch (surface) {
+    case 'RouterFee':
+      return 'DEOS Router fee';
+    case 'ActorUserCreationEnabled':
+      return 'User Actor creation';
+    case 'ActorGlobalCircuitBreaker':
+      return 'Actor machine freeze';
+    default:
+      return 'Unavailable';
+  }
 }
 
 export function treasurySpendScalarLabel(scalar?: string | null) {

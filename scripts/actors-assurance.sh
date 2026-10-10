@@ -14,6 +14,7 @@ INTEGRATED_W3_OPENING_MATRIX=0
 INTEGRATED_W4_HETEROGENEOUS_EFFECTS=0
 INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP=0
 INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE=0
+INTEGRATED_CURRENT_W7_DEADLINES=0
 INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER=0
 INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE=0
 INTEGRATED_W9_RESOURCE_INDEPENDENCE=0
@@ -35,7 +36,6 @@ REQUIRED_HEAVY_PROFILES=(
     "scheduler_stress_fifo_dense_vs_sparse_topology_matrix"
     "scheduler_stress_fifo_sparse_topology_long_run_liveness"
     "stress_10k_actors_queue_scheduler"
-    "checkpoint_a_s6_dense_10k_wakeups_converge_without_drops"
     "control_only_10k_first_traversal_with_continuous_user_dispatch"
     "transfer_10k_homogeneous_predicate_attribution"
     "swapout_10k_manual_and_reactive_first_traversal"
@@ -46,9 +46,6 @@ REQUIRED_HEAVY_PROFILES=(
     "mixed_9500_transfer_400_swapout_100_control_first_traversal"
 )
 PACKAGE_HEAVY_PROFILES=(
-    "crossing_scale_10k_zero_match_small_cohort_and_maximum_herd"
-    "breaker_materializes_maximum_mixed_wakeup_crossing_and_broad_fanout_without_execution_loss"
-    "crossing_mixed_dense_sparse_directional_lifecycle_profile"
     "maximum_dormant_identity_population_adds_no_idle_scan"
 )
 OCCUPANCY_HEAVY_PROFILE="profile_scheduler_queue_wakeup_occupancy_10k"
@@ -76,7 +73,7 @@ Options:
   --exact-heavy-profile NAME Run one declared runtime/package heavy profile
   --production-reference-replay
                              Run the current pinned production-Wasm block/proof replay
-  --integrated-w0-w1              Run only EXP-0066's full-Executive W0/W1 preparation gate
+  --integrated-w0-w1              Run only the full-Executive W0/W1 preparation gate
   --integrated-w1-actor-only      Run the exact-Wasm 100-block Actor-only W1 campaign
   --integrated-w1-continuous-user Run the exact-Wasm 100-block continuous-user W1 campaign
   --integrated-w2-schedules       Run exact-Wasm 100-block Manual-only and Cadenced-only W2 campaigns
@@ -87,17 +84,19 @@ Options:
                                   Run native and exact-Wasm W5 lifecycle/retry/cleanup
   --integrated-w6-mixed-arrival-lifecycle
                                   Run native and exact-Wasm W6 clocks/Triggers/churn
+  --integrated-current-w7-deadlines
+                                  Run native/exact-Wasm current W7 Sleep/reentry and bounded drain
   --integrated-w7-due-only-active-frontier
                                   Run native and exact-Wasm W7 active-frontier scaling
   --integrated-w8-tombstone-prefix-chunk-pressure
-                                  Run native and exact-Wasm W8 queue-prefix pressure
+                                  Run native and exact-Wasm W8 Service after closed-prefix setup
   --integrated-w9-resource-independence
                                   Run native and exact-Wasm W9 User-resource isolation
   --integrated-control-attribution
                                   Run native and exact-Wasm schedule-Control phase attribution
   --integrated-funded-user-action
                                   Run native and exact-Wasm funded User Action fee evidence
-  --backpressure-audit            Run EXP-0100 existing-path atomicity/retry falsifiers
+  --backpressure-audit            Run existing-path atomicity/retry falsifiers
 
 The preparation gate authors real ordered inherents, finalizes actor-only and
 continuous-valid-user-demand blocks, then independently replays the exact production Wasm.
@@ -119,30 +118,37 @@ The W5 campaign completes one five-Actor Manual matrix across zero-Step,
 Opening/middle/final Running, retry exhaustion, productive cleanup, minimal
 admission apoptosis, and uncompensated committed-prefix durability.
 The W6 campaign combines dense Manual readiness, sparse block windows, AtTime
-tick deadlines and seeded Cadenced periods with pause/resume, close-created
-tombstones and normal Crossing generation rotation without stale execution.
-Its timeline distinguishes deadline, materialization and service: distinct short
-tick periods can become due together in the same produced block.
+tick deadlines and seeded Cadenced periods with pause/resume and owner close.
+It checks Q1, window timing, retained readiness and no closed-Actor execution.
+Distinct short tick periods can become due together in the same produced block.
+The current W7 deadline campaign creates 1,024 real User retries through signed
+Manual readiness and ordinary funding-unavailable Attempts, with 16 Actors per
+owner across 64 owners. Its 32 C32 deadline pages become due 32 Actors/block for
+32 blocks, followed by a fixed 32-block drain. It checks due-key/slot extraction
+order, B+1 return service, retry exhaustion and custody neutrality, reporting
+unfinished Sleep/Service obligations, persistent bytes/key mutations and proofs.
+The 64 setup blocks remain separate from the 64-block measurement horizon; every
+block is replayed against the pinned Wasm. A false completion target is retained.
 The W7 campaign compares one 100-due-Actor control with the same due frontier at
 10,000 total identities: 4,943 future, 4,942 unsignaled, and 15 retained reference
-identities form the 9,900 non-due population. Both profiles must preserve exact
-FIFO/Q1 throughput and the complete-attempt Control frontier.
-The W8 campaign measures legal closed-Actor tombstone prefixes of
-1/4/8/16/32/64/128 entries ahead of the same 100 due Manual Actors. Each complete
-block must reclaim the exact prefix, preserve the live FIFO/Q1 committed prefix,
-and stop remaining live work only at the Actor Control frontier without opening a
-page-layout comparison.
-The W9 campaign compares the same 100-due-Actor FIFO frontier under Actor-only,
-proof-saturated remarks, and RefTime-heavy valid Router demand. It requires equal
-Actor service/accounting and records the explicit fallback when production-valid
-business calls still reach User ProofSize before the RefTime frontier.
-The Control-attribution campaign compares matched 100-Actor Manual and cadence-one
-fixtures for nine linked blocks, records mandatory-Prepass versus final Control,
-and proves temporal occurrence materialization is Prepass-owned and cannot service
-newly materialized work past that block's captured FIFO cutoff. It also pins the
-production-Weight read/write ledger for fixed coordination, dual-clock probes,
-retained/removed wakeup consumption, Cadenced rearm topology, and close/fault
-admission contingencies without treating additive envelopes as actual block proof.
+identities form the 9,900 non-due population. Both profiles must preserve equal
+Steps per block, Service order and Q1; Control deltas are reported separately.
+The W8 campaign retains its historical command name but closes
+1/4/8/16/32/64/128 Actors during setup and verifies canonical Service removal
+before measuring a block with 100 due Manual Actors. It checks the live Service
+prefix, Q1, cursor preservation and Control refusal, not runtime reclamation of
+physical Ready tombstones.
+The W9 campaign compares the same 100-due-Actor Service frontier under Actor-only,
+proof-saturated remarks, and RefTime-heavy valid Router demand. Assertions require
+separate ProofSize/RefTime user refusal and nonempty canonical Actor prefixes,
+not equal throughput. The comparison summary names each user refusal component;
+per-profile booleans and next-call weights retain the supporting evidence.
+The Control-attribution campaign compares 100-Actor Manual and cadence-one
+fixtures for nine linked blocks and records mandatory-Prepass versus final Control.
+Deadline materialization may run in on_idle; B+1 eligibility defers newly
+materialized service, not a legacy FIFO cutoff. Its generated-Weight I/O check
+covers AtTime/Cadenced occurrence selectors and the rearm delta, not measured
+marginal accesses or complete block proof.
 The wall-clock matrix remains diagnostic and does not run in this contract.
   -h, --help                 Show this help message
 
@@ -200,6 +206,9 @@ parse_args() {
             --integrated-w6-mixed-arrival-lifecycle)
                 INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE=1
                 ;;
+            --integrated-current-w7-deadlines)
+                INTEGRATED_CURRENT_W7_DEADLINES=1
+                ;;
             --integrated-w7-due-only-active-frontier)
                 INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER=1
                 ;;
@@ -230,9 +239,9 @@ parse_args() {
         esac
         shift
     done
-    local integrated_count=$((INTEGRATED_W0_W1 + INTEGRATED_W1_ACTOR_ONLY + INTEGRATED_W1_CONTINUOUS_USER + INTEGRATED_W2_SCHEDULES + INTEGRATED_W3_OPENING_MATRIX + INTEGRATED_W4_HETEROGENEOUS_EFFECTS + INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP + INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE + INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER + INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE + INTEGRATED_W9_RESOURCE_INDEPENDENCE + INTEGRATED_CONTROL_ATTRIBUTION + INTEGRATED_FUNDED_USER_ACTION))
+    local integrated_count=$((INTEGRATED_W0_W1 + INTEGRATED_W1_ACTOR_ONLY + INTEGRATED_W1_CONTINUOUS_USER + INTEGRATED_W2_SCHEDULES + INTEGRATED_W3_OPENING_MATRIX + INTEGRATED_W4_HETEROGENEOUS_EFFECTS + INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP + INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE + INTEGRATED_CURRENT_W7_DEADLINES + INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER + INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE + INTEGRATED_W9_RESOURCE_INDEPENDENCE + INTEGRATED_CONTROL_ATTRIBUTION + INTEGRATED_FUNDED_USER_ACTION))
     if [[ "$integrated_count" -gt 1 ]]; then
-        log_error "Select exactly one integrated EXP-0066 cohort"
+        log_error "Select exactly one integrated workload cohort"
         exit 2
     fi
     if [[ "$QUICK_MODE" == "1" && ( "$integrated_count" -gt 0 || "$BACKPRESSURE_AUDIT" == "1" ) ]]; then
@@ -504,11 +513,11 @@ run_integrated_w0_w1_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native full-Executive W0/W1 fixture" \
+        "Workload gate: native full-Executive W0/W1 fixture" \
         "" \
         "cd \"$TEMPLATE_DIR\" && cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W0/W1 replay" \
+        "Workload gate: exact production-Wasm W0/W1 replay" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -526,7 +535,7 @@ run_integrated_w1_campaign_gate() {
             label="continuous valid-user"
             ;;
         *)
-            log_error "Unknown EXP-0066 W1 campaign: $demand"
+            log_error "Unknown W1 campaign: $demand"
             return 2
             ;;
     esac
@@ -538,7 +547,7 @@ run_integrated_w1_campaign_gate() {
         return 1
     fi
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm ${label} W1 campaign" \
+        "Workload gate: exact production-Wasm ${label} W1 campaign" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
 }
@@ -553,7 +562,7 @@ run_integrated_w2_schedule_gate() {
         return 1
     fi
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm Manual-only and Cadenced-only W2 campaigns" \
+        "Workload gate: exact production-Wasm Manual-only and Cadenced-only W2 campaigns" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
 }
@@ -568,7 +577,7 @@ run_integrated_w3_opening_matrix_gate() {
         return 1
     fi
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W3 Opening-predicate and mixed-length matrix" \
+        "Workload gate: exact production-Wasm W3 Opening-predicate and mixed-length matrix" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
 }
@@ -583,7 +592,7 @@ run_integrated_w4_heterogeneous_effects_gate() {
         return 1
     fi
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W4 heterogeneous effect campaigns" \
+        "Workload gate: exact production-Wasm W4 heterogeneous effect campaigns" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
 }
@@ -601,11 +610,11 @@ run_integrated_w5_lifecycle_retry_cleanup_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native full-Executive W5 lifecycle/retry/cleanup fixture" \
+        "Workload gate: native full-Executive W5 lifecycle/retry/cleanup fixture" \
         "" \
         "cd \"$TEMPLATE_DIR\" && cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W5 lifecycle/retry/cleanup campaign" \
+        "Workload gate: exact production-Wasm W5 lifecycle/retry/cleanup campaign" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -623,11 +632,11 @@ run_integrated_funded_user_action_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0097 gate: native funded User Action monetary/resource witness" \
+        "Funded-User gate: native funded User Action monetary/resource witness" \
         "" \
         "cd \"$TEMPLATE_DIR\" && cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0097 gate: exact production-Wasm funded User Action replay" \
+        "Funded-User gate: exact production-Wasm funded User Action replay" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -645,11 +654,33 @@ run_integrated_w6_mixed_arrival_lifecycle_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native full-Executive W6 clocks/Triggers/lifecycle fixture" \
+        "Workload gate: native full-Executive W6 clocks/Triggers/lifecycle fixture" \
         "" \
         "cd \"$TEMPLATE_DIR\" && cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W6 clocks/Triggers/lifecycle campaign" \
+        "Workload gate: exact production-Wasm W6 clocks/Triggers/lifecycle campaign" \
+        "" \
+        "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
+}
+
+run_integrated_current_w7_deadlines_gate() {
+    local native_profile="full_executive_current_w7_deadline_fixture"
+    local wasm_profile="full_executive_current_w7_deadlines_replay_exact_production_wasm"
+    local listing matches profile
+    listing="$(cd "$TEMPLATE_DIR" && cargo test --release -p deos-runtime --locked -- --list 2>/dev/null)"
+    for profile in "$native_profile" "$wasm_profile"; do
+        matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
+        if [[ "$matches" -ne 1 ]]; then
+            log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
+            return 1
+        fi
+    done
+    run_shell_step \
+        "Current W7 gate: native full-Executive Sleep/reentry fixture" \
+        "" \
+        "cd \"$TEMPLATE_DIR\" && cargo test --release -p deos-runtime --locked '$native_profile' -- --ignored --nocapture"
+    run_shell_step \
+        "Current W7 gate: exact production-Wasm Sleep/reentry and bounded drain" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -667,11 +698,11 @@ run_integrated_w7_due_only_active_frontier_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native full-Executive W7 due-only active-frontier fixture" \
+        "Workload gate: native full-Executive W7 due-only active-frontier fixture" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W7 due-only active-frontier campaign" \
+        "Workload gate: exact production-Wasm W7 due-only active-frontier campaign" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -689,11 +720,11 @@ run_integrated_w8_tombstone_prefix_chunk_pressure_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native full-Executive W8 tombstone-prefix/chunk pressure" \
+        "Workload gate: native full-Executive W8 Service after closed-prefix setup" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W8 tombstone-prefix/chunk pressure" \
+        "Workload gate: exact production-Wasm W8 Service after closed-prefix setup" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -711,11 +742,11 @@ run_integrated_w9_resource_independence_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native full-Executive W9 resource independence" \
+        "Workload gate: native full-Executive W9 resource independence" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm W9 resource independence" \
+        "Workload gate: exact production-Wasm W9 resource independence" \
         "" \
         "cd \"$TEMPLATE_DIR\" && RUST_TEST_THREADS=1 DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -733,11 +764,11 @@ run_integrated_control_attribution_gate() {
         fi
     done
     run_shell_step \
-        "EXP-0066 gate: native schedule-Control phase attribution" \
+        "Workload gate: native schedule-Control phase attribution" \
         "" \
         "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 RUST_TEST_THREADS=1 cargo test -p deos-runtime --locked '$native_profile' -- --nocapture"
     run_shell_step \
-        "EXP-0066 gate: exact production-Wasm schedule-Control phase attribution" \
+        "Workload gate: exact production-Wasm schedule-Control phase attribution" \
         "" \
         "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 RUST_TEST_THREADS=1 DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
 }
@@ -785,7 +816,6 @@ run_gate() {
     run_shell_step "Actors gate: runtime cost vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p deos-runtime --example actor_cost_vectors -- --check ../web-client/src/lib/automation/actors-cost-vectors.json"
     run_shell_step "Actors gate: ABI manifest drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-abi"
     run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-normative-drift"
-    run_shell_step "Actors gate: observation runtime evidence drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:observation-evidence"
     run_shell_step "Actors gate: certified ingress evidence drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:ingress-evidence"
     run_shell_step "Actors gate: cross-language semantic contract" "" "cd \"$PROJECT_ROOT/web-client\" && npm run test:automation"
     run_shell_step "Actors gate: exhaustive production/simulation Step parity" "" "cd \"$TEMPLATE_DIR\" && cargo test -q --locked -p pallet-deos-actors --lib canonical_step_transition_matrix_has_production_simulation_parity"
@@ -849,30 +879,29 @@ run_gate() {
 
 run_backpressure_audit() {
     local runtime_profiles=(
-        temporary_oracle_capacity_failure_rolls_back_economics_and_has_one_retry_owner
         swap_exact_out_liquidity_boundary_fails_without_partial_execution
-        xcm_deposit_failure_rolls_back_precommit_events_and_exact_holding
-        oracle_publication_rolls_back_when_crossing_transition_queue_is_full
-        internal_asset_transfer_rolls_back_when_funding_pending_overflows
+        xcm_deposit_overflow_preserves_state_and_exact_holding
+        xcm_native_deposit_sees_arriving_fees_and_rolls_back_late_ingress_refusal
+        xcm_foreign_deposit_refusal_preserves_both_ledgers_and_credit_issuance
         actor_fee_collector_rolls_back_completely_on_ledger_failure
         runtime_simulation_core_rolls_back_deos_adapter_effects
-        anchored_split_transfer_rolls_back_when_a_later_recipient_is_unavailable
     )
     local package_profiles=(
-        fanout_structural_fault_is_bounded_and_requires_repair_before_resume
         user_retry_insolvency_closes_before_effect_capacity_deferral
         retry_later_resumes_same_cursor_without_replaying_committed_prefix
+        cycle_balance_late_failure_preserves_prefix_and_clears_snapshot_on_abort
+        cycle_balance_capture_retry_preserves_the_first_attempt_volume
     )
     local profile
     for profile in "${runtime_profiles[@]}"; do
         run_shell_step \
-            "EXP-0100 runtime falsifier: ${profile}" \
+            "Backpressure runtime falsifier: ${profile}" \
             "" \
             "cd \"$TEMPLATE_DIR\" && cargo test -p deos-runtime --locked '$profile'"
     done
     for profile in "${package_profiles[@]}"; do
         run_shell_step \
-            "EXP-0100 package falsifier: ${profile}" \
+            "Backpressure package falsifier: ${profile}" \
             "" \
             "cd \"$TEMPLATE_DIR\" && cargo test -p pallet-deos-actors --locked '$profile'"
     done
@@ -885,7 +914,7 @@ main() {
     capture_evidence_identity
     snapshot_wasm_artifact
     trap restore_wasm_artifact EXIT
-    log_info "Profile: $CARGO_PROFILE | quick: $QUICK_MODE | exact-heavy-profile: ${EXACT_HEAVY_PROFILE:-none} | production-reference-replay: $PRODUCTION_REFERENCE_REPLAY | occupancy: $INCLUDE_OCCUPANCY_PROFILE | integrated-w0-w1: $INTEGRATED_W0_W1 | integrated-w1-actor-only: $INTEGRATED_W1_ACTOR_ONLY | integrated-w1-continuous-user: $INTEGRATED_W1_CONTINUOUS_USER | integrated-w2-schedules: $INTEGRATED_W2_SCHEDULES | integrated-w3-opening-matrix: $INTEGRATED_W3_OPENING_MATRIX | integrated-w4-heterogeneous-effects: $INTEGRATED_W4_HETEROGENEOUS_EFFECTS | integrated-w5-lifecycle-retry-cleanup: $INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP | integrated-w6-mixed-arrival-lifecycle: $INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE | integrated-w7-due-only-active-frontier: $INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER | integrated-w8-tombstone-prefix-chunk-pressure: $INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE | integrated-w9-resource-independence: $INTEGRATED_W9_RESOURCE_INDEPENDENCE | integrated-control-attribution: $INTEGRATED_CONTROL_ATTRIBUTION | integrated-funded-user-action: $INTEGRATED_FUNDED_USER_ACTION | backpressure-audit: $BACKPRESSURE_AUDIT"
+    log_info "Profile: $CARGO_PROFILE | quick: $QUICK_MODE | exact-heavy-profile: ${EXACT_HEAVY_PROFILE:-none} | production-reference-replay: $PRODUCTION_REFERENCE_REPLAY | occupancy: $INCLUDE_OCCUPANCY_PROFILE | integrated-w0-w1: $INTEGRATED_W0_W1 | integrated-w1-actor-only: $INTEGRATED_W1_ACTOR_ONLY | integrated-w1-continuous-user: $INTEGRATED_W1_CONTINUOUS_USER | integrated-w2-schedules: $INTEGRATED_W2_SCHEDULES | integrated-w3-opening-matrix: $INTEGRATED_W3_OPENING_MATRIX | integrated-w4-heterogeneous-effects: $INTEGRATED_W4_HETEROGENEOUS_EFFECTS | integrated-w5-lifecycle-retry-cleanup: $INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP | integrated-w6-mixed-arrival-lifecycle: $INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE | integrated-current-w7-deadlines: $INTEGRATED_CURRENT_W7_DEADLINES | integrated-w7-due-only-active-frontier: $INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER | integrated-w8-tombstone-prefix-chunk-pressure: $INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE | integrated-w9-resource-independence: $INTEGRATED_W9_RESOURCE_INDEPENDENCE | integrated-control-attribution: $INTEGRATED_CONTROL_ATTRIBUTION | integrated-funded-user-action: $INTEGRATED_FUNDED_USER_ACTION | backpressure-audit: $BACKPRESSURE_AUDIT"
     if [[ "$BACKPRESSURE_AUDIT" == "1" ]]; then
         run_backpressure_audit
     elif [[ -n "$EXACT_HEAVY_PROFILE" ]]; then
@@ -908,6 +937,8 @@ main() {
         run_integrated_w5_lifecycle_retry_cleanup_gate
     elif [[ "$INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE" == "1" ]]; then
         run_integrated_w6_mixed_arrival_lifecycle_gate
+    elif [[ "$INTEGRATED_CURRENT_W7_DEADLINES" == "1" ]]; then
+        run_integrated_current_w7_deadlines_gate
     elif [[ "$INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER" == "1" ]]; then
         run_integrated_w7_due_only_active_frontier_gate
     elif [[ "$INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE" == "1" ]]; then

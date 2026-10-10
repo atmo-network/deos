@@ -32,6 +32,21 @@ use crate::configs::{
 pub(crate) const CONTEXT_GEOMETRY_INHERENT_IDENTIFIER: sp_inherents::InherentIdentifier =
   *b"deosctx0";
 
+fn with_actor_prepass_inherent_data(
+  mut data: sp_inherents::InherentData,
+) -> sp_inherents::InherentData {
+  if matches!(
+    data.get_data::<pallet_deos_actors::ActorPrepassInherentData>(
+      &pallet_deos_actors::ACTOR_PREPASS_INHERENT_IDENTIFIER,
+    ),
+    Ok(None)
+  ) {
+    pallet_deos_actors::provide_actor_prepass_inherent_data(&mut data)
+      .expect("a missing Actor Prepass identifier admits its fixed version data"); // deos-bypass: panic-owner — get_data returned None for this uniquely owned identifier; put_data can fail only if that identifier already exists.
+  }
+  data
+}
+
 pub(crate) fn context_geometry_fatal_result() -> sp_inherents::CheckInherentsResult {
   let mut result = sp_inherents::CheckInherentsResult::new();
   result
@@ -231,6 +246,10 @@ impl_runtime_apis! {
     }
 
     impl pallet_deos_actors::ActorResourceApi<Block, BlockNumber> for Runtime {
+  fn machine_control_flags() -> pallet_deos_actors::ActorMachineControlFlags {
+    Actors::machine_control_flags()
+  }
+
   fn block_resource_budget() -> pallet_deos_actors::BlockResourceBudget {
     crate::configs::BlockResourceBudgetValue::get()
   }
@@ -245,34 +264,15 @@ impl_runtime_apis! {
   }
 }
 
-impl pallet_deos_actors::ActorEligibilityApi<Block, primitives::OracleFeedId, BlockNumber>
-        for Runtime {
+impl pallet_deos_actors::ActorEligibilityApi<Block, BlockNumber, Balance> for Runtime {
         fn actor_eligibility(
             actor_id: pallet_deos_actors::ActorId,
         ) -> Result<
-            pallet_deos_actors::ActorEligibility<primitives::OracleFeedId, BlockNumber>,
+            pallet_deos_actors::ActorEligibility<BlockNumber, Balance>,
             pallet_deos_actors::ActorClassificationError,
         > {
             Actors::actor_eligibility(actor_id)
         }
-
-        fn materialization_faults() -> pallet_deos_actors::MaterializationFaults<primitives::OracleFeedId, BlockNumber> {
-            pallet_deos_actors::MaterializationFaults {
-                crossing: Actors::crossing_worker_fault(),
-                fanout: Actors::observation_fanout_worker_fault(),
-                wakeup: Actors::wakeup_worker_fault(),
-            }
-        }
-
-        fn crossing_capacity(feed: primitives::OracleFeedId) -> pallet_deos_actors::CrossingCapacity {
-            pallet_deos_actors::CrossingCapacity {
-                user_limit: <crate::configs::actor_config::ActorMaxUserCrossingMembersPerFeed as polkadot_sdk::frame_support::traits::Get<u32>>::get(),
-                total_limit: <crate::configs::actor_config::ActorMaxCrossingMembersPerFeed as polkadot_sdk::frame_support::traits::Get<u32>>::get(),
-                user_memberships: Actors::crossing_user_feed_membership_count(feed),
-                total_memberships: Actors::crossing_feed_membership_count(feed),
-            }
-        }
-
     }
 
     impl primitives::TmctolReadModelApi<Block, AccountId, Balance> for Runtime {
@@ -291,7 +291,7 @@ impl pallet_deos_actors::ActorEligibilityApi<Block, primitives::OracleFeedId, Bl
         }
 
         fn inherent_extrinsics(data: sp_inherents::InherentData) -> Vec<<Block as BlockT>::Extrinsic> {
-            data.create_extrinsics()
+            with_actor_prepass_inherent_data(data).create_extrinsics()
         }
 
         fn check_inherents(
@@ -301,7 +301,7 @@ impl pallet_deos_actors::ActorEligibilityApi<Block, primitives::OracleFeedId, Bl
             if validate_context_inherent_geometry(&data).is_err() {
                 return context_geometry_fatal_result();
             }
-            data.check_extrinsics(&block)
+            with_actor_prepass_inherent_data(data).check_extrinsics(&block)
         }
     }
 
@@ -493,7 +493,9 @@ impl pallet_deos_actors::ActorEligibilityApi<Block, primitives::OracleFeedId, Bl
             }
 
             use polkadot_sdk::frame_support::traits::WhitelistedStorageKeys;
-            let whitelist = AllPalletsWithSystem::whitelisted_storage_keys();
+            let mut whitelist = AllPalletsWithSystem::whitelisted_storage_keys();
+      // Benchmark-only mode selection is not a production storage access.
+      whitelist.push(crate::configs::staking_config::BENCHMARK_NATIVE_SECURITY_MODE_KEY.to_vec().into());
 
             let mut batches = Vec::<BenchmarkBatch>::new();
             let params = (&config, &whitelist);

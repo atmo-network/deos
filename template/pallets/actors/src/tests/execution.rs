@@ -25,7 +25,7 @@ fn control_invocation_receipts_are_independent_of_actor_fee_exemption() {
             steps.push(make_step(Task::Transfer {
               to: BOB,
               asset: TestAsset::Local(1),
-              amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+              amount: AmountResolution::Percent(Perbill::one()),
             }));
           }
           steps.push(step.clone());
@@ -45,6 +45,11 @@ fn control_invocation_receipts_are_independent_of_actor_fee_exemption() {
             RuntimeOrigin::signed(ALICE),
             actor_id
           ));
+          // Canonical publication serves the Trigger occurrence at B+1, so every attempt round is
+          // driven at block 2 or at the persisted retry `eligible_at` rather than in the trigger
+          // block, and a block-deadline retry is returned to Service through the canonical
+          // deadline frontier instead of the retired legacy waiting drain.
+          frame_system::Pallet::<Test>::set_block_number(2);
           if phase != crate::StepControlPhase::Opening {
             Actors::execute_cycle(Weight::MAX);
             let run =
@@ -53,9 +58,8 @@ fn control_invocation_receipts_are_independent_of_actor_fee_exemption() {
               run.cursor,
               u32::from(phase == crate::StepControlPhase::Running)
             );
-            System::set_block_number(run.eligible_at);
-            let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-            Actors::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter);
+            frame_system::Pallet::<Test>::set_block_number(run.eligible_at);
+            service_canonical_temporal_frontiers(run.eligible_at);
           }
           if result != 0 {
             set_asset_balance(&sovereign, TestAsset::Local(1), 100);
@@ -256,9 +260,9 @@ fn loaded_step_returns_exact_persisted_successor_run() {
         actor_id
       ));
       if advance {
-        Actors::on_initialize(1);
-        run_prepass();
-        Actors::on_idle(1, Weight::MAX);
+        // Canonical publication serves the Trigger occurrence at B+1, so the first ordinary
+        // attempt runs one block later than the manual trigger.
+        run_next_idle(Weight::MAX);
         let run = Actors::actor_run_state(actor_id).expect("first ordinary attempt retains Run");
         System::set_block_number(run.eligible_at);
       }
@@ -276,44 +280,69 @@ fn loaded_step_returns_exact_persisted_successor_run() {
         state.hot.clone(),
         state.contract.clone(),
       );
-      let ticket = Actors::build_actor_step_ticket(
-        actor_id,
-        state.hot.queue_ticket.expect("ordinary successor is Ready"),
-        now,
-        &state.identity,
-        &state.hot,
-        state.run_state.as_ref(),
-        &admission,
-      )
-      .expect("real source ticket");
       let fee = Actors::maximum_current_action_fee(
         ActorType::System,
         &loaded_step.step,
         loaded_step.resources,
       )
       .expect("System fee envelope");
-      let plan = Actors::build_current_step_plan(
+      let mut plan = Actors::build_canonical_current_step_plan(
         actor_id,
         state.identity,
         state.hot,
         state.run_state,
-        state.funding,
         admission,
-        ticket,
         loaded_step,
         fee,
       )
       .expect("source plan is coherent");
+      plan.behavior_observation = crate::BehaviorObservation {
+        precondition: Some(false),
+        action: Some(false),
+        completion: Some(true),
+      };
+      plan.normal_cycle_completion = Some(crate::NormalCycleCompletion::EarlyReturn);
+      plan.clean_cycle_step = crate::CleanCycleStep::Disqualified;
       let corruption_plan = plan.clone();
-      let mut successor_parts = None;
+      let mut successor_run = None;
       let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
       assert_ok!(polkadot_sdk::frame_support::storage::with_transaction(
         || {
-          assert_ok!(Actors::paged_consume_head_at(ticket.ticket));
           let (returned, _, disposition, _, _) =
             Actors::execute_loaded_single_step_core(actor_id, &instance, plan, now, count as u32)
               .unwrap_or_else(|error| panic!("{name}: core failed: {error:?}"));
           assert_eq!(disposition, expected, "{name}");
+          assert_eq!(
+            returned.clean_cycle_step,
+            match expected {
+              AttemptDisposition::Suspended => crate::CleanCycleStep::Neutral,
+              AttemptDisposition::Failed => crate::CleanCycleStep::Disqualified,
+              _ => crate::CleanCycleStep::EconomicSuccess,
+            },
+            "{name}: clean facts belong to this attempt, not the supplied plan"
+          );
+          assert_eq!(
+            returned.normal_cycle_completion,
+            if expected == AttemptDisposition::Completed {
+              Some(crate::NormalCycleCompletion::PlanEnd)
+            } else {
+              None
+            },
+            "{name}: no caller-supplied or historical completion survives"
+          );
+          assert_eq!(
+            returned.behavior_observation,
+            crate::BehaviorObservation {
+              precondition: None,
+              action: match expected {
+                AttemptDisposition::Suspended => None,
+                AttemptDisposition::Failed => Some(false),
+                _ => Some(true),
+              },
+              completion: None,
+            },
+            "{name}: observations belong to this execution, not the caller or cumulative Run",
+          );
           assert_eq!(
             returned.run.as_ref().map(|run| run.cursor),
             cursor,
@@ -327,10 +356,10 @@ fn loaded_step_returns_exact_persisted_successor_run() {
             "{name}: returned authority must be the persisted successor, including terminal None",
           );
           if name == "opening progress" {
-            successor_parts = Some((
-              crate::ActorRunHeads::<Test>::get(actor_id).expect("real successor head"),
-              crate::ActorRunPayloads::<Test>::get(actor_id).expect("real successor payload"),
-            ));
+            successor_run = Some(
+              crate::ActorRunStateStore::<Test>::get(actor_id)
+                .expect("real successor run lives in the canonical store"),
+            );
           }
           polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(
             Ok::<(), DispatchError>(()),
@@ -341,65 +370,60 @@ fn loaded_step_returns_exact_persisted_successor_run() {
         polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
         before
       );
-      if let Some((head, payload)) = successor_parts {
-        for head_only in [true, false] {
-          if head_only {
-            crate::ActorRunHeads::<Test>::insert(actor_id, head.clone());
-          } else {
-            crate::ActorRunPayloads::<Test>::insert(actor_id, &payload);
+      if let Some(run) = successor_run {
+        crate::ActorRunStateStore::<Test>::insert(actor_id, run);
+        assert!(
+          Actors::actor_run_state(actor_id).is_some(),
+          "canonical orphan Run is readable through the semantic accessor"
+        );
+        let corrupt_root =
+          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+        let custody = (
+          asset_balance(&sovereign, TestAsset::Local(1)),
+          asset_balance(&BOB, TestAsset::Local(1)),
+        );
+        assert_ok!(polkadot_sdk::frame_support::storage::with_transaction(
+          || {
+            let events = System::events();
+            let before_core =
+              polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+            let result = Actors::execute_loaded_single_step_core(
+              actor_id,
+              &instance,
+              corruption_plan.clone(),
+              now,
+              count as u32,
+            );
+            assert!(
+              matches!(
+                result,
+                Err(crate::scheduler::AttemptTransactionError::Invariant)
+              ),
+              "Idle orphan partition must reject before effects"
+            );
+            assert_eq!(
+              polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+              before_core
+            );
+            assert_eq!(System::events(), events);
+            assert_eq!(
+              (
+                asset_balance(&sovereign, TestAsset::Local(1)),
+                asset_balance(&BOB, TestAsset::Local(1))
+              ),
+              custody
+            );
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok::<
+              (),
+              DispatchError,
+            >(()))
           }
-          assert!(Actors::actor_run_state(actor_id).is_none());
-          let corrupt_root =
-            polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-          let custody = (
-            asset_balance(&sovereign, TestAsset::Local(1)),
-            asset_balance(&BOB, TestAsset::Local(1)),
-          );
-          assert_ok!(polkadot_sdk::frame_support::storage::with_transaction(
-            || {
-              assert_ok!(Actors::paged_consume_head_at(ticket.ticket));
-              let events = System::events();
-              let before_core =
-                polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-              let result = Actors::execute_loaded_single_step_core(
-                actor_id,
-                &instance,
-                corruption_plan.clone(),
-                now,
-                count as u32,
-              );
-              assert!(
-                matches!(
-                  result,
-                  Err(crate::scheduler::AttemptTransactionError::Invariant)
-                ),
-                "Idle orphan partition must reject before effects; head_only={head_only}"
-              );
-              assert_eq!(
-                polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-                before_core
-              );
-              assert_eq!(System::events(), events);
-              assert_eq!(
-                (
-                  asset_balance(&sovereign, TestAsset::Local(1)),
-                  asset_balance(&BOB, TestAsset::Local(1))
-                ),
-                custody
-              );
-              polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok::<
-                (),
-                DispatchError,
-              >(()))
-            }
-          ));
-          assert_eq!(
-            polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-            corrupt_root
-          );
-          crate::ActorRunHeads::<Test>::remove(actor_id);
-          crate::ActorRunPayloads::<Test>::remove(actor_id);
-        }
+        ));
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+          corrupt_root
+        );
+        crate::ActorRunStateStore::<Test>::remove(actor_id);
       }
       #[cfg(feature = "try-runtime")]
       assert_ok!(Actors::do_try_state());
@@ -411,27 +435,31 @@ fn loaded_step_returns_exact_persisted_successor_run() {
 fn loaded_cancellation_missing_run_is_idle_only_and_never_resurrects_backing() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
-    let mut state = Actors::active_actor_state(actor_id).expect("real suspended authority");
-    let (_, cell) = Actors::actor_control_cell(actor_id).expect("canonical primary");
+    let (mut state, admission, _) = Actors::load_frame_actor_service_state(actor_id)
+      .expect("canonical suspended authority");
     let identity = state.identity.clone();
     let orphan_run = state.run_state.take().expect("Run remains persisted");
     let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
     assert_eq!(Actors::cancel_run_internal_loaded(actor_id, &identity, CancellationReason::Explicit, None,
-      crate::execution::LoadedCancellationContext::RetainedFrame { admission: cell.admission, state }), Err(Error::<Test>::ActorRunInvariant.into()));
+      crate::execution::LoadedCancellationContext::RetainedFrame { admission, state }), Err(Error::<Test>::ActorRunInvariant.into()));
     assert_eq!(polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1), before);
 
     let idle_id = create_system_with(ALICE, manual_schedule(), None, BoundedVec::default());
-    let idle = Actors::active_actor_state(idle_id).expect("real Idle authority");
-    let (_, idle_cell) = Actors::actor_control_cell(idle_id).expect("Idle primary");
+    let (idle, idle_admission, _) = Actors::load_frame_actor_service_state(idle_id)
+      .expect("canonical Idle authority");
     assert!(idle.run_state.is_none());
+    let idle_actor = Actors::load_actor_ref(idle_id).expect("Idle canonical publication exists");
+    let idle = Actors::detach_actor_publication(idle_actor, idle, None)
+      .expect("loaded-finalizer caller releases the original publication before the corruption probe");
     crate::ActorRunStateStore::<Test>::insert(idle_id, orphan_run);
     System::reset_events();
     let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
     assert_eq!(Actors::cancel_run_internal_loaded(idle_id, &idle.identity, CancellationReason::Explicit, None,
-      crate::execution::LoadedCancellationContext::RetainedFrame { admission: idle_cell.admission.clone(), state: idle.clone() }), Ok(false));
+      crate::execution::LoadedCancellationContext::RetainedFrame { admission: idle_admission.clone(), state: idle.clone() }), Ok(false));
     assert_eq!(polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1), before);
-    assert_ok!(Actors::finalize_actor_from_retained_state(idle_id, idle, &idle_cell.admission, CloseReason::OwnerInitiated));
+    assert_ok!(Actors::finalize_actor_from_retained_state(idle_id, idle, &idle_admission, CloseReason::OwnerInitiated));
     assert!(!crate::ActorRunStateStore::<Test>::contains_key(idle_id));
+    assert!(!crate::ActorProcesses::<Test>::contains_key(idle_id));
     assert!(!has_actor_event(|event| matches!(event, Event::CycleCancelled { actor_id: id, .. } | Event::CycleSummary { actor_id: id, .. } if *id == idle_id)));
     #[cfg(feature = "try-runtime")]
     assert_ok!(Actors::do_try_state());
@@ -451,15 +479,12 @@ fn loaded_cancellation_uses_supplied_run_despite_missing_or_stale_backing() {
           run_prepass();
           Actors::on_idle(eligible_at, Weight::MAX);
         }
-        let state = Actors::active_actor_state(actor_id).expect("real suspended authority");
-        let (_, cell) = Actors::actor_control_cell(actor_id).expect("canonical primary");
+        let (state, admission, _) = Actors::load_frame_actor_service_state(actor_id)
+          .expect("canonical suspended authority");
         let identity = state.identity.clone();
         let supplied_run = state.run_state.clone().expect("supplied Run");
         assert_eq!(state.hot.cycle_state, CycleState::Suspended);
-        assert_eq!(state.hot.wakeup_pointer.is_some(), waiting);
-        if consumed {
-          assert_ok!(Actors::remove_primary_control_cell_inner(actor_id));
-        }
+        assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
         if missing {
           crate::ActorRunStateStore::<Test>::remove(actor_id);
         } else {
@@ -468,11 +493,14 @@ fn loaded_cancellation_uses_supplied_run_despite_missing_or_stale_backing() {
           crate::ActorRunStateStore::<Test>::insert(actor_id, stale);
         }
         let context = if consumed {
-          crate::execution::LoadedCancellationContext::ConsumedFrame { admission: cell.admission, state }
+          crate::execution::LoadedCancellationContext::ConsumedFrame { admission, state }
         } else {
-          crate::execution::LoadedCancellationContext::RetainedFrame { admission: cell.admission, state }
+          crate::execution::LoadedCancellationContext::RetainedFrame { admission, state }
         };
         System::reset_events();
+        // A canonically published Actor owns one Run authority: the supplied semantic Run wins and
+        // the persisted store is reconciled to it, so a missing or diverging stored Run backing
+        // never resurrects stale backing or blocks the cancellation.
         assert_eq!(Actors::cancel_run_internal_loaded(actor_id, &identity, CancellationReason::Explicit, None, context), Ok(true));
         assert!(Actors::actor_run_state(actor_id).is_none());
         let successor = Actors::active_actor_state(actor_id).expect("Idle successor is canonical");
@@ -495,65 +523,31 @@ fn current_step_execution_weight(actor_id: ActorId) -> Weight {
 }
 
 #[test]
-fn frozen_cycle_snapshot_dependency_is_closed_over_amounts_tasks_and_preconditions() {
-  assert!(!AmountResolution::Fixed(1u64).requires_frozen_cycle_snapshot());
-  assert!(
-    !AmountResolution::<u64>::PercentageOfCurrent(Perbill::one()).requires_frozen_cycle_snapshot()
-  );
-  assert!(!AmountResolution::<u64>::AllAvailable.requires_frozen_cycle_snapshot());
-  assert!(
-    AmountResolution::<u64>::PercentageAtOpening(Perbill::one()).requires_frozen_cycle_snapshot()
-  );
-  assert!(
-    AmountResolution::<u64>::PercentageOfLastFunding(Perbill::one())
-      .requires_frozen_cycle_snapshot()
-  );
-
+fn current_predicates_and_amounts_require_no_frozen_cycle_snapshot() {
   let mut step = make_step(Task::StopCycle);
   assert!(!step.requires_frozen_cycle_snapshot());
-  step.precondition = timed_all_conditions(
-    ObservationTiming::Opening,
-    vec![Predicate::BlockNumberAbove { threshold: 0 }],
-  );
-  assert!(step.requires_frozen_cycle_snapshot());
+  step.precondition = all_conditions(vec![Predicate::BlockNumberAbove { threshold: 0 }]);
+  assert!(!step.requires_frozen_cycle_snapshot());
 
   let current = StepOf::<Test> {
-    precondition: timed_all_conditions(
-      ObservationTiming::Current,
-      vec![Predicate::BlockNumberAbove { threshold: 0 }],
-    ),
+    precondition: all_conditions(vec![Predicate::BlockNumberAbove { threshold: 0 }]),
     task: Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+      amount: AmountResolution::Percent(Perbill::one()),
     },
     on_error: StepErrorPolicy::AbortCycle,
   };
   assert!(!current.requires_frozen_cycle_snapshot());
-
-  let opening_amount = make_step(Task::Transfer {
-    to: BOB,
-    asset: TestAsset::Native,
-    amount: AmountResolution::PercentageAtOpening(Perbill::one()),
-  });
-  assert!(opening_amount.requires_frozen_cycle_snapshot());
 }
 
 #[test]
 fn every_trigger_family_round_trips_dormant_and_active_lifecycle() {
   new_test_ext().execute_with(|| {
-    set_observation(
-      7,
-      crate::ScalarObservationState::Fresh {
-        value: 50,
-        observed_at: 1,
-      },
-    );
     let triggers = [
       RuntimeTrigger::manual(),
       RuntimeTrigger::address_event(SourceFilter::OwnerOnly, AssetFilter::Any),
-      RuntimeTrigger::observation_change(7),
-      RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
+      RuntimeTrigger::at_time(10),
       RuntimeTrigger::cadenced(10),
     ];
     for (index, trigger) in triggers.into_iter().enumerate() {
@@ -601,9 +595,9 @@ fn every_trigger_family_round_trips_dormant_and_active_lifecycle() {
       ));
       assert!(Actors::actor_hot(actor_id).is_none());
       assert!(Actors::load_actor_contract(actor_id).is_none());
-      assert!(ActorFunding::<Test>::get(actor_id).is_none());
-      assert!(Actors::crossing_membership(actor_id).is_none());
-      assert!(Actors::actor_observation_feeds(actor_id).is_none());
+      assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+        actor_id
+      ));
     }
   });
 }
@@ -646,47 +640,42 @@ fn task_failure_defaults_unknown_errors_to_permanent() {
 }
 
 #[test]
-fn actor_run_schema_round_trips_retry_position_and_typed_snapshot_surfaces() {
+fn actor_run_schema_round_trips_retry_position_without_historical_state() {
   new_test_ext().execute_with(|| {
     let mut contract_steps = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::PercentageAtOpening(Perbill::one()),
-      }),
+      StepOf::<Test> {
+        precondition: all_conditions(vec![Predicate::BalanceAbove {
+          asset: TestAsset::Native,
+          threshold: 50,
+        }]),
+        task: Task::Transfer {
+          to: BOB,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Percent(Perbill::one()),
+        },
+        on_error: StepErrorPolicy::AbortCycle,
+      },
       make_step(Task::Unstake {
         asset: TestAsset::Local(1),
-        shares: AmountResolution::PercentageAtOpening(Perbill::one()),
+        shares: AmountResolution::Percent(Perbill::one()),
       }),
     ])
     .expect("two-step plan fits");
     contract_steps[0].on_error = RETRY_LATER;
     let actor_id = create_system_with(ALICE, percentage_trigger_schedule(), None, contract_steps);
-    let mut opening_snapshot: BoundedBTreeMap<
-      OpeningSurface<TestAsset>,
-      Balance,
-      <Test as crate::Config>::MaxOpeningSnapshotEntries,
-    > = Default::default();
-    opening_snapshot
-      .try_insert(OpeningSurface::PreservableAsset(TestAsset::Native), 100)
-      .expect("asset snapshot fits");
-    opening_snapshot
-      .try_insert(OpeningSurface::StakingShares(TestAsset::Local(1)), 40)
-      .expect("staking snapshot fits");
     let run_state = RuntimeActorRunState {
+      balance_snapshot: None,
       contract_authority: run_contract_authority(actor_id),
       cycle_nonce: 1,
       cursor: 0,
-      opening_predicate_cursor: 0,
       unsuccessful_attempts_at_cursor: 1,
       last_attempt_block: 1,
       last_committed_step_block: None,
       eligible_at: 2,
-      opening_snapshot,
-      opening_predicate_results: Default::default(),
-      funding_snapshot: Default::default(),
       cumulative_outcomes: OutcomeTotals::default(),
-      last_step_outcome: Some(StepOutcome::FundingUnavailable),
+      last_step_outcome: Some(StepOutcome::FundingUnavailable(
+        crate::FundingUnavailableReason::TaskInput,
+      )),
       suspension: Some(SuspensionReason::FundingUnavailable),
     };
     let encoded = run_state.encode();
@@ -696,10 +685,11 @@ fn actor_run_schema_round_trips_retry_position_and_typed_snapshot_surfaces() {
     assert_eq!(decoded.unsuccessful_attempts_at_cursor, 1);
     assert_eq!(decoded.last_attempt_block, 1);
     assert_eq!(decoded.eligible_at, 2);
-    assert_eq!(decoded.opening_snapshot.len(), 2);
     assert_eq!(
       decoded.last_step_outcome,
-      Some(StepOutcome::FundingUnavailable)
+      Some(StepOutcome::FundingUnavailable(
+        crate::FundingUnavailableReason::TaskInput
+      ))
     );
     assert_eq!(
       decoded.suspension,
@@ -758,7 +748,7 @@ fn ordinary_one_attempt_run_keeps_run_state_sparse() {
 }
 
 #[test]
-fn normal_running_progress_persists_one_causal_successor_and_rejects_stale_authority() {
+fn normal_running_progress_persists_one_causal_successor_and_rejects_stale_service_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(
@@ -769,17 +759,14 @@ fn normal_running_progress_persists_one_causal_successor_and_rejects_stale_autho
         .expect("two Steps fit"),
     );
     let running = RuntimeActorRunState {
+      balance_snapshot: None,
       contract_authority: run_contract_authority(actor_id),
       cycle_nonce: 1,
       cursor: 1,
-      opening_predicate_cursor: 0,
       unsuccessful_attempts_at_cursor: 0,
       last_attempt_block: 1,
       last_committed_step_block: Some(1),
       eligible_at: 2,
-      opening_snapshot: Default::default(),
-      opening_predicate_results: Default::default(),
-      funding_snapshot: Default::default(),
       cumulative_outcomes: OutcomeTotals {
         executed_steps: 1,
         committed_effectful_tasks: 0,
@@ -799,6 +786,10 @@ fn normal_running_progress_persists_one_causal_successor_and_rejects_stale_autho
     assert_eq!(stored.eligible_at, running.eligible_at);
     assert_eq!(stored.cumulative_outcomes, running.cumulative_outcomes);
     assert_eq!(
+      stored.contract_authority.pipeline_service_identity,
+      crate::pipeline_service_identity(stored.contract_authority.admission_identity),
+    );
+    assert_eq!(
       Actors::actor_hot(actor_id).map(|hot| hot.cycle_state),
       Some(CycleState::Running)
     );
@@ -811,7 +802,7 @@ fn normal_running_progress_persists_one_causal_successor_and_rejects_stale_autho
         .as_mut()
         .expect("Running state exists")
         .contract_authority
-        .admission_identity[0] ^= 1;
+        .pipeline_service_identity[0] ^= 1;
     });
     assert!(matches!(
       Actors::load_actor_state(actor_id),
@@ -821,7 +812,7 @@ fn normal_running_progress_persists_one_causal_successor_and_rejects_stale_autho
 }
 
 #[test]
-fn running_state_carries_the_exact_opening_predicate_cursor() {
+fn running_state_rechecks_current_predicates_after_progress() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(
@@ -830,18 +821,12 @@ fn running_state_carries_the_exact_opening_predicate_cursor() {
       None,
       BoundedVec::try_from(vec![
         StepOf::<Test> {
-          precondition: timed_all_conditions(
-            ObservationTiming::Opening,
-            vec![Predicate::BlockNumberAbove { threshold: 10 }],
-          ),
+          precondition: all_conditions(vec![Predicate::BlockNumberAbove { threshold: 10 }]),
           task: Task::StopCycle,
           on_error: StepErrorPolicy::AbortCycle,
         },
         StepOf::<Test> {
-          precondition: timed_all_conditions(
-            ObservationTiming::Opening,
-            vec![Predicate::BlockNumberAbove { threshold: 0 }],
-          ),
+          precondition: all_conditions(vec![Predicate::BlockNumberAbove { threshold: 0 }]),
           task: Task::Transfer {
             to: BOB,
             asset: TestAsset::Native,
@@ -858,41 +843,13 @@ fn running_state_carries_the_exact_opening_predicate_cursor() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let run = Actors::actor_run_state(actor_id).expect("Running state persists");
     assert_eq!(run.cursor, 1);
-    assert_eq!(run.opening_predicate_cursor, 1);
-    assert_eq!(
-      run.opening_predicate_results.as_slice(),
-      [Ok(false), Ok(true)]
-    );
     #[cfg(feature = "try-runtime")]
-    {
-      assert_ok!(Actors::do_try_state());
-      for shifted_cursor in [0, 2] {
-        ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
-          maybe
-            .as_mut()
-            .expect("Running authority")
-            .opening_predicate_cursor = shifted_cursor;
-        });
-        assert!(
-          Actors::do_try_state().is_err(),
-          "shifted Opening cursor {shifted_cursor} was accepted"
-        );
-      }
-      ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
-        maybe
-          .as_mut()
-          .expect("Running authority")
-          .opening_predicate_cursor = 1;
-      });
-      assert_ok!(Actors::do_try_state());
-    }
+    assert_ok!(Actors::do_try_state());
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    Actors::on_idle(2, Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(asset_balance(&BOB, TestAsset::Native), before + 5);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(
@@ -903,7 +860,7 @@ fn running_state_carries_the_exact_opening_predicate_cursor() {
 }
 
 #[test]
-fn signal_during_running_is_retained_for_a_later_cycle() {
+fn manual_signal_during_running_is_ignored_without_a_future_cycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let mut steps = inert_contract_steps();
@@ -915,50 +872,26 @@ fn signal_during_running_is_retained_for_a_later_cycle() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    Actors::on_idle(1, Weight::MAX);
-    assert_eq!(
-      Actors::actor_hot(actor_id).map(|hot| hot.cycle_state),
-      Some(CycleState::Running)
-    );
-    assert!(!Actors::pending_signal(actor_id));
+    run_next_idle(Weight::MAX);
+    let run_before = Actors::actor_run_state(actor_id).expect("Cycle is Running");
 
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert!(Actors::pending_signal(actor_id));
-    Actors::on_idle(1, Weight::MAX);
+    assert!(!Actors::pending_signal(actor_id));
     assert_eq!(
-      Actors::actor_hot(actor_id).map(|hot| hot.cycle_state),
-      Some(CycleState::Running),
-      "the successor cannot execute in the commit block"
+      Actors::actor_run_state(actor_id)
+        .expect("ignored signal preserves the current Run")
+        .encode(),
+      run_before.encode()
     );
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    Actors::on_idle(2, Weight::MAX);
-    let after_first_cycle = Actors::active_actor_view(actor_id).expect("Actor remains active");
-    assert_eq!(after_first_cycle.cycle_nonce, 1);
-    assert_eq!(after_first_cycle.cycle_state, CycleState::Idle);
-    assert!(after_first_cycle.pending_signal);
-
-    Actors::on_idle(2, Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
-      Some(1),
-      "the retained signal cannot open another cycle in the completion block"
-    );
-    frame_system::Pallet::<Test>::set_block_number(3);
-    Actors::on_initialize(3);
-    Actors::on_idle(3, Weight::MAX);
-    let next_cycle = Actors::active_actor_view(actor_id).expect("next Cycle remains active");
-    assert_eq!(next_cycle.cycle_nonce, 1);
-    assert_eq!(next_cycle.cycle_state, CycleState::Running);
-    assert!(!next_cycle.pending_signal);
-    assert_eq!(
-      Actors::actor_run_state(actor_id).map(|run| run.cycle_nonce),
-      Some(2)
-    );
+    run_next_idle(Weight::MAX);
+    let completed = Actors::active_actor_view(actor_id).expect("Actor remains active");
+    assert_eq!(completed.cycle_nonce, 1);
+    assert_eq!(completed.cycle_state, CycleState::Idle);
+    assert!(!completed.pending_signal);
   });
 }
 
@@ -970,18 +903,20 @@ fn run_attempt_missing_state_fails_without_panicking_or_mutating() {
       .expect("coherent Actor run exists")
       .eligible_at;
     frame_system::Pallet::<Test>::set_block_number(due);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(due, &mut meter);
-    assert_eq!(
-      Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-      Some(actor_id)
+    Actors::on_initialize(due);
+    assert!(
+      crate::ActorProcesses::<Test>::contains_key(actor_id),
+      "the suspended retry owns a canonical process residence"
     );
     ActorRunStateStore::<Test>::remove(actor_id);
     let hot_before = Actors::actor_hot(actor_id).expect("hot state remains");
     System::reset_events();
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
 
-    Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
+    // The canonical Service round must fail closed when the persisted Run backing is missing
+    // instead of panicking or partially mutating the ring, semantic owner, or cycle meter.
+    let mut meter = WeightMeter::with_limit(Weight::MAX);
+    assert!(Actors::service_canonical_round_head(&mut meter, due).is_err());
 
     assert_eq!(Actors::actor_hot(actor_id), Some(hot_before));
     assert!(System::events().is_empty());
@@ -1002,19 +937,18 @@ fn actor_run_try_state_rejects_marker_and_cursor_drift() {
     ActorRunStateStore::<Test>::insert(
       actor_id,
       RuntimeActorRunState {
+        balance_snapshot: None,
         contract_authority: run_contract_authority(actor_id),
         cycle_nonce: 1,
         cursor: 0,
-        opening_predicate_cursor: 0,
         unsuccessful_attempts_at_cursor: 1,
         last_attempt_block: 1,
         last_committed_step_block: None,
         eligible_at: 2,
-        opening_snapshot: Default::default(),
-        opening_predicate_results: Default::default(),
-        funding_snapshot: Default::default(),
         cumulative_outcomes: Default::default(),
-        last_step_outcome: Some(StepOutcome::FundingUnavailable),
+        last_step_outcome: Some(StepOutcome::FundingUnavailable(
+          crate::FundingUnavailableReason::TaskInput,
+        )),
         suspension: Some(SuspensionReason::FundingUnavailable),
       },
     );
@@ -1036,22 +970,6 @@ fn actor_run_try_state_rejects_marker_and_cursor_drift() {
       maybe.as_mut().expect("Actor run exists").eligible_at = 2;
     });
     assert_ok!(crate::Pallet::<Test>::do_try_state());
-    ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
-      maybe
-        .as_mut()
-        .expect("Actor run exists")
-        .opening_snapshot
-        .try_insert(OpeningSurface::PreservableAsset(TestAsset::Native), 10)
-        .expect("snapshot entry fits");
-    });
-    assert!(crate::Pallet::<Test>::do_try_state().is_err());
-    ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
-      maybe
-        .as_mut()
-        .expect("Actor run exists")
-        .opening_snapshot
-        .clear();
-    });
     ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
       maybe.as_mut().expect("Actor run exists").cursor = 1;
     });
@@ -1123,15 +1041,14 @@ fn generated_predicate_weight_scales_with_bounded_step_visits() {
 fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_user_with(
+    let actor_id = create_system_with(
       ALICE,
-      Mutability::Mutable,
       manual_schedule(),
       None,
       transfer_contract_steps(BOB, 10),
     );
     let initial = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(initial.actor_class.actor_type(), ActorType::User);
+    assert_eq!(initial.actor_class.actor_type(), ActorType::System);
     assert!(matches!(initial.trigger, Trigger::Manual));
     assert_eq!(initial.lifecycle, ActiveLifecycle::Active);
     assert!(!initial.pending_signal);
@@ -1161,9 +1078,9 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
       trigger: Trigger::cadenced(3),
       cooldown_blocks: 0,
     };
-    frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id));
     frame_system::Pallet::<Test>::set_block_number(3);
+    assert_ok!(Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id));
+    frame_system::Pallet::<Test>::set_block_number(4);
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
@@ -1176,6 +1093,64 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
       after_update.trigger,
       Trigger::Cadenced { every_ticks: 3 }
     ));
+  });
+}
+
+#[test]
+fn canonical_idle_contract_update_republishes_generation_bound_residence() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 10),
+    );
+    let record_before = match crate::ActorSemanticStates::<Test>::get(actor_id) {
+      Some(crate::ActorSemanticState::Active(record)) => record,
+      _ => panic!("canonical semantic record"),
+    };
+    let process_before =
+      crate::ActorProcesses::<Test>::get(actor_id).expect("canonical process published");
+    let timer_schedule = Schedule {
+      trigger: Trigger::cadenced(3),
+      cooldown_blocks: 0,
+    };
+    frame_system::Pallet::<Test>::set_block_number(2);
+    assert_ok!(update_contract_partial!(
+      RuntimeOrigin::signed(ALICE),
+      actor_id,
+      timer_schedule,
+      None,
+    ));
+    let record_after = match crate::ActorSemanticStates::<Test>::get(actor_id) {
+      Some(crate::ActorSemanticState::Active(record)) => record,
+      _ => panic!("canonical semantic record after update"),
+    };
+    let process_after =
+      crate::ActorProcesses::<Test>::get(actor_id).expect("process republished after update");
+    assert_eq!(
+      record_after.generation,
+      record_before.generation + 1,
+      "an authorized Contract replacement rotates the semantic generation"
+    );
+    assert_eq!(process_after.generation, record_after.generation);
+    assert_ne!(process_after.generation, process_before.generation);
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(
+      actor_id
+    ));
+    let after = Actors::active_actor_view(actor_id).expect("canonical active Actor after update");
+    assert_eq!(after.cooldown_blocks, 0);
+    assert!(matches!(
+      after.trigger,
+      Trigger::Cadenced { every_ticks: 3 }
+    ));
+    assert!(
+      crate::TriggerDeadlineHandles::<Test>::contains_key(actor_id),
+      "the replaced Cadenced Contract owns exactly one canonical temporal deadline"
+    );
   });
 }
 
@@ -1211,7 +1186,7 @@ fn authored_abort_preserves_earlier_provisional_task_commit() {
       actor_id
     ));
 
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
 
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(
@@ -1267,7 +1242,9 @@ fn frame_only_abort_cycle_removes_transaction_local_scalar_bridges() {
       } if *id == actor_id
     )));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::load_frame_control_authority(actor_id).is_some());
+    // The retained Idle resident is canonical; no legacy scalar frame authority is recreated.
+    assert!(Actors::active_actor_state(actor_id).is_some());
+    assert!(Actors::load_frame_control_authority(actor_id).is_none());
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -1301,7 +1278,7 @@ fn frame_only_abort_cycle_closes_at_failure_threshold_without_scalar_hot() {
     ));
     set_temporary_dex_failure(true);
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
@@ -1350,7 +1327,7 @@ fn frame_only_running_abort_cycle_failure_never_materializes_scalar_hot() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("Running prefix")
@@ -1358,19 +1335,17 @@ fn frame_only_running_abort_cycle_failure_never_materializes_scalar_hot() {
       1
     );
     set_temporary_dex_failure(true);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::on_initialize(3);
     run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    Actors::on_idle(3, Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
-    let authority = Actors::load_frame_control_authority(actor_id).expect("Idle authority");
-    assert_eq!(authority.2.cycle_state, CycleState::Idle);
-    assert_eq!(authority.2.unsuccessful_attempt_streak, 1);
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    let authority = Actors::active_actor_state(actor_id).expect("canonical Idle authority remains");
+    assert_eq!(authority.hot.cycle_state, CycleState::Idle);
+    assert_eq!(authority.hot.unsuccessful_attempt_streak, 1);
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
       event,
@@ -1387,113 +1362,6 @@ fn frame_only_running_abort_cycle_failure_never_materializes_scalar_hot() {
     )));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn run_control_placement_failures_roll_back_exactly() {
-  fn exhaust_ticket_namespace(actor_id: ActorId) {
-    let (location, cell) = Actors::actor_control_cell(actor_id).expect("suspended primary");
-    let crate::ActorControlLocation::Ready { ticket } = location else {
-      panic!("retry fixture retains its Ready ticket");
-    };
-    assert_eq!(Actors::queue_occupancy(), 1);
-    let old_page =
-      crate::ActorReadyFrameChunks::<Test>::take(ticket / 32).expect("sole Ready page");
-    assert_eq!(old_page.iter().flatten().count(), 1);
-    let final_ticket = u64::MAX - 1;
-    let mut final_page = old_page;
-    *final_page
-      .get_mut((ticket % 32) as usize)
-      .expect("old slot") = None;
-    *final_page
-      .get_mut((final_ticket % 32) as usize)
-      .expect("final slot") = Some(cell);
-    crate::ActorReadyFrameChunks::<Test>::insert(final_ticket / 32, final_page);
-    crate::ActorControlLocators::<Test>::insert(
-      actor_id,
-      crate::ActorControlLocation::Ready {
-        ticket: final_ticket,
-      },
-    );
-    crate::ActorReadyHead::<Test>::put(final_ticket);
-    crate::ActorReadyTail::<Test>::put(u64::MAX);
-    assert!(Actors::active_actor_view(actor_id).is_some());
-  }
-
-  new_test_ext().execute_with(|| {
-    let actor_id = create_suspended_system_retry(1);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    exhaust_ticket_namespace(actor_id);
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    let events_before = System::events();
-
-    assert_noop!(
-      update_contract_partial!(
-        RuntimeOrigin::root(),
-        actor_id,
-        FundingSourcePolicy::AnyVerifiedIngress,
-      ),
-      Error::<Test>::QueueTicketExhausted
-    );
-    assert!(Actors::actor_run_state(actor_id).is_some());
-    assert_eq!(System::events(), events_before);
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
-    );
-  });
-
-  new_test_ext().execute_with(|| {
-    let actor_id = create_suspended_system_retry(1);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    exhaust_ticket_namespace(actor_id);
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    let events_before = System::events();
-
-    assert_noop!(
-      update_contract_partial!(
-        RuntimeOrigin::root(),
-        actor_id,
-        inert_contract_steps(),
-        crate::CompletionPolicy::Persistent,
-      ),
-      Error::<Test>::QueueTicketExhausted
-    );
-    assert!(Actors::actor_run_state(actor_id).is_some());
-    assert_eq!(System::events(), events_before);
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
-    );
-  });
-
-  new_test_ext().execute_with(|| {
-    let actor_id = create_suspended_system_retry(1);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    exhaust_ticket_namespace(actor_id);
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    let events_before = System::events();
-
-    assert_noop!(
-      Actors::cancel_run(RuntimeOrigin::root(), actor_id),
-      Error::<Test>::QueueTicketExhausted
-    );
-    assert!(Actors::actor_run_state(actor_id).is_some());
-    assert_eq!(System::events(), events_before);
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
-    );
   });
 }
 
@@ -1709,8 +1577,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_without_tasks()
     fund_native(actor_id, 100);
     let charlie_before = native_balance(&CHARLIE);
     for cycle in 1..=threshold {
-      frame_system::Pallet::<Test>::set_block_number(u64::from(cycle) + 1);
-      run_idle(Weight::MAX);
+      run_scheduled_cadence_occurrence(actor_id);
       if cycle < threshold {
         assert_eq!(
           Actors::active_actor_view(actor_id)
@@ -1765,7 +1632,7 @@ fn execute_cycle_respects_max_executions_per_block() {
     }
     frame_system::Pallet::<Test>::set_block_number(2);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    Actors::execute_cycle(Weight::MAX);
     let started_block_2 = frame_system::Pallet::<Test>::events()
       .iter()
       .filter(|record| {
@@ -1778,7 +1645,7 @@ fn execute_cycle_respects_max_executions_per_block() {
     assert_eq!(started_block_2, max_exec);
     frame_system::Pallet::<Test>::set_block_number(3);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    Actors::execute_cycle(Weight::MAX);
     let started_block_3 = frame_system::Pallet::<Test>::events()
       .iter()
       .filter(|record| {
@@ -1832,12 +1699,7 @@ fn retry_later_is_mutable_only_at_creation_and_update() {
       transfer_contract_steps(ALICE, 1),
     );
     assert_noop!(
-      update_contract_partial!(
-        RuntimeOrigin::signed(BOB),
-        immutable_id,
-        retry_plan,
-        crate::CompletionPolicy::Persistent,
-      ),
+      update_contract_partial!(RuntimeOrigin::signed(BOB), immutable_id, retry_plan, None,),
       Error::<Test>::RetryLaterNotAllowedForImmutableActor
     );
   });
@@ -1957,7 +1819,7 @@ fn frame_only_running_swap_retry_and_resume_never_materialize_scalar_hot() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("Running prefix")
@@ -1965,35 +1827,24 @@ fn frame_only_running_swap_retry_and_resume_never_materialize_scalar_hot() {
       1
     );
     set_temporary_dex_failure(true);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let retry = Actors::actor_run_state(actor_id).expect("Running failure suspends");
     assert_eq!(retry.cursor, 1);
-    assert_eq!(retry.eligible_at, 3);
+    assert_eq!(retry.eligible_at, 4);
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(3);
-    Actors::on_initialize(3);
-    run_prepass();
-    Actors::on_idle(3, Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("resumed continuation")
         .cursor,
       2
     );
-    frame_system::Pallet::<Test>::set_block_number(4);
-    Actors::on_initialize(4);
-    run_prepass();
-    Actors::on_idle(4, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
       event,
@@ -2037,22 +1888,20 @@ fn frame_only_opening_continue_next_step_failure_never_materializes_scalar_hot()
     ));
     set_temporary_dex_failure(true);
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let continuation = Actors::actor_run_state(actor_id).expect("failure advances cursor");
     assert_eq!(continuation.cursor, 1);
     assert!(continuation.suspension.is_none());
     assert_eq!(continuation.cumulative_outcomes.failed_steps, 1);
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::on_initialize(3);
     run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    Actors::on_idle(3, Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
       event,
@@ -2094,19 +1943,21 @@ fn frame_only_stake_continue_next_step_rolls_back_without_scalar_hot() {
     ));
     set_fail_staking_after_burn(true);
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let continuation = Actors::actor_run_state(actor_id).expect("failure advances cursor");
     assert_eq!(continuation.cursor, 1);
     assert_eq!(continuation.cumulative_outcomes.failed_steps, 1);
     assert_eq!(native_balance(&actor), 120);
     assert_eq!(staked_balance(actor, asset), 0);
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::on_initialize(3);
     run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    Actors::on_idle(3, Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -2148,14 +1999,14 @@ fn frame_only_stake_retry_later_permanent_failure_terminates_without_scalar_hot(
     ));
     set_fail_staking_after_burn(true);
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(native_balance(&actor), 120);
     assert_eq!(staked_balance(actor, asset), 0);
-    let authority = Actors::load_frame_control_authority(actor_id).expect("Idle authority");
-    assert_eq!(authority.2.cycle_state, CycleState::Idle);
-    assert_eq!(authority.2.unsuccessful_attempt_streak, 1);
+    let authority = Actors::active_actor_state(actor_id).expect("canonical Idle authority remains");
+    assert_eq!(authority.hot.cycle_state, CycleState::Idle);
+    assert_eq!(authority.hot.unsuccessful_attempt_streak, 1);
     assert!(has_actor_event(|event| matches!(
       event,
       Event::CycleSummary {
@@ -2195,15 +2046,12 @@ fn frame_only_retry_attempt_exhaustion_closes_from_consumed_authority() {
     ));
     set_temporary_dex_failure(true);
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert!(matches!(
       Actors::active_actor_view(actor_id).map(|instance| instance.cycle_state),
       Some(CycleState::Suspended)
     ));
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
@@ -2253,7 +2101,7 @@ fn frame_only_running_continue_next_step_failure_never_materializes_scalar_hot()
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("Running prefix")
@@ -2261,25 +2109,23 @@ fn frame_only_running_continue_next_step_failure_never_materializes_scalar_hot()
       1
     );
     set_temporary_dex_failure(true);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::on_initialize(3);
     run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    Actors::on_idle(3, Weight::MAX);
     let continuation = Actors::actor_run_state(actor_id).expect("failure advances cursor");
     assert_eq!(continuation.cursor, 2);
     assert!(continuation.suspension.is_none());
     assert_eq!(continuation.cumulative_outcomes.failed_steps, 1);
 
-    frame_system::Pallet::<Test>::set_block_number(3);
-    Actors::on_initialize(3);
+    frame_system::Pallet::<Test>::set_block_number(4);
+    Actors::on_initialize(4);
     run_prepass();
-    Actors::on_idle(3, Weight::MAX);
+    Actors::on_idle(4, Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
       event,
@@ -2334,7 +2180,8 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let first = Actors::active_actor_view(actor_id).expect("suspended actor remains");
     let first_continuation = Actors::actor_run_state(actor_id).expect("Actor run exists");
@@ -2344,8 +2191,8 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     assert_eq!(first_continuation.cycle_nonce, 1);
     assert_eq!(first_continuation.cursor, 1);
     assert_eq!(first_continuation.unsuccessful_attempts_at_cursor, 1);
-    assert_eq!(first_continuation.last_attempt_block, 2);
-    assert_eq!(first_continuation.eligible_at, 3);
+    assert_eq!(first_continuation.last_attempt_block, 3);
+    assert_eq!(first_continuation.eligible_at, 4);
     assert!(matches!(
       first_continuation.last_step_outcome,
       Some(StepOutcome::Failed(TaskFailure {
@@ -2359,10 +2206,7 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     );
     assert_eq!(first_continuation.cumulative_outcomes.executed_steps, 1);
     assert_eq!(first_continuation.cumulative_outcomes.failed_steps, 1);
-    assert!(crate::ActorRunHeads::<Test>::contains_key(actor_id));
-    assert!(crate::ActorRunPayloads::<Test>::contains_key(actor_id));
-    assert!(first.queue_ticket.is_some());
-    assert!(first.wakeup_pointer.is_none());
+    assert!(crate::ActorRunStateStore::<Test>::contains_key(actor_id));
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before);
     assert_eq!(native_balance(&first.sovereign_account), 90);
@@ -2372,8 +2216,6 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
       matches!(event, Event::CycleSummary { actor_id: id, .. } if *id == actor_id)
     }));
 
-    frame_system::Pallet::<Test>::set_block_number(first_continuation.eligible_at);
-    run_idle(Weight::MAX);
     run_next_idle(Weight::MAX);
     let second_continuation = Actors::actor_run_state(actor_id).expect("Actor run remains");
     assert_eq!(second_continuation.cycle_nonce, 1);
@@ -2383,19 +2225,12 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     assert_eq!(second_continuation.eligible_at, 6);
     assert_eq!(second_continuation.cumulative_outcomes.executed_steps, 1);
     assert_eq!(second_continuation.cumulative_outcomes.failed_steps, 2);
-    let second = Actors::active_actor_view(actor_id).expect("long retry Actor remains");
-    assert!(crate::ActorRunHeads::<Test>::contains_key(actor_id));
-    assert!(crate::ActorRunPayloads::<Test>::contains_key(actor_id));
-    assert!(second.queue_ticket.is_none());
-    assert!(second.wakeup_pointer.is_some());
+    assert!(crate::ActorRunStateStore::<Test>::contains_key(actor_id));
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before);
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(second_continuation.eligible_at);
-    Actors::on_initialize(second_continuation.eligible_at);
-    run_prepass();
-    run_idle(Weight::MAX);
+    run_canonical_reentry_at(second_continuation.eligible_at, Weight::MAX);
     run_next_idle(Weight::MAX);
 
     let completed = Actors::active_actor_view(actor_id).expect("completed actor remains");
@@ -2403,10 +2238,7 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     assert_eq!(completed.cycle_nonce, 1);
     assert_eq!(completed.unsuccessful_attempt_streak, 0);
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(!crate::ActorRunHeads::<Test>::contains_key(actor_id));
-    assert!(!crate::ActorRunPayloads::<Test>::contains_key(actor_id));
-    assert!(completed.queue_ticket.is_none());
-    assert!(completed.wakeup_pointer.is_none());
+    assert!(!crate::ActorRunStateStore::<Test>::contains_key(actor_id));
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before + 5);
     let starts = frame_system::Pallet::<Test>::events()
@@ -2434,62 +2266,348 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
 }
 
 #[test]
+fn current_step_behavior_observations_follow_whole_checks_and_logical_actions() {
+  for has_tail in [false, true] {
+    exercise_current_step_behavior_observations(has_tail);
+  }
+}
+
+#[test]
+fn normal_cycle_completion_zero_step_survives_nonce_terminal_and_candidate_rollback() {
+  for auto_close in [false, true] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let mut contract = system_active_contract(manual_schedule(), None, BoundedVec::default())
+        .expect("zero-Step Contract");
+      contract.auto_close_at_cycle_nonce = auto_close.then_some(1);
+      let actor_id = Actors::next_actor_id();
+      assert_ok!(Actors::create_system_actor(
+        RuntimeOrigin::root(),
+        ALICE,
+        Mutability::Mutable,
+        Some(contract)
+      ));
+      age_fixture_control_clock(actor_id);
+      assert_ok!(Actors::manual_trigger(
+        RuntimeOrigin::signed(ALICE),
+        actor_id
+      ));
+      System::set_block_number(2);
+      let state = Actors::active_actor_state(actor_id).expect("active zero-Step Actor");
+      let crate::ActorSemanticState::Active(semantic) =
+        crate::ActorSemanticStates::<Test>::get(actor_id).unwrap()
+      else {
+        panic!("active canonical authority");
+      };
+      let actor = crate::ActorRef {
+        actor_id,
+        generation: semantic.generation,
+      };
+      let kind = crate::ServiceNodes::<Test>::get(actor_id).unwrap().kind;
+      let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      assert_ok!(polkadot_sdk::frame_support::storage::with_transaction(
+        || {
+          Actors::begin_service_round(2).expect("one canonical Service round");
+          let evidence =
+            Actors::execute_zero_step_on_service(actor, kind, state, &semantic.admission, 2)
+              .expect("real zero-Step service transition");
+          assert_eq!(
+            evidence.attempt.as_ref().unwrap().normal_cycle_completion,
+            Some(crate::NormalCycleCompletion::PlanEnd)
+          );
+          assert_eq!(
+            evidence.attempt.as_ref().unwrap().clean_cycle_step,
+            crate::CleanCycleStep::Neutral
+          );
+          assert_eq!(
+            crate::CleanCycleCandidate::default()
+              .completion(evidence.attempt.as_ref().unwrap().normal_cycle_completion),
+            Some(false)
+          );
+          assert_eq!(Actors::actor_identity(actor_id).is_none(), auto_close);
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(
+            Ok::<(), DispatchError>(()),
+          )
+        }
+      ));
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        before
+      );
+    });
+  }
+}
+
+fn exercise_current_step_behavior_observations(has_tail: bool) {
+  for source in [CycleState::Idle, CycleState::Running, CycleState::Suspended] {
+    for stop in [false, true] {
+      if stop && source == CycleState::Suspended {
+        continue;
+      }
+      for check in [None, Some(Ok(true)), Some(Ok(false)), Some(Err(()))] {
+        new_test_ext().execute_with(|| {
+          System::set_block_number(1);
+          set_observation(
+            1,
+            crate::ScalarObservationState::Fresh {
+              value: 50,
+              observed_at: 1,
+            },
+          );
+          let target = StepOf::<Test> {
+            precondition: check.and_then(|_| {
+              all_conditions(vec![
+                Predicate::ObservationAbove {
+                  feed: 1,
+                  threshold: 10,
+                  max_age_blocks: 100,
+                },
+                Predicate::BlockNumberAbove { threshold: 0 },
+              ])
+            }),
+            task: if stop {
+              Task::StopCycle
+            } else {
+              Task::Transfer {
+                to: BOB,
+                asset: TestAsset::Local(2),
+                amount: AmountResolution::Fixed(1),
+              }
+            },
+            on_error: if source == CycleState::Suspended {
+              StepErrorPolicy::RetryLater { max_attempts: 3 }
+            } else {
+              StepErrorPolicy::ContinueNextStep
+            },
+          };
+          let mut steps = vec![];
+          if source == CycleState::Running {
+            steps.push(make_step(Task::Transfer {
+              to: CHARLIE,
+              asset: TestAsset::Native,
+              amount: AmountResolution::Fixed(1),
+            }));
+          }
+          steps.push(target);
+          if has_tail {
+            steps.push(make_step(Task::StopCycle));
+          }
+          let count = steps.len() as u32;
+          let actor_id = create_system_with(
+            ALICE,
+            manual_schedule(),
+            None,
+            BoundedVec::try_from(steps).expect("bounded observation Contract"),
+          );
+          fund_native(actor_id, 100);
+          assert_ok!(Actors::manual_trigger(
+            RuntimeOrigin::signed(ALICE),
+            actor_id
+          ));
+          if source != CycleState::Idle {
+            run_next_idle(Weight::MAX);
+            let run = Actors::actor_run_state(actor_id).expect("real predecessor retains Run");
+            System::set_block_number(run.eligible_at);
+          } else {
+            System::set_block_number(2);
+          }
+          let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
+            .expect("canonical current Step authority");
+          assert_eq!(state.hot.cycle_state, source);
+          let sovereign = state.identity.sovereign_account;
+          set_asset_balance(&sovereign, TestAsset::Local(2), 10);
+          set_observation(
+            1,
+            match check {
+              Some(Err(())) => crate::ScalarObservationState::Fresh {
+                value: 50,
+                observed_at: System::block_number() + 1,
+              },
+              _ => crate::ScalarObservationState::Fresh {
+                value: if check == Some(Ok(false)) { 0 } else { 50 },
+                observed_at: System::block_number(),
+              },
+            },
+          );
+          let instance = Actors::derive_active_actor_view(
+            state.identity.clone(),
+            state.hot.clone(),
+            state.contract.clone(),
+          );
+          let fee = Actors::maximum_current_action_fee(
+            ActorType::System,
+            &loaded_step.step,
+            loaded_step.resources,
+          )
+          .expect("System fee envelope");
+          let plan = Actors::build_canonical_current_step_plan(
+            actor_id,
+            state.identity,
+            state.hot,
+            state.run_state,
+            admission,
+            loaded_step,
+            fee,
+          )
+          .expect("coherent current Step plan");
+          let before =
+            polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+          assert_ok!(polkadot_sdk::frame_support::storage::with_transaction(
+            || {
+              let (returned, _, _, _, _) = Actors::execute_loaded_single_step_core(
+                actor_id,
+                &instance,
+                plan,
+                System::block_number(),
+                count,
+              )
+              .expect("real Step candidate");
+              assert_eq!(
+                returned.clean_cycle_step,
+                if check == Some(Err(())) || !stop && check == Some(Ok(false)) {
+                  crate::CleanCycleStep::Disqualified
+                } else if !stop {
+                  crate::CleanCycleStep::EconomicSuccess
+                } else {
+                  crate::CleanCycleStep::Neutral
+                },
+                "{source:?}, StopCycle={stop}, check={check:?}, tail={has_tail}"
+              );
+              assert_eq!(
+                returned.normal_cycle_completion,
+                if !has_tail && !(source == CycleState::Suspended && check == Some(Err(()))) {
+                  Some(crate::NormalCycleCompletion::PlanEnd)
+                } else if has_tail && stop && (check.is_none() || check == Some(Ok(true))) {
+                  Some(crate::NormalCycleCompletion::EarlyReturn)
+                } else {
+                  None
+                },
+                "{source:?}, StopCycle={stop}, check={check:?}, tail={has_tail}"
+              );
+              assert_eq!(
+                returned.behavior_observation,
+                crate::BehaviorObservation {
+                  precondition: check.and_then(Result::ok),
+                  action: if !stop && (check.is_none() || check == Some(Ok(true))) {
+                    Some(true)
+                  } else {
+                    None
+                  },
+                  completion: None,
+                },
+                "{source:?}, StopCycle={stop}, check={check:?}"
+              );
+              polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok::<
+                (),
+                DispatchError,
+              >(()))
+            }
+          ));
+          assert_eq!(
+            polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+            before
+          );
+        });
+      }
+    }
+  }
+}
+
+#[test]
 fn stop_cycle_commits_prefix_and_completes_before_unreachable_suffix() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let contract_steps = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(10),
-      }),
-      StepOf::<Test> {
-        precondition: None,
-        task: Task::StopCycle,
-        on_error: RETRY_LATER,
-      },
-      make_step(Task::Transfer {
-        to: CHARLIE,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(5),
-      }),
-    ])
-    .expect("three steps fit");
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
-    fund_native(actor_id, 100);
-    let bob_before = native_balance(&BOB);
-    let charlie_before = native_balance(&CHARLIE);
+  for actor_type in [ActorType::User, ActorType::System] {
+    new_test_ext().execute_with(|| {
+      frame_system::Pallet::<Test>::set_block_number(1);
+      let contract_steps = BoundedVec::try_from(vec![
+        make_step(Task::Transfer {
+          to: BOB,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Fixed(10),
+        }),
+        StepOf::<Test> {
+          precondition: None,
+          task: Task::StopCycle,
+          on_error: RETRY_LATER,
+        },
+        make_step(Task::Transfer {
+          to: CHARLIE,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Fixed(5),
+        }),
+      ])
+      .expect("three steps fit");
+      let actor_id = match actor_type {
+        ActorType::User => create_user_with(
+          ALICE,
+          Mutability::Mutable,
+          manual_schedule(),
+          None,
+          contract_steps,
+        ),
+        ActorType::System => create_system_with(ALICE, manual_schedule(), None, contract_steps),
+      };
+      let head = crate::ActorContractHeads::<Test>::get(actor_id).unwrap();
+      let expected_pipeline = if actor_type == ActorType::User {
+        200
+      } else {
+        0
+      };
+      assert_eq!(
+        head
+          .header
+          .pipeline_machine_envelope
+          .pipeline_machine_fee_upper,
+        expected_pipeline
+      );
+      assert_eq!(head.header.step_count, 3);
+      assert_eq!(Actors::active_actor_view(actor_id).unwrap().steps.len(), 3);
+      let hold = Actors::actor_state_hold(actor_id);
+      fund_native(actor_id, 100_000);
+      let bob_before = native_balance(&BOB);
+      let charlie_before = native_balance(&CHARLIE);
 
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle(Weight::MAX);
+      assert_ok!(Actors::manual_trigger(
+        RuntimeOrigin::signed(ALICE),
+        actor_id
+      ));
+      clear_fee_collections();
+      run_next_idle_to_completion(actor_id);
 
-    let actor = Actors::active_actor_view(actor_id).expect("actor remains active");
-    assert_eq!(actor.cycle_state, CycleState::Idle);
-    assert_eq!(actor.cycle_nonce, 1);
-    assert_eq!(actor.unsuccessful_attempt_streak, 0);
-    assert!(Actors::actor_run_state(actor_id).is_none());
-    assert_eq!(native_balance(&BOB), bob_before + 10);
-    assert_eq!(native_balance(&CHARLIE), charlie_before);
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::CycleStopped {
-        actor_id: id,
-        cycle_nonce: 1,
-        step_index: 1,
-      } if *id == actor_id
-    )));
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::CycleSummary {
-        actor_id: id,
-        outcomes: OutcomeTotals { executed_steps: 2, failed_steps: 0, .. },
-        ..
-      } if *id == actor_id
-    )));
-  });
+      assert_eq!(
+        fee_collections(),
+        if actor_type == ActorType::User {
+          vec![200, 100]
+        } else {
+          vec![]
+        }
+      );
+      assert_eq!(Actors::actor_state_hold(actor_id), hold);
+
+      let actor = Actors::active_actor_view(actor_id).expect("actor remains active");
+      assert_eq!(actor.cycle_state, CycleState::Idle);
+      assert_eq!(actor.cycle_nonce, 1);
+      assert_eq!(actor.unsuccessful_attempt_streak, 0);
+      assert!(Actors::actor_run_state(actor_id).is_none());
+      assert_eq!(native_balance(&BOB), bob_before + 10);
+      assert_eq!(native_balance(&CHARLIE), charlie_before);
+      assert!(has_actor_event(|event| matches!(
+        event,
+        Event::CycleStopped {
+          actor_id: id,
+          cycle_nonce: 1,
+          step_index: 1,
+        } if *id == actor_id
+      )));
+      assert!(has_actor_event(|event| matches!(
+        event,
+        Event::CycleSummary {
+          actor_id: id,
+          outcomes: OutcomeTotals { executed_steps: 2, failed_steps: 0, .. },
+          ..
+        } if *id == actor_id
+      )));
+    });
+  }
 }
 
 #[test]
@@ -2521,7 +2639,7 @@ fn skipped_stop_cycle_advances_to_the_suffix() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
 
     assert_eq!(native_balance(&BOB), bob_before + 5);
     assert!(!has_actor_event(|event| matches!(
@@ -2560,19 +2678,18 @@ fn close_after_productive_cycle_ignores_false_cycles_then_closes_immutable_actor
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Immutable,
-      system_active_contract_with_completion(
+      system_active_contract_with_close_when(
         timer_schedule(1),
         None,
         contract_steps_with_step(step),
-        crate::CompletionPolicy::CloseAfterProductiveCycle,
+        Some(crate::tests::close_when_action_and_normal_cycle()),
       ),
     ));
     let actor = sovereign_account(actor_id);
     fund_native(actor_id, 50);
     let bob_before = native_balance(&BOB);
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    run_scheduled_cadence_occurrence(actor_id);
 
     let retained = Actors::active_actor_view(actor_id).expect("false cycle remains active");
     assert_eq!(retained.cycle_nonce, 1);
@@ -2588,9 +2705,8 @@ fn close_after_productive_cycle_ignores_false_cycles_then_closes_immutable_actor
     )));
 
     fund_native(actor_id, 100);
-    frame_system::Pallet::<Test>::set_block_number(3);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    run_scheduled_cadence_occurrence(actor_id);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
     assert_eq!(native_balance(&BOB), bob_before + 10);
@@ -2608,7 +2724,7 @@ fn close_after_productive_cycle_ignores_false_cycles_then_closes_immutable_actor
       .expect("productive summary");
     let closed = events
       .iter()
-      .position(|event| matches!(event, Event::ActorClosed { actor_id: id, reason: CloseReason::ProductiveCycleCompleted } if *id == actor_id))
+      .position(|event| matches!(event, Event::ActorClosed { actor_id: id, reason: CloseReason::BehaviorPolicySatisfied } if *id == actor_id))
       .expect("productive close");
     assert!(summary < closed);
   });
@@ -2624,7 +2740,7 @@ fn frame_only_productive_completion_closes_without_scalar_hot() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_contract_with_completion(
+      system_active_contract_with_close_when(
         manual_schedule(),
         None,
         contract_steps_with_step(make_step(Task::Transfer {
@@ -2632,13 +2748,13 @@ fn frame_only_productive_completion_closes_without_scalar_hot() {
           asset: TestAsset::Native,
           amount: AmountResolution::Fixed(10),
         })),
-        crate::CompletionPolicy::CloseAfterProductiveCycle,
+        Some(crate::tests::close_when_action_and_normal_cycle()),
       ),
     ));
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
@@ -2646,7 +2762,7 @@ fn frame_only_productive_completion_closes_without_scalar_hot() {
       event,
       Event::ActorClosed {
         actor_id: id,
-        reason: CloseReason::ProductiveCycleCompleted,
+        reason: CloseReason::BehaviorPolicySatisfied,
       } if *id == actor_id
     )));
     #[cfg(feature = "try-runtime")]
@@ -2673,7 +2789,7 @@ fn frame_only_effectful_auto_close_uses_terminal_nonce_without_scalar_hot() {
     assert_ok!(replace_auto_close(RuntimeOrigin::root(), actor_id, Some(1),));
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
@@ -2698,11 +2814,11 @@ fn close_after_productive_cycle_does_not_treat_stop_cycle_as_effectful() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_contract_with_completion(
+      system_active_contract_with_close_when(
         manual_schedule(),
         None,
         contract_steps_with_step(make_step(Task::StopCycle)),
-        crate::CompletionPolicy::CloseAfterProductiveCycle,
+        Some(crate::tests::close_when_action_and_normal_cycle()),
       ),
     ));
 
@@ -2722,7 +2838,7 @@ fn close_after_productive_cycle_does_not_treat_stop_cycle_as_effectful() {
       event,
       Event::ActorClosed {
         actor_id: id,
-        reason: CloseReason::ProductiveCycleCompleted,
+        reason: CloseReason::BehaviorPolicySatisfied,
       } if *id == actor_id
     )));
   });
@@ -2738,11 +2854,11 @@ fn close_after_productive_cycle_waits_for_retry_completion() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_contract_with_completion(
+      system_active_contract_with_close_when(
         manual_schedule(),
         None,
         temporary_retry_swap_plan(),
-        crate::CompletionPolicy::CloseAfterProductiveCycle,
+        Some(crate::tests::close_when_action_and_normal_cycle()),
       ),
     ));
     fund_native(actor_id, 100);
@@ -2757,13 +2873,18 @@ fn close_after_productive_cycle_waits_for_retry_completion() {
       event,
       Event::ActorClosed {
         actor_id: id,
-        reason: CloseReason::ProductiveCycleCompleted,
+        reason: CloseReason::BehaviorPolicySatisfied,
       } if *id == actor_id
     )));
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    let eligible_at = Actors::actor_run_state(actor_id)
+      .expect("retry suspension")
+      .eligible_at;
+    frame_system::Pallet::<Test>::set_block_number(eligible_at);
+    Actors::on_initialize(eligible_at);
+    run_prepass();
+    Actors::on_idle(eligible_at, Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(Actors::active_actor_view(actor_id).is_none());
@@ -2771,7 +2892,7 @@ fn close_after_productive_cycle_waits_for_retry_completion() {
       event,
       Event::ActorClosed {
         actor_id: id,
-        reason: CloseReason::ProductiveCycleCompleted,
+        reason: CloseReason::BehaviorPolicySatisfied,
       } if *id == actor_id
     )));
   });
@@ -2797,11 +2918,11 @@ fn close_after_productive_cycle_keeps_retry_exhaustion_as_failure_terminal() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_contract_with_completion(
+      system_active_contract_with_close_when(
         manual_schedule(),
         None,
         contract_steps_with_step(retry_step),
-        crate::CompletionPolicy::CloseAfterProductiveCycle,
+        Some(crate::tests::close_when_action_and_normal_cycle()),
       ),
     ));
     fund_native(actor_id, 100);
@@ -2812,8 +2933,13 @@ fn close_after_productive_cycle_keeps_retry_exhaustion_as_failure_terminal() {
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
     run_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_some());
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    let eligible_at = Actors::actor_run_state(actor_id)
+      .expect("retry suspension")
+      .eligible_at;
+    frame_system::Pallet::<Test>::set_block_number(eligible_at);
+    Actors::on_initialize(eligible_at);
+    run_prepass();
+    Actors::on_idle(eligible_at, Weight::MAX);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
     assert_eq!(native_balance(&actor), balance_before);
@@ -2828,7 +2954,7 @@ fn close_after_productive_cycle_keeps_retry_exhaustion_as_failure_terminal() {
       event,
       Event::ActorClosed {
         actor_id: id,
-        reason: CloseReason::ProductiveCycleCompleted,
+        reason: CloseReason::BehaviorPolicySatisfied,
       } if *id == actor_id
     )));
   });
@@ -2926,35 +3052,33 @@ fn continuation_can_complete_at_stop_cycle_without_replaying_prefix() {
     fund_native(actor_id, 100);
     let bob_before = native_balance(&BOB);
     let charlie_before = native_balance(&CHARLIE);
-    set_temporary_dex_failure(true);
 
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
-      Actors::actor_run_state(actor_id).expect("suspended").cursor,
+      Actors::actor_run_state(actor_id)
+        .expect("committed prefix")
+        .cursor,
       1
     );
     assert_eq!(native_balance(&BOB), bob_before + 10);
 
+    set_temporary_dex_failure(true);
+    run_next_idle(Weight::MAX);
+    let suspended = Actors::actor_run_state(actor_id).expect("suspended");
+    assert_eq!(suspended.cursor, 1);
+    assert_eq!(suspended.unsuccessful_attempts_at_cursor, 1);
+
     set_temporary_dex_failure(false);
-    let eligible_at = Actors::actor_run_state(actor_id)
-      .expect("suspension remains")
-      .eligible_at;
+    let eligible_at = suspended.eligible_at;
     frame_system::Pallet::<Test>::set_block_number(eligible_at);
     Actors::on_initialize(eligible_at);
     run_prepass();
     Actors::on_idle(eligible_at, Weight::MAX);
-    #[cfg(not(feature = "runtime-benchmarks"))]
-    {
-      let locator = crate::ActorControlLocators::<Test>::get(actor_id);
-      assert!(
-        matches!(locator, Some(crate::ActorControlLocation::Ready { .. })),
-        "successor locator: {locator:?}"
-      );
-    }
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     run_next_idle(Weight::MAX);
 
     let crate::LoadedActorStateOf::Active(state) =
@@ -3026,7 +3150,7 @@ fn temporary_failure_keeps_continue_next_step_semantics() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
 
     let completed = Actors::active_actor_view(actor_id).expect("actor remains");
     assert_eq!(completed.cycle_state, CycleState::Idle);
@@ -3084,7 +3208,8 @@ fn retry_later_local_attempt_cutoff_closes_without_prefix_replay() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("first unsuccessful attempt persists")
@@ -3095,8 +3220,7 @@ fn retry_later_local_attempt_cutoff_closes_without_prefix_replay() {
     let first_eligible_at = Actors::actor_run_state(actor_id)
       .expect("first unsuccessful attempt persists")
       .eligible_at;
-    frame_system::Pallet::<Test>::set_block_number(first_eligible_at);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(first_eligible_at, Weight::MAX);
     run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
@@ -3108,19 +3232,12 @@ fn retry_later_local_attempt_cutoff_closes_without_prefix_replay() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert!(
-      Actors::active_actor_view(actor_id)
-        .expect("suspended actor remains")
-        .pending_signal
-    );
+    assert!(!Actors::pending_signal(actor_id));
 
     let second_eligible_at = Actors::actor_run_state(actor_id)
       .expect("second unsuccessful attempt persists")
       .eligible_at;
-    frame_system::Pallet::<Test>::set_block_number(second_eligible_at);
-    Actors::on_initialize(second_eligible_at);
-    run_prepass();
-    run_idle(Weight::MAX);
+    run_canonical_round_at(second_eligible_at, Weight::MAX);
     run_next_idle(Weight::MAX);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
@@ -3178,7 +3295,7 @@ fn retry_later_resets_local_attempt_count_after_cursor_advancement() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     let first = Actors::actor_run_state(actor_id).expect("first cursor suspends");
     assert_eq!(
       (first.cursor, first.unsuccessful_attempts_at_cursor),
@@ -3187,8 +3304,8 @@ fn retry_later_resets_local_attempt_count_after_cursor_advancement() {
 
     set_temporary_dex_failure(false);
     set_temporary_add_liquidity_failure(true);
-    frame_system::Pallet::<Test>::set_block_number(first.eligible_at);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(first.eligible_at, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let advanced = Actors::actor_run_state(actor_id).expect("later cursor suspends");
     assert_eq!(advanced.cursor, 1);
     assert_eq!(advanced.unsuccessful_attempts_at_cursor, 1);
@@ -3342,19 +3459,16 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
-    let initial_hot = Actors::actor_hot(actor_id).expect("suspended actor stays schedulable");
-    assert!(initial_hot.queue_ticket.is_some());
-    assert!(initial_hot.wakeup_pointer.is_none());
-    assert_eq!(
-      Actors::actor_run_state(actor_id)
-        .expect("attempt zero")
-        .cursor,
-      0
-    );
+    run_next_idle(Weight::MAX);
+    let initial = Actors::actor_run_state(actor_id).expect("first attempt suspends");
+    assert_eq!(initial.cursor, 0);
+    assert_eq!(initial.unsuccessful_attempts_at_cursor, 1);
+    assert_eq!(initial.eligible_at, 3);
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert_eq!(native_balance(&actor), balance_before);
 
-    for (due, expected_attempt, next_due) in [(2, 1, 4), (4, 2, 8), (8, 3, 16), (16, 4, 24)] {
+    for (due, expected_attempt, next_due) in [(3, 1, 5), (5, 2, 10), (10, 3, 19), (19, 4, 28)] {
       frame_system::Pallet::<Test>::set_block_number(due - 1);
       run_idle(Weight::MAX);
       assert_eq!(
@@ -3363,8 +3477,7 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
           .unsuccessful_attempts_at_cursor,
         expected_attempt
       );
-      frame_system::Pallet::<Test>::set_block_number(due);
-      run_idle(Weight::MAX);
+      run_canonical_reentry_at(due, Weight::MAX);
       let continuation = Actors::actor_run_state(actor_id).expect("temporary failure resuspends");
       assert_eq!(
         continuation.unsuccessful_attempts_at_cursor,
@@ -3375,7 +3488,7 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
       assert_eq!(native_balance(&actor), balance_before);
     }
 
-    frame_system::Pallet::<Test>::set_block_number(23);
+    frame_system::Pallet::<Test>::set_block_number(27);
     run_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
@@ -3384,8 +3497,7 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
       5
     );
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(24);
-    run_idle(Weight::MAX);
+    run_canonical_reentry_at(28, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(native_balance(&actor), balance_before - 10);
     assert_eq!(
@@ -3402,15 +3514,13 @@ fn run_weight_deferral_does_not_admit_attempt() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      None,
-      temporary_retry_swap_plan(),
-    );
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, temporary_retry_swap_plan());
     fund_native(actor_id, 100);
     set_temporary_dex_failure(true);
-    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
     run_idle(Weight::MAX);
     let before = Actors::actor_run_state(actor_id).expect("suspended");
     let ticket_before = Actors::actor_hot(actor_id)
@@ -3418,15 +3528,8 @@ fn run_weight_deferral_does_not_admit_attempt() {
       .queue_ticket;
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let queue_weight = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1)
-      .saturating_add(Actors::scheduler_actor_probe_weight_upper())
-      .saturating_add(
-        <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
-          .max(<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page()),
-      );
-    let proof_limit = queue_weight
+    let proof_limit = current_step_execution_weight(actor_id)
       .proof_size()
-      .saturating_add(current_step_execution_weight(actor_id).proof_size())
       .saturating_sub(1);
     Actors::execute_cycle(Weight::from_parts(u64::MAX, proof_limit));
 
@@ -3478,27 +3581,20 @@ fn frame_only_exact_next_retry_completes_without_scalar_rehydration() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let suspended = Actors::actor_run_state(actor_id).expect("suspended Run survives");
     assert_eq!(suspended.cursor, 0);
-    assert_eq!(suspended.eligible_at, 2);
-    assert_eq!(canonical_scheduled_wakeup_block(actor_id), None);
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Ready { .. })
-    ));
+    assert_eq!(suspended.eligible_at, 3);
+    assert_eq!(scheduled_wakeup_block(actor_id), None);
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    run_canonical_round_at(3, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
       event,
@@ -3538,13 +3634,12 @@ fn frame_only_user_retry_preserves_installed_hold_without_scalar_rehydration() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let suspended = Actors::actor_run_state(actor_id).expect("User retry suspends");
-    assert_eq!(suspended.eligible_at, 2);
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Ready { .. })
-    ));
+    assert_eq!(suspended.eligible_at, 3);
+    assert_eq!(scheduled_wakeup_block(actor_id), None);
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert_eq!(
       crate::ActorStateHolds::<Test>::get(actor_id),
       Some(installed_hold.clone())
@@ -3552,15 +3647,9 @@ fn frame_only_user_retry_preserves_installed_hold_without_scalar_rehydration() {
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    run_canonical_round_at(3, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert_eq!(
       crate::ActorStateHolds::<Test>::get(actor_id),
       Some(installed_hold)
@@ -3596,60 +3685,33 @@ fn frame_only_user_later_retry_preserves_hold_through_block_waiting() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let first_retry = Actors::actor_run_state(actor_id).expect("first retry survives");
     assert_eq!(first_retry.unsuccessful_attempts_at_cursor, 1);
-    assert_eq!(first_retry.eligible_at, 2);
-    assert_eq!(canonical_scheduled_wakeup_block(actor_id), None);
+    assert_eq!(first_retry.eligible_at, 3);
+    assert_eq!(scheduled_wakeup_block(actor_id), None);
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert_eq!(
+      crate::ActorStateHolds::<Test>::get(actor_id),
+      Some(installed_hold.clone())
+    );
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    run_canonical_round_at(3, Weight::MAX);
     let second_retry = Actors::actor_run_state(actor_id).expect("second retry survives");
     assert_eq!(second_retry.unsuccessful_attempts_at_cursor, 2);
-    assert_eq!(second_retry.eligible_at, 4);
-    assert_eq!(canonical_scheduled_wakeup_block(actor_id), Some(4));
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Waiting {
-        key: WakeupKey::Block(4),
-        ..
-      })
-    ));
+    assert_eq!(second_retry.eligible_at, 5);
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(5));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert_eq!(
       crate::ActorStateHolds::<Test>::get(actor_id),
       Some(installed_hold.clone())
     );
-
-    frame_system::Pallet::<Test>::set_block_number(4);
-    Actors::on_initialize(4);
-    run_prepass();
-    Actors::on_idle(4, Weight::MAX);
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Ready { .. })
-    ));
-    assert_eq!(canonical_scheduled_wakeup_block(actor_id), None);
-    assert!(Actors::actor_run_state(actor_id).is_some());
-    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert_eq!(
-      crate::ActorStateHolds::<Test>::get(actor_id),
-      Some(installed_hold.clone())
-    );
-    assert!(!crate::WakeupWorkerFaultState::<Test>::exists());
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(5);
-    Actors::on_initialize(5);
-    run_prepass();
-    Actors::on_idle(5, Weight::MAX);
+    run_canonical_reentry_at(5, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert_eq!(
       crate::ActorStateHolds::<Test>::get(actor_id),
@@ -3690,28 +3752,22 @@ fn suspended_retry_wakes_for_window_expiry_before_cooldown() {
       actor_id
     ));
     run_idle(Weight::MAX);
-    assert_eq!(canonical_scheduled_wakeup_block(actor_id), Some(102));
-    #[cfg(not(feature = "runtime-benchmarks"))]
-    {
-      assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-      let locator = crate::ActorControlLocators::<Test>::get(actor_id);
-      assert!(
-        matches!(
-          locator,
-          Some(crate::ActorControlLocation::Waiting {
-            key: WakeupKey::Block(102),
-            ..
-          })
-        ),
-        "window-expiry locator: {locator:?}; hot={:?}",
-        Actors::actor_hot(actor_id)
-      );
-      assert!(Actors::load_frame_control_authority(actor_id).is_some());
-    }
+    // A retry suspension inside an active window must wake for the window terminal before its
+    // cooldown, so the canonical deadline and the persisted Run eligibility both clamp to 102.
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(102));
+    assert_eq!(
+      Actors::actor_run_state(actor_id).map(|run| run.eligible_at),
+      Some(102)
+    );
+    assert_eq!(
+      crate::DeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(102))
+    );
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
 
     let ticket_frontier_before_expiry = crate::ActorReadyTail::<Test>::get();
-    frame_system::Pallet::<Test>::set_block_number(102);
-    run_idle(Weight::MAX);
+    run_canonical_reentry_at(102, Weight::MAX);
     assert_eq!(
       crate::ActorReadyTail::<Test>::get(),
       ticket_frontier_before_expiry,
@@ -3719,11 +3775,10 @@ fn suspended_retry_wakes_for_window_expiry_before_cooldown() {
     );
     assert!(
       Actors::active_actor_view(actor_id).is_none(),
-      "actor={:?}; locator={:?}; hot={:?}; wakeup_fault={:?}",
+      "actor={:?}; locator={:?}; hot={:?}",
       Actors::active_actor_view(actor_id),
       crate::ActorControlLocators::<Test>::get(actor_id),
       Actors::actor_hot(actor_id),
-      crate::WakeupWorkerFaultState::<Test>::get(),
     );
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| {
@@ -3761,16 +3816,13 @@ fn frame_only_user_window_expiry_releases_hold_from_consumed_waiting_authority()
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
-    assert_eq!(canonical_scheduled_wakeup_block(actor_id), Some(102));
+    run_idle(Weight::MAX);
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(102));
     assert!(crate::ActorStateHolds::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
 
     let ticket_frontier_before_expiry = crate::ActorReadyTail::<Test>::get();
-    frame_system::Pallet::<Test>::set_block_number(102);
-    Actors::on_initialize(102);
-    run_prepass();
-    Actors::on_idle(102, Weight::MAX);
+    run_canonical_reentry_at(102, Weight::MAX);
     assert_eq!(
       crate::ActorReadyTail::<Test>::get(),
       ticket_frontier_before_expiry,
@@ -3779,7 +3831,6 @@ fn frame_only_user_window_expiry_releases_hold_from_consumed_waiting_authority()
     assert!(!Actors::active_actor_exists(actor_id));
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!crate::ActorStateHolds::<Test>::contains_key(actor_id));
-    assert!(!crate::ActorFunding::<Test>::contains_key(actor_id));
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
@@ -3841,7 +3892,7 @@ fn user_retry_admits_and_charges_only_each_current_step() {
     run_idle(Weight::MAX);
     assert_eq!(
       native_balance(&sink) - sink_before,
-      pipeline_fee + prefix_fee + retry_fee
+      pipeline_fee + prefix_fee
     );
     assert_eq!(
       Actors::actor_run_state(actor_id).expect("Actor run").cursor,
@@ -3856,15 +3907,9 @@ fn user_retry_admits_and_charges_only_each_current_step() {
     Actors::on_initialize(first_eligible_at);
     run_prepass();
     let retry_budget = Actors::scheduler_admission_overhead()
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_actor_state_probe())
       .saturating_add(retry_weight)
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_on_idle_base())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::materialization_coordinator_base())
-      .saturating_add(
-        <TestWeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future()
-          .saturating_mul(2),
-      )
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::crossing_worker_base())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::observation_fanout_base())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::block_resource_finalize());
     run_idle(retry_budget);
     run_next_idle(retry_budget);
@@ -3887,6 +3932,7 @@ fn user_retry_admits_and_charges_only_each_current_step() {
     Actors::on_initialize(second_eligible_at);
     run_prepass();
     run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     run_next_idle(Weight::MAX);
     assert_eq!(
       native_balance(&sink) - sink_before,
@@ -3931,14 +3977,13 @@ fn user_retry_insolvency_closes_before_effect_capacity_deferral() {
           RuntimeOrigin::signed(ALICE),
           actor_id
         ));
-        Actors::on_idle(2, Weight::MAX);
+        run_next_idle(Weight::MAX);
         let run = Actors::actor_run_state(actor_id).expect("temporary failure suspends");
         assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
-        assert_eq!(run.eligible_at, 3);
-        assert!(matches!(
-          crate::ActorControlLocators::<Test>::get(actor_id),
-          Some(crate::ActorControlLocation::Ready { .. })
-        ));
+        assert_eq!(run.eligible_at, 4);
+        assert_eq!(scheduled_wakeup_block(actor_id), None);
+        assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+        assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
         let sovereign = sovereign_account(actor_id);
         if !solvent {
           let excess = native_balance(&sovereign)
@@ -3958,7 +4003,13 @@ fn user_retry_insolvency_closes_before_effect_capacity_deferral() {
         .checked_limits()
         .expect("independent component limits fit");
         let mut resources = crate::BlockResourceState::new(run.eligible_at);
-        assert_ok!(resources.begin_prepass());
+        assert_ok!(
+          resources.begin_prepass(
+            limits
+              .into_budget()
+              .expect("synthetic limits define one budget")
+          )
+        );
         assert_ok!(resources.open_external_phase());
         assert_ok!(resources.begin_drain());
         let pass = Actors::execute_cycle_to_cutoff_with_resources(
@@ -3991,10 +4042,10 @@ fn user_retry_insolvency_closes_before_effect_capacity_deferral() {
               .encode(),
             run.encode()
           );
-          assert_eq!(
-            Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-            Some(actor_id)
-          );
+          // The canonical Service ring retains the deferred Actor in place, so the next
+          // full-budget drain pass retries the same attempt rather than dropping placement.
+          assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+          assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
           Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
           let retried = Actors::actor_run_state(actor_id).expect("funded retry suspends again");
           assert_eq!(retried.cycle_nonce, run.cycle_nonce);
@@ -4044,23 +4095,22 @@ fn frame_only_underfunded_retry_apoptosis_closes_from_retained_ready_authority()
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let run = Actors::actor_run_state(actor_id).expect("temporary failure suspends");
-    assert_eq!(run.eligible_at, 2);
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Ready { .. })
-    ));
+    assert_eq!(run.eligible_at, 3);
+    assert_eq!(scheduled_wakeup_block(actor_id), None);
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     let sovereign = sovereign_account(actor_id);
     let balance = native_balance(&sovereign);
     deplete_user_sovereign(actor_id, balance - TestMinUserBalance::get());
     let custody_before = native_balance(&sovereign);
     clear_fee_collections();
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::on_initialize(3);
     run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    Actors::on_idle(3, Weight::MAX);
 
     assert!(!Actors::active_actor_exists(actor_id));
     assert!(Actors::actor_run_state(actor_id).is_none());
@@ -4087,12 +4137,11 @@ fn consumed_frame_finalizer_rejects_a_retained_primary() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let admission = Actors::actor_control_cell(actor_id)
-      .expect("creation admits the Contract")
-      .1
-      .admission;
-    let state = Actors::active_actor_state(actor_id)
-      .expect("capture state while primary remains authoritative");
+    let (state, admission, _) =
+      Actors::load_frame_actor_service_state(actor_id).expect("creation admits the Contract");
+    // Canonical creation publishes no legacy primary, so stage one to exercise the consumed-frame
+    // finalizer's fail-closed guard against a retained pre-cutover control cell.
+    crate::ActorControlLocators::<Test>::insert(actor_id, crate::ActorControlLocation::Unsignaled);
 
     assert_noop!(
       Actors::finalize_actor_from_consumed_state(
@@ -4103,8 +4152,9 @@ fn consumed_frame_finalizer_rejects_a_retained_primary() {
       ),
       Error::<Test>::ActorInvariant
     );
-    assert!(Actors::active_actor_exists(actor_id));
     assert!(crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    crate::ActorControlLocators::<Test>::remove(actor_id);
+    assert!(Actors::active_actor_exists(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
@@ -4112,7 +4162,7 @@ fn consumed_frame_finalizer_rejects_a_retained_primary() {
 }
 
 #[test]
-fn run_opening_snapshot_is_complete_frozen_and_capacity_checked_live() {
+fn retried_percentage_steps_resolve_against_current_attempt_balances() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset_a = TestAsset::Local(1);
@@ -4125,14 +4175,14 @@ fn run_opening_snapshot_is_complete_frozen_and_capacity_checked_live() {
       make_step(Task::Transfer {
         to: BOB,
         asset: asset_a,
-        amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(10)),
+        amount: AmountResolution::Percent(Perbill::from_percent(10)),
       }),
       StepOf::<Test> {
         precondition: None,
         task: Task::SwapIn {
           asset_in: asset_b,
           asset_out,
-          amount_in: AmountResolution::PercentageAtOpening(Perbill::from_percent(50)),
+          amount_in: AmountResolution::Percent(Perbill::from_percent(50)),
           slippage_tolerance: Perbill::one(),
         },
         on_error: RETRY_LATER,
@@ -4140,7 +4190,7 @@ fn run_opening_snapshot_is_complete_frozen_and_capacity_checked_live() {
       make_step(Task::Transfer {
         to: CHARLIE,
         asset: asset_c,
-        amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(10)),
+        amount: AmountResolution::Percent(Perbill::from_percent(10)),
       }),
     ])
     .expect("three-step plan fits");
@@ -4151,68 +4201,36 @@ fn run_opening_snapshot_is_complete_frozen_and_capacity_checked_live() {
     }
     set_temporary_dex_failure(true);
     signal_percentage_trigger(actor_id, asset_b);
-    run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let continuation = Actors::actor_run_state(actor_id).expect("suspended");
     assert_eq!(continuation.cursor, 1);
-    assert_eq!(continuation.opening_snapshot.len(), 3);
-    assert_eq!(
-      continuation
-        .opening_snapshot
-        .get(&OpeningSurface::PreservableAsset(asset_a)),
-      Some(&99)
-    );
-    assert_eq!(
-      continuation
-        .opening_snapshot
-        .get(&OpeningSurface::PreservableAsset(asset_b)),
-      Some(&99)
-    );
-    let mut mutated_snapshot = continuation.clone();
-    *mutated_snapshot
-      .opening_snapshot
-      .get_mut(&OpeningSurface::PreservableAsset(asset_a))
-      .expect("Opening asset remains present") = 98;
-    assert_noop!(
-      Actors::write_run_state(actor_id, Some(mutated_snapshot)),
-      Error::<Test>::ActorRunInvariant
-    );
-    assert_eq!(
-      Actors::actor_run_state(actor_id).map(|state| state.encode()),
-      Some(continuation.encode())
-    );
     assert_eq!(asset_balance(&BOB, asset_a), 9);
+    assert_eq!(
+      asset_balance(&actor, asset_b),
+      100,
+      "failed input debit rolls back"
+    );
+    assert_eq!(asset_balance(&u64::MAX, asset_b), 0);
 
     assert_ok!(MockAssetOps::transfer(&actor, &BOB, asset_b, 20));
+    assert_eq!(asset_balance(&actor, asset_b), 80);
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(continuation.eligible_at);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(continuation.eligible_at, Weight::MAX);
     run_next_idle(Weight::MAX);
-    let after_capacity_failure = Actors::actor_run_state(actor_id).expect("still suspended");
-    assert_eq!(after_capacity_failure.cursor, 1);
-    assert_eq!(after_capacity_failure.unsuccessful_attempts_at_cursor, 2);
-    assert_eq!(
-      after_capacity_failure
-        .opening_snapshot
-        .get(&OpeningSurface::PreservableAsset(asset_b)),
-      Some(&99)
-    );
 
-    set_asset_balance(&actor, asset_b, 100);
-    frame_system::Pallet::<Test>::set_block_number(after_capacity_failure.eligible_at);
-    Actors::on_initialize(after_capacity_failure.eligible_at);
-    run_prepass();
-    run_idle(Weight::MAX);
-    run_next_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert_eq!(asset_balance(&actor, asset_b), 82);
+    // The retry spends floor((80 - protected minimum 1) * 50%) = 39, not a leaked-attempt basis.
+    assert_eq!(asset_balance(&actor, asset_b), 41);
+    assert_eq!(asset_balance(&u64::MAX, asset_b), 39);
     assert_eq!(asset_balance(&CHARLIE, asset_c), 9);
     assert_eq!(asset_balance(&BOB, asset_a), 9);
   });
 }
 
 #[test]
-fn maximal_run_opening_snapshot_stays_bounded_to_full_contract_surfaces() {
+fn maximal_current_amount_contract_uses_only_current_balances() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let mut steps = Vec::new();
@@ -4223,8 +4241,8 @@ fn maximal_run_opening_snapshot_stays_bounded_to_full_contract_surfaces() {
         task: Task::AddLiquidity {
           asset_a: TestAsset::Local(100 + index * 2),
           asset_b: TestAsset::Local(101 + index * 2),
-          amount_a: AmountResolution::PercentageAtOpening(Perbill::from_percent(10)),
-          amount_b: AmountResolution::PercentageAtOpening(Perbill::from_percent(10)),
+          amount_a: AmountResolution::Percent(Perbill::from_percent(10)),
+          amount_b: AmountResolution::Percent(Perbill::from_percent(10)),
           min_lp_out: 1,
         },
         on_error: if index == 0 {
@@ -4246,14 +4264,11 @@ fn maximal_run_opening_snapshot_stays_bounded_to_full_contract_surfaces() {
 
     let continuation = Actors::actor_run_state(actor_id).expect("maximal Actor run");
     assert_eq!(continuation.cursor, 0);
-    assert_eq!(
-      continuation.opening_snapshot.len() as u32,
-      <<Test as crate::Config>::MaxOpeningSnapshotEntries as Get<u32>>::get()
-    );
 
     set_temporary_add_liquidity_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    // The failed opening was served at B+1 (block 2); canonical execution commits one Step per
+    // round, so continue explicit rounds until the maximal Contract finishes.
+    run_next_idle_to_completion(actor_id);
     assert!(Actors::actor_run_state(actor_id).is_none());
   });
 }
@@ -4292,9 +4307,9 @@ fn run_attempts_have_unique_chain_coordinates_without_the_stored_ordinal() {
     assert!(matches!(opening[cycle_started + 1], Event::StepFailed { actor_id: id, cycle_nonce: 1, step_index: 0, .. } if id == actor_id));
     assert!(matches!(opening[cycle_started + 2], Event::CycleSuspended { actor_id: id, cycle_nonce: 1, cursor: 0, reason: SuspensionReason::Temporary, .. } if id == actor_id));
 
-    frame_system::Pallet::<Test>::set_block_number(2);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    // The opening attempt was served at B+1 (block 2), so the retry becomes eligible at block 3.
+    run_next_idle(Weight::MAX);
     let retry_event_index = frame_system::Pallet::<Test>::events()
       .iter()
       .position(|record| matches!(record.event, RuntimeEvent::Actors(Event::CycleContinued { actor_id: id, cycle_nonce: 1, cursor: 0, .. }) if id == actor_id))
@@ -4311,9 +4326,13 @@ fn run_attempts_have_unique_chain_coordinates_without_the_stored_ordinal() {
     assert!(matches!(retry[2], Event::CycleSuspended { actor_id: id, cycle_nonce: 1, cursor: 0, .. } if id == actor_id));
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(4);
+    // The second retry was served at block 3 with a two-block backoff, so the completion attempt is
+    // eligible at the persisted eligible_at (block 5) rather than the legacy block 4.
+    let completion_block = Actors::actor_run_state(actor_id)
+      .expect("second retry persists its successor")
+      .eligible_at;
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    run_canonical_reentry_at(completion_block, Weight::MAX);
     let completion_event_index = frame_system::Pallet::<Test>::events()
       .iter()
       .position(|record| matches!(record.event, RuntimeEvent::Actors(Event::CycleContinued { actor_id: id, cycle_nonce: 1, cursor: 0, .. }) if id == actor_id))
@@ -4330,15 +4349,67 @@ fn run_attempts_have_unique_chain_coordinates_without_the_stored_ordinal() {
     assert!(matches!(completion[2], Event::CycleSummary { actor_id: id, cycle_nonce: 1, outcomes: OutcomeTotals { failed_steps: 2, .. }, .. } if id == actor_id));
 
     let attempt_coordinates = [
-      (1u64, 1u64, opening_event_index),
-      (1u64, 2u64, retry_event_index),
-      (1u64, 4u64, completion_event_index),
+      (1u64, 2u64, opening_event_index),
+      (1u64, 3u64, retry_event_index),
+      (
+        1u64,
+        u64::from(completion_block.saturating_add(1)),
+        completion_event_index,
+      ),
     ];
     assert_eq!(
       attempt_coordinates.into_iter().collect::<BTreeSet<_>>().len(),
       attempt_coordinates.len(),
       "cycle nonce plus block/event coordinates uniquely identify every attempt without its stored ordinal"
     );
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn supported_public_lifecycle_never_recreates_legacy_authority() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    setup_temporary_retry_pool();
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, temporary_retry_swap_plan());
+    fund_native(actor_id, 100);
+    assert_no_legacy_actor_authority(actor_id);
+
+    assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
+    assert_no_legacy_actor_authority(actor_id);
+    frame_system::Pallet::<Test>::set_block_number(2);
+    assert_ok!(Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id));
+    assert_no_legacy_actor_authority(actor_id);
+
+    frame_system::Pallet::<Test>::set_block_number(3);
+    set_temporary_dex_failure(true);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    assert_no_legacy_actor_authority(actor_id);
+    run_next_idle(Weight::MAX);
+    let first_retry = Actors::actor_run_state(actor_id).expect("first retry persists");
+    assert_no_legacy_actor_authority(actor_id);
+
+    run_canonical_reentry_at(first_retry.eligible_at, Weight::MAX);
+    let second_retry = Actors::actor_run_state(actor_id).expect("reentry persists successor");
+    assert_eq!(second_retry.unsuccessful_attempts_at_cursor, 2);
+    assert_no_legacy_actor_authority(actor_id);
+
+    assert_ok!(update_contract_partial!(
+      RuntimeOrigin::root(),
+      actor_id,
+      transfer_contract_steps(BOB, 7),
+      None,
+    ));
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_no_legacy_actor_authority(actor_id);
+
+    frame_system::Pallet::<Test>::set_block_number(second_retry.eligible_at.saturating_add(1));
+    assert_ok!(Actors::close_actor(RuntimeOrigin::root(), actor_id));
+    assert!(!Actors::active_actor_exists(actor_id));
+    assert_no_legacy_actor_authority(actor_id);
   });
 }
 
@@ -4353,14 +4424,11 @@ fn completion_policy_only_replacement_cancels_contract_bound_run() {
       RuntimeOrigin::root(),
       actor_id,
       before.steps.clone(),
-      crate::CompletionPolicy::CloseAfterProductiveCycle,
+      Some(crate::tests::close_when_action_and_normal_cycle()),
     ));
     let after = Actors::active_actor_view(actor_id).expect("updated actor");
     assert_eq!(after.steps, before.steps);
-    assert_eq!(
-      after.completion,
-      crate::CompletionPolicy::CloseAfterProductiveCycle
-    );
+    assert_eq!(after.has_close_when, true);
     assert_eq!(after.cycle_state, CycleState::Idle);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(after.cycle_nonce, continuation_before.cycle_nonce);
@@ -4397,7 +4465,79 @@ fn completion_policy_only_replacement_cancels_contract_bound_run() {
 }
 
 #[test]
-fn permissionless_sweep_is_lifecycle_touchpoint_only_under_breaker() {
+fn step_replacement_cancels_retry_and_resets_bounds_before_fresh_execution() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let suspended = Actors::actor_run_state(actor_id).expect("suspended retry exists");
+    let sovereign = sovereign_account(actor_id);
+    let bob_before = native_balance(&BOB);
+    let custody_before = native_balance(&sovereign);
+    assert_eq!(suspended.cycle_nonce, 1);
+    assert_eq!(suspended.unsuccessful_attempts_at_cursor, 1);
+    assert_eq!(
+      Actors::active_actor_view(actor_id)
+        .expect("suspended actor")
+        .unsuccessful_attempt_streak,
+      1
+    );
+
+    let replacement = transfer_contract_steps(BOB, 7);
+    assert_ok!(update_contract_partial!(
+      RuntimeOrigin::root(),
+      actor_id,
+      replacement,
+      None,
+    ));
+
+    let replaced = Actors::active_actor_view(actor_id).expect("replacement remains active");
+    assert_eq!(replaced.cycle_state, CycleState::Idle);
+    assert_eq!(replaced.cycle_nonce, suspended.cycle_nonce);
+    assert_eq!(replaced.unsuccessful_attempt_streak, 0);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(native_balance(&sovereign), custody_before);
+    assert_eq!(native_balance(&BOB), bob_before);
+
+    set_temporary_dex_failure(false);
+    frame_system::Pallet::<Test>::set_block_number(2);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    run_idle(Weight::MAX);
+
+    let completed = Actors::active_actor_view(actor_id).expect("replacement completed");
+    assert_eq!(completed.cycle_state, CycleState::Idle);
+    assert_eq!(completed.cycle_nonce, 2);
+    assert_eq!(completed.unsuccessful_attempt_streak, 0);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(native_balance(&sovereign), custody_before - 7);
+    assert_eq!(native_balance(&BOB), bob_before + 7);
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::CycleCancelled {
+        actor_id: id,
+        cycle_nonce: 1,
+        reason: CancellationReason::ContractReplaced,
+      } if *id == actor_id
+    )));
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::CycleSummary {
+        actor_id: id,
+        cycle_nonce: 2,
+        result: CycleResult::Completed,
+        outcomes: OutcomeTotals {
+          executed_steps: 1,
+          committed_effectful_tasks: 1,
+          ..
+        },
+      } if *id == actor_id
+    )));
+  });
+}
+
+#[test]
+fn frozen_sweep_refuses_and_thawed_sweep_remains_lifecycle_only() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(
@@ -4409,6 +4549,14 @@ fn permissionless_sweep_is_lifecycle_touchpoint_only_under_breaker() {
     assert_ok!(Actors::set_global_circuit_breaker(
       RuntimeOrigin::root(),
       true
+    ));
+    assert_noop!(
+      Actors::permissionless_sweep(RuntimeOrigin::signed(BOB), actor_id),
+      Error::<Test>::GlobalCircuitBreakerActive
+    );
+    assert_ok!(Actors::set_global_circuit_breaker(
+      RuntimeOrigin::root(),
+      false
     ));
     assert_ok!(Actors::permissionless_sweep(
       RuntimeOrigin::signed(BOB),
@@ -4427,7 +4575,7 @@ fn tiny_percentage_amount_is_skipped_without_contract_steps_failure() {
     let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfCurrent(Perbill::from_parts(1)),
+      amount: AmountResolution::Percent(Perbill::from_parts(1)),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
@@ -4491,7 +4639,7 @@ fn cycle_summary_tracks_step_outcomes() {
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::from_parts(1)),
+        amount: AmountResolution::Percent(Perbill::from_parts(1)),
       }),
       make_step(Task::Transfer {
         to: BOB,
@@ -4516,7 +4664,7 @@ fn cycle_summary_tracks_step_outcomes() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
     assert!(has_actor_event(|event| {
       matches!(
         event,
@@ -4566,7 +4714,7 @@ fn cycle_summary_tracks_step_outcomes() {
 }
 
 #[test]
-fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
+fn cycle_boundaries_drive_failure_reset_auto_close_and_event_order() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = |on_error| StepOf::<Test> {
@@ -4600,24 +4748,16 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
       RuntimeOrigin::signed(ALICE),
       continue_id
     ));
-    frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(continue_id);
     let after_first = Actors::active_actor_view(continue_id).expect("successful actor remains active");
     assert_eq!(after_first.cycle_nonce, 1);
     assert_eq!(after_first.unsuccessful_attempt_streak, 0);
-    frame_system::Pallet::<Test>::set_block_number(3);
-    Actors::on_initialize(3);
-    run_prepass();
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       continue_id
     ));
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
-    frame_system::Pallet::<Test>::set_block_number(4);
-    Actors::on_initialize(4);
-    run_prepass();
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(continue_id);
     assert!(Actors::active_actor_view(continue_id).is_none());
     let continue_events: Vec<_> = frame_system::Pallet::<Test>::events()
       .into_iter()
@@ -4692,10 +4832,11 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
       Some(1)
     ));
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), abort_id));
+    let abort_sovereign = sovereign_account(abort_id);
     frame_system::Pallet::<Test>::reset_events();
     run_next_idle(Weight::MAX);
-    let abort_instance = Actors::active_actor_view(abort_id).expect("aborted actor remains active");
-    assert_eq!(abort_instance.unsuccessful_attempt_streak, 1);
+    assert!(Actors::actor_identity(abort_id).is_none());
+    assert_eq!(native_balance(&abort_sovereign), 100);
     let abort_events: Vec<_> = frame_system::Pallet::<Test>::events()
       .into_iter()
       .filter_map(|record| match record.event {
@@ -4703,11 +4844,12 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
         _ => None,
       })
       .collect();
-    assert_eq!(abort_events.len(), 4);
+    assert_eq!(abort_events.len(), 5);
     assert!(matches!(abort_events[0], Event::CycleStarted { actor_id, .. } if actor_id == abort_id));
     assert!(matches!(abort_events[1], Event::StepFailed { actor_id, step_index: 0, .. } if actor_id == abort_id));
     assert!(matches!(abort_events[2], Event::CycleSummary { actor_id, result: CycleResult::Failed, outcomes: OutcomeTotals { executed_steps: 0, failed_steps: 1, .. }, .. } if actor_id == abort_id));
-    assert!(matches!(abort_events[3], Event::ActionFeeCharged { actor_id, step_index: 0, fee: 0, .. } if actor_id == abort_id));
+    assert!(matches!(abort_events[3], Event::ActorClosed { actor_id, reason: CloseReason::AutoCloseNonceReached } if actor_id == abort_id));
+    assert!(matches!(abort_events[4], Event::ActionFeeCharged { actor_id, step_index: 0, fee: 0, .. } if actor_id == abort_id));
     let close_only_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     frame_system::Pallet::<Test>::reset_events();
     assert_ok!(Actors::close_actor(RuntimeOrigin::root(), close_only_id));
@@ -4724,7 +4866,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
 }
 
 #[test]
-fn percentage_at_opening_uses_cycle_start_snapshot() {
+fn percentage_of_current_uses_each_steps_available_balance() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let contract_steps = BoundedVec::try_from(vec![
@@ -4736,7 +4878,7 @@ fn percentage_at_opening_uses_cycle_start_snapshot() {
       make_step(Task::Transfer {
         to: CHARLIE,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(50)),
+        amount: AmountResolution::Percent(Perbill::from_percent(50)),
       }),
     ])
     .expect("contract_steps fits");
@@ -4747,61 +4889,10 @@ fn percentage_at_opening_uses_cycle_start_snapshot() {
     let actor = sovereign_account(actor_id);
     let actor_before = native_balance(&actor);
     signal_percentage_trigger(actor_id, TestAsset::Native);
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(50));
-    assert_eq!(native_balance(&CHARLIE), charlie_before.saturating_add(50));
-    assert_eq!(native_balance(&actor), actor_before.saturating_sub(100));
-  });
-}
-
-#[test]
-fn notify_address_event_accumulates_without_pause_resume_cycle() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(100)),
-    }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
-    let actor = sovereign_account(actor_id);
-    assert_ok!(ordinary_transfer_to_actor(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      TestAsset::Native,
-      100
-    ));
-    assert_eq!(native_balance(&actor), 100);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle_until_cycle_nonce(actor_id, 1);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle_until_cycle_nonce(actor_id, 2);
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(instance.lifecycle, ActiveLifecycle::Active);
-    frame_system::Pallet::<Test>::set_block_number(3);
-    fund_native(actor_id, 500);
-    assert_ok!(Actors::notify_address_event(
-      actor_id,
-      TestAsset::Native,
-      500,
-      &CHARLIE
-    ));
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&500)
-    );
-    assert!(!has_actor_event(|event| {
-      matches!(event, Event::ActorResumed { actor_id: id } if *id == actor_id)
-    }));
+    assert_eq!(native_balance(&CHARLIE), charlie_before.saturating_add(25));
+    assert_eq!(native_balance(&actor), actor_before.saturating_sub(75));
   });
 }
 
@@ -5025,19 +5116,18 @@ fn retry_target_uses_only_cursor_local_count_and_last_attempt_block() {
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let instance = Actors::active_actor_view(actor_id).expect("actor");
     let run_state = |last_attempt_block, eligible_at| RuntimeActorRunState {
+      balance_snapshot: None,
       contract_authority: run_contract_authority(actor_id),
       cycle_nonce: 1,
       cursor: 0,
-      opening_predicate_cursor: 0,
       unsuccessful_attempts_at_cursor: 1,
       last_attempt_block,
       last_committed_step_block: None,
       eligible_at,
-      opening_snapshot: Default::default(),
-      opening_predicate_results: Default::default(),
-      funding_snapshot: Default::default(),
       cumulative_outcomes: Default::default(),
-      last_step_outcome: Some(StepOutcome::FundingUnavailable),
+      last_step_outcome: Some(StepOutcome::FundingUnavailable(
+        crate::FundingUnavailableReason::TaskInput,
+      )),
       suspension: Some(SuspensionReason::FundingUnavailable),
     };
     ActorRunStateStore::<Test>::insert(actor_id, run_state(u64::MAX - 1, u64::MAX));
@@ -5072,77 +5162,60 @@ fn predicate_evaluator_visits_every_atom_and_preserves_first_error() {
 }
 
 #[test]
-fn opening_and_current_predicates_observe_distinct_step_state() {
-  for (timing, second_step_executes) in [
-    (ObservationTiming::Opening, true),
-    (ObservationTiming::Current, false),
-  ] {
-    new_test_ext().execute_with(|| {
-      frame_system::Pallet::<Test>::set_block_number(1);
-      let plan = BoundedVec::try_from(vec![
-        make_step(Task::Transfer {
-          to: BOB,
+fn predicates_observe_current_step_state() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let plan = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(60),
+      }),
+      StepOf::<Test> {
+        precondition: all_conditions(vec![Predicate::BalanceAbove {
           asset: TestAsset::Native,
-          amount: AmountResolution::Fixed(60),
-        }),
-        StepOf::<Test> {
-          precondition: timed_all_conditions(
-            timing,
-            vec![Predicate::BalanceAbove {
-              asset: TestAsset::Native,
-              threshold: 50,
-            }],
-          ),
-          task: Task::Transfer {
-            to: CHARLIE,
-            asset: TestAsset::Native,
-            amount: AmountResolution::Fixed(10),
-          },
-          on_error: StepErrorPolicy::AbortCycle,
+          threshold: 50,
+        }]),
+        task: Task::Transfer {
+          to: CHARLIE,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Fixed(10),
         },
-      ])
-      .expect("two-step plan fits");
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
-      fund_native(actor_id, 100);
-      let charlie_before = native_balance(&CHARLIE);
-      assert_ok!(Actors::manual_trigger(
-        RuntimeOrigin::signed(ALICE),
-        actor_id
-      ));
-      run_idle(Weight::MAX);
-      assert_eq!(
-        native_balance(&CHARLIE) > charlie_before,
-        second_step_executes
-      );
-      assert_eq!(
-        has_actor_event(|event| matches!(
-          event,
-          Event::StepSkipped {
-            actor_id: id,
-            step_index: 1,
-            reason: StepSkippedReason::PreconditionFalse,
-            ..
-          } if *id == actor_id
-        )),
-        !second_step_executes
-      );
-    });
-  }
+        on_error: StepErrorPolicy::AbortCycle,
+      },
+    ])
+    .expect("two-step plan fits");
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
+    fund_native(actor_id, 100);
+    let charlie_before = native_balance(&CHARLIE);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    run_next_idle_to_completion(actor_id);
+    assert_eq!(native_balance(&CHARLIE), charlie_before);
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::StepSkipped {
+        actor_id: id,
+        step_index: 1,
+        reason: StepSkippedReason::PreconditionFalse,
+        ..
+      } if *id == actor_id
+    )));
+  });
 }
 
 #[test]
-fn opening_predicate_result_is_reused_by_run_state() {
+fn predicate_is_rechecked_from_current_state_after_retry() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let plan = contract_steps_with_step(StepOf::<Test> {
-      precondition: timed_all_conditions(
-        ObservationTiming::Opening,
-        vec![Predicate::BalanceAbove {
-          asset: TestAsset::Native,
-          threshold: 50,
-        }],
-      ),
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
+        asset: TestAsset::Native,
+        threshold: 50,
+      }]),
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -5159,18 +5232,21 @@ fn opening_predicate_result_is_reused_by_run_state() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
-    let continuation = Actors::actor_run_state(actor_id).expect("Actor run exists");
-    assert_eq!(
-      continuation.opening_predicate_results.as_slice(),
-      &[Ok(true)]
-    );
+    run_next_idle(Weight::MAX);
+    let suspended = Actors::actor_run_state(actor_id).expect("suspended actor");
     assert_ok!(MockAssetOps::transfer(&actor, &BOB, TestAsset::Native, 60));
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(suspended.eligible_at, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
+      event,
+      Event::StepSkipped {
+        actor_id: id,
+        reason: StepSkippedReason::PreconditionFalse,
+        ..
+      } if *id == actor_id
+    )));
+    assert!(!has_actor_event(|event| matches!(
       event,
       Event::SwapExecuted { actor_id: id, .. } if *id == actor_id
     )));
@@ -5294,7 +5370,7 @@ fn retry_re_evaluates_live_any_conditions_at_the_same_cursor() {
     setup_temporary_retry_pool();
     let step = StepOf::<Test> {
       precondition: any_conditions(vec![
-        Predicate::BlockNumberBelow { threshold: 2 },
+        Predicate::BlockNumberBelow { threshold: 3 },
         Predicate::BlockNumberAbove { threshold: 100 },
       ]),
       task: Task::SwapIn {
@@ -5317,15 +5393,12 @@ fn retry_re_evaluates_live_any_conditions_at_the_same_cursor() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
-    assert_eq!(
-      Actors::actor_run_state(actor_id).expect("suspended").cursor,
-      0
-    );
+    run_next_idle(Weight::MAX);
+    let suspended = Actors::actor_run_state(actor_id).expect("suspended");
+    assert_eq!(suspended.cursor, 0);
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(suspended.eligible_at, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,
@@ -5365,7 +5438,7 @@ fn continue_next_step_error_policy_proceeds_after_failure() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
     assert!(
       has_actor_event(|e| matches!(
         e,
@@ -5409,7 +5482,7 @@ fn staking_adapter_late_failure_rolls_back_partial_mutation() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
     assert_eq!(native_balance(&actor), 110);
     assert_eq!(staked_balance(actor, asset), 0);
     assert_eq!(native_balance(&CHARLIE), charlie_before + 10);
@@ -5489,6 +5562,11 @@ fn user_dca_complete_lifecycle() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     });
+    let cycle_fees = cadenced_trigger_fee()
+      + pipeline_opening_fee(&contract_steps)
+      + Actors::maximum_contract_step_fee(ActorType::User, &contract_steps, 0)
+        .expect("DCA Action fee fits")
+        .total_fee;
     let actor_id = Actors::next_actor_id();
     prefund_active_user_creation(ALICE, &contract_steps);
     assert_ok!(Actors::create_user_actor(
@@ -5506,12 +5584,10 @@ fn user_dca_complete_lifecycle() {
     // Step 2: Fund sovereign
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, foreign, 500);
-    fund_native(actor_id, 500); // For fees
+    fund_native(actor_id, TestMinUserBalance::get() + cycle_fees * 8);
     // Step 3-4: Advance blocks and verify execution
     for block in 2..8 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      Actors::on_initialize(block);
-      Actors::on_idle(block, Weight::MAX);
+      run_canonical_block_at(block, Weight::MAX);
     }
     assert!(
       has_actor_event(|e| matches!(
@@ -5522,11 +5598,12 @@ fn user_dca_complete_lifecycle() {
     );
     // Step 5: Multiple cycles
     let bob_before = asset_balance(&BOB, foreign);
-    for block in 7..27 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      Actors::on_initialize(block);
-      Actors::on_idle(block, Weight::MAX);
+    for block in 8..30 {
+      run_canonical_block_at(block, Weight::MAX);
     }
+    let settled = Actors::active_actor_view(actor_id).expect("funded DCA remains active");
+    assert_eq!(settled.cycle_state, CycleState::Idle);
+    assert!(!settled.pending_signal);
     let bob_after = asset_balance(&BOB, foreign);
     assert!(bob_after > bob_before, "Bob should receive transfers");
     // Step 6-7: Drain native below MinUserBalance; automatic cadence underfunding preserves process authority
@@ -5540,9 +5617,7 @@ fn user_dca_complete_lifecycle() {
     );
     // Later due occurrences advance without fee/readiness/apoptosis; lifecycle touchpoints do not predict solvency
     for block in 30..50 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      Actors::on_initialize(block);
-      Actors::on_idle(block, Weight::MAX);
+      run_canonical_block_at(block, Weight::MAX);
       if Actors::active_actor_view(actor_id).is_none() {
         break;
       }
@@ -5612,7 +5687,10 @@ fn deferred_cycle_does_not_consume_auto_close_nonce_target() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(starvation_blocked_budget(actor_id));
+    // The occurrence published at block 1 is served at B+1. A weight-blocked Drain pass must not
+    // open or complete a cycle, so a deferred cycle never consumes the auto-close nonce target.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_drain_only(starvation_blocked_budget(actor_id));
     let inst = Actors::active_actor_view(actor_id).expect("Actors must exist");
     assert_eq!(inst.cycle_nonce, 0);
     assert!(!has_actor_event(|event| matches!(
@@ -5620,7 +5698,8 @@ fn deferred_cycle_does_not_consume_auto_close_nonce_target() {
       Event::CycleStarted { actor_id: id, .. } | Event::CycleSummary { actor_id: id, .. }
         if *id == actor_id
     )));
-    run_idle(Weight::MAX);
+    // A full canonical round completes the successful cycle and reaches the auto-close target.
+    run_next_idle(Weight::MAX);
     assert!(Actors::active_actor_view(actor_id).is_none());
   });
 }
@@ -5725,13 +5804,12 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
           )
           .expect("Fresh target and suffix fit")
         };
-        let schedule = if case.stimulus == StepParityStimulus::PredicateError {
-          observation_schedule(vec![1])
-        } else if case.actor_type == ActorType::System && case.mutability == Mutability::Immutable {
-          timer_schedule(1)
-        } else {
-          manual_schedule()
-        };
+        let schedule =
+          if case.actor_type == ActorType::System && case.mutability == Mutability::Immutable {
+            timer_schedule(1)
+          } else {
+            manual_schedule()
+          };
         let expected_contract = match case.actor_type {
           ActorType::User => user_active_contract(schedule.clone(), None, steps.clone()),
           ActorType::System => system_active_contract(schedule.clone(), None, steps.clone()),
@@ -5753,11 +5831,17 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
             100
           },
         );
+        let mut occurrence_block = frame_system::Pallet::<Test>::block_number()
+          .checked_add(1)
+          .expect("matrix occurrence block");
         if case.actor_type == ActorType::System && case.mutability == Mutability::Immutable {
-          frame_system::Pallet::<Test>::set_block_number(11);
-          assert!(enqueue_latched_actor(actor_id));
-        } else if case.stimulus == StepParityStimulus::PredicateError {
-          assert!(enqueue_latched_actor(actor_id));
+          // A Cadenced Actor arms its trigger deadline at creation. Servicing the due frontier
+          // publishes the canonical Pending occurrence for the following block instead of
+          // injecting a legacy paged entry.
+          let due = scheduled_wakeup_block(actor_id).expect("cadence armed at creation");
+          frame_system::Pallet::<Test>::set_block_number(due);
+          service_canonical_temporal_frontiers(due);
+          occurrence_block = due.checked_add(1).expect("cadence occurrence block");
         } else {
           assert_ok!(Actors::manual_trigger(
             RuntimeOrigin::signed(ALICE),
@@ -5766,7 +5850,8 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
         }
         if current_run {
           // Commit the real prefix before comparing one target Step, never a whole-cycle runner.
-          Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
+          // Canonical publication serves the occurrence one block after the latch.
+          run_canonical_round_at(occurrence_block, Weight::MAX);
           let prefix_run = Actors::actor_run_state(actor_id).expect("matrix prefix opens a Run");
           assert_eq!(prefix_run.cursor, 1, "{} prefix cursor", case.name);
           frame_system::Pallet::<Test>::set_block_number(prefix_run.eligible_at);
@@ -5784,19 +5869,19 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
               .expect("matrix suspension persists")
               .eligible_at;
             frame_system::Pallet::<Test>::set_block_number(eligible_at);
-            let mut meter = WeightMeter::with_limit(Weight::MAX);
-            Actors::drain_overdue_wakeups_cursor(eligible_at, &mut meter);
+            service_canonical_temporal_frontiers(eligible_at);
           }
+        } else {
+          frame_system::Pallet::<Test>::set_block_number(occurrence_block);
         }
         let mode = if current_run {
           SimulationMode::CurrentRun
         } else {
           SimulationMode::FreshCurrentPlan
         };
-        assert_eq!(
-          Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-          Some(actor_id),
-          "{} target is the real production FIFO head",
+        assert!(
+          crate::ServiceNodes::<Test>::contains_key(actor_id),
+          "{} target is the real production Service head",
           case.name
         );
         System::reset_events();
@@ -6032,6 +6117,9 @@ fn simulation_zero_step_user_auto_close_preserves_budget_and_rollback_boundaries
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // A fresh occurrence publishes one Pending Service at B+1, so the canonical round is only
+    // eligible in the following block.
+    System::set_block_number(2);
     let contract = Actors::load_actor_contract(actor_id).expect("zero-Step Contract exists");
     let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     let custody = native_balance(&sovereign_account(actor_id));
@@ -6082,59 +6170,6 @@ fn simulation_zero_step_user_auto_close_preserves_budget_and_rollback_boundaries
 }
 
 #[test]
-fn simulation_terminal_ready_rejects_corrupt_fifo_span_without_cleanup() {
-  new_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_contract_steps(),
-    );
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    let contract = Actors::load_actor_contract(actor_id).expect("admitted windowed Contract");
-    assert!(matches!(
-      Actors::actor_control_cell(actor_id).map(|(location, _)| location),
-      Some(crate::ActorControlLocation::Ready { .. })
-    ));
-    System::set_block_number(102);
-    assert_eq!(
-      active_eligibility(actor_id).terminal_reason,
-      Some(CloseReason::WindowExpired)
-    );
-    let head = Actors::queue_head();
-    crate::ActorReadyTail::<Test>::put(
-      head + u64::from(<<Test as crate::Config>::MaxQueueLength as Get<u32>>::get()) + 1,
-    );
-    System::reset_events();
-    let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    let account = sovereign_account(actor_id);
-    let custody = native_balance(&account);
-    assert_eq!(
-      Actors::simulate_current_contract(
-        actor_id,
-        ActorType::System,
-        Mutability::Mutable,
-        contract,
-        SimulationMode::FreshCurrentPlan,
-        ample_simulation_budget()
-      ),
-      Err(SimulationError::Classification(
-        ActorClassificationError::ActorInvariant
-      ))
-    );
-    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), root);
-    Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
-    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), root);
-    assert_eq!(native_balance(&account), custody);
-    assert!(System::events().is_empty());
-  });
-}
-
-#[test]
 fn simulation_non_ready_terminal_cleanup_is_budgeted_and_custody_neutral() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -6153,6 +6188,8 @@ fn simulation_non_ready_terminal_cleanup_is_budgeted_and_custody_neutral() {
         .queue_ticket
         .is_none()
     );
+    run_canonical_round_at(102, Weight::MAX);
+    System::set_block_number(103);
     let account = sovereign_account(actor_id);
     let custody = native_balance(&account);
     let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -6200,6 +6237,45 @@ fn simulation_non_ready_terminal_cleanup_is_budgeted_and_custody_neutral() {
 }
 
 #[test]
+fn simulation_non_ready_terminal_refuses_real_user_hold_release_failure() {
+  use polkadot_sdk::frame_support::traits::{fungible::MutateHold, tokens::Precision};
+  new_test_ext().execute_with(|| {
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      inert_contract_steps(),
+    );
+    crate::ActorSemanticStates::<Test>::mutate(actor_id, |state| {
+      let Some(crate::ActorSemanticState::Active(record)) = state else {
+        panic!("active source");
+      };
+      record.identity.cycle_nonce = u64::MAX;
+    });
+    let contract = Actors::load_actor_contract(actor_id).unwrap();
+    let reason: RuntimeHoldReason = crate::HoldReason::ActorState.into();
+    assert_ok!(Balances::release(&reason, &ALICE, 1, Precision::Exact));
+    assert!(Actors::active_actor_state(actor_id).is_some());
+    let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+    assert_eq!(
+      Actors::simulate_current_contract(
+        actor_id,
+        ActorType::User,
+        Mutability::Mutable,
+        contract,
+        SimulationMode::FreshCurrentPlan,
+        ample_simulation_budget(),
+      ),
+      Err(SimulationError::Classification(
+        ActorClassificationError::ActorInvariant
+      ))
+    );
+    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), root);
+  });
+}
+
+#[test]
 fn running_simulation_obeys_q1_and_returns_only_the_current_step() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -6229,6 +6305,9 @@ fn running_simulation_obeys_q1_and_returns_only_the_current_step() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // Canonical publication serves the Trigger occurrence at B+1, so the opening round must run at
+    // block 2 rather than in the trigger block.
+    frame_system::Pallet::<Test>::set_block_number(2);
     Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
     let run = Actors::actor_run_state(actor_id).expect("Opening commits only the prefix");
     assert_eq!(run.cursor, 1);
@@ -6294,10 +6373,9 @@ fn running_simulation_obeys_q1_and_returns_only_the_current_step() {
 #[test]
 fn run_simulation_preserves_retry_position_and_committed_state() {
   new_test_ext().execute_with(|| {
-    let actor_id = create_suspended_system_retry(1);
+    let actor_id = create_canonical_suspended_system_retry(1);
     let expected_contract =
-      system_active_contract(manual_schedule(), None, temporary_retry_swap_plan())
-        .expect("direct Actor Contract");
+      Actors::load_actor_contract(actor_id).expect("canonical retry Contract remains stored");
     let continuation_before = Actors::actor_run_state(actor_id).expect("Actor run exists");
     let actor_before = Actors::active_actor_view(actor_id).expect("actor exists");
     let events_before = frame_system::Pallet::<Test>::event_count();
@@ -6318,7 +6396,10 @@ fn run_simulation_preserves_retry_position_and_committed_state() {
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
       before_due_root
     );
-    frame_system::Pallet::<Test>::set_block_number(continuation_before.eligible_at);
+    run_canonical_round_at(continuation_before.eligible_at, Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(
+      continuation_before.eligible_at.saturating_add(1),
+    );
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
 
     let result = Actors::simulate_current_contract(
@@ -6390,6 +6471,8 @@ fn simulation_projects_first_retry_suspension_and_rolls_back_actor_mutation() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // The fresh occurrence is eligible at B+1, where the canonical round retries the failing Step.
+    System::set_block_number(2);
     let actor_before = Actors::active_actor_view(actor_id).expect("actor exists");
     let events_before = frame_system::Pallet::<Test>::event_count();
 
@@ -6425,13 +6508,28 @@ fn simulation_classification_uses_frame_authority_without_scalar_control_partiti
         actor_id,
         ActorType::System,
         Mutability::Mutable,
-        expected_contract,
+        expected_contract.clone(),
         SimulationMode::FreshCurrentPlan,
         ample_simulation_budget(),
       )
       .err(),
       Some(SimulationError::NotReady)
     );
+    crate::ActorControlLocators::<Test>::insert(actor_id, crate::ActorControlLocation::Unsignaled);
+    assert_eq!(
+      Actors::simulate_current_contract(
+        actor_id,
+        ActorType::System,
+        Mutability::Mutable,
+        expected_contract,
+        SimulationMode::FreshCurrentPlan,
+        ample_simulation_budget(),
+      ),
+      Err(SimulationError::Classification(
+        ActorClassificationError::ActorInvariant
+      ))
+    );
+    crate::ActorControlLocators::<Test>::remove(actor_id);
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -6469,7 +6567,7 @@ fn simulation_rejects_contract_and_mode_mismatch_without_execution() {
         ActorType::System,
         Mutability::Mutable,
         ActorContract {
-          trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 100,),
+          trigger: RuntimeTrigger::at_time(0),
           ..system_active_contract(manual_schedule(), None, contract_steps.clone())
             .expect("direct Actor Contract")
         },
@@ -6522,9 +6620,10 @@ fn simulation_rejects_contract_and_mode_mismatch_without_execution() {
 #[test]
 fn canonical_loader_requires_run_state_exactly_for_suspended_state() {
   new_test_ext().execute_with(|| {
+    // Canonical publication owns no legacy primary, so the corruption partitions exercise the
+    // semantic owner, the Run store, and the admitted Contract geometry.
     let actor_id = create_suspended_system_retry(1);
     let run_state = Actors::actor_run_state(actor_id).expect("suspended run exists");
-    let (location, cell) = Actors::actor_control_cell(actor_id).expect("primary exists");
     assert!(matches!(
       Actors::load_actor_state(actor_id),
       LoadedActorStateOf::Active(_)
@@ -6535,85 +6634,33 @@ fn canonical_loader_requires_run_state_exactly_for_suspended_state() {
       LoadedActorStateOf::Corrupt
     ));
     ActorRunStateStore::<Test>::insert(actor_id, run_state);
-    mutate_primary_control_cell(actor_id, |stored| stored.hot.cycle_state = CycleState::Idle);
+    mutate_actor_hot_coherent(actor_id, |hot| hot.cycle_state = CycleState::Idle);
     assert!(matches!(
       Actors::load_actor_state(actor_id),
       LoadedActorStateOf::Corrupt
     ));
-    mutate_primary_control_cell(actor_id, |stored| *stored = cell.clone());
+    mutate_actor_hot_coherent(actor_id, |hot| hot.cycle_state = CycleState::Suspended);
     assert!(matches!(
       Actors::load_actor_state(actor_id),
       LoadedActorStateOf::Active(_)
     ));
 
     let contract = Actors::load_actor_contract(actor_id).expect("Contract exists");
-    let admission = cell.admission.clone();
-    for remove_partition in 0u8..4 {
-      match remove_partition {
-        0 => {
-          crate::ActorControlLocators::<Test>::remove(actor_id);
-          assert!(matches!(
-            Actors::load_actor_state(actor_id),
-            LoadedActorStateOf::Corrupt
-          ));
-          crate::ActorControlLocators::<Test>::insert(actor_id, location);
-        }
-        1 => {
-          mutate_primary_control_cell(actor_id, |stored| stored.actor_id = u64::MAX);
-          assert!(matches!(
-            Actors::load_actor_state(actor_id),
-            LoadedActorStateOf::Corrupt
-          ));
-          match location {
-            crate::ActorControlLocation::Unsignaled => {
-              crate::ActorUnsignaledControlCells::<Test>::insert(actor_id, cell.clone());
-            }
-            crate::ActorControlLocation::Ready { ticket } => {
-              crate::ActorReadyFrameChunks::<Test>::mutate(ticket / 32, |stored| {
-                *stored
-                  .as_mut()
-                  .expect("Ready page")
-                  .get_mut((ticket % 32) as usize)
-                  .expect("Ready slot") = Some(cell.clone());
-              });
-            }
-            crate::ActorControlLocation::Waiting { key, page, slot } => {
-              crate::ActorWaitingFrameChunks::<Test>::mutate((key, page), |stored| {
-                *stored
-                  .as_mut()
-                  .expect("Waiting page")
-                  .entries
-                  .get_mut(usize::from(slot))
-                  .expect("Waiting slot") = Some(crate::ActorWaitingEntry::Primary(cell.clone()));
-              });
-            }
-          }
-        }
-        2 => {
-          assert!(Actors::remove_admitted_contract_geometry(actor_id).is_some());
-          assert!(matches!(
-            Actors::load_actor_state(actor_id),
-            LoadedActorStateOf::Corrupt
-          ));
-          assert!(Actors::insert_admitted_contract_geometry(
-            actor_id, &contract, &admission
-          ));
-        }
-        3 => {
-          let funding = ActorFunding::<Test>::take(actor_id).expect("funding exists");
-          assert!(matches!(
-            Actors::load_actor_state(actor_id),
-            LoadedActorStateOf::Corrupt
-          ));
-          ActorFunding::<Test>::insert(actor_id, funding);
-        }
-        _ => unreachable!(),
-      }
-      assert!(matches!(
-        Actors::load_actor_state(actor_id),
-        LoadedActorStateOf::Active(_)
-      ));
-    }
+    let admission = Actors::load_control_authority_with_authority(actor_id)
+      .map(|(_, _, admission)| admission)
+      .expect("canonical admission exists");
+    assert!(Actors::remove_admitted_contract_geometry(actor_id).is_some());
+    assert!(matches!(
+      Actors::load_actor_state(actor_id),
+      LoadedActorStateOf::Corrupt
+    ));
+    assert!(Actors::insert_admitted_contract_geometry(
+      actor_id, &contract, &admission
+    ));
+    assert!(matches!(
+      Actors::load_actor_state(actor_id),
+      LoadedActorStateOf::Active(_)
+    ));
   });
 }
 
@@ -6621,12 +6668,14 @@ fn canonical_loader_requires_run_state_exactly_for_suspended_state() {
 fn eligibility_projection_reports_suspended_retry_then_ready_at_attempt_block() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
+    // Canonical publication serves the Trigger occurrence at B+1, so the opening attempt lands at
+    // block 2 and the one-block retry cooldown places eligibility at block 3 rather than 2.
     assert_eq!(
       active_eligibility(actor_id).execution_phase,
-      ActorExecutionPhase::WaitingRetry(2)
+      ActorExecutionPhase::WaitingRetry(3)
     );
 
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
     assert_eq!(
       active_eligibility(actor_id).execution_phase,
       ActorExecutionPhase::Ready

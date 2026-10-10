@@ -5,10 +5,12 @@ Excludes: Runtime submission, file-system loaders, UI presentation, and alternat
 Zone: Web-client validation entrypoint; composes configuration IR with canonical authoring and artifact contracts.
 */
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
+import { readActorsTestMetadata } from './actors-test-metadata.mjs';
+
 import {
+  DEOS_ACTORS_AUTHORING_LIMITS,
   createActorArtifactFromAuthoring,
   lowerActorAuthoringContract,
 } from '../src/lib/automation/authoring.ts';
@@ -25,11 +27,16 @@ import {
   serializeActorConfigurationMarkdown,
   serializeActorConfigurationToml,
 } from '../src/lib/automation/configuration-ir.ts';
-import { inspectActorContractArtifact } from '../src/lib/automation/contract-artifact.ts';
+import {
+  inspectActorContractArtifact,
+  readActorBehaviorContractSchema,
+} from '../src/lib/automation/contract-artifact.ts';
 
-const metadataBytes = new Uint8Array(
-  await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
-);
+const metadataBytes = await readActorsTestMetadata();
+const limits = () => ({
+  ...DEOS_ACTORS_AUTHORING_LIMITS,
+  behavior: readActorBehaviorContractSchema(metadataBytes),
+});
 const runtime = {
   genesisHash: `0x${'55'.repeat(32)}`,
   specVersion: 1,
@@ -47,8 +54,21 @@ const feed = {
 const contract = {
   actorType: 'System',
   mutability: 'Mutable',
-  completionPolicy: 'CloseAfterProductiveCycle',
-  trigger: { type: 'ObservationChange', feed },
+  closeWhen: {
+    clauses: [
+      [
+        { metric: 'ActionSuccessTotal', threshold: 1 },
+        { metric: 'CycleCompletedTotal', threshold: 1 },
+      ],
+    ],
+  },
+  onUnfunded: 'Close',
+  autoCloseAtCycleNonce: null,
+  trigger: {
+    type: 'AddressEvent',
+    sourceFilter: { type: 'Any' },
+    assetFilter: { type: 'Any' },
+  },
   cooldownBlocks: 4,
   scheduleWindow: { start: 10, end: 1_000 },
   fundingPolicy: { type: 'RuntimePolicy' },
@@ -59,21 +79,15 @@ const contract = {
         clauses: [
           [
             {
-              timing: 'Opening',
-              predicate: {
-                type: 'ObservationBelow',
-                feed,
-                threshold: '1500000000000',
-                maxAgeBlocks: 20,
-              },
+              type: 'ObservationBelow',
+              feed,
+              threshold: '1500000000000',
+              maxAgeBlocks: 20,
             },
             {
-              timing: 'Current',
-              predicate: {
-                type: 'BalanceAbove',
-                asset: native,
-                threshold: '100',
-              },
+              type: 'BalanceAbove',
+              asset: native,
+              threshold: '100',
             },
           ],
         ],
@@ -132,12 +146,12 @@ test('syntax comments and Markdown prose do not alter lowering or Actor Contract
     ),
     parseActorConfigurationMarkdown(
       serializeActorConfigurationMarkdown(ir).replace(
-        '<!-- deos.actor.configuration-ir@1 -->',
-        '<!-- deos.actor.configuration-ir@1 -->\n\nOperator prose is not executable.',
+        '<!-- deos.actor.configuration-ir@2 -->',
+        '<!-- deos.actor.configuration-ir@2 -->\n\nOperator prose is not executable.',
       ),
     ),
   ];
-  const canonicalLowering = lowerActorAuthoringContract(contract);
+  const canonicalLowering = lowerActorAuthoringContract(contract, limits());
   const canonicalArtifact = createActorArtifactFromAuthoring({
     contract: contract,
     metadataBytes,
@@ -150,7 +164,10 @@ test('syntax comments and Markdown prose do not alter lowering or Actor Contract
   );
   assert.equal(canonicalInspection.valid, true);
   for (const parsed of sources) {
-    assert.deepEqual(lowerActorConfigurationIr(parsed), canonicalLowering);
+    assert.deepEqual(
+      lowerActorConfigurationIr(parsed, limits()),
+      canonicalLowering,
+    );
     const parsedContract = configurationIrToAuthoringContract(parsed);
     const artifact = createActorArtifactFromAuthoring({
       contract: parsedContract,
@@ -191,7 +208,7 @@ test('structural diagnostics and diff remain path-addressed and deterministic', 
   ]);
   const invalid = structuredClone(ir);
   invalid.steps[0].errorPolicy.maxAttempts = 0;
-  const diagnostics = diagnoseActorConfigurationIr(invalid);
+  const diagnostics = diagnoseActorConfigurationIr(invalid, limits());
   assert.equal(diagnostics.length, 1);
   assert.equal(diagnostics[0].severity, 'Error');
   assert.match(diagnostics[0].path, /steps\[0\]/);

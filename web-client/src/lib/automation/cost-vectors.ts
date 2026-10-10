@@ -31,8 +31,6 @@ export type ActorCostVectors = {
 const TRIGGER_FAMILIES = new Set<ActorTriggerFeeView['family']>([
   'Manual',
   'AddressEvent',
-  'ObservationChange',
-  'ObservationCrossing',
   'AtTime',
   'Cadenced',
 ]);
@@ -126,22 +124,22 @@ function quote(value: unknown, label: string): ActorCostView {
             candidate.machineFee,
             `${label}.prospectivePipelineFee.machineFee`,
           );
-          const cleanupFee = decimal(
-            candidate.cleanupFee,
-            `${label}.prospectivePipelineFee.cleanupFee`,
-          );
+          if ('cleanupFee' in candidate) {
+            throw new Error(
+              `${label}.prospectivePipelineFee contains a retired cleanup fee`,
+            );
+          }
           const totalFee = decimal(
             candidate.totalFee,
             `${label}.prospectivePipelineFee.totalFee`,
           );
-          if (machineFee + cleanupFee !== totalFee) {
+          if (machineFee !== totalFee) {
             throw new Error(
               `${label}.prospectivePipelineFee total is inconsistent`,
             );
           }
           return {
             machineFee,
-            cleanupFee,
             totalFee,
             strategy: 'UpfrontBounded' as const,
             admissionIdentity: identity(
@@ -177,7 +175,6 @@ function quote(value: unknown, label: string): ActorCostView {
       `${label}.stateHold.contractBody`,
     ),
     detector: decimal(componentsSource.detector, `${label}.stateHold.detector`),
-    funding: decimal(componentsSource.funding, `${label}.stateHold.funding`),
     run: decimal(componentsSource.run, `${label}.stateHold.run`),
   };
   const holdTotal = decimal(holdSource.total, `${label}.stateHold.total`);

@@ -84,7 +84,7 @@ One fixed ordered row in `ContractSteps`, containing an optional `Precondition`,
 
 ### Actor Control
 
-The component-wise hard-ceiling resource domain for Actor-specific detection, materialization, current-Step evaluation, FIFO movement, lifecycle bookkeeping, and bounded cleanup. It receives at most one third of schedulable block `Weight`.
+The component-wise hard-ceiling resource domain for Actor-specific detection, materialization, current-Step evaluation, Service ring and deadline movement, lifecycle bookkeeping, and bounded cleanup. It receives at most one third of schedulable block `Weight`.
 
 ### Shared Economic Execution
 

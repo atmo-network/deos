@@ -5,8 +5,9 @@ Excludes: Signing, submission, runtime mutation, and protocol policy.
 Zone: Web-client validation entrypoint; imports automation domain contracts only.
 */
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+
+import { readActorsTestMetadata } from './actors-test-metadata.mjs';
 
 import { analyzeActorContract } from '../src/lib/automation/analysis.ts';
 import {
@@ -18,9 +19,7 @@ import {
   projectActorCompositionWarnings,
 } from '../src/lib/automation/risk-warnings.ts';
 
-const metadataBytes = new Uint8Array(
-  await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
-);
+const metadataBytes = await readActorsTestMetadata();
 const runtime = {
   genesisHash: `0x${'11'.repeat(32)}`,
   specVersion: 1,
@@ -35,7 +34,6 @@ const fixed = (value = 10n) => ({ type: 'Fixed', value });
 
 const taskNames = [
   'Transfer',
-  'SplitTransfer',
   'SwapIn',
   'SwapOut',
   'AddLiquidity',
@@ -56,9 +54,9 @@ const weightModel = {
     refTime: 10n + BigInt(conditionCount),
     proofSize: 2n + BigInt(conditionCount),
   }),
-  taskUpper: ({ splitLegs }) => ({
-    weight: { refTime: 100n + BigInt(splitLegs), proofSize: 5n },
-    executionFeeUpper: 7n + BigInt(splitLegs),
+  taskUpper: () => ({
+    weight: { refTime: 100n, proofSize: 5n },
+    executionFeeUpper: 7n,
   }),
   lifecycleOverhead: {
     weight: { refTime: 20n, proofSize: 3n },
@@ -114,7 +112,8 @@ function activeContract(steps) {
     cooldown_blocks: 5,
     window: undefined,
     steps,
-    completion: variant('Persistent'),
+    close_when: undefined,
+    on_unfunded: variant('Close'),
     funding: variant('OwnerOnly'),
     auto_close_at_cycle_nonce: undefined,
   };
@@ -156,7 +155,7 @@ test('Immutable actor without a terminal step produces a critical warning', () =
   );
   assert.ok(hit, 'immutable-without-terminal warning expected');
   assert.equal(hit.severity, 'critical');
-  assert.match(hit.message, /custody permanently/);
+  assert.match(hit.message, /owner cannot close it early/);
 });
 
 test('Immutable zero-Step AtTime with auto-close nonce has an authored terminal', () => {
@@ -171,6 +170,44 @@ test('Immutable zero-Step AtTime with auto-close nonce has an authored terminal'
   assert.ok(
     !warnings.some((w) => w.kind === 'ImmutableWithoutReachableTerminal'),
     'authored auto-close nonce is a reachable immutable terminal',
+  );
+});
+
+test('Cycle abort does not supply an Immutable Actor lifetime terminal', () => {
+  const artifact = artifactFor({
+    steps: [step({ onError: 'AbortCycle' })],
+    mutability: 'Immutable',
+  });
+  const warnings = projectActorCompositionWarnings({
+    artifact,
+    analysis: analyze(artifact),
+  });
+  assert(
+    warnings.some(
+      (warning) => warning.kind === 'ImmutableWithoutReachableTerminal',
+    ),
+  );
+});
+
+test('explicit outcome closure is an authored lifetime terminal without a permanence claim', () => {
+  const contract = activeContract([]);
+  contract.close_when = [
+    [
+      {
+        metric: { type: 'CycleCompletedTotal', value: undefined },
+        threshold: 2,
+      },
+    ],
+  ];
+  const artifact = artifactFor({ contract, mutability: 'Immutable' });
+  const warnings = projectActorCompositionWarnings({
+    artifact,
+    analysis: analyze(artifact),
+  });
+  assert(
+    !warnings.some(
+      (warning) => warning.kind === 'ImmutableWithoutReachableTerminal',
+    ),
   );
 });
 
@@ -243,7 +280,7 @@ test('all warning kinds are declared in the stable enumeration', () => {
   const artifact = artifactFor({ steps: [step()] });
   const analysis = analyze(artifact);
   projectActorCompositionWarnings({ artifact, analysis });
-  assert.ok(ACTORS_COMPOSITION_WARNING_KINDS.length >= 8);
+  assert.ok(ACTORS_COMPOSITION_WARNING_KINDS.length === 6);
   assert.ok(
     ACTORS_COMPOSITION_WARNING_KINDS.includes(
       'ImmutableWithoutReachableTerminal',
@@ -254,33 +291,4 @@ test('all warning kinds are declared in the stable enumeration', () => {
       'CompletedDoesNotImplyAllTasksSuccess',
     ),
   );
-  assert.ok(
-    ACTORS_COMPOSITION_WARNING_KINDS.includes('BroadObservationFanout'),
-  );
-  assert.ok(
-    ACTORS_COMPOSITION_WARNING_KINDS.includes('SparseObservationCrossing'),
-  );
-});
-
-test('high-cardinality broad observation projection escalates with the bounded subscriber count', () => {
-  const artifact = artifactFor({ steps: [step()] });
-  const base = analyze(artifact);
-  const analysis = {
-    ...base,
-    trigger: {
-      kind: 'ObservationChange',
-      sourceKinds: ['ObservationChange'],
-      feed: 7,
-    },
-  };
-  const warnings = projectActorCompositionWarnings({
-    artifact,
-    analysis,
-    observationSubscriberCount: 1_000,
-  });
-  const warning = warnings.find(
-    (entry) => entry.kind === 'BroadObservationFanout',
-  );
-  assert.equal(warning?.severity, 'warning');
-  assert.match(warning?.evidence ?? '', /subscribers=1000/);
 });

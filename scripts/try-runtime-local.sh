@@ -41,6 +41,7 @@ Options:
 Environment:
   PREPARE_NETWORK=0|1
   START_NETWORK=0|1
+  DEOS_OMNI_NODE_PATH=<path> and DEOS_OMNI_NODE_SHA256=<sha> select a qualified Omni
   KEEP_NETWORK=0|1
   RUN_ON_RUNTIME_UPGRADE=0|1
   RUN_EXECUTE_BLOCK=0|1
@@ -93,6 +94,8 @@ prepare_prerequisites() {
     phase_banner "Step 1: Prepare local artifacts"
     export CHAIN_TYPE
     run_script_step "Download node binaries" "01-download-binaries.sh"
+    hydrate_local_tool_paths
+    verify_deos_omni_node "$(command -v polkadot-omni-node-deos || true)"
     run_script_step "Install cargo tools" "02-install-tools.sh"
     run_script_step "Build runtime" "03-build-runtime.sh"
     run_script_step "Generate chain spec" "04-generate-chain-spec.sh"
@@ -110,7 +113,8 @@ check_prerequisites() {
         require_commands jq
     fi
     if [[ "$START_NETWORK" == "1" ]]; then
-        require_commands polkadot polkadot-omni-node zombienet chain-spec-builder
+        require_commands polkadot polkadot-omni-node-deos zombienet chain-spec-builder
+        verify_deos_omni_node "$(command -v polkadot-omni-node-deos)"
         if [[ ! -f "$TEMPLATE_DIR/chain_spec.json" ]]; then
             log_error "Missing chain spec: $TEMPLATE_DIR/chain_spec.json"
             echo "  Hint: run ./scripts/04-generate-chain-spec.sh or rerun with --prepare"

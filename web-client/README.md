@@ -34,6 +34,8 @@ The client follows the repository-wide read-model contract:
 
 Do not make archive/search/dashboard behavior look like canonical chain truth. If a future feature needs an indexer, model that dependency explicitly.
 
+Actor monitoring reads finalized canonical semantic/process owners and shows current residence. Missing canonical metadata is unavailable, never an absent Actor. Eligibility API v8 retains the original unpaid reason/grace, exact debt/current shortfall, authenticated behavior episode generation, referenced caps, capped monitor values and clean-Cycle flags, distinguishing stateless policies from allocated state. Resource API v2 separately exposes creation admission, machine freeze and block-local halt; missing flag metadata leaves resource data usable. The committed schema matches the selected Wasm and local SCALE/consumer checks pass; public policy admission, complete financial/resource qualification and live RPC/rendered conformance remain separate gates.
+
 ## Architecture Boundaries
 
 ### Domain slices
@@ -126,6 +128,17 @@ When runtime query/view surfaces change, refresh metadata with:
 ../scripts/export-papi-metadata.sh
 ```
 
+Then regenerate the dependent ABI and ingress projections:
+
+```sh
+npm run generate:actors-abi
+npm run generate:ingress-evidence
+```
+
+The package-owned `fee_envelope_vectors` and runtime-owned `actor_cost_vectors` examples also bind the metadata hash; invoke the owning Cargo examples from `../template` with explicit output paths to refresh them. `../scripts/validate-local.sh full` checks their exact freshness. The cost-vector fixture starts with disabled User creation and explicitly enables it through the public setter in isolated externalities; it does not change genesis policy.
+
+Default metadata export requires an existing current production-profile Wasm and compares native bytes with its actual Metadata API before writing. Use `--wasm PATH` for explicit code or `--native-only` only for labelled source preparation. Descriptor generation does not by itself qualify runtime admission, resource bounds or live RPC.
+
 For local native-staking demos, regenerate the chain spec with current runtime presets, start the local network, then run:
 
 ```sh
@@ -148,7 +161,7 @@ Use the smallest meaningful validation first. For full client validation, run:
 npm run validate
 ```
 
-That command runs Prettier, deterministic Actors contract-artifact regressions, Svelte checks, and the production build. Use `npm run test:automation` for focused metadata/SCALE artifacts, structural diffs, state-pinned amount resolution, Weight/fee separation, forecast staleness, local task rollback, Continuation cursors, donation sensitivity, exact Actors call/origin composition, and matching-Wasm provenance-gate fixtures. Independent Domain DAG and Wiki Sync Skills may audit this workspace, but client and project validation do not depend on their internal scripts.
+That command runs Prettier, deterministic Actors contract-artifact regressions, Svelte checks, and the production build. Use `npm run test:automation` for focused metadata/SCALE artifacts, structural diffs, state-pinned amount resolution, Weight/fee separation, forecast staleness, local task rollback, Continuation cursors, donation sensitivity, exact Actors call/origin composition, and matching-Wasm provenance-gate fixtures. For source preparation, `DEOS_ACTORS_TEST_METADATA_PATH=/absolute/path/native.scale npm run test:automation` supplies one explicit native metadata fixture without replacing committed artifacts. Generated ABI/normative checks still inspect their authoritative committed bindings; a native codec pass does not establish runtime admission, Wasm execution or production resource qualification. Independent Domain DAG and Wiki Sync Skills may audit this workspace, but client and project validation do not depend on their internal scripts.
 
 ## Production Build
 

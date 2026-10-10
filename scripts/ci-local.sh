@@ -7,6 +7,8 @@ ONLY_CHECK="all"
 FIX_FORMAT=0
 TARGET_PACKAGE=""
 TEST_FILTER=""
+TEST_TARGET=""
+SELF_TEST=0
 RELEASE_TESTS=0
 FEATURE_MODE="auto"
 SKIP_WASM_BUILD="${SKIP_WASM_BUILD:-1}"
@@ -29,6 +31,8 @@ Options:
   --only CHECK       Run one compact check: clippy, tests, docs, format, or check
   --package NAME     Scope clippy, tests, docs, or check to one Cargo package
   --test-filter NAME Scope --only tests to one Cargo test-name filter
+  --test-target NAME Select one integration test; requires --only tests --package
+  --self-test        Check argument/command contracts without running Cargo
   --release          Use optimized tests; requires --only tests
   --all-features     Enable all Cargo features (Clippy default)
   --default-features Use package default features, including for Clippy
@@ -43,6 +47,7 @@ EOF
 }
 
 parse_args() {
+    local argument_count=$#
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --only)
@@ -79,6 +84,18 @@ parse_args() {
                 shift 2
                 continue
                 ;;
+            --test-target)
+                if [[ $# -lt 2 || -z "$2" ]]; then
+                    log_error "--test-target requires a Cargo integration test name"
+                    exit 2
+                fi
+                TEST_TARGET="$2"
+                shift 2
+                continue
+                ;;
+            --self-test)
+                SELF_TEST=1
+                ;;
             --release)
                 RELEASE_TESTS=1
                 ;;
@@ -103,6 +120,20 @@ parse_args() {
         esac
         shift
     done
+    if (( SELF_TEST == 1 && argument_count != 1 )); then
+        log_error "--self-test must be used alone"
+        exit 2
+    fi
+    if [[ -n "$TEST_TARGET" ]]; then
+        if [[ "$ONLY_CHECK" != "tests" || -z "$TARGET_PACKAGE" ]]; then
+            log_error "--test-target requires --only tests and --package"
+            exit 2
+        fi
+        if [[ ! "$TEST_TARGET" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]*$ ]]; then
+            log_error "--test-target accepts a simple Cargo integration test name"
+            exit 2
+        fi
+    fi
     if (( FIX_FORMAT == 1 )) && [[ "$ONLY_CHECK" != "format" ]]; then
         log_error "--fix requires --only format"
         exit 2
@@ -179,14 +210,17 @@ run_primary_checks() {
     fi
 
     if selected tests; then
-        local feature_args profile_args=""
+        local feature_args profile_args="" target_args=""
         feature_args="$(cargo_feature_args tests)"
+        if [[ -n "$TEST_TARGET" ]]; then
+            target_args=" --test '$TEST_TARGET'"
+        fi
         if (( RELEASE_TESTS == 1 )); then
             profile_args="--release"
         fi
         run_shell_step "Tests" \
             "15" \
-            "cargo test --locked $profile_args $feature_args $scope_args$test_filter"
+            "cargo test --locked $profile_args $feature_args $scope_args$target_args$test_filter"
     fi
 
     if selected docs; then
@@ -244,8 +278,66 @@ print_summary() {
     fi
 }
 
+self_test() (
+    local captured_command=""
+    run_shell_step() {
+        [[ "$1" == "Tests" && "$2" == "15" ]] || exit 1
+        captured_command="$3"
+    }
+    reset_test_args() {
+        ONLY_CHECK="all"
+        FIX_FORMAT=0
+        TARGET_PACKAGE=""
+        TEST_FILTER=""
+        TEST_TARGET=""
+        SELF_TEST=0
+        RELEASE_TESTS=0
+        FEATURE_MODE="auto"
+        captured_command=""
+    }
+    expect_command() {
+        local expected="$1"
+        shift
+        reset_test_args
+        parse_args "$@"
+        run_primary_checks
+        [[ "$captured_command" == "$expected" ]] || {
+            log_error "Unexpected test command: $captured_command"
+            exit 1
+        }
+    }
+    expect_refusal() {
+        reset_test_args
+        if (parse_args "$@") >/dev/null 2>&1; then
+            log_error "Expected argument refusal: $*"
+            exit 1
+        fi
+    }
+    expect_command "cargo test --locked   --workspace" --only tests
+    expect_command "cargo test --locked   --package 'pallet-deos-actors' 'behavior_runtime'" \
+        --only tests --package pallet-deos-actors --test-filter behavior_runtime
+    expect_command "cargo test --locked   --package 'pallet-deos-actors' --test 'current_state_semantic_oracle'" \
+        --only tests --package pallet-deos-actors --test-target current_state_semantic_oracle --default-features
+    expect_command "cargo test --locked --release --all-features --package 'pallet-deos-actors' --test 'current_state_semantic_oracle' 'q1'" \
+        --only tests --package pallet-deos-actors --test-target current_state_semantic_oracle --test-filter q1 --release --all-features
+    expect_refusal --only tests --package pallet-deos-actors --test-target
+    expect_refusal --only tests --package pallet-deos-actors --test-target ""
+    expect_refusal --only tests --package pallet-deos-actors --test-target --release
+    expect_refusal --only tests --test-target current_state_semantic_oracle
+    expect_refusal --package pallet-deos-actors --test-target current_state_semantic_oracle
+    expect_refusal --only check --package pallet-deos-actors --test-target current_state_semantic_oracle
+    expect_refusal --only tests --package pallet-deos-actors --test-target '../oracle'
+    expect_refusal --only tests --package pallet-deos-actors --test-target "oracle'; touch unsafe"
+    expect_refusal --self-test --only tests
+    log_success "Local CI argument/command self-test passed (4 commands, 9 refusals; no Cargo execution)"
+)
+
 main() {
     parse_args "$@"
+    if (( SELF_TEST == 1 )); then
+        self_test
+        return
+    fi
     phase_banner "DEOS local CI workflow"
     check_prerequisites
     run_primary_checks

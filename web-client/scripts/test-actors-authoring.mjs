@@ -9,6 +9,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
+import { readActorsTestMetadata } from './actors-test-metadata.mjs';
+
 import { analyzeActorContract } from '../src/lib/automation/analysis.ts';
 import {
   ACTORS_AUTHORING_CONDITION_TYPES,
@@ -24,11 +26,16 @@ import {
   replaceActorStep,
   validateActorAuthoringContract,
 } from '../src/lib/automation/authoring.ts';
-import { inspectActorContractArtifact } from '../src/lib/automation/contract-artifact.ts';
+import {
+  inspectActorContractArtifact,
+  readActorBehaviorContractSchema,
+} from '../src/lib/automation/contract-artifact.ts';
 
-const metadataBytes = new Uint8Array(
-  await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
-);
+const metadataBytes = await readActorsTestMetadata();
+const authoringLimits = () => ({
+  ...DEOS_ACTORS_AUTHORING_LIMITS,
+  behavior: readActorBehaviorContractSchema(metadataBytes),
+});
 const triggerEditorSource = await readFile(
   new URL(
     '../src/lib/automation/AutomationTriggerEditor.svelte',
@@ -77,10 +84,6 @@ const addressTrigger = {
   sourceFilter: { type: 'Any' },
   assetFilter: { type: 'Any' },
 };
-const observationTrigger = {
-  type: 'ObservationChange',
-  feed: observationFeed,
-};
 
 const weightModel = {
   identity: 'authoring-test-weights',
@@ -90,9 +93,9 @@ const weightModel = {
     refTime: 10n + BigInt(conditionCount),
     proofSize: 2n + BigInt(conditionCount),
   }),
-  taskUpper: ({ splitLegs }) => ({
-    weight: { refTime: 100n + BigInt(splitLegs), proofSize: 5n },
-    executionFeeUpper: 7n + BigInt(splitLegs),
+  taskUpper: () => ({
+    weight: { refTime: 100n, proofSize: 5n },
+    executionFeeUpper: 7n,
   }),
   lifecycleOverhead: {
     weight: { refTime: 20n, proofSize: 3n },
@@ -122,7 +125,8 @@ function contract(steps = [authoringStep('step-0')], overrides = {}) {
   return {
     actorType: 'User',
     mutability: 'Mutable',
-    completionPolicy: 'Persistent',
+    closeWhen: null,
+    onUnfunded: 'Close',
     trigger: { type: 'Manual' },
     cooldownBlocks: 0,
     scheduleWindow: null,
@@ -153,7 +157,7 @@ test('authoring controls cover every current task and predicate variant', () => 
     ),
     ACTORS_AUTHORING_CONDITION_TYPES,
   );
-  assert.equal(ACTORS_AUTHORING_TASK_TYPES.length, 12);
+  assert.equal(ACTORS_AUTHORING_TASK_TYPES.length, 11);
   assert.equal(ACTORS_AUTHORING_CONDITION_TYPES.length, 10);
 });
 
@@ -187,27 +191,39 @@ test('one metadata-aligned zero-to-twelve-step baseline applies to both actor cl
   }
 });
 
-test('completion policy lowers exactly and rejects unknown lifecycle values', () => {
-  const persistent = lowerActorAuthoringContract(contract());
-  assert.deepEqual(persistent.completion, {
-    type: 'Persistent',
-    value: undefined,
-  });
+test('outcome closure and fee-shortfall lower independently without legacy completion', () => {
+  const absent = lowerActorAuthoringContract(contract());
+  assert.equal(absent.close_when, undefined);
+  assert.deepEqual(absent.on_unfunded, { type: 'Close', value: undefined });
+  const closeWhen = {
+    clauses: [
+      [
+        { metric: 'ActionSuccessTotal', threshold: 1 },
+        { metric: 'CycleCompletedTotal', threshold: 1 },
+      ],
+    ],
+  };
   const oneShot = lowerActorAuthoringContract(
-    contract(undefined, { completionPolicy: 'CloseAfterProductiveCycle' }),
+    contract(undefined, { closeWhen, onUnfunded: 'AwaitFunding' }),
+    authoringLimits(),
   );
-  assert.deepEqual(oneShot.completion, {
-    type: 'CloseAfterProductiveCycle',
+  assert.deepEqual(
+    oneShot.close_when.map((clause) => clause.map((atom) => atom.metric.type)),
+    [['ActionSuccessTotal', 'CycleCompletedTotal']],
+  );
+  assert.deepEqual(oneShot.on_unfunded, {
+    type: 'AwaitFunding',
     value: undefined,
   });
+  assert.equal('completion' in oneShot, false);
   assert.equal(
     validateActorAuthoringContract(
-      contract(undefined, { completionPolicy: 'UnknownLifecycle' }),
+      contract(undefined, { completionPolicy: 'Persistent' }),
     ).valid,
     false,
   );
-  assert.match(automationWidgetSource, /Close after productive cycle/);
-  assert.match(automationWidgetSource, /committed effectful task/);
+  assert.match(automationWidgetSource, /Outcome lifetime/);
+  assert.match(automationWidgetSource, /Fee shortfall/);
 });
 
 test('optional auto-close target lowers exactly and rejects invalid u64 values', () => {
@@ -245,7 +261,7 @@ test('observation authoring exposes freshness and validates bounded identity', (
     contract([
       authoringStep('observation', transferTask(), {
         precondition: {
-          clauses: [[{ timing: 'Current', predicate: invalid }]],
+          clauses: [[invalid]],
         },
       }),
     ]),
@@ -280,10 +296,6 @@ test('trigger editor exposes one scalar trigger without graph vocabulary', () =>
     'Cadenced',
     'Manual',
     'AddressEvent',
-    'ObservationChange',
-    'ObservationCrossing',
-    'Rising',
-    'Falling',
     'OwnerOnly',
     'Whitelist',
     'everyTicks',
@@ -294,74 +306,38 @@ test('trigger editor exposes one scalar trigger without graph vocabulary', () =>
     );
   }
   assert(!triggerEditorSource.includes('maxTriggerSources'));
-  assert(triggerEditorSource.includes('Broad semantics'));
-  assert(triggerEditorSource.includes('creation never retrofires'));
+  assert(!triggerEditorSource.includes('ObservationChange'));
+  assert(!triggerEditorSource.includes('ObservationCrossing'));
+  assert(triggerEditorSource.includes('evaluated at execution time'));
   for (const rejected of ['successor', 'callback', 'branch target']) {
     assert(!triggerEditorSource.toLowerCase().includes(rejected));
   }
 });
 
-test('observation sources lower exactly and PercentageAtOpening is trigger-independent', () => {
-  const openingAmountStep = authoringStep(
-    'opening-amount',
-    transferTask({ type: 'PercentageAtOpening', parts: 500_000_000 }),
+test('current percentages remain trigger-independent and removed observation triggers fail closed', () => {
+  const currentAmountStep = authoringStep(
+    'current-amount',
+    transferTask({ type: 'Percent', parts: 500_000_000 }),
   );
-  const observationOnly = contract([openingAmountStep], {
-    trigger: observationTrigger,
-  });
-  assert.equal(validateActorAuthoringContract(observationOnly).valid, true);
-  const lowered = lowerActorAuthoringContract(observationOnly);
-  assert.deepEqual(lowered.trigger, {
-    type: 'ObservationChange',
-    value: {
-      feed: {
-        asset_in: { type: 'Native', value: undefined },
-        asset_out: { type: 'Local', value: 7 },
-        method: { type: 'PreExecutionSpot', value: undefined },
-        aggregation: { type: 'Ema', value: { half_life_blocks: 100 } },
-        scale: 12,
-      },
-    },
-  });
-  assert.equal(
-    validateActorAuthoringContract(
-      contract([openingAmountStep], { trigger: addressTrigger }),
-    ).valid,
-    true,
-  );
-});
-
-test('ObservationCrossing validates hysteresis and lowers exact u128 semantics', () => {
-  const rising = contract(undefined, {
-    trigger: {
-      type: 'ObservationCrossing',
-      feed: observationTrigger.feed,
-      direction: 'Rising',
-      threshold: '100',
-      rearmThreshold: '80',
-    },
-  });
-  assert.equal(validateActorAuthoringContract(rising).valid, true);
-  assert.deepEqual(lowerActorAuthoringContract(rising).trigger, {
-    type: 'ObservationCrossing',
-    value: {
-      feed: lowerActorAuthoringContract(
-        contract(undefined, { trigger: observationTrigger }),
-      ).trigger.value.feed,
-      direction: { type: 'Rising', value: undefined },
-      threshold: 100n,
-      rearm_threshold: 80n,
-    },
-  });
   for (const trigger of [
-    { ...rising.trigger, rearmThreshold: '100' },
-    { ...rising.trigger, direction: 'Falling', rearmThreshold: '80' },
-    { ...rising.trigger, threshold: `${1n << 128n}` },
+    { type: 'Manual' },
+    addressTrigger,
+    { type: 'Cadenced', everyTicks: 10 },
   ]) {
     assert.equal(
-      validateActorAuthoringContract(contract(undefined, { trigger })).valid,
-      false,
+      validateActorAuthoringContract(contract([currentAmountStep], { trigger }))
+        .valid,
+      true,
     );
+  }
+  for (const type of ['ObservationChange', 'ObservationCrossing']) {
+    const validation = validateActorAuthoringContract(
+      contract([currentAmountStep], {
+        trigger: { type, feed: observationFeed },
+      }),
+    );
+    assert.equal(validation.valid, false);
+    assert(validation.issues.some((issue) => issue.path === 'trigger.type'));
   }
 });
 
@@ -376,25 +352,35 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
         inputLimit: { type: 'Absolute', amount: '100' },
         slippageParts: 10_000_000,
       }),
-      authoringStep('transfer', transferTask({ type: 'AllAvailable' }), {
-        precondition: {
-          clauses: [
-            [
-              {
-                timing: 'Opening',
-                predicate: {
+      authoringStep(
+        'transfer',
+        transferTask({ type: 'Percent', parts: 1_000_000_000 }),
+        {
+          precondition: {
+            clauses: [
+              [
+                {
                   type: 'BalanceAbove',
                   asset: local,
                   threshold: '0',
                 },
-              },
+              ],
             ],
-          ],
+          },
+          errorPolicy: { type: 'RetryLater', maxAttempts: 3 },
         },
-        errorPolicy: { type: 'RetryLater', maxAttempts: 3 },
-      }),
+      ),
     ],
-    { completionPolicy: 'CloseAfterProductiveCycle' },
+    {
+      closeWhen: {
+        clauses: [
+          [
+            { metric: 'ActionSuccessTotal', threshold: 1 },
+            { metric: 'CycleCompletedTotal', threshold: 1 },
+          ],
+        ],
+      },
+    },
   );
   const first = artifact(draft);
   const second = artifact(structuredClone(draft));
@@ -408,8 +394,8 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
   if (inspection.valid) {
     assert.equal(inspection.projection.steps.length, 2);
     assert.equal(
-      inspection.projection.completion.type,
-      'CloseAfterProductiveCycle',
+      inspection.projection.close_when[0][0].metric.type,
+      'ActionSuccessTotal',
     );
     assert.deepEqual(inspection.projection.steps[0].task.value.input_limit, {
       type: 'Absolute',
@@ -428,7 +414,7 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
     weightModel,
   });
   assert.equal(analysis.identity.contractId, first.contractId);
-  assert.equal(analysis.completionPolicy, 'CloseAfterProductiveCycle');
+  assert.deepEqual(analysis.closeWhen, draft.closeWhen);
   assert.deepEqual(analysis.steps[0].parameters.input_limit, {
     type: 'Absolute',
     value: { $runtimeType: 'bigint', $integer: '100' },
@@ -478,15 +464,6 @@ test('ordered builder operations change only explicit Step order or content', ()
 test('every current Task lowers through metadata and remains analyzer-visible', () => {
   const tasks = [
     transferTask(),
-    {
-      type: 'SplitTransfer',
-      asset: native,
-      amount: fixed(),
-      legs: [
-        { to: accountA, shareParts: 400_000_000 },
-        { to: accountB, shareParts: 600_000_000 },
-      ],
-    },
     {
       type: 'SwapIn',
       assetIn: native,
@@ -548,15 +525,12 @@ test('every current Task lowers through metadata and remains analyzer-visible', 
     });
     assert.equal(result.steps[0].task, task.type);
   }
-  assert.equal(tasks.length, 12);
+  assert.equal(tasks.length, 11);
 });
 
 test('Unconditional and bounded DNF lower exactly and empty forms fail before encoding', () => {
   const atom = { type: 'BlockNumberAbove', threshold: 1 };
-  for (const precondition of [
-    null,
-    { clauses: [[{ timing: 'Opening', predicate: atom }]] },
-  ]) {
+  for (const precondition of [null, { clauses: [[atom]] }]) {
     const lowered = lowerActorAuthoringContract(
       contract([authoringStep('only', transferTask(), { precondition })]),
     );
@@ -617,17 +591,16 @@ test('every Predicate and AmountResolution lowers without changing step topology
       contract([
         authoringStep('only', transferTask(), {
           precondition: {
-            clauses: [[{ timing: 'Current', predicate: current }]],
+            clauses: [[current]],
           },
         }),
       ]),
     );
     assert.equal(lowered.steps.length, 1);
     const loweredPredicate = lowered.steps[0].precondition[0][0];
-    assert.equal(loweredPredicate.timing.type, 'Current');
-    assert.equal(loweredPredicate.predicate.type, current.type);
+    assert.equal(loweredPredicate.type, current.type);
     if (current.type.startsWith('Observation')) {
-      assert.deepEqual(loweredPredicate.predicate.value, {
+      assert.deepEqual(loweredPredicate.value, {
         feed: {
           asset_in: { type: 'Native', value: undefined },
           asset_out: { type: 'Local', value: 7 },
@@ -643,19 +616,59 @@ test('every Predicate and AmountResolution lowers without changing step topology
       });
     }
   }
-  const amounts = [
-    fixed(),
-    { type: 'PercentageOfCurrent', parts: 500_000_000 },
-    { type: 'PercentageAtOpening', parts: 500_000_000 },
-    { type: 'PercentageOfLastFunding', parts: 500_000_000 },
-    { type: 'AllAvailable' },
-  ];
+  const amounts = [fixed(), { type: 'Percent', parts: 500_000_000 }];
   for (const amount of amounts) {
     const lowered = lowerActorAuthoringContract(
       contract([authoringStep('only', transferTask(amount))]),
     );
     assert.equal(lowered.steps[0].task.value.amount.type, amount.type);
   }
+});
+
+test('stepped distribution captures one volume and rejects invalid reuse', () => {
+  const capture = {
+    type: 'CaptureCycleBalance',
+    percentParts: 100_000_000,
+    shareParts: 500_000_000,
+  };
+  const reuse = { type: 'CycleBalancePercent', parts: 500_000_000 };
+  const steps = [
+    authoringStep('capture', {
+      type: 'Transfer',
+      to: accountA,
+      asset: native,
+      amount: capture,
+    }),
+    authoringStep('reuse', {
+      type: 'Transfer',
+      to: accountB,
+      asset: native,
+      amount: reuse,
+    }),
+  ];
+  const authored = contract(steps);
+  assert.equal(validateActorAuthoringContract(authored).valid, true);
+  const lowered = lowerActorAuthoringContract(authored);
+  assert.deepEqual(lowered.steps[0].task.value.amount, {
+    type: 'CaptureCycleBalance',
+    value: { percent: 100_000_000, share: 500_000_000 },
+  });
+  assert.deepEqual(lowered.steps[1].task.value.amount, {
+    type: 'CycleBalancePercent',
+    value: 500_000_000,
+  });
+  for (const invalid of [
+    contract([steps[1]]),
+    contract([steps[1], steps[0]]),
+    contract([
+      steps[0],
+      {
+        ...steps[1],
+        task: { ...steps[1].task, amount: { ...reuse, parts: 600_000_000 } },
+      },
+    ]),
+  ])
+    assert.equal(validateActorAuthoringContract(invalid).valid, false);
 });
 
 test('typed validation rejects control-flow-adjacent and runtime-invalid drafts', () => {
@@ -695,9 +708,7 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
   assert.equal(validateActorAuthoringContract(userMint).valid, false);
   for (const amount of [
     { type: 'Fixed', value: '0' },
-    { type: 'PercentageOfCurrent', parts: 0 },
-    { type: 'PercentageAtOpening', parts: 0 },
-    { type: 'PercentageOfLastFunding', parts: 0 },
+    { type: 'Percent', parts: 0 },
   ]) {
     assert.equal(
       validateActorAuthoringContract(
@@ -749,27 +760,35 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     validateActorAuthoringContract(zeroAbsoluteInputLimit).valid,
     false,
   );
-  const duplicateSplit = contract([
-    authoringStep('only', {
-      type: 'SplitTransfer',
+  const duplicateCapture = contract([
+    authoringStep('a', {
+      type: 'Transfer',
+      to: accountA,
       asset: native,
-      amount: fixed(),
-      legs: [
-        { to: accountA, shareParts: 600_000_000 },
-        { to: accountA, shareParts: 600_000_000 },
-      ],
+      amount: {
+        type: 'CaptureCycleBalance',
+        percentParts: 1_000_000_000,
+        shareParts: 500_000_000,
+      },
+    }),
+    authoringStep('b', {
+      type: 'Transfer',
+      to: accountB,
+      asset: native,
+      amount: {
+        type: 'CaptureCycleBalance',
+        percentParts: 1_000_000_000,
+        shareParts: 500_000_000,
+      },
     }),
   ]);
-  const splitValidation = validateActorAuthoringContract(duplicateSplit);
-  assert.equal(splitValidation.valid, false);
-  if (!splitValidation.valid) {
-    assert(
-      splitValidation.issues.some((issue) => /unique/.test(issue.message)),
-    );
-    assert(
-      splitValidation.issues.some((issue) => /exceed/.test(issue.message)),
-    );
-  }
+  const captureValidation = validateActorAuthoringContract(duplicateCapture);
+  assert.equal(captureValidation.valid, false);
+  assert(
+    captureValidation.issues.some((issue) =>
+      /one cycle balance capture/.test(issue.message),
+    ),
+  );
   for (const overrides of [
     { trigger: { type: 'Cadenced', everyTicks: 0 } },
     {
@@ -829,28 +848,43 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
 
 test('scenario corpus lowers every expressible or partial execution core without inventing missing predicates', () => {
   const all = (...predicates) => ({
-    clauses: [
-      predicates.map((predicate) => ({ timing: 'Current', predicate })),
-    ],
+    clauses: [predicates],
   });
   const balanceAbove = (asset = native) => ({
     type: 'BalanceAbove',
     asset,
     threshold: '1',
   });
-  const split = (asset = native) => ({
-    type: 'SplitTransfer',
-    asset,
-    amount: { type: 'AllAvailable' },
-    legs: [
-      { to: accountA, shareParts: 500_000_000 },
-      { to: accountB, shareParts: 500_000_000 },
-    ],
-  });
+  const distribution = (
+    asset = native,
+    precondition = null,
+    percentParts = 1_000_000_000,
+  ) => [
+    authoringStep(
+      'capture',
+      {
+        type: 'Transfer',
+        to: accountA,
+        asset,
+        amount: {
+          type: 'CaptureCycleBalance',
+          percentParts,
+          shareParts: 500_000_000,
+        },
+      },
+      { precondition },
+    ),
+    authoringStep('reuse', {
+      type: 'Transfer',
+      to: accountB,
+      asset,
+      amount: { type: 'CycleBalancePercent', parts: 500_000_000 },
+    }),
+  ];
   const swap = {
     type: 'SwapIn',
     assetIn: local,
-    amountIn: { type: 'AllAvailable' },
+    amountIn: { type: 'Percent', parts: 1_000_000_000 },
     assetOut: native,
     slippageParts: 10_000_000,
   };
@@ -865,7 +899,7 @@ test('scenario corpus lowers every expressible or partial execution core without
           authoringStep('burn', {
             type: 'Burn',
             asset: native,
-            amount: { type: 'AllAvailable' },
+            amount: { type: 'Percent', parts: 1_000_000_000 },
           }),
         ],
         { actorType: 'System', fundingPolicy: { type: 'RuntimePolicy' } },
@@ -874,17 +908,13 @@ test('scenario corpus lowers every expressible or partial execution core without
     },
     {
       name: 'DEOS Fee Sink',
-      contract: contract([authoringStep('split', split())]),
-      tasks: ['SplitTransfer'],
+      contract: contract(distribution(native, null, 100_000_000)),
+      tasks: ['Transfer', 'Transfer'],
     },
     {
       name: 'DEOS BLDR splitter',
-      contract: contract([
-        authoringStep('split', split(local), {
-          precondition: all(balanceAbove(local)),
-        }),
-      ]),
-      tasks: ['SplitTransfer'],
+      contract: contract(distribution(local, all(balanceAbove(local)))),
+      tasks: ['Transfer', 'Transfer'],
     },
     {
       name: 'DEOS Liquidity Actor core',
@@ -909,15 +939,13 @@ test('scenario corpus lowers every expressible or partial execution core without
     },
     {
       name: 'Threshold payroll',
-      contract: contract([
-        authoringStep('payroll', split(), {
-          precondition: all(balanceAbove(), {
-            type: 'BlockNumberAbove',
-            threshold: 1,
-          }),
-        }),
-      ]),
-      tasks: ['SplitTransfer'],
+      contract: contract(
+        distribution(
+          native,
+          all(balanceAbove(), { type: 'BlockNumberAbove', threshold: 1 }),
+        ),
+      ),
+      tasks: ['Transfer', 'Transfer'],
     },
     {
       name: 'Resilient swap-to-liquidity pipeline',
@@ -984,7 +1012,7 @@ test('scenario corpus lowers every expressible or partial execution core without
   assert.equal(ACTORS_AUTHORING_TASK_TYPES.includes('Rebalance'), false);
 });
 
-test('trigger, completion, and funding policy variants lower as typed ActorContract fields', () => {
+test('trigger, outcome, and funding policy variants lower as typed ActorContract fields', () => {
   const drafts = [
     contract(undefined, {
       trigger: { type: 'Manual' },
@@ -1013,17 +1041,7 @@ test('trigger, completion, and funding policy variants lower as typed ActorContr
       fundingPolicy: { type: 'SignedAllowlist', accounts: [accountA] },
     }),
     contract(undefined, {
-      trigger: observationTrigger,
-      fundingPolicy: { type: 'AnyVerifiedIngress' },
-    }),
-    contract(undefined, {
-      trigger: {
-        type: 'ObservationCrossing',
-        feed: observationTrigger.feed,
-        direction: 'Falling',
-        threshold: '80',
-        rearmThreshold: '100',
-      },
+      trigger: { type: 'Cadenced', everyTicks: 10 },
       fundingPolicy: { type: 'AnyVerifiedIngress' },
     }),
   ];

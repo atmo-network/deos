@@ -1,6 +1,4 @@
 use crate::types::{AmountResolution, Mutability, Precondition, Predicate, StepErrorPolicy, Task};
-#[cfg(test)]
-use crate::types::{ObservationTiming, TimedPredicate};
 use crate::{RetryClass, WeightInfo};
 use alloc::vec::Vec;
 use frame::prelude::*;
@@ -32,7 +30,6 @@ pub enum ActorAvailability {
 #[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub enum TaskWeightOwner {
   Transfer,
-  SplitTransfer,
   Burn,
   Mint,
   DexSwapIn,
@@ -46,10 +43,9 @@ pub enum TaskWeightOwner {
 }
 
 impl TaskWeightOwner {
-  pub fn weight<W: WeightInfo>(self, split_legs: u32) -> polkadot_sdk::sp_weights::Weight {
+  pub fn weight<W: WeightInfo>(self) -> polkadot_sdk::sp_weights::Weight {
     match self {
       Self::Transfer => W::task_transfer(),
-      Self::SplitTransfer => W::task_split_transfer(split_legs),
       Self::Burn => W::task_burn(),
       Self::Mint => W::task_mint(),
       Self::DexSwapIn => W::task_dex_exact_in(),
@@ -67,7 +63,6 @@ impl TaskWeightOwner {
 #[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub enum BoundedInternalAlgorithm {
   None,
-  PalletSplitFanout,
   RuntimeAdapterContract,
 }
 
@@ -119,19 +114,15 @@ fn push_unique<T: PartialEq>(values: &mut Vec<T>, value: T) {
   }
 }
 
-fn task_amount_surfaces<AssetId, Balance, AccountId, MaxSplitTransferLegs>(
-  task: &Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>,
-) -> Vec<TaskAmountSurface>
-where
-  MaxSplitTransferLegs: Get<u32>,
-{
+fn task_amount_surfaces<AssetId, Balance, AccountId>(
+  task: &Task<AssetId, Balance, AccountId>,
+) -> Vec<TaskAmountSurface> {
   let surface = |role, amount| TaskAmountSurface {
     role,
     contract: describe_amount_resolution(amount),
   };
   match task {
     Task::Transfer { amount, .. }
-    | Task::SplitTransfer { amount, .. }
     | Task::Burn { amount, .. }
     | Task::Mint { amount, .. }
     | Task::Stake { amount, .. } => {
@@ -160,13 +151,12 @@ where
   }
 }
 
-pub fn describe_task<AssetId, Balance, AccountId, MaxSplitTransferLegs>(
-  task: &Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>,
+pub fn describe_task<AssetId, Balance, AccountId>(
+  task: &Task<AssetId, Balance, AccountId>,
 ) -> TaskInstructionContract<AssetId, AccountId>
 where
   AssetId: Clone + PartialEq,
   AccountId: Clone,
-  MaxSplitTransferLegs: Get<u32>,
 {
   let mut assets_read = Vec::new();
   let mut assets_written = Vec::new();
@@ -190,23 +180,6 @@ where
         ActorAvailability::UserAndSystem,
         TaskWeightOwner::Transfer,
         BoundedInternalAlgorithm::None,
-        false,
-        false,
-      )
-    }
-    Task::SplitTransfer { asset, legs, .. } => {
-      push_unique(&mut assets_read, asset.clone());
-      push_unique(&mut assets_written, asset.clone());
-      for leg in legs {
-        recipients.push(RecipientSurface::Explicit(leg.to.clone()));
-      }
-      recipients.push(RecipientSurface::ActorSovereign);
-      (
-        AdapterRequirement::AssetOps,
-        alloc::vec![EffectClass::Transfer],
-        ActorAvailability::UserAndSystem,
-        TaskWeightOwner::SplitTransfer,
-        BoundedInternalAlgorithm::PalletSplitFanout,
         false,
         false,
       )
@@ -406,7 +379,7 @@ pub enum PredicateReadSurface<AssetId, ObservationFeedId = ()> {
 #[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub enum ObservationWindow {
   ArtifactTime,
-  LogicalCycleStart,
+  CaptureStepTime,
   StepAttemptTime,
 }
 
@@ -514,8 +487,7 @@ pub fn describe_predicate<AssetId: Clone, Balance, BlockNumber, ObservationFeedI
 pub enum AmountDataDependency {
   ArtifactValue,
   CurrentBalanceOrShares,
-  OpeningSnapshot,
-  LastFundingSnapshot,
+  CycleBalanceSnapshot,
   TaskPolicyCapacity,
 }
 
@@ -548,20 +520,15 @@ pub fn describe_amount_resolution<Balance>(
       ObservationWindow::ArtifactTime,
       RetryObservation::ReuseFrozenValueWithLiveCapacity,
     ),
-    AmountResolution::PercentageOfCurrent(_) | AmountResolution::AllAvailable => (
+    AmountResolution::CaptureCycleBalance { .. } | AmountResolution::CycleBalancePercent(_) => (
+      AmountDataDependency::CycleBalanceSnapshot,
+      ObservationWindow::CaptureStepTime,
+      RetryObservation::ReuseFrozenValueWithLiveCapacity,
+    ),
+    AmountResolution::Percent(_) => (
       AmountDataDependency::CurrentBalanceOrShares,
       ObservationWindow::StepAttemptTime,
       RetryObservation::ReobserveLiveValue,
-    ),
-    AmountResolution::PercentageAtOpening(_) => (
-      AmountDataDependency::OpeningSnapshot,
-      ObservationWindow::LogicalCycleStart,
-      RetryObservation::ReuseFrozenValueWithLiveCapacity,
-    ),
-    AmountResolution::PercentageOfLastFunding(_) => (
-      AmountDataDependency::LastFundingSnapshot,
-      ObservationWindow::LogicalCycleStart,
-      RetryObservation::ReuseFrozenValueWithLiveCapacity,
     ),
   };
   AmountInstructionContract {
@@ -618,11 +585,9 @@ pub fn describe_error_policy(policy: StepErrorPolicy) -> ErrorPolicyInstructionC
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::types::SplitLeg;
-  use polkadot_sdk::frame_support::traits::ConstU32;
   use polkadot_sdk::sp_runtime::Perbill;
 
-  type TestTask = Task<u32, u128, u64, ConstU32<8>>;
+  type TestTask = Task<u32, u128, u64>;
 
   fn fixed() -> AmountResolution<u128> {
     AmountResolution::Fixed(10)
@@ -630,17 +595,6 @@ mod tests {
 
   #[test]
   fn every_task_has_one_exhaustive_semantic_contract() {
-    let legs = BoundedVec::try_from(alloc::vec![
-      SplitLeg {
-        to: 7,
-        share: Perbill::from_percent(40),
-      },
-      SplitLeg {
-        to: 8,
-        share: Perbill::from_percent(60),
-      },
-    ])
-    .expect("two legs fit");
     let cases: Vec<(TestTask, AdapterRequirement, TaskWeightOwner)> = alloc::vec![
       (
         Task::Transfer {
@@ -650,15 +604,6 @@ mod tests {
         },
         AdapterRequirement::AssetOps,
         TaskWeightOwner::Transfer,
-      ),
-      (
-        Task::SplitTransfer {
-          asset: 1,
-          amount: fixed(),
-          legs,
-        },
-        AdapterRequirement::AssetOps,
-        TaskWeightOwner::SplitTransfer,
       ),
       (
         Task::SwapIn {
@@ -752,7 +697,7 @@ mod tests {
         TaskWeightOwner::StopCycle,
       ),
     ];
-    assert_eq!(cases.len(), 12);
+    assert_eq!(cases.len(), 11);
     for (task, adapter, weight_owner) in cases {
       let is_stop = matches!(&task, Task::StopCycle);
       let contract = describe_task(&task);
@@ -762,7 +707,6 @@ mod tests {
       assert_eq!(contract.committed_non_compensated_effects, !is_stop);
       let expected_amount_roles = match weight_owner {
         TaskWeightOwner::Transfer
-        | TaskWeightOwner::SplitTransfer
         | TaskWeightOwner::Burn
         | TaskWeightOwner::Mint
         | TaskWeightOwner::Stake => alloc::vec![TaskAmountRole::Amount],
@@ -799,10 +743,7 @@ mod tests {
   fn precondition_contract_exposes_optional_bounded_dnf_without_dynamic_control() {
     type TestPredicate = Predicate<u32, u128, u32>;
     type TestPrecondition = Precondition<TestPredicate, ConstU32<4>, ConstU32<4>>;
-    let atom: TimedPredicate<TestPredicate> = TimedPredicate {
-      timing: ObservationTiming::Current,
-      predicate: Predicate::BlockNumberAbove { threshold: 1 },
-    };
+    let atom: TestPredicate = Predicate::BlockNumberAbove { threshold: 1 };
     let clause: BoundedVec<_, ConstU32<4>> =
       BoundedVec::try_from(alloc::vec![atom]).expect("one predicate fits");
     let clauses: BoundedVec<_, ConstU32<4>> =
@@ -881,10 +822,7 @@ mod tests {
   fn every_amount_resolution_has_a_live_task_policy_constructor() {
     let cases = [
       AmountResolution::Fixed(1u128),
-      AmountResolution::PercentageOfCurrent(Perbill::one()),
-      AmountResolution::PercentageAtOpening(Perbill::one()),
-      AmountResolution::PercentageOfLastFunding(Perbill::one()),
-      AmountResolution::AllAvailable,
+      AmountResolution::Percent(Perbill::one()),
     ];
     for amount in cases {
       let contract = describe_amount_resolution(&amount);

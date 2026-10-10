@@ -76,6 +76,9 @@ prepare_pinned_environment() {
 
 run_fast_checks() {
     phase_banner "Step 3: Fast profile"
+    run_script_step "Pinned binary selection self-test" "01-download-binaries.sh" --self-test
+    run_script_step "Local CI argument/command self-test" "ci-local.sh" --self-test
+    run_script_step "Network assurance mode self-test" "network-assurance-local.sh" --self-test
     run_shell_step "Simulator tests" "" "node '$PROJECT_ROOT/simulator/tests.js'"
     SKIP_WASM_BUILD=1 run_script_step "Rust workspace CI" "ci-local.sh"
 }
@@ -108,7 +111,7 @@ regenerate_full_artifacts() {
     fingerprint_before="$(worktree_fingerprint)"
     run_script_step "Deterministic production runtime" "03-build-runtime.sh"
     run_script_step "Runtime metadata and descriptors" "export-papi-metadata.sh"
-    run_shell_step "Runtime-derived client evidence" "" "cd '$PROJECT_ROOT/web-client' && npm run generate:actors-abi && npm run generate:ingress-evidence && npm run generate:observation-evidence"
+    run_shell_step "Runtime-derived client evidence" "" "cd '$PROJECT_ROOT/web-client' && npm run generate:actors-abi && npm run generate:ingress-evidence"
     run_shell_step "Package-derived Actors evidence" "" "cd '$TEMPLATE_DIR' && cargo run -q --locked -p pallet-deos-actors --example semantic_manifest -- --check ../web-client/src/lib/automation/actors-semantic-manifest.json && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --metadata ../web-client/.papi/metadata/deos.scale --weights runtime/src/weights/pallet_deos_actors.rs --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
     run_shell_step "Runtime-derived Actors cost evidence" "" "cd '$TEMPLATE_DIR' && cargo run -q --locked -p deos-runtime --example actor_cost_vectors -- --check ../web-client/src/lib/automation/actors-cost-vectors.json"
     fingerprint_after="$(worktree_fingerprint)"

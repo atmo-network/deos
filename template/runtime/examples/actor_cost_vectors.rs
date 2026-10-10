@@ -1,8 +1,8 @@
-use deos_runtime::{AccountId, Actors, Balance, Balances, Oracle, Runtime, RuntimeOrigin, System};
+use deos_runtime::{AccountId, Actors, Balance, Balances, Runtime, RuntimeOrigin, System};
 use pallet_deos_actors::{
-  ActorContract, ActorCostQuote, ActorType, AmountResolution, AssetFilter, CompletionPolicy,
-  ContractSteps, CrossingDirection, FundingSourcePolicy, Mutability, SourceFilter, Step,
-  StepErrorPolicy, Task, Trigger, TriggerFamily,
+  ActorContract, ActorCostQuote, ActorType, AmountResolution, AssetFilter, ContractSteps,
+  FundingSourcePolicy, Mutability, SourceFilter, Step, StepErrorPolicy, Task, Trigger,
+  TriggerFamily,
 };
 use polkadot_sdk::{
   frame_support::{BoundedVec, traits::Currency},
@@ -10,9 +10,7 @@ use polkadot_sdk::{
   sp_io::TestExternalities,
   sp_io::hashing::sha2_256,
 };
-use primitives::{
-  AssetKind, LocalPoolObservationMethod, OracleAggregationId, OracleFeedId, OracleProvenance,
-};
+use primitives::AssetKind;
 use serde_json::{Value, json};
 use std::{env, fs, path::Path, process};
 
@@ -42,10 +40,9 @@ fn trigger_family_name(family: TriggerFamily) -> &'static str {
   match family {
     TriggerFamily::Manual => "Manual",
     TriggerFamily::AddressEvent => "AddressEvent",
-    TriggerFamily::ObservationChange => "ObservationChange",
-    TriggerFamily::ObservationCrossing => "ObservationCrossing",
     TriggerFamily::AtTime => "AtTime",
     TriggerFamily::Cadenced => "Cadenced",
+    TriggerFamily::ParkedBalance => "ParkedBalance",
   }
 }
 
@@ -69,7 +66,6 @@ fn hold_breakdown_value(breakdown: pallet_deos_actors::ActorStateHoldBreakdown<B
     "contractHead": breakdown.contract_head.to_string(),
     "contractBody": breakdown.contract_body.to_string(),
     "detector": breakdown.detector.to_string(),
-    "funding": breakdown.funding.to_string(),
     "run": breakdown.run.to_string(),
   })
 }
@@ -86,7 +82,6 @@ fn quote_value(quote: ActorCostQuote<Balance>) -> Value {
   let pipeline = quote.prospective_pipeline_fee.map(|pipeline| {
     json!({
       "machineFee": pipeline.pipeline_machine_fee.to_string(),
-      "cleanupFee": pipeline.cleanup_fee.to_string(),
       "totalFee": pipeline.total_fee.to_string(),
       "strategy": "UpfrontBounded",
       "admissionIdentity": hex(&pipeline.admission_identity),
@@ -135,7 +130,9 @@ fn active_contract(
     cooldown_blocks: 0,
     window: None,
     steps,
-    completion: CompletionPolicy::Persistent,
+    on_unfunded: pallet_deos_actors::OnUnfunded::Close,
+    close_when: None,
+    parked_balance_activation: None,
     funding: FundingSourcePolicy::OwnerOnly,
     auto_close_at_cycle_nonce: None,
   }
@@ -188,7 +185,9 @@ fn create_system_vector(destination: &AccountId) -> Value {
       cooldown_blocks: 0,
       window: None,
       steps,
-      completion: CompletionPolicy::Persistent,
+      on_unfunded: pallet_deos_actors::OnUnfunded::Close,
+      close_when: None,
+      parked_balance_activation: None,
       funding: FundingSourcePolicy::RuntimePolicy,
       auto_close_at_cycle_nonce: None,
     }),
@@ -245,30 +244,9 @@ fn manifest() -> Value {
   let mut ext = TestExternalities::new(storage);
   let vectors = ext.execute_with(|| {
     System::set_block_number(1);
-    let feed = OracleFeedId::directional_local_pool_price(
-      AssetKind::Native,
-      AssetKind::Local(1),
-      LocalPoolObservationMethod::PreExecutionSpot,
-      OracleAggregationId::Ema {
-        half_life_blocks: 1,
-      },
-      12,
-    );
-    Oracle::register_feed(
-      RuntimeOrigin::root(),
-      feed,
-      destination.clone(),
-      feed.meaning(),
-      OracleProvenance::DeosRouterPreExecutionReserves,
-      12,
-      pallet_oracle::Aggregation::LastValue,
-      pallet_oracle::ZeroPolicy::Reject,
-      false,
-    )
-    .expect("cost-vector observation feed registers");
-    Oracle::publish(RuntimeOrigin::signed(destination.clone()), feed, 100)
-      .expect("cost-vector observation publishes");
-
+    assert!(!Actors::user_creation_enabled()); // deos-bypass: panic-owner -- fixed off-chain cost-vector preparation preserves disabled genesis
+    Actors::set_user_creation_enabled(RuntimeOrigin::root(), true)
+      .expect("cost-vector public User admission preparation succeeds"); // deos-bypass: panic-owner -- fixed off-chain diagnostic setup
     let mut vectors = vec![
       create_user_vector(
         "user-manual-0",
@@ -316,23 +294,6 @@ fn manifest() -> Value {
         transfer_steps(1, &destination),
       ),
       create_user_vector(
-        "user-observation-change-1",
-        7,
-        Trigger::ObservationChange { feed },
-        transfer_steps(1, &destination),
-      ),
-      create_user_vector(
-        "user-observation-crossing-1",
-        8,
-        Trigger::ObservationCrossing {
-          feed,
-          direction: CrossingDirection::Rising,
-          threshold: 200,
-          rearm_threshold: 100,
-        },
-        transfer_steps(1, &destination),
-      ),
-      create_user_vector(
         "user-at-time-1",
         9,
         Trigger::AtTime { after_ticks: 10 },
@@ -354,10 +315,27 @@ fn manifest() -> Value {
     "format": FORMAT,
     "formatVersion": FORMAT_VERSION,
     "runtimeApiVersion": RUNTIME_API_VERSION,
-    "metadataSha256": file_identity(Path::new("../web-client/.papi/metadata/deos.scale")),
-    "weightSha256": file_identity(Path::new("runtime/src/weights/pallet_deos_actors.rs")),
+    "metadataSha256": file_identity(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web-client/.papi/metadata/deos.scale")),
+    "weightSha256": file_identity(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src/weights/pallet_deos_actors.rs")),
     "vectors": vectors,
   })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn cost_vectors_prepare_public_admission_without_overriding_genesis() {
+    let artifact = manifest();
+    let vectors = artifact["vectors"]
+      .as_array()
+      .expect("fixed vector artifact");
+    assert_eq!(vectors.len(), 10);
+    assert_eq!(vectors[0]["contractStepCount"], 0);
+    assert_eq!(vectors[8]["quote"]["actorType"], "System");
+    assert_eq!(vectors[9]["name"], "user-dormant");
+  }
 }
 
 fn usage() {

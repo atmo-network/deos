@@ -26,10 +26,11 @@ use polkadot_sdk::{
 use crate::{AssetConversion, RuntimeOrigin, Timestamp};
 use pallet_deos_actors::{
   ActorPrepassContext, ActorType, AdmissionCertificateAuthority,
-  AdmissionCertificateAuthorityProvider, AssetOps, DexOps, DexSwapOutcome, ExecutionContext,
-  FeeCollector, FundingAuthority, LiquidityOps, StepControlExecution, StepControlOutcome,
-  StepControlPhase, StepControlPlacement, StepControlWeightProvider, Task,
-  TaskEffectWeightProvider, TaskFailure, WeightInfo as ActorsWeightInfo,
+  AdmissionCertificateAuthorityProvider, AssetOps, BalanceTransitionIngress, DexOps,
+  DexSwapOutcome, ExecutionContext, FeeCollector, FundingAuthority, LiquidityOps,
+  StepControlExecution, StepControlOutcome, StepControlPhase, StepControlPlacement,
+  StepControlWeightProvider, Task, TaskEffectWeightProvider, TaskFailure,
+  WeightInfo as ActorsWeightInfo,
 };
 
 parameter_types! {
@@ -47,13 +48,11 @@ parameter_types! {
   /// authored Contract geometry and admits it only when its complete per-Contract resource
   /// envelope fits the guaranteed Actor service floor.
   pub const ActorMaxContractSteps: u32 = 12;
+  pub const ActorMaxParkedBalanceWatches: u32 = 1;
   pub const ActorMaxFundingTrackedAssets: u32 = 40;
-  pub const ActorMaxOpeningSnapshotEntries: u32 = 24;
-  pub const ActorMaxOpeningPredicateResults: u32 = 48;
   pub const ActorMaxPreconditionClauses: u32 = 4;
   pub const ActorMaxPredicatesPerClause: u32 = 4;
   pub const ActorMaxPredicatesPerStep: u32 = 4;
-  pub const ActorMaxSplitTransferLegs: u32 = 8;
 
   // --- Trigger and schedule bounds ---
 
@@ -72,26 +71,8 @@ parameter_types! {
   pub const ActorQueuePageSize: u32 = 64;
   /// Production temporal page granularity selected from 32/64/128 Wasm operation evidence.
   pub const ActorWakeupPageSize: u32 = 32;
-  /// Broad ObservationChange subscriber/fanout page granularity.
-  pub const ActorObservationPageSize: u32 = 64;
-  /// ObservationCrossing membership page granularity selected by bounded observation fanout requirements.
-  pub const ActorCrossingPageSize: u32 = 128;
-  pub const ActorMaxCrossingTransitionsPerFeed: u32 = 64;
-  pub const ActorMaxCrossingMembersPerFeed: u32 = 10_000;
-pub const ActorMaxUserCrossingMembersPerFeed: u32 = 9_000;
-pub const ActorMaxCrossingTransitionsPerBlock: u32 = 8;
-  pub const ActorMaxCrossingLeavesPerBlock: u32 = 64;
-  pub const ActorMaxCrossingPagesPerBlock: u32 = 64;
-  /// Accepted tail/preflight ceiling under Actor Control. Exact non-tail compaction is
-  /// independently clamped to 64 candidates by the pallet.
-  pub const ActorMaxCrossingActorsPerBlock: u32 = 128;
   pub const ActorMaxQueueEntriesScannedPerBlock: u32 = 10_000;
-  pub const ActorMaxObservationFanoutPagesPerBlock: u32 = 64;
   pub const ActorMaxWakeupsPerBlock: u32 = 512;
-  pub ActorObservationFanoutWeightLimit: Weight =
-    Perbill::from_percent(20) * MAXIMUM_BLOCK_WEIGHT;
-  pub ActorCrossingWorkerWeightLimit: Weight =
-    Perbill::from_percent(10) * MAXIMUM_BLOCK_WEIGHT;
   /// Dedicated overdue-wakeup worker envelope: one worst-case complete wakeup unit plus cursor
   /// probe remains inside it (spec 15.2.9), and it stays below the guaranteed on_idle headroom.
   pub ActorWakeupWeightLimit: Weight = Perbill::from_percent(14) * MAXIMUM_BLOCK_WEIGHT;
@@ -135,6 +116,65 @@ impl Get<Balance> for ActorMinUserBalanceGuard {
   fn get() -> Balance {
     ActorMinUserBalance::get().max(ExistentialDeposit::get())
   }
+}
+
+fn ensure_user_action_fee_capacity(
+  who: &AccountId,
+  effect_weight: Weight,
+) -> Result<(), TaskFailure> {
+  let action =
+    <crate::WeightToFee as polkadot_sdk::sp_weights::WeightToFee>::weight_to_fee(&effect_weight);
+  let required = ActorMinUserBalanceGuard::get()
+    .checked_add(action)
+    .ok_or_else(|| {
+      TaskFailure::permanent(DispatchError::Arithmetic(
+        polkadot_sdk::sp_runtime::ArithmeticError::Overflow,
+      ))
+    })?;
+  if TmctolAssetOps::balance(who, AssetKind::Native) < required {
+    return Err(TaskFailure::permanent(DispatchError::Token(
+      TokenError::FundsUnavailable,
+    )));
+  }
+  Ok(())
+}
+
+fn active_actor_type(who: &AccountId) -> Option<ActorType> {
+  crate::Actors::sovereign_index(who.clone())
+    .and_then(pallet_deos_actors::ActorSemanticStates::<Runtime>::get)
+    .and_then(|state| match state {
+      pallet_deos_actors::ActorSemanticState::Active(record)
+        if record.identity.sovereign_account == *who =>
+      {
+        Some(record.identity.actor_class.actor_type())
+      }
+      _ => None,
+    })
+}
+
+fn is_active_user_actor(who: &AccountId) -> bool {
+  active_actor_type(who) == Some(ActorType::User)
+}
+
+fn with_user_action_fee_capacity<R>(
+  context: &ExecutionContext<'_, AccountId>,
+  effect_weight: Weight,
+  effect: impl FnOnce() -> Result<R, TaskFailure>,
+) -> Result<R, TaskFailure> {
+  if context.actor_type != ActorType::User {
+    return effect();
+  }
+  polkadot_sdk::frame_support::storage::with_transaction(|| {
+    let result = effect().and_then(|value| {
+      // New consumer references can reduce spendability even without an auxiliary native debit.
+      ensure_user_action_fee_capacity(context.actor, effect_weight)?;
+      Ok(value)
+    });
+    match result {
+      Ok(value) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(value)),
+      Err(error) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error)),
+    }
+  })
 }
 
 /// Canonical unified fee-collection boundary for Actors charges.
@@ -182,14 +222,6 @@ impl RuntimeStepControlWeight {
     )
   }
 
-  fn nonzero_parameterized(value: u32, weight: impl FnOnce(u32) -> Weight) -> Weight {
-    if value == 0 {
-      Weight::zero()
-    } else {
-      weight(value)
-    }
-  }
-
   fn current_predicate_weight(units: u32) -> Weight {
     type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
     let count = units.min(ActorMaxPredicatesPerStep::get());
@@ -209,57 +241,20 @@ impl RuntimeStepControlWeight {
       weight
     }
   }
-
-  fn opening_snapshot_models(entries: u32) -> [Weight; 3] {
-    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-    let single = ActorMaxOpeningSnapshotEntries::get().min(ActorMaxContractSteps::get());
-    let share_mixed = ActorMaxOpeningSnapshotEntries::get().min(
-      ActorMaxContractSteps::get()
-        .saturating_mul(2)
-        .saturating_sub(1),
-    );
-    [
-      ControlWeights::opening_snapshot_capture(entries),
-      ControlWeights::opening_target_snapshot_capture(entries.min(single)),
-      ControlWeights::opening_share_mixed_capture(entries.min(share_mixed)),
-    ]
-  }
-
-  fn opening_snapshot_weight(entries: u32) -> Weight {
-    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-    if entries == 0 {
-      ControlWeights::opening_snapshot_traversal()
-    } else {
-      Self::opening_snapshot_models(entries)
-        .into_iter()
-        .fold(Weight::zero(), Self::component_max)
-    }
-  }
-
-  fn opening_predicate_models(results: u32) -> [Option<Weight>; 3] {
-    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-    [
-      Some(ControlWeights::opening_predicate_capture(results)),
-      Some(ControlWeights::opening_max_encoded_balance_capture(results)),
-      (results >= 2).then(|| ControlWeights::opening_observation_heavy_capture(results - 1)),
-    ]
-  }
-
-  fn opening_predicate_weight(results: u32) -> Weight {
-    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-    if results == 0 {
-      ControlWeights::opening_predicate_traversal()
-    } else {
-      Self::opening_predicate_models(results)
-        .into_iter()
-        .flatten()
-        .fold(Weight::zero(), Self::component_max)
-    }
-  }
 }
 
-impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeStepControlWeight {
-  fn production_weight_identity() -> Option<[u8; 32]> {
+impl RuntimeStepControlWeight {
+  fn user_opening_control_weight(tail_chunks: u32) -> Weight {
+    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    if tail_chunks == 0 {
+      ControlWeights::scheduler_inner_opening_user_complete_header_max()
+    } else {
+      ControlWeights::scheduler_inner_opening_user_complete_header_max_tail(tail_chunks)
+    }
+  }
+
+  // Bind the same finite User header profiles consumed by maximum and actual Control selection.
+  fn production_weight_identity_from_user_opening(user_opening: &[Weight]) -> Option<[u8; 32]> {
     type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
     let tail_plan = (1..=4)
       .map(ControlWeights::current_step_plan_running_tail)
@@ -334,16 +329,15 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
         })
       })
       .collect::<alloc::vec::Vec<_>>();
-    let maximum_tail_opening_amount_entries = ActorMaxContractSteps::get()
+    let maximum_tail_amount_source_entries = ActorMaxContractSteps::get()
       .saturating_sub(1)
-      .saturating_mul(2)
-      .min(ActorMaxOpeningSnapshotEntries::get());
+      .saturating_mul(2);
     let maximum_current_predicates = ActorMaxPredicatesPerStep::get();
     let maximum_opening_head_current_predicates = maximum_current_predicates.saturating_sub(1);
     let suspended_head_retry = [
       ControlWeights::scheduler_inner_suspended_head_retry(0, 0),
       ControlWeights::scheduler_inner_suspended_head_retry(
-        maximum_tail_opening_amount_entries,
+        maximum_tail_amount_source_entries,
         maximum_current_predicates,
       ),
     ];
@@ -354,14 +348,14 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
     let suspended_head_progress = [
       ControlWeights::scheduler_inner_suspended_head_progress(0, 0),
       ControlWeights::scheduler_inner_suspended_head_progress(
-        maximum_tail_opening_amount_entries,
+        maximum_tail_amount_source_entries,
         maximum_current_predicates,
       ),
     ];
     let suspended_head_opening_retry = [
       ControlWeights::scheduler_inner_suspended_head_opening_retry(0, 0),
       ControlWeights::scheduler_inner_suspended_head_opening_retry(
-        maximum_tail_opening_amount_entries,
+        maximum_tail_amount_source_entries,
         maximum_opening_head_current_predicates,
       ),
     ];
@@ -374,7 +368,7 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
     let suspended_head_opening_progress = [
       ControlWeights::scheduler_inner_suspended_head_opening_progress(0, 0),
       ControlWeights::scheduler_inner_suspended_head_opening_progress(
-        maximum_tail_opening_amount_entries,
+        maximum_tail_amount_source_entries,
         maximum_opening_head_current_predicates,
       ),
     ];
@@ -382,25 +376,6 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
       .saturating_sub(1)
       .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK))
       .map(ControlWeights::contract_geometry_reconstruct)
-      .collect::<alloc::vec::Vec<_>>();
-    let opening_snapshot = (0..=ActorMaxOpeningSnapshotEntries::get())
-      .map(|count| {
-        (
-          Self::opening_snapshot_weight(count),
-          (count > 0).then(|| Self::opening_snapshot_models(count)),
-        )
-      })
-      .collect::<alloc::vec::Vec<_>>();
-    let opening_predicates = (0..=ActorMaxOpeningPredicateResults::get())
-      .map(|count| {
-        (
-          Self::opening_predicate_weight(count),
-          (count > 0).then(|| Self::opening_predicate_models(count)),
-        )
-      })
-      .collect::<alloc::vec::Vec<_>>();
-    let funding = (1..=ActorMaxFundingTrackedAssets::get())
-      .map(ControlWeights::funding_snapshot_open)
       .collect::<alloc::vec::Vec<_>>();
     let current_predicates = (1..=ActorMaxPredicatesPerStep::get())
       .map(|count| {
@@ -414,12 +389,15 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
     Some(
       (
         *b"DEOS_ACTOR_STEP_CONTROL_WEIGHT",
-        *b"DEOS_ACTOR_CONTROL_ACTUAL_V10",
+        *b"DEOS_ACTOR_CONTROL_ACTUAL_V15",
         (
-          ControlWeights::scheduler_paged_tombstone_drain(1),
+          ControlWeights::service_round_begin_populated(),
+          ControlWeights::service_round_probe_eligible(),
           ControlWeights::scheduler_actor_state_probe(),
-          ControlWeights::scheduler_paged_consume_preserve_page(),
-          ControlWeights::scheduler_paged_consume_delete_page(),
+          ControlWeights::service_round_admit_eligible(),
+          ControlWeights::service_member_retire_interior(),
+          ControlWeights::service_member_retire_pair_cursor(),
+          ControlWeights::service_member_retire_singleton(),
         ),
         (
           ControlWeights::scheduler_inner_zero_step_complete(),
@@ -428,6 +406,7 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
           opening_retry,
           opening_complete,
           opening_progress,
+          user_opening,
         ),
         ControlWeights::current_step_plan_opening_head(),
         ControlWeights::current_step_plan_suspended_head(),
@@ -446,16 +425,12 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
           suspended_head_opening_progress,
         ),
         opening_tail_chunks,
-        opening_snapshot,
-        opening_predicates,
-        funding,
         current_predicates,
         ControlWeights::run_progress(),
         ControlWeights::run_suspend(),
         ControlWeights::run_complete(),
-        ControlWeights::scheduler_paged_append_new_page(),
         (
-          ControlWeights::scheduler_wakeup_append_new_page(),
+          ControlWeights::service_member_to_deadline_new_key(),
           ControlWeights::close_actor(),
           ControlWeights::fee_collection(),
           ControlWeights::action_invocation_receipt(),
@@ -463,6 +438,22 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
       )
         .using_encoded(polkadot_sdk::sp_io::hashing::blake2_256),
     )
+  }
+}
+
+#[cfg(test)]
+#[path = "../tests/actor_control_weight_identity.rs"]
+mod control_weight_identity_tests;
+
+impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeStepControlWeight {
+  fn production_weight_identity() -> Option<[u8; 32]> {
+    let maximum_tail_chunks = ActorMaxContractSteps::get()
+      .saturating_sub(1)
+      .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK);
+    let user_opening = (0..=maximum_tail_chunks)
+      .map(Self::user_opening_control_weight)
+      .collect::<alloc::vec::Vec<_>>();
+    Self::production_weight_identity_from_user_opening(&user_opening)
   }
 
   fn maximum_control_weight(
@@ -524,42 +515,12 @@ impl RuntimeStepControlWeight {
     }
   }
 
-  fn maximal_opening_completion(context: pallet_deos_actors::StepControlWeightContext) -> bool {
-    let steps = 1u32
-      .saturating_add(
-        context
-          .opening_tail_chunks
-          .saturating_mul(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK),
-      )
-      .min(ActorMaxContractSteps::get());
-    context.cursor == 0
-      && context.predicate_evaluation_units == ActorMaxPredicatesPerStep::get().saturating_mul(2)
-      && context.opening_snapshot_entries
-        == steps
-          .saturating_sub(1)
-          .saturating_mul(2)
-          .min(ActorMaxOpeningSnapshotEntries::get())
-      && context.opening_predicate_results
-        == steps
-          .saturating_mul(ActorMaxPredicatesPerStep::get())
-          .min(ActorMaxOpeningPredicateResults::get())
-      && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get()
-  }
-
   fn maximum_control_without_collection(
     context: pallet_deos_actors::StepControlWeightContext,
     step: &pallet_deos_actors::StepOf<Runtime>,
   ) -> Option<Weight> {
-    let separate = Self::base_maximum_control_weight(context, step)?
-      .checked_add(&Self::action_receipt_allowance(step))?;
-    // This direct profile executes predicated StopCycle and already deposits its receipt.
-    // Compare complete envelopes; never subtract an isolated measurement from an aggregate.
-    Some(if Self::maximal_opening_completion(context) {
-      let complete = crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_complete_max(context.opening_tail_chunks);
-      Self::component_max(separate, complete)
-    } else {
-      separate
-    })
+    Self::base_maximum_control_weight(context, step)?
+      .checked_add(&Self::action_receipt_allowance(step))
   }
 
   fn base_maximum_control_weight(
@@ -567,26 +528,18 @@ impl RuntimeStepControlWeight {
     _: &pallet_deos_actors::StepOf<Runtime>,
   ) -> Option<Weight> {
     type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-    let maximum_evaluation_units = ActorMaxPredicatesPerStep::get().checked_mul(2)?;
+    // Admission and execution both describe only the current Step's predicates. There is no
+    // second Opening evaluation axis; doubled predicate contexts cannot come from a Contract.
+    let maximum_evaluation_units = ActorMaxPredicatesPerStep::get();
     let maximum_opening_tail_chunks = ActorMaxContractSteps::get()
       .saturating_sub(1)
       .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK);
     if context.predicate_evaluation_units > maximum_evaluation_units
       || context.opening_tail_chunks > maximum_opening_tail_chunks
       || context.cursor > 0 && context.opening_tail_chunks != 0
-      || context.opening_snapshot_entries > ActorMaxOpeningSnapshotEntries::get()
-      || context.opening_predicate_results > ActorMaxOpeningPredicateResults::get()
-      || context.funding_snapshot_entries > ActorMaxFundingTrackedAssets::get()
     {
       return None;
     }
-    let maximum_opening = context.cursor == 0
-      && context.steps_in_fragment == 1
-      && context.opening_tail_chunks == maximum_opening_tail_chunks
-      && context.predicate_evaluation_units == maximum_evaluation_units
-      && context.opening_snapshot_entries == ActorMaxOpeningSnapshotEntries::get()
-      && context.opening_predicate_results == ActorMaxOpeningPredicateResults::get()
-      && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get();
     let plan = if context.cursor == 0 {
       if context.steps_in_fragment != 1 {
         return None;
@@ -607,20 +560,6 @@ impl RuntimeStepControlWeight {
       ControlWeights::contract_geometry_reconstruct(context.opening_tail_chunks)
         .checked_sub(&ControlWeights::contract_geometry_reconstruct(0))?
     };
-    let opening_snapshot = if context.cursor > 0 && context.opening_snapshot_entries == 0 {
-      Weight::zero()
-    } else {
-      Self::opening_snapshot_weight(context.opening_snapshot_entries)
-    };
-    let opening_predicates = if context.cursor > 0 && context.opening_predicate_results == 0 {
-      Weight::zero()
-    } else {
-      Self::opening_predicate_weight(context.opening_predicate_results)
-    };
-    let funding = Self::nonzero_parameterized(
-      context.funding_snapshot_entries,
-      ControlWeights::funding_snapshot_open,
-    );
     let current_predicates = Self::current_predicate_weight(context.predicate_evaluation_units);
     let commit = Self::component_max(
       Self::component_max(
@@ -630,48 +569,16 @@ impl RuntimeStepControlWeight {
       ControlWeights::run_complete(),
     );
     let placement = Self::component_max(
-      ControlWeights::scheduler_paged_append_new_page(),
-      ControlWeights::scheduler_wakeup_append_new_page(),
+      ControlWeights::service_round_admit_eligible(),
+      ControlWeights::service_member_to_deadline_new_key(),
     );
     let composed = plan
       .saturating_add(opening_tail)
-      .saturating_add(opening_snapshot)
-      .saturating_add(opening_predicates)
-      .saturating_add(funding)
       .saturating_add(current_predicates)
       .saturating_add(commit)
       .saturating_add(placement);
-    let opening_geometry_steps = 1u32
-      .saturating_add(
-        context
-          .opening_tail_chunks
-          .saturating_mul(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK),
-      )
-      .min(ActorMaxContractSteps::get());
-    let minimal_opening = context.cursor == 0
-      && context.predicate_evaluation_units == 0
-      && context.opening_snapshot_entries == 0
-      && context.opening_predicate_results == 0;
-    let maximal_opening = context.cursor == 0
-      && context.opening_tail_chunks > 0
-      && context.predicate_evaluation_units == maximum_evaluation_units
-      && context.opening_snapshot_entries
-        == opening_geometry_steps
-          .saturating_mul(2)
-          .min(ActorMaxOpeningSnapshotEntries::get())
-      && context.opening_predicate_results
-        == opening_geometry_steps
-          .saturating_mul(ActorMaxPredicatesPerStep::get())
-          .min(ActorMaxOpeningPredicateResults::get())
-      && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get();
-    let maximal_opening_completion = Self::maximal_opening_completion(context);
-    let user_completion = if context.opening_tail_chunks == 0 {
-      ControlWeights::scheduler_inner_opening_user_complete_header_max()
-    } else {
-      ControlWeights::scheduler_inner_opening_user_complete_header_max_tail(
-        context.opening_tail_chunks,
-      )
-    };
+    let minimal_opening = context.cursor == 0 && context.predicate_evaluation_units == 0;
+    let user_completion = Self::user_opening_control_weight(context.opening_tail_chunks);
     let composed = if minimal_opening {
       let non_progress_min = Self::component_max(
         ControlWeights::scheduler_inner_opening_failed_min(context.opening_tail_chunks),
@@ -692,44 +599,22 @@ impl RuntimeStepControlWeight {
         )
       };
       Self::component_max(composed, direct)
-    } else if maximal_opening {
-      Self::component_max(
-        composed,
-        Self::component_max(
-          ControlWeights::scheduler_inner_opening_progress_max(context.opening_tail_chunks),
-          if maximum_opening {
-            ControlWeights::scheduler_paged_execute_opening_max()
-          } else {
-            Weight::zero()
-          },
-        ),
-      )
-    } else if maximal_opening_completion {
-      Self::component_max(
-        composed,
-        Self::component_max(
-          ControlWeights::scheduler_inner_opening_failed_max(context.opening_tail_chunks),
-          ControlWeights::scheduler_inner_opening_retry_max(context.opening_tail_chunks),
-        ),
-      )
     } else {
       composed
     };
-    if context.cursor == 0 && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
-    {
-      let maximum_tail_opening_amount_entries = ActorMaxContractSteps::get()
+    if context.cursor == 0 {
+      let maximum_tail_amount_source_entries = ActorMaxContractSteps::get()
         .saturating_sub(1)
-        .saturating_mul(2)
-        .min(ActorMaxOpeningSnapshotEntries::get());
+        .saturating_mul(2);
       let maximum_current_predicates = ActorMaxPredicatesPerStep::get();
       let retry = ControlWeights::scheduler_inner_suspended_head_retry(
-        maximum_tail_opening_amount_entries,
+        maximum_tail_amount_source_entries,
         maximum_current_predicates,
       );
       let complete =
         ControlWeights::scheduler_inner_suspended_head_complete(maximum_current_predicates);
       let progress = ControlWeights::scheduler_inner_suspended_head_progress(
-        maximum_tail_opening_amount_entries,
+        maximum_tail_amount_source_entries,
         maximum_current_predicates,
       );
       return Some(Self::component_max(
@@ -737,78 +622,47 @@ impl RuntimeStepControlWeight {
         Self::component_max(retry, Self::component_max(complete, progress)),
       ));
     }
-    if context.cursor == 0
-      && context.predicate_evaluation_units > ActorMaxPredicatesPerStep::get()
-      && context.predicate_evaluation_units <= maximum_evaluation_units
-    {
-      let maximum_tail_opening_amount_entries = ActorMaxContractSteps::get()
-        .saturating_sub(1)
-        .saturating_mul(2)
-        .min(ActorMaxOpeningSnapshotEntries::get());
-      let maximum_current_predicates = ActorMaxPredicatesPerStep::get().saturating_sub(1);
-      let opening_retry = ControlWeights::scheduler_inner_suspended_head_opening_retry(
-        maximum_tail_opening_amount_entries,
-        maximum_current_predicates,
-      );
-      let opening_complete =
-        ControlWeights::scheduler_inner_suspended_head_opening_complete(maximum_current_predicates);
-      let opening_progress = ControlWeights::scheduler_inner_suspended_head_opening_progress(
-        maximum_tail_opening_amount_entries,
-        maximum_current_predicates,
-      );
-      return Some(Self::component_max(
-        composed,
-        Self::component_max(
-          opening_retry,
-          Self::component_max(opening_complete, opening_progress),
+    let atomic_complete = ControlWeights::scheduler_inner_running_complete(
+      context.steps_in_fragment,
+      context.predicate_evaluation_units,
+    );
+    let atomic = if context.steps_in_fragment >= 2 {
+      Self::component_max(
+        atomic_complete,
+        ControlWeights::scheduler_inner_running_progress(
+          context.steps_in_fragment,
+          context.predicate_evaluation_units,
         ),
-      ));
-    }
-    if context.cursor > 0 && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
-    {
-      let atomic_complete = ControlWeights::scheduler_inner_running_complete(
+      )
+    } else {
+      atomic_complete
+    };
+    let atomic = Self::component_max(
+      atomic,
+      ControlWeights::scheduler_inner_suspended_tail_retry(
         context.steps_in_fragment,
         context.predicate_evaluation_units,
-      );
-      let atomic = if context.steps_in_fragment >= 2 {
-        Self::component_max(
-          atomic_complete,
-          ControlWeights::scheduler_inner_running_progress(
-            context.steps_in_fragment,
-            context.predicate_evaluation_units,
-          ),
-        )
-      } else {
-        atomic_complete
-      };
-      let atomic = Self::component_max(
+      ),
+    );
+    let atomic = Self::component_max(
+      atomic,
+      ControlWeights::scheduler_inner_suspended_tail_complete(
+        context.steps_in_fragment,
+        context.predicate_evaluation_units,
+      ),
+    );
+    let atomic = if context.steps_in_fragment >= 2 {
+      Self::component_max(
         atomic,
-        ControlWeights::scheduler_inner_suspended_tail_retry(
+        ControlWeights::scheduler_inner_suspended_tail_progress(
           context.steps_in_fragment,
           context.predicate_evaluation_units,
         ),
-      );
-      let atomic = Self::component_max(
-        atomic,
-        ControlWeights::scheduler_inner_suspended_tail_complete(
-          context.steps_in_fragment,
-          context.predicate_evaluation_units,
-        ),
-      );
-      let atomic = if context.steps_in_fragment >= 2 {
-        Self::component_max(
-          atomic,
-          ControlWeights::scheduler_inner_suspended_tail_progress(
-            context.steps_in_fragment,
-            context.predicate_evaluation_units,
-          ),
-        )
-      } else {
-        atomic
-      };
-      return Some(Self::component_max(composed, atomic));
-    }
-    Some(composed)
+      )
+    } else {
+      atomic
+    };
+    Some(Self::component_max(composed, atomic))
   }
 
   fn base_actual_control_weight(
@@ -821,24 +675,11 @@ impl RuntimeStepControlWeight {
     Self::base_maximum_control_weight(context, step)?;
     let separate = |weight| Some((weight, InvocationReceiptCoverage::Separate));
     let included = |weight| Some((weight, InvocationReceiptCoverage::Included));
-    let maximum_evaluation_units = ActorMaxPredicatesPerStep::get().checked_mul(2)?;
-    let maximum_opening_tail_chunks = ActorMaxContractSteps::get()
-      .saturating_sub(1)
-      .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK);
-    let maximum_opening = context.cursor == 0
-      && context.steps_in_fragment == 1
-      && context.opening_tail_chunks == maximum_opening_tail_chunks
-      && context.predicate_evaluation_units == maximum_evaluation_units
-      && context.opening_snapshot_entries == ActorMaxOpeningSnapshotEntries::get()
-      && context.opening_predicate_results == ActorMaxOpeningPredicateResults::get()
-      && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get();
     if execution.phase == StepControlPhase::Opening
       && execution.outcome == StepControlOutcome::Failed
       && execution.placement == StepControlPlacement::None
       && context.cursor == 0
       && context.predicate_evaluation_units == 0
-      && context.opening_snapshot_entries == 0
-      && context.opening_predicate_results == 0
     {
       return separate(ControlWeights::scheduler_inner_opening_failed_min(
         context.opening_tail_chunks,
@@ -849,8 +690,6 @@ impl RuntimeStepControlWeight {
       && execution.placement == StepControlPlacement::Wakeup
       && context.cursor == 0
       && context.predicate_evaluation_units == 0
-      && context.opening_snapshot_entries == 0
-      && context.opening_predicate_results == 0
     {
       return separate(ControlWeights::scheduler_inner_opening_retry_min(
         context.opening_tail_chunks,
@@ -861,128 +700,23 @@ impl RuntimeStepControlWeight {
       && execution.placement == StepControlPlacement::None
       && context.cursor == 0
       && context.predicate_evaluation_units == 0
-      && context.opening_snapshot_entries == 0
-      && context.opening_predicate_results == 0
     {
-      return separate(if context.opening_tail_chunks == 0 {
-        ControlWeights::scheduler_inner_opening_user_complete_header_max()
-      } else {
-        ControlWeights::scheduler_inner_opening_user_complete_header_max_tail(
-          context.opening_tail_chunks,
-        )
-      });
+      return separate(Self::user_opening_control_weight(
+        context.opening_tail_chunks,
+      ));
     }
     if execution.phase == StepControlPhase::Opening
       && execution.outcome == StepControlOutcome::Continued
       && execution.placement == StepControlPlacement::Queue
       && context.cursor == 0
       && context.opening_tail_chunks > 0
+      && context.predicate_evaluation_units == 0
     {
-      let opening_geometry_steps = 1u32
-        .saturating_add(
-          context
-            .opening_tail_chunks
-            .saturating_mul(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK),
-        )
-        .min(ActorMaxContractSteps::get());
-      if context.predicate_evaluation_units == 0
-        && context.opening_snapshot_entries == 0
-        && context.opening_predicate_results == 0
-      {
-        return separate(ControlWeights::scheduler_inner_opening_progress_min(
-          context.opening_tail_chunks,
-        ));
-      }
-      if context.predicate_evaluation_units == maximum_evaluation_units
-        && context.opening_snapshot_entries
-          == opening_geometry_steps
-            .saturating_mul(2)
-            .min(ActorMaxOpeningSnapshotEntries::get())
-        && context.opening_predicate_results
-          == opening_geometry_steps
-            .saturating_mul(ActorMaxPredicatesPerStep::get())
-            .min(ActorMaxOpeningPredicateResults::get())
-        && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get()
-      {
-        // The direct profile does not bound independent amount/predicate sources.
-        // Retain the admitted composed envelope until complete-path coverage is regenerated.
-        return included(maximum);
-      }
-    }
-    if execution.phase == StepControlPhase::Opening
-      && execution.outcome == StepControlOutcome::Failed
-      && execution.placement == StepControlPlacement::None
-      && context.cursor == 0
-      && context.predicate_evaluation_units == maximum_evaluation_units
-    {
-      let opening_geometry_steps = 1u32
-        .saturating_add(
-          context
-            .opening_tail_chunks
-            .saturating_mul(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK),
-        )
-        .min(ActorMaxContractSteps::get());
-      if context.opening_snapshot_entries
-        == opening_geometry_steps
-          .saturating_sub(1)
-          .saturating_mul(2)
-          .min(ActorMaxOpeningSnapshotEntries::get())
-        && context.opening_predicate_results
-          == opening_geometry_steps
-            .saturating_mul(ActorMaxPredicatesPerStep::get())
-            .min(ActorMaxOpeningPredicateResults::get())
-        && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get()
-      {
-        return separate(ControlWeights::scheduler_inner_opening_failed_max(
-          context.opening_tail_chunks,
-        ));
-      }
-    }
-    if execution.phase == StepControlPhase::Opening
-      && execution.outcome == StepControlOutcome::Suspended
-      && execution.placement == StepControlPlacement::Wakeup
-      && context.cursor == 0
-      && context.predicate_evaluation_units == maximum_evaluation_units
-    {
-      let opening_geometry_steps = 1u32
-        .saturating_add(
-          context
-            .opening_tail_chunks
-            .saturating_mul(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK),
-        )
-        .min(ActorMaxContractSteps::get());
-      if context.opening_snapshot_entries
-        == opening_geometry_steps
-          .saturating_sub(1)
-          .saturating_mul(2)
-          .min(ActorMaxOpeningSnapshotEntries::get())
-        && context.opening_predicate_results
-          == opening_geometry_steps
-            .saturating_mul(ActorMaxPredicatesPerStep::get())
-            .min(ActorMaxOpeningPredicateResults::get())
-        && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get()
-      {
-        return separate(ControlWeights::scheduler_inner_opening_retry_max(
-          context.opening_tail_chunks,
-        ));
-      }
-    }
-    if execution.phase == StepControlPhase::Opening
-      && execution.outcome == StepControlOutcome::Completed
-      && execution.placement == StepControlPlacement::None
-      && Self::maximal_opening_completion(context)
-    {
-      return included(ControlWeights::scheduler_inner_opening_complete_max(
+      return separate(ControlWeights::scheduler_inner_opening_progress_min(
         context.opening_tail_chunks,
       ));
     }
-    if maximum_opening && execution.phase == StepControlPhase::Opening {
-      return included(maximum);
-    }
-    if execution.phase == StepControlPhase::Running
-      && context.cursor > 0
-      && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
-    {
+    if execution.phase == StepControlPhase::Running && context.cursor > 0 {
       if execution.outcome == StepControlOutcome::Completed
         && execution.placement == StepControlPlacement::None
       {
@@ -1011,7 +745,6 @@ impl RuntimeStepControlWeight {
       && execution.outcome == StepControlOutcome::Completed
       && execution.placement == StepControlPlacement::None
       && context.cursor > 0
-      && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
     {
       return separate(ControlWeights::scheduler_inner_suspended_tail_complete(
         context.steps_in_fragment,
@@ -1023,7 +756,6 @@ impl RuntimeStepControlWeight {
       && execution.placement == StepControlPlacement::Queue
       && context.cursor > 0
       && context.steps_in_fragment >= 2
-      && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
     {
       return separate(ControlWeights::scheduler_inner_suspended_tail_progress(
         context.steps_in_fragment,
@@ -1034,7 +766,6 @@ impl RuntimeStepControlWeight {
       && execution.outcome == StepControlOutcome::Suspended
       && execution.placement == StepControlPlacement::Wakeup
       && context.cursor > 0
-      && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
     {
       return separate(ControlWeights::scheduler_inner_suspended_tail_retry(
         context.steps_in_fragment,
@@ -1060,24 +791,6 @@ impl RuntimeStepControlWeight {
         ControlWeights::contract_geometry_reconstruct(context.opening_tail_chunks)
           .checked_sub(&ControlWeights::contract_geometry_reconstruct(0))?
       };
-    let opening_snapshot = if execution.phase == StepControlPhase::Opening {
-      Self::opening_snapshot_weight(context.opening_snapshot_entries)
-    } else {
-      Weight::zero()
-    };
-    let opening_predicates = if execution.phase == StepControlPhase::Opening {
-      Self::opening_predicate_weight(context.opening_predicate_results)
-    } else {
-      Weight::zero()
-    };
-    let funding = if execution.phase == StepControlPhase::Opening {
-      Self::nonzero_parameterized(
-        context.funding_snapshot_entries,
-        ControlWeights::funding_snapshot_open,
-      )
-    } else {
-      Weight::zero()
-    };
     let current_predicates = Self::current_predicate_weight(context.predicate_evaluation_units);
     let commit = match execution.outcome {
       StepControlOutcome::Continued => ControlWeights::run_progress(),
@@ -1086,15 +799,12 @@ impl RuntimeStepControlWeight {
     };
     let placement = match execution.placement {
       StepControlPlacement::None => Weight::zero(),
-      StepControlPlacement::Queue => ControlWeights::scheduler_paged_append_new_page(),
-      StepControlPlacement::Wakeup => ControlWeights::scheduler_wakeup_append_new_page(),
+      StepControlPlacement::Queue => ControlWeights::service_round_admit_eligible(),
+      StepControlPlacement::Wakeup => ControlWeights::service_member_to_deadline_new_key(),
     };
     separate(
       plan
         .saturating_add(opening_tail)
-        .saturating_add(opening_snapshot)
-        .saturating_add(opening_predicates)
-        .saturating_add(funding)
         .saturating_add(current_predicates)
         .saturating_add(commit)
         .saturating_add(placement),
@@ -1104,23 +814,16 @@ impl RuntimeStepControlWeight {
 
 pub struct TmctolTaskEffectWeight;
 
-impl<AssetId, Balance, AccountId, MaxSplitTransferLegs>
-  TaskEffectWeightProvider<Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>>
+impl<AssetId, Balance, AccountId> TaskEffectWeightProvider<Task<AssetId, Balance, AccountId>>
   for TmctolTaskEffectWeight
-where
-  MaxSplitTransferLegs: Get<u32>,
 {
   fn production_weight_identity() -> Option<[u8; 32]> {
     type EffectWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-    let split_transfer = (0..=ActorMaxSplitTransferLegs::get())
-      .map(EffectWeights::task_split_transfer)
-      .collect::<alloc::vec::Vec<_>>();
     Some(
       (
         *b"DEOS_ACTOR_TASK_EFFECT_WEIGHT",
         *b"DEOS_ACTOR_EFFECT_ACTUAL_V1",
         EffectWeights::task_transfer(),
-        split_transfer,
         EffectWeights::task_dex_exact_in(),
         EffectWeights::task_dex_exact_out(),
         EffectWeights::task_add_liquidity(),
@@ -1136,15 +839,10 @@ where
     )
   }
 
-  fn maximum_effect_weight(
-    task: &Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>,
-  ) -> Option<Weight> {
+  fn maximum_effect_weight(task: &Task<AssetId, Balance, AccountId>) -> Option<Weight> {
     type EffectWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
     match task {
       Task::Transfer { .. } => Some(EffectWeights::task_transfer()),
-      Task::SplitTransfer { legs, .. } => Some(EffectWeights::task_split_transfer(
-        u32::try_from(legs.len()).ok()?,
-      )),
       Task::SwapIn { .. } => Some(EffectWeights::task_dex_exact_in()),
       Task::SwapOut { .. } => Some(EffectWeights::task_dex_exact_out()),
       Task::AddLiquidity { .. } => Some(EffectWeights::task_add_liquidity()),
@@ -1159,7 +857,7 @@ where
   }
 
   fn actual_effect_weight(
-    task: &Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>,
+    task: &Task<AssetId, Balance, AccountId>,
     execution: pallet_deos_actors::TaskEffectExecution,
   ) -> Option<Weight> {
     match execution {
@@ -1171,28 +869,21 @@ where
 
 pub struct RuntimeAdmissionCertificateAuthority;
 
-impl AdmissionCertificateAuthorityProvider for RuntimeAdmissionCertificateAuthority {
-  fn current() -> Option<AdmissionCertificateAuthority> {
-    type ControlWeights = <Runtime as pallet_deos_actors::Config>::StepControlWeight;
-    type EffectWeights = <Runtime as pallet_deos_actors::Config>::TaskEffectWeight;
-    let control_identity = <ControlWeights as StepControlWeightProvider<
-      pallet_deos_actors::StepOf<Runtime>,
-    >>::production_weight_identity()?;
-    let effect_identity = <EffectWeights as TaskEffectWeightProvider<
-      pallet_deos_actors::TaskOf<Runtime>,
-    >>::production_weight_identity()?;
-    let configured_bounds_commitment = (
+impl RuntimeAdmissionCertificateAuthority {
+  pub(crate) fn configured_bounds_with_behavior_limits(
+    maximum_clauses: u32,
+    maximum_atoms_per_clause: u32,
+  ) -> [u8; 32] {
+    (
       *b"DEOS_ACTOR_CONFIGURED_BOUNDS",
       (
         ActorMaxContractSteps::get(),
         ActorMaxFundingTrackedAssets::get(),
-        ActorMaxOpeningSnapshotEntries::get(),
-        ActorMaxOpeningPredicateResults::get(),
         ActorMaxPreconditionClauses::get(),
         ActorMaxPredicatesPerClause::get(),
         ActorMaxPredicatesPerStep::get(),
-        ActorMaxSplitTransferLegs::get(),
         ActorMaxWhitelistSize::get(),
+        ActorMaxParkedBalanceWatches::get(),
       ),
       (
         ActorMaxConsecutiveFailures::get(),
@@ -1209,15 +900,32 @@ impl AdmissionCertificateAuthorityProvider for RuntimeAdmissionCertificateAuthor
         ActorMaxQueueEntriesScannedPerBlock::get(),
         ActorQueuePageSize::get(),
         ActorWakeupPageSize::get(),
-        ActorObservationPageSize::get(),
         ActorOnIdleReserve::get(),
       ),
+      <Runtime as pallet_deos_actors::Config>::BlockResourceBudget::get(),
+      (maximum_clauses, maximum_atoms_per_clause),
     )
-      .using_encoded(polkadot_sdk::sp_io::hashing::blake2_256);
+      .using_encoded(polkadot_sdk::sp_io::hashing::blake2_256)
+  }
+}
+
+impl AdmissionCertificateAuthorityProvider for RuntimeAdmissionCertificateAuthority {
+  fn current() -> Option<AdmissionCertificateAuthority> {
+    type ControlWeights = <Runtime as pallet_deos_actors::Config>::StepControlWeight;
+    type EffectWeights = <Runtime as pallet_deos_actors::Config>::TaskEffectWeight;
+    let control_identity = <ControlWeights as StepControlWeightProvider<
+      pallet_deos_actors::StepOf<Runtime>,
+    >>::production_weight_identity()?;
+    let effect_identity = <EffectWeights as TaskEffectWeightProvider<
+      pallet_deos_actors::TaskOf<Runtime>,
+    >>::production_weight_identity()?;
+    let configured_bounds_commitment = Self::configured_bounds_with_behavior_limits(
+      <Runtime as pallet_deos_actors::Config>::MaxBehaviorClauses::get(),
+      <Runtime as pallet_deos_actors::Config>::MaxBehaviorAtomsPerClause::get(),
+    );
     type LifecycleWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
     let maximum_lifecycle_weight = [
       LifecycleWeights::create_user_actor(),
-      LifecycleWeights::create_user_actor_crossing_new_page(),
       LifecycleWeights::create_user_actor_at_slot(),
       LifecycleWeights::create_system_actor(),
       LifecycleWeights::create_system_actor_at_sovereign_id(),
@@ -1238,7 +946,7 @@ impl AdmissionCertificateAuthorityProvider for RuntimeAdmissionCertificateAuthor
       )
     });
     Some(AdmissionCertificateAuthority {
-      runtime_actor_semantics_version: 1,
+      runtime_actor_semantics_version: 2,
       production_weight_identity: AdmissionCertificateAuthority::compose_production_weight_identity(
         control_identity,
         effect_identity,
@@ -1393,11 +1101,13 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
           }
         }
         // A certified destination ingress consequence keeps its closed retry
-        // classification through TaskFailure (spec 6.1): recoverable queue/wakeup
+        // classification through TaskFailure: recoverable queue/wakeup
         // capacity is Temporary, exhaustion/corruption/invariant failure is
         // Permanent, so the owning task retries rather than aborting.
         RuntimeAddressEventIngress::on_internal_inbound(to, asset, amount, from)
           .map_err(TaskFailure::from)?;
+        <crate::Actors as BalanceTransitionIngress<AssetKind>>::note_balance_transition(asset)
+          .map_err(TaskFailure::permanent)?;
         Ok(())
       })();
       match result {
@@ -1410,29 +1120,39 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
   }
 
   fn burn(who: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), TaskFailure> {
-    (|| -> DispatchResult {
-      match asset {
-        AssetKind::Native => {
-          let (_, remainder) = <Balances as Currency<AccountId>>::slash(who, amount);
-          if remainder > 0 {
-            return Err(DispatchError::Token(TokenError::FundsUnavailable));
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      let result = (|| -> Result<(), TaskFailure> {
+        match asset {
+          AssetKind::Native => {
+            let (_, remainder) = <Balances as Currency<AccountId>>::slash(who, amount);
+            if remainder > 0 {
+              return Err(TaskFailure::permanent(DispatchError::Token(
+                TokenError::FundsUnavailable,
+              )));
+            }
           }
-          Ok(())
+          AssetKind::Local(id) | AssetKind::Foreign(id) => {
+            <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::burn_from(
+              id,
+              who,
+              amount,
+              Preservation::Expendable,
+              Precision::Exact,
+              Fortitude::Polite,
+            )
+            .map_err(TaskFailure::permanent)?;
+          }
         }
-        AssetKind::Local(id) | AssetKind::Foreign(id) => {
-          <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::burn_from(
-            id,
-            who,
-            amount,
-            Preservation::Expendable,
-            Precision::Exact,
-            Fortitude::Polite,
-          )?;
-          Ok(())
+        <crate::Actors as BalanceTransitionIngress<AssetKind>>::note_balance_transition(asset)
+          .map_err(TaskFailure::permanent)
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(failure) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(failure))
         }
       }
-    })()
-    .map_err(TaskFailure::permanent)
+    })
   }
 
   fn mint(to: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), TaskFailure> {
@@ -1461,6 +1181,8 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
         // TaskFailure so the owning task retries on recoverable capacity.
         RuntimeAddressEventIngress::on_inbound_without_source(to, asset, amount)
           .map_err(TaskFailure::from)?;
+        <crate::Actors as BalanceTransitionIngress<AssetKind>>::note_balance_transition(asset)
+          .map_err(TaskFailure::permanent)?;
         Ok(())
       })();
       match result {
@@ -1486,6 +1208,15 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
           Preservation::Expendable,
           Fortitude::Polite,
         )
+      }
+    }
+  }
+
+  fn total_balance(who: &AccountId, asset: AssetKind) -> Balance {
+    match asset {
+      AssetKind::Native => <Balances as NativeInspect<AccountId>>::total_balance(who),
+      AssetKind::Local(id) | AssetKind::Foreign(id) => {
+        <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::total_balance(id, who)
       }
     }
   }
@@ -1634,14 +1365,20 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       quote.amount_after_fee,
       quote.amount_out,
     )?;
-    pallet_deos_router::Pallet::<Runtime>::execute_swap_for(
-      who, asset_in, asset_out, amount_in, min_out, who,
+    with_user_action_fee_capacity(
+      &context,
+      <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as ActorsWeightInfo>::task_dex_exact_in(),
+      || {
+        pallet_deos_router::Pallet::<Runtime>::execute_swap_for(
+          who, asset_in, asset_out, amount_in, min_out, who,
+        )
+        .map(|outcome| DexSwapOutcome {
+          total_amount_in: outcome.total_amount_in,
+          recipient_amount_out: outcome.recipient_amount_out,
+        })
+        .map_err(classify_router_execution_failure)
+      },
     )
-    .map(|outcome| DexSwapOutcome {
-      total_amount_in: outcome.total_amount_in,
-      recipient_amount_out: outcome.recipient_amount_out,
-    })
-    .map_err(classify_router_execution_failure)
   }
 
   fn swap_exact_out(
@@ -1690,19 +1427,25 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       quote.amount_after_fee,
       quote.amount_out,
     )?;
-    pallet_deos_router::Pallet::<Runtime>::execute_exact_out_for(
-      who,
-      asset_in,
-      asset_out,
-      amount_out,
-      execution_cap,
-      who,
+    with_user_action_fee_capacity(
+      &context,
+      <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as ActorsWeightInfo>::task_dex_exact_out(),
+      || {
+        pallet_deos_router::Pallet::<Runtime>::execute_exact_out_for(
+          who,
+          asset_in,
+          asset_out,
+          amount_out,
+          execution_cap,
+          who,
+        )
+        .map(|outcome| DexSwapOutcome {
+          total_amount_in: outcome.total_amount_in,
+          recipient_amount_out: outcome.recipient_amount_out,
+        })
+        .map_err(classify_router_execution_failure)
+      },
     )
-    .map(|outcome| DexSwapOutcome {
-      total_amount_in: outcome.total_amount_in,
-      recipient_amount_out: outcome.recipient_amount_out,
-    })
-    .map_err(classify_router_execution_failure)
   }
 }
 
@@ -1725,6 +1468,9 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       use alloc::boxed::Box;
       let result = (|| -> Result<(Balance, Balance, Balance), TaskFailure> {
+        let actor_type = active_actor_type(who);
+        let preserve_native_anchor = actor_type == Some(ActorType::System)
+          && Balances::free_balance(who) >= ExistentialDeposit::get();
         if AssetConversion::get_reserves(asset_a, asset_b).is_err() {
           crate::DeosRouter::create_pool(RuntimeOrigin::signed(who.clone()), asset_a, asset_b)
             .map_err(TaskFailure::permanent)?;
@@ -1746,12 +1492,24 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
         let lp_after = liquidity_lp_balance(who, asset_a, asset_b);
         let lp_minted = lp_after.saturating_sub(lp_before);
         // Factual outcomes: measure the actual asset debits and LP output rather than
-        // returning the authored caps as if fully consumed (spec 3.4).
+        // returning the authored caps as if fully consumed.
         let used_a = a_before.saturating_sub(TmctolAssetOps::balance(who, asset_a));
         let used_b = b_before.saturating_sub(TmctolAssetOps::balance(who, asset_b));
         if lp_minted < min_lp_out {
           return Err(TaskFailure::temporary(DispatchError::Other(
             "MinimumLpOutputNotMet",
+          )));
+        }
+        if actor_type == Some(ActorType::User) {
+          ensure_user_action_fee_capacity(
+            who,
+            <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as ActorsWeightInfo>::task_add_liquidity(),
+          )?;
+        }
+        // Auxiliary pool deposits must not consume a System Actor's existing free ED.
+        if preserve_native_anchor && Balances::free_balance(who) < ExistentialDeposit::get() {
+          return Err(TaskFailure::permanent(DispatchError::Token(
+            TokenError::FundsUnavailable,
           )));
         }
         Ok((used_a, used_b, lp_minted))
@@ -1813,6 +1571,12 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
         let amount_a = after_a.saturating_sub(before_a);
         let amount_b = after_b.saturating_sub(before_b);
         validate_remove_liquidity_output(amount_a, amount_b, min_amount_a, min_amount_b)?;
+        if is_active_user_actor(who) {
+          ensure_user_action_fee_capacity(
+            who,
+            <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as ActorsWeightInfo>::task_remove_liquidity(),
+          )?;
+        }
         Ok((amount_a, amount_b))
       })();
       match result {
@@ -1842,15 +1606,26 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
           "DonationAmountTooSmall",
         )));
       }
-      let donation =
-        crate::configs::AssetConversionAdapter::donate_native_staking_liquidity_from_ntve(
-          who,
-          max_amount_a,
-          max_amount_b,
-          max_ratio_error,
-        )?;
-      TmctolAssetOps::bridge_native_staking_pool_yield().map_err(TaskFailure::permanent)?;
-      return Ok(donation);
+      let effect = || {
+        let donation =
+          crate::configs::AssetConversionAdapter::donate_native_staking_liquidity_from_ntve(
+            who,
+            max_amount_a,
+            max_amount_b,
+            max_ratio_error,
+          )?;
+        TmctolAssetOps::bridge_native_staking_pool_yield().map_err(TaskFailure::permanent)?;
+        Ok(donation)
+      };
+      return if is_active_user_actor(who) {
+        with_user_action_fee_capacity(
+          &ExecutionContext::new(who, ActorType::User),
+          <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as ActorsWeightInfo>::task_donate_liquidity(),
+          effect,
+        )
+      } else {
+        effect()
+      };
     }
     Err(TaskFailure::permanent(DispatchError::Other(
       "LiquidityDonationUnsupported",
@@ -1896,7 +1671,7 @@ impl TmctolDexOps {
       .ok_or_else(|| {
         TaskFailure::temporary(DispatchError::Other("SystemReferencePriceUnavailable"))
       })?;
-    // Checked cross-multiplication deviation guard (spec 5.3): the scaled reference
+    // Checked cross-multiplication deviation guard: the scaled reference
     // price is ref_out/ref_in * PRECISION; comparing without division requires
     //   abs(exec_out * ref_in - ref_out * exec_in) * ACCURACY
     //     <= deviation * ref_out * exec_in
@@ -2064,15 +1839,6 @@ impl DeosSystemActorContractValidator {
             targets.push(target);
           }
         }
-        pallet_deos_actors::Task::SplitTransfer { legs, .. } => {
-          for leg in legs {
-            if let Some(target) = Self::known_target(&leg.to)
-              && !targets.contains(&target)
-            {
-              targets.push(target);
-            }
-          }
-        }
         _ => {}
       }
     }
@@ -2141,20 +1907,6 @@ impl DeosSystemActorContractValidator {
               };
               if !edges.contains(&edge) {
                 edges.push(edge);
-              }
-            }
-          }
-          pallet_deos_actors::Task::SplitTransfer { legs, .. } => {
-            for leg in legs {
-              if let Some(target) = Self::target_actor(&leg.to, contracts) {
-                let edge = SystemActivationEdge {
-                  source: *source,
-                  target,
-                  effect: SystemActivationEffect::CertifiedActorTransfer,
-                };
-                if !edges.contains(&edge) {
-                  edges.push(edge);
-                }
               }
             }
           }
@@ -2418,7 +2170,9 @@ impl
           window: None,
           steps: burn_contract_steps,
           funding: FundingSourcePolicy::RuntimePolicy,
-          completion: pallet_deos_actors::CompletionPolicy::Persistent,
+          on_unfunded: pallet_deos_actors::OnUnfunded::Close,
+          close_when: None,
+          parked_balance_activation: None,
           auto_close_at_cycle_nonce: None,
         },
       ),
@@ -2432,7 +2186,9 @@ impl
           window: None,
           steps: fee_sink_contract_steps,
           funding: FundingSourcePolicy::RuntimePolicy,
-          completion: pallet_deos_actors::CompletionPolicy::Persistent,
+          on_unfunded: pallet_deos_actors::OnUnfunded::Close,
+          close_when: None,
+          parked_balance_activation: None,
           auto_close_at_cycle_nonce: None,
         },
       ),
@@ -2454,7 +2210,9 @@ impl
             dust,
           ),
           funding: FundingSourcePolicy::RuntimePolicy,
-          completion: pallet_deos_actors::CompletionPolicy::Persistent,
+          on_unfunded: pallet_deos_actors::OnUnfunded::Close,
+          close_when: None,
+          parked_balance_activation: None,
           auto_close_at_cycle_nonce: None,
         },
       ),
@@ -2525,9 +2283,7 @@ impl
   }
 
   fn integrity_test() {
-    use pallet_deos_actors::{
-      AmountResolution, CompletionPolicy, FundingSourcePolicy, Mutability, Task, Trigger,
-    };
+    use pallet_deos_actors::{AmountResolution, FundingSourcePolicy, Mutability, Task, Trigger};
 
     use polkadot_sdk::sp_runtime::traits::AccountIdConversion;
     DeosSystemActorContractValidator::manifest()
@@ -2569,16 +2325,7 @@ impl
       FundingSourcePolicy::RuntimePolicy,
       "Fee Sink must accept runtime-certified fee ingress",
     );
-    assert_eq!(
-      contract.completion,
-      CompletionPolicy::Persistent,
-      "Fee Sink must remain persistent",
-    );
-    assert_eq!(
-      contract.steps.len(),
-      1,
-      "Fee Sink must own one allocation step"
-    );
+    assert_eq!(contract.close_when, None, "Fee Sink must remain persistent",);
 
     assert!(
       Self::dormant_system_actors()
@@ -2607,41 +2354,30 @@ impl
         (liquidity_actor.clone(), Perbill::from_percent(50)),
       ]
     };
-    assert!(
-      matches!(contract.steps[0].task, Task::SplitTransfer { .. }),
-      "Fee Sink must own one split transfer",
-    );
-    let Task::SplitTransfer {
-      asset,
-      amount,
-      legs,
-    } = &contract.steps[0].task
-    else {
-      return;
-    };
     assert_eq!(
-      *asset,
-      AssetKind::Native,
-      "Fee Sink must allocate native fees"
+      contract.steps.len(),
+      expected_legs.len(),
+      "one Transfer per allocation leg"
     );
-    assert_eq!(
-      *amount,
-      AmountResolution::PercentageOfCurrent(ecosystem::params::FEE_SINK_BUFFER_PCT),
-      "Fee Sink must process the canonical buffer share",
-    );
-    let actual_legs = legs
-      .iter()
-      .map(|leg| (leg.to.clone(), leg.share))
-      .collect::<alloc::vec::Vec<_>>();
-    assert_eq!(
-      actual_legs, expected_legs,
-      "Fee Sink mode/leg topology drifted"
-    );
-    assert_eq!(
-      legs.iter().map(|leg| leg.share.deconstruct()).sum::<u32>(),
-      Perbill::one().deconstruct(),
-      "Fee Sink allocation shares must conserve the processed amount",
-    );
+    for (index, (step, (to, share))) in contract.steps.iter().zip(expected_legs).enumerate() {
+      let expected_amount = if index == 0 {
+        AmountResolution::CaptureCycleBalance {
+          percent: ecosystem::params::FEE_SINK_BUFFER_PCT,
+          share,
+        }
+      } else {
+        AmountResolution::CycleBalancePercent(share)
+      };
+      assert_eq!(
+        step.task,
+        Task::Transfer {
+          to,
+          asset: AssetKind::Native,
+          amount: expected_amount
+        },
+        "Fee Sink allocation topology drifted"
+      );
+    }
 
     let fee_sink_account = crate::Actors::sovereign_account_id_system(fee_sink_id);
     assert_eq!(
@@ -2687,10 +2423,6 @@ impl TmctolGenesisSystemActors {
   ) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
     let clause = predicates
       .into_iter()
-      .map(|predicate| pallet_deos_actors::TimedPredicate {
-        timing: pallet_deos_actors::ObservationTiming::Current,
-        predicate,
-      })
       .collect::<alloc::vec::Vec<_>>()
       .try_into()
       .expect("runtime predicate clause fits MaxPredicatesPerClause");
@@ -2712,46 +2444,75 @@ impl TmctolGenesisSystemActors {
     rounded.try_into().unwrap_or(Balance::MAX)
   }
 
+  fn build_distribution_steps(
+    asset: AssetKind,
+    percent: Perbill,
+    recipients: alloc::vec::Vec<(AccountId, Perbill)>,
+    precondition: Option<pallet_deos_actors::PreconditionOf<Runtime>>,
+  ) -> alloc::vec::Vec<pallet_deos_actors::StepOf<Runtime>> {
+    use pallet_deos_actors::{AmountResolution, Step, StepErrorPolicy, Task};
+    recipients
+      .into_iter()
+      .enumerate()
+      .map(|(index, (to, share))| Step {
+        precondition: if index == 0 {
+          precondition.clone()
+        } else {
+          None
+        },
+        task: Task::Transfer {
+          to,
+          asset,
+          amount: if index == 0 {
+            AmountResolution::CaptureCycleBalance { percent, share }
+          } else {
+            AmountResolution::CycleBalancePercent(share)
+          },
+        },
+        on_error: StepErrorPolicy::AbortCycle,
+      })
+      .collect()
+  }
+
   pub fn build_fee_sink_contract_steps() -> pallet_deos_actors::ContractSteps<Runtime> {
-    use pallet_deos_actors::{AmountResolution, SplitLeg, Step, StepErrorPolicy, Task};
     let lp_backed = crate::Staking::native_security_mode()
       == pallet_staking::NativeSecurityMode::LpBackedSelection;
     let legs = if lp_backed {
       alloc::vec![
-        SplitLeg {
-          to: crate::Staking::native_security_reward_account(),
-          share: Perbill::from_percent(34),
-        },
-        SplitLeg {
-          to: crate::Staking::pool_account_for(0),
-          share: Perbill::from_percent(33),
-        },
-        SplitLeg {
-          to: crate::Actors::sovereign_account_id_system(
+        (
+          crate::Staking::native_security_reward_account(),
+          Perbill::from_percent(34)
+        ),
+        (
+          crate::Staking::pool_account_for(0),
+          Perbill::from_percent(33)
+        ),
+        (
+          crate::Actors::sovereign_account_id_system(
             ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
           ),
-          share: Perbill::from_percent(33),
-        },
+          Perbill::from_percent(33)
+        ),
       ]
     } else {
       alloc::vec![
-        SplitLeg {
-          to: crate::Staking::pool_account_for(0),
-          share: Perbill::from_percent(50),
-        },
-        SplitLeg {
-          to: crate::Actors::sovereign_account_id_system(
+        (
+          crate::Staking::pool_account_for(0),
+          Perbill::from_percent(50)
+        ),
+        (
+          crate::Actors::sovereign_account_id_system(
             ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
           ),
-          share: Perbill::from_percent(50),
-        },
+          Perbill::from_percent(50)
+        ),
       ]
     };
     let mut minimum_processed = 0;
     for leg in &legs {
       minimum_processed = minimum_processed.max(Self::minimum_base_for_perbill_output(
         ExistentialDeposit::get(),
-        leg.share,
+        leg.1,
       ));
     }
     assert!(
@@ -2765,22 +2526,15 @@ impl TmctolGenesisSystemActors {
     let minimum_balance = ExistentialDeposit::get()
       .saturating_add(required_spendable)
       .saturating_sub(1);
-    alloc::vec![Step {
-      precondition: Self::all_conditions(alloc::vec![
-        pallet_deos_actors::Predicate::BalanceAbove {
-          asset: AssetKind::Native,
-          threshold: minimum_balance,
-        },
-      ]),
-      task: Task::SplitTransfer {
+    Self::build_distribution_steps(
+      AssetKind::Native,
+      ecosystem::params::FEE_SINK_BUFFER_PCT,
+      legs,
+      Self::all_conditions(alloc::vec![pallet_deos_actors::Predicate::BalanceAbove {
         asset: AssetKind::Native,
-        amount: AmountResolution::PercentageOfCurrent(ecosystem::params::FEE_SINK_BUFFER_PCT,),
-        legs: legs
-          .try_into()
-          .expect("phase-aware fee-sink split legs fit"),
-      },
-      on_error: StepErrorPolicy::AbortCycle,
-    }]
+        threshold: minimum_balance
+      }]),
+    )
     .try_into()
     .expect("phase-aware fee-sink contract_steps fits")
   }
@@ -2804,7 +2558,7 @@ impl TmctolGenesisSystemActors {
         precondition: dust_guard(foreign),
         task: Task::SwapIn {
           asset_in: foreign,
-          amount_in: AmountResolution::AllAvailable,
+          amount_in: AmountResolution::Percent(Perbill::one()),
           asset_out: AssetKind::Native,
           slippage_tolerance: ecosystem::params::SYSTEM_ACTORS_MAX_SWAP_SLIPPAGE,
         },
@@ -2816,7 +2570,7 @@ impl TmctolGenesisSystemActors {
       precondition: dust_guard(AssetKind::Native),
       task: Task::Burn {
         asset: AssetKind::Native,
-        amount: AmountResolution::AllAvailable,
+        amount: AmountResolution::Percent(Perbill::one()),
       },
       on_error: StepErrorPolicy::AbortCycle,
     });
@@ -2833,13 +2587,13 @@ impl TmctolGenesisSystemActors {
   /// Contract steps:
   /// 1. If Native > dust AND Foreign > dust → AddLiquidity (opportunistic)
   /// 2. If Foreign > dust → SwapIn Foreign→Native with reserve-aware slippage
-  /// 3. If LP > dust → SplitTransfer LP to TOL buckets (50/16.67/16.67/16.66)
+  /// 3. If LP > dust → Four Transfer Steps distribute LP to TOL buckets (50/16.67/16.67/16.66)
   pub fn build_zap_contract_steps(
     foreign: AssetKind,
     lp_asset: AssetKind,
     dust_threshold: Balance,
   ) -> pallet_deos_actors::ContractSteps<Runtime> {
-    use pallet_deos_actors::{AmountResolution, Predicate, SplitLeg, Step, StepErrorPolicy, Task};
+    use pallet_deos_actors::{AmountResolution, Predicate, Step, StepErrorPolicy, Task};
     let dust_guard = |asset: AssetKind| {
       Self::all_conditions(alloc::vec![Predicate::BalanceAbove {
         asset,
@@ -2859,16 +2613,16 @@ impl TmctolGenesisSystemActors {
       ])
     };
     let slippage_tolerance = Self::resolve_zap_slippage_tolerance(foreign);
-    let steps: alloc::vec::Vec<pallet_deos_actors::StepOf<Runtime>> = alloc::vec![
+    let mut steps: alloc::vec::Vec<pallet_deos_actors::StepOf<Runtime>> = alloc::vec![
       // Step 1: Opportunistic LP provisioning — add both sides at current pool ratio
-      // AllAvailable for native subtracts ED at resolution layer, safe with Preserve semantics
+      // A 100% current percentage subtracts ED at resolution, safe with Preserve semantics.
       Step {
         precondition: dual_dust_guard(AssetKind::Native, foreign),
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: foreign,
-          amount_a: AmountResolution::AllAvailable,
-          amount_b: AmountResolution::AllAvailable,
+          amount_a: AmountResolution::Percent(Perbill::one()),
+          amount_b: AmountResolution::Percent(Perbill::one()),
           min_lp_out: 1,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -2878,50 +2632,44 @@ impl TmctolGenesisSystemActors {
         precondition: dust_guard(foreign),
         task: Task::SwapIn {
           asset_in: foreign,
-          amount_in: AmountResolution::AllAvailable,
+          amount_in: AmountResolution::Percent(Perbill::one()),
           asset_out: AssetKind::Native,
           slippage_tolerance,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
       },
-      // Step 3: Distribute LP tokens to TOL buckets
-      Step {
-        precondition: dust_guard(lp_asset),
-        task: Task::SplitTransfer {
-          asset: lp_asset,
-          amount: AmountResolution::AllAvailable,
-          legs: alloc::vec![
-            SplitLeg {
-              to: pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
-                ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID,
-              ),
-              share: ecosystem::params::TOL_BUCKET_A_ALLOCATION,
-            },
-            SplitLeg {
-              to: pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
-                ecosystem::actor_ids::TOL_BUCKET_B_ACTORS_ID,
-              ),
-              share: ecosystem::params::TOL_BUCKET_B_ALLOCATION,
-            },
-            SplitLeg {
-              to: pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
-                ecosystem::actor_ids::TOL_BUCKET_C_ACTORS_ID,
-              ),
-              share: ecosystem::params::TOL_BUCKET_C_ALLOCATION,
-            },
-            SplitLeg {
-              to: pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
-                ecosystem::actor_ids::TOL_BUCKET_D_ACTORS_ID,
-              ),
-              share: ecosystem::params::TOL_BUCKET_D_ALLOCATION,
-            },
-          ]
-          .try_into()
-          .expect("4 bucket legs fit"),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      },
     ];
+    steps.extend(Self::build_distribution_steps(
+      lp_asset,
+      Perbill::one(),
+      alloc::vec![
+        (
+          pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
+            ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID
+          ),
+          ecosystem::params::TOL_BUCKET_A_ALLOCATION
+        ),
+        (
+          pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
+            ecosystem::actor_ids::TOL_BUCKET_B_ACTORS_ID
+          ),
+          ecosystem::params::TOL_BUCKET_B_ALLOCATION
+        ),
+        (
+          pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
+            ecosystem::actor_ids::TOL_BUCKET_C_ACTORS_ID
+          ),
+          ecosystem::params::TOL_BUCKET_C_ALLOCATION
+        ),
+        (
+          pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
+            ecosystem::actor_ids::TOL_BUCKET_D_ACTORS_ID
+          ),
+          ecosystem::params::TOL_BUCKET_D_ALLOCATION
+        ),
+      ],
+      dust_guard(lp_asset),
+    ));
     steps
       .try_into()
       .expect("Liquidity Actor contract_steps fits within MaxContractSteps")
@@ -2948,7 +2696,7 @@ impl TmctolGenesisSystemActors {
       task: Task::Transfer {
         to: treasury_account,
         asset: lp_asset,
-        amount: AmountResolution::PercentageOfCurrent(unwind_pct),
+        amount: AmountResolution::Percent(unwind_pct),
       },
       on_error: StepErrorPolicy::AbortCycle,
     }]
@@ -2979,7 +2727,7 @@ impl TmctolGenesisSystemActors {
         lp_asset,
         asset_a,
         asset_b,
-        lp_amount: AmountResolution::AllAvailable,
+        lp_amount: AmountResolution::Percent(Perbill::one()),
         min_amount_a: 1,
         min_amount_b: 1,
       },
@@ -2998,7 +2746,7 @@ impl TmctolGenesisSystemActors {
     bldr_asset: AssetKind,
     dust_threshold: Balance,
   ) -> pallet_deos_actors::ContractSteps<Runtime> {
-    use pallet_deos_actors::{AmountResolution, Predicate, SplitLeg, Step, StepErrorPolicy, Task};
+    use pallet_deos_actors::Predicate;
     let dust_guard = |asset: AssetKind| {
       Self::all_conditions(alloc::vec![Predicate::BalanceAbove {
         asset,
@@ -3011,26 +2759,21 @@ impl TmctolGenesisSystemActors {
     let bldr_treasury_account = pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
       ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
     );
-    let steps: alloc::vec::Vec<pallet_deos_actors::StepOf<Runtime>> = alloc::vec![Step {
-      precondition: dust_guard(bldr_asset),
-      task: Task::SplitTransfer {
-        asset: bldr_asset,
-        amount: AmountResolution::AllAvailable,
-        legs: alloc::vec![
-          SplitLeg {
-            to: bldr_liquidity_account,
-            share: ecosystem::params::BLDR_SPLITTER_LIQUIDITY_SHARE,
-          },
-          SplitLeg {
-            to: bldr_treasury_account,
-            share: ecosystem::params::BLDR_SPLITTER_TREASURY_SHARE,
-          },
-        ]
-        .try_into()
-        .expect("2 legs fit"),
-      },
-      on_error: StepErrorPolicy::AbortCycle,
-    },];
+    let steps = Self::build_distribution_steps(
+      bldr_asset,
+      Perbill::one(),
+      alloc::vec![
+        (
+          bldr_liquidity_account,
+          ecosystem::params::BLDR_SPLITTER_LIQUIDITY_SHARE
+        ),
+        (
+          bldr_treasury_account,
+          ecosystem::params::BLDR_SPLITTER_TREASURY_SHARE
+        ),
+      ],
+      dust_guard(bldr_asset),
+    );
     steps
       .try_into()
       .expect("BLDR splitter contract_steps fits within MaxContractSteps")
@@ -3074,8 +2817,8 @@ impl TmctolGenesisSystemActors {
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: bldr_asset,
-          amount_a: AmountResolution::AllAvailable,
-          amount_b: AmountResolution::AllAvailable,
+          amount_a: AmountResolution::Percent(Perbill::one()),
+          amount_b: AmountResolution::Percent(Perbill::one()),
           min_lp_out: 1,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -3085,7 +2828,7 @@ impl TmctolGenesisSystemActors {
         task: Task::Transfer {
           to: bldr_anchor,
           asset: lp_asset,
-          amount: AmountResolution::AllAvailable,
+          amount: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       },
@@ -3115,7 +2858,9 @@ impl TmctolGenesisSystemActors {
         cooldown_blocks: ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
         window: None,
         steps: contract_steps,
-        completion: pallet_deos_actors::CompletionPolicy::Persistent,
+        on_unfunded: pallet_deos_actors::OnUnfunded::Close,
+        close_when: None,
+        parked_balance_activation: None,
         funding: pallet_deos_actors::FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: None,
       },
@@ -3166,7 +2911,7 @@ impl TmctolGenesisSystemActors {
       task: Task::DonateLiquidity {
         asset_a: native_asset,
         asset_b: staked_asset,
-        max_amount_a: AmountResolution::AllAvailable,
+        max_amount_a: AmountResolution::Percent(Perbill::one()),
         max_ratio_error: ecosystem::params::NATIVE_STAKING_LP_DONATION_MAX_RATIO_ERROR,
       },
       on_error: StepErrorPolicy::AbortCycle,
@@ -3180,7 +2925,7 @@ impl TmctolGenesisSystemActors {
   ///
   /// Contract steps:
   /// 1. SwapIn(NTVE → target) — amount resolved as % of current NTVE balance
-  /// 2. Burn(target, AllAvailable) — destroy all acquired tokens
+  /// 2. Burn(target, 100% current) — destroy all acquired tokens
   ///
   /// Multiple small buybacks per day create smooth market pressure.
   pub fn build_treasury_b_buyback_contract_steps(
@@ -3204,7 +2949,7 @@ impl TmctolGenesisSystemActors {
         precondition: native_dust,
         task: Task::SwapIn {
           asset_in: AssetKind::Native,
-          amount_in: AmountResolution::PercentageOfCurrent(buyback_pct),
+          amount_in: AmountResolution::Percent(buyback_pct),
           asset_out: target_asset,
           slippage_tolerance: slippage,
         },
@@ -3215,7 +2960,7 @@ impl TmctolGenesisSystemActors {
         precondition: target_dust,
         task: Task::Burn {
           asset: target_asset,
-          amount: AmountResolution::AllAvailable,
+          amount: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       },
@@ -3238,28 +2983,45 @@ impl TmctolStakingOps {
 
 impl pallet_deos_actors::adapters::StakingOps<AccountId, AssetKind, Balance> for TmctolStakingOps {
   fn stake(who: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), TaskFailure> {
-    (|| -> DispatchResult {
-      let staking_asset_id = Self::staking_asset_id(asset);
+    let effect = || -> Result<(), TaskFailure> {
       let _ = crate::Staking::stake(
         RuntimeOrigin::signed(who.clone()).into(),
-        staking_asset_id,
+        Self::staking_asset_id(asset),
         amount,
-      )?;
+      )
+      .map_err(TaskFailure::permanent)?;
       Ok(())
-    })()
-    .map_err(TaskFailure::permanent)
+    };
+    if is_active_user_actor(who) {
+      with_user_action_fee_capacity(
+        &ExecutionContext::new(who, ActorType::User),
+        <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as ActorsWeightInfo>::task_stake(),
+        effect,
+      )
+    } else {
+      effect()
+    }
   }
 
   fn unstake(who: &AccountId, asset: AssetKind, shares: Balance) -> Result<(), TaskFailure> {
-    (|| -> DispatchResult {
+    let effect = || -> Result<(), TaskFailure> {
       let _ = crate::Staking::unstake(
         RuntimeOrigin::signed(who.clone()).into(),
         Self::staking_asset_id(asset),
         shares,
-      )?;
+      )
+      .map_err(TaskFailure::permanent)?;
       Ok(())
-    })()
-    .map_err(TaskFailure::permanent)
+    };
+    if is_active_user_actor(who) {
+      with_user_action_fee_capacity(
+        &ExecutionContext::new(who, ActorType::User),
+        <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as ActorsWeightInfo>::task_unstake(),
+        effect,
+      )
+    } else {
+      effect()
+    }
   }
 
   fn share_balance(who: &AccountId, asset: AssetKind) -> Balance {
@@ -3389,6 +3151,7 @@ impl pallet_deos_actors::Config for Runtime {
   type AssetOps = TmctolAssetOps;
   type AdmissionCertificateAuthority = RuntimeAdmissionCertificateAuthority;
   type StepControlWeight = RuntimeStepControlWeight;
+  type PipelineControlWeight = ();
   type TaskEffectWeight = TmctolTaskEffectWeight;
   type ObservationFeedId = primitives::OracleFeedId;
   type ObservationProvider = TmctolObservationProvider;
@@ -3407,13 +3170,13 @@ impl pallet_deos_actors::Config for Runtime {
   type ActorStateHoldPerByte = ActorStateHoldPerByte;
   type FeeSink = ActorFeeRecipient;
   type FeeCollector = TmctolFeeCollector;
+  type FinancialWaitBacking = ();
   type GenesisSystemActors = TmctolGenesisSystemActors;
   type SystemActorContractValidator = DeosSystemActorContractValidator;
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
   type MaxActiveActors = ActorMaxActiveActors;
   type MaxActorIdentities = ActorMaxActiveActors;
   type MaxSystemSovereigns = ActorMaxActiveActors;
-  type MaxOpeningPredicateResults = ActorMaxOpeningPredicateResults;
   type MaxPreconditionClauses = ActorMaxPreconditionClauses;
   type MaxPredicatesPerClause = ActorMaxPredicatesPerClause;
   type MaxPredicatesPerStep = ActorMaxPredicatesPerStep;
@@ -3427,28 +3190,18 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxQueueLength = ActorMaxQueueLength;
   type QueuePageSize = ActorQueuePageSize;
   type WakeupPageSize = ActorWakeupPageSize;
-  type ObservationPageSize = ActorObservationPageSize;
-  type CrossingPageSize = ActorCrossingPageSize;
-  type MaxCrossingTransitionsPerFeed = ActorMaxCrossingTransitionsPerFeed;
-  type MaxCrossingMembersPerFeed = ActorMaxCrossingMembersPerFeed;
-  type MaxUserCrossingMembersPerFeed = ActorMaxUserCrossingMembersPerFeed;
-  type MaxCrossingTransitionsPerBlock = ActorMaxCrossingTransitionsPerBlock;
-  type MaxCrossingLeavesPerBlock = ActorMaxCrossingLeavesPerBlock;
-  type MaxCrossingPagesPerBlock = ActorMaxCrossingPagesPerBlock;
-  type MaxCrossingActorsPerBlock = ActorMaxCrossingActorsPerBlock;
-  type CrossingWorkerWeightLimit = ActorCrossingWorkerWeightLimit;
   type MaxQueueEntriesScannedPerBlock = ActorMaxQueueEntriesScannedPerBlock;
-  type MaxObservationFanoutPagesPerBlock = ActorMaxObservationFanoutPagesPerBlock;
-  type ObservationFanoutWeightLimit = ActorObservationFanoutWeightLimit;
   type WakeupWeightLimit = ActorWakeupWeightLimit;
   type MaxWakeupsPerBlock = ActorMaxWakeupsPerBlock;
   type MaxFundingTrackedAssets = ActorMaxFundingTrackedAssets;
-  type MaxOpeningSnapshotEntries = ActorMaxOpeningSnapshotEntries;
   type MaxIdleStarvationBlocks = ActorMaxIdleStarvationBlocks;
   type ActorOnIdleReserve = ActorOnIdleReserve;
   type MaxOwnerSlots = ActorMaxOwnerSlots;
   type MaxContractSteps = ActorMaxContractSteps;
-  type MaxSplitTransferLegs = ActorMaxSplitTransferLegs;
+  type MaxParkedBalanceWatches = ActorMaxParkedBalanceWatches;
+  // Preparation bounds only; present policies remain unavailable before owner qualification.
+  type MaxBehaviorClauses = ConstU32<4>;
+  type MaxBehaviorAtomsPerClause = ConstU32<4>;
   type MaxSweepBatch = ActorMaxSweepBatch;
   type MaxWhitelistSize = ActorMaxWhitelistSize;
   type MinUserBalance = ActorMinUserBalanceGuard;
@@ -3613,6 +3366,58 @@ impl RuntimeActorsBenchmarkHelper {
 impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitives::OracleFeedId>
   for RuntimeActorsBenchmarkHelper
 {
+  fn setup_close_currency_peer(owner: &AccountId) -> Result<bool, DispatchError> {
+    use polkadot_sdk::frame_support::traits::fungible::InspectHold;
+    let actor_reason = RuntimeHoldReason::Actors(pallet_deos_actors::HoldReason::ActorState);
+    assert_eq!(Balances::balance_on_hold(&actor_reason, owner), 0);
+    crate::Preimage::note_preimage(RuntimeOrigin::signed(owner.clone()), alloc::vec![0xa5; 64])
+      .map_err(|error| error.error)?;
+    Self::assert_close_currency_peer(owner)?;
+    Ok(true)
+  }
+
+  fn assert_close_currency_peer(owner: &AccountId) -> DispatchResult {
+    use polkadot_sdk::frame_support::traits::fungible::InspectHold;
+    use polkadot_sdk::sp_runtime::traits::Hash;
+    let bytes = alloc::vec![0xa5; 64];
+    let hash = <Runtime as polkadot_sdk::frame_system::Config>::Hashing::hash(&bytes);
+    let reason = RuntimeHoldReason::Preimage(pallet_preimage::HoldReason::Preimage);
+    let amount = crate::configs::preimage_config::PreimageBaseDeposit::get()
+      + crate::configs::preimage_config::PreimageByteDeposit::get() * 64;
+    assert!(amount > 0);
+    assert_eq!(Balances::balance_on_hold(&reason, owner), amount);
+    assert_eq!(
+      pallet_preimage::PreimageFor::<Runtime>::get((hash, 64))
+        .ok_or(DispatchError::Other("BenchmarkClosePreimageMissing"))?
+        .to_vec(),
+      bytes
+    );
+    match pallet_preimage::RequestStatusFor::<Runtime>::get(hash)
+      .ok_or(DispatchError::Other("BenchmarkClosePreimageStatusMissing"))?
+    {
+      pallet_preimage::RequestStatus::Unrequested {
+        ticket: (depositor, _),
+        len,
+      } => {
+        assert_eq!(&depositor, owner);
+        assert_eq!(len, 64);
+      }
+      _ => return Err(DispatchError::Other("BenchmarkClosePreimageDepositChanged")),
+    }
+    let holds = pallet_balances::Holds::<Runtime>::get(owner);
+    assert_eq!(holds[0].id, reason);
+    let actor_reason = RuntimeHoldReason::Actors(pallet_deos_actors::HoldReason::ActorState);
+    let actor_amount = Balances::balance_on_hold(&actor_reason, owner);
+    if actor_amount == 0 {
+      assert_eq!(holds.len(), 1);
+    } else {
+      assert_eq!(holds.len(), 2);
+      assert_eq!(holds[1].id, actor_reason);
+      assert_eq!(holds[1].amount, actor_amount);
+    }
+    Ok(())
+  }
+
   fn setup_add_liquidity(
     owner: &AccountId,
   ) -> Result<(AssetKind, AssetKind, Balance, Balance), DispatchError> {
@@ -3641,9 +3446,141 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
     Ok((asset_a, asset_b, amount, amount))
   }
 
+  fn setup_add_liquidity_deposit_accounts(
+    owner: &AccountId,
+  ) -> Result<Option<(AssetKind, AssetKind, Balance, Balance)>, DispatchError> {
+    let lp_namespace_start = primitives::assets::TYPE_LP | 1;
+    let current_next_lp = pallet_asset_conversion::NextPoolAssetId::<Runtime>::get().unwrap_or(0);
+    if current_next_lp < lp_namespace_start {
+      pallet_asset_conversion::NextPoolAssetId::<Runtime>::put(lp_namespace_start);
+    }
+    let assets = [300_101, 300_102];
+    let amount = Balance::MAX / 4;
+    for asset in assets {
+      crate::Assets::force_create(
+        RuntimeOrigin::root(),
+        asset,
+        polkadot_sdk::sp_runtime::MultiAddress::Id(owner.clone()),
+        false,
+        1,
+      )?;
+      <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+        asset,
+        owner,
+        amount + 1,
+      )?;
+    }
+    let asset_a = AssetKind::Local(assets[0]);
+    let asset_b = AssetKind::Local(assets[1]);
+    let pool_id =
+      <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_a, &asset_b)
+        .map_err(|_| DispatchError::Other("PoolIdUnavailable"))?;
+    if pallet_asset_conversion::Pools::<Runtime>::contains_key(pool_id) {
+      return Err(DispatchError::Other("AddLiquidityPoolAlreadyExists"));
+    }
+    Ok(Some((asset_a, asset_b, amount, amount)))
+  }
+
+  fn setup_system_add_liquidity_deposits(
+    owner: &AccountId,
+    anchor_backed: bool,
+  ) -> Result<Option<(AssetKind, AssetKind, Balance, Balance, AssetKind, Balance)>, DispatchError>
+  {
+    let deposit = <Runtime as pallet_assets::Config>::AssetAccountDeposit::get();
+    let funding = 3 * deposit
+      + if anchor_backed {
+        EXISTENTIAL_DEPOSIT
+      } else {
+        0
+      };
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(owner, funding);
+    assert_eq!(Balances::free_balance(owner), funding);
+    let Some((asset_a, asset_b, amount_a, amount_b)) =
+      Self::setup_add_liquidity_deposit_accounts(owner)?
+    else {
+      return Ok(None);
+    };
+    let lp = pallet_asset_conversion::NextPoolAssetId::<Runtime>::get()
+      .ok_or(DispatchError::Other("LpAssetUnavailable"))?;
+    let expected_lp =
+      amount_a - <Runtime as pallet_asset_conversion::Config>::MintMinLiquidity::get();
+    Ok(Some((
+      asset_a,
+      asset_b,
+      amount_a,
+      amount_b,
+      AssetKind::Local(lp),
+      expected_lp,
+    )))
+  }
+
+  fn setup_system_add_liquidity_existing_pool(
+    owner: &AccountId,
+  ) -> Result<Option<(AssetKind, AssetKind, Balance, Balance, AssetKind, Balance)>, DispatchError>
+  {
+    let lp_namespace_start = primitives::assets::TYPE_LP | 1;
+    if pallet_asset_conversion::NextPoolAssetId::<Runtime>::get().unwrap_or(0) < lp_namespace_start
+    {
+      pallet_asset_conversion::NextPoolAssetId::<Runtime>::put(lp_namespace_start);
+    }
+    let provider: AccountId =
+      polkadot_sdk::frame_benchmarking::account("system-liquidity-provider", 0, 0);
+    let _ =
+      <Balances as Currency<AccountId>>::deposit_creating(&provider, EXISTENTIAL_DEPOSIT * 100);
+    let assets = [300_103, 300_104];
+    let amount: Balance = 1_000_000;
+    for asset in assets {
+      Self::ensure_local_asset(asset, &provider)?;
+      <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+        asset,
+        &provider,
+        amount + 1,
+      )?;
+      <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+        asset,
+        owner,
+        amount + 1,
+      )?;
+    }
+    let asset_a = AssetKind::Local(assets[0]);
+    let asset_b = AssetKind::Local(assets[1]);
+    crate::DeosRouter::create_pool(RuntimeOrigin::signed(provider.clone()), asset_a, asset_b)?;
+    AssetConversion::add_liquidity(
+      RuntimeOrigin::signed(provider.clone()),
+      alloc::boxed::Box::new(asset_a),
+      alloc::boxed::Box::new(asset_b),
+      amount,
+      amount,
+      0,
+      0,
+      provider.clone(),
+    )?;
+    let pool_id =
+      <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_a, &asset_b)
+        .map_err(|_| DispatchError::Other("PoolIdUnavailable"))?;
+    let lp = pallet_asset_conversion::Pools::<Runtime>::get(pool_id)
+      .ok_or(DispatchError::Other("PoolNotCreated"))?
+      .lp_token;
+    crate::Assets::touch_other(
+      RuntimeOrigin::signed(provider),
+      lp,
+      polkadot_sdk::sp_runtime::MultiAddress::Id(owner.clone()),
+    )?;
+    assert_eq!(Balances::free_balance(owner), 0);
+    assert_eq!(Balances::reserved_balance(owner), 0);
+    Ok(Some((
+      asset_a,
+      asset_b,
+      amount,
+      amount,
+      AssetKind::Local(lp),
+      amount,
+    )))
+  }
+
   fn setup_donate_liquidity(
     owner: &AccountId,
-  ) -> Result<(AssetKind, AssetKind, Balance), DispatchError> {
+  ) -> Result<(AssetKind, AssetKind, Balance, Balance, Balance), DispatchError> {
     let asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
     Self::ensure_local_asset(asset_id, owner)?;
     let liquidity: Balance = 1_000_000_000;
@@ -3690,7 +3627,86 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
       0,
       owner.clone(),
     )?;
-    Ok((asset_a, asset_b, liquidity / 10))
+    // This fixture establishes equal reserves and 1:1 staking conversion. The reference
+    // operation stakes half of the input and donates the other half plus the new receipts.
+    let input = liquidity / 10;
+    let pool = pallet_staking::Pools::<Runtime>::get(asset_id)
+      .ok_or(DispatchError::Other("NativeStakingPoolUnavailable"))?;
+    if pool.accounted_balance != pool.total_shares {
+      return Err(DispatchError::Other(
+        "BenchmarkDonationConversionNotOneToOne",
+      ));
+    }
+    Ok((asset_a, asset_b, input, input / 2, input / 2))
+  }
+
+  fn setup_native_conversion_ingress(
+    owner: &AccountId,
+    refusal: bool,
+  ) -> Result<
+    Option<(
+      AccountId,
+      AccountId,
+      AssetKind,
+      pallet_deos_actors::ActorId,
+      Balance,
+      TaskFailure,
+    )>,
+    DispatchError,
+  > {
+    super::staking_config::prepare_benchmark_native_security_mode(
+      pallet_staking::NativeSecurityMode::TrustedSet,
+    );
+    Self::setup_donate_liquidity(owner)?;
+    let next_tick = crate::Timestamp::get()
+      .checked_div(ActorCadenceTickMillis::get())
+      .and_then(|tick| tick.checked_add(1))
+      .ok_or(DispatchError::Other("BenchmarkClockOverflow"))?;
+    if crate::Timestamp::get() > 0 {
+      Self::finalize_scheduler_clock()?;
+    }
+    Self::advance_to_scheduler_tick(next_tick)?;
+    TmctolGenesisSystemActors::activate_native_staking_liquidity_actor(1)?;
+    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+    let actor_id = ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID;
+    if crate::Actors::active_actor_state(actor_id).is_none() {
+      return Err(DispatchError::Other("NativeStakingLiquidityActorNotActive"));
+    }
+    let sink_id = ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
+    let sink = crate::Actors::active_actor_state(sink_id)
+      .ok_or(DispatchError::Other("BenchmarkFeeSinkNotActive"))?;
+    polkadot_sdk::frame_support::ensure!(
+      sink.contract.steps == TmctolGenesisSystemActors::build_fee_sink_contract_steps(),
+      DispatchError::Other("BenchmarkFeeSinkPlanMismatch")
+    );
+    let source = crate::Actors::sovereign_account_id_system(sink_id);
+    TmctolAssetOps::mint(
+      &source,
+      AssetKind::Native,
+      EXISTENTIAL_DEPOSIT.saturating_mul(100),
+    )
+    .map_err(|failure| failure.error)?;
+    let total = ecosystem::params::FEE_SINK_BUFFER_PCT.mul_floor(
+      TmctolAssetOps::balance(&source, AssetKind::Native).saturating_sub(EXISTENTIAL_DEPOSIT),
+    );
+    polkadot_sdk::frame_support::ensure!(
+      Perbill::from_percent(50).mul_floor(total) >= EXISTENTIAL_DEPOSIT,
+      DispatchError::Other("BenchmarkFeeSinkAllocationTooSmall")
+    );
+    if refusal {
+      let freezer = pallet_assets::Asset::<Runtime>::get(native_asset_id)
+        .ok_or(DispatchError::Other("BenchmarkNativeAssetUnavailable"))?
+        .freezer;
+      crate::Assets::freeze_asset(RuntimeOrigin::signed(freezer), native_asset_id)?;
+    }
+    Ok(Some((
+      crate::Staking::pool_account_for(native_asset_id),
+      crate::Actors::sovereign_account_id_system(actor_id),
+      AssetKind::Local(native_asset_id),
+      actor_id,
+      total,
+      TaskFailure::permanent(pallet_assets::Error::<Runtime>::AssetNotLive),
+    )))
   }
 
   fn setup_remove_liquidity(
@@ -3784,6 +3800,91 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
     target_lp.ok_or(DispatchError::Other("TargetLpMissing"))
   }
 
+  fn setup_remove_liquidity_consumer_outputs(
+    owner: &AccountId,
+  ) -> Result<Option<(AssetKind, AssetKind, AssetKind, Balance)>, DispatchError> {
+    let provider: AccountId =
+      polkadot_sdk::frame_benchmarking::account("remove-liquidity-provider", 0, 0);
+    assert_ne!(&provider, owner);
+    let output_ids = [300_301, 300_302];
+    let pair = (
+      AssetKind::Local(output_ids[0]),
+      AssetKind::Local(output_ids[1]),
+    );
+    let liquidity = 3_000_000_000_000u128;
+    let lp_amount = 1_000_000;
+    let lp_namespace_start = primitives::assets::TYPE_LP | 1;
+    if pallet_asset_conversion::NextPoolAssetId::<Runtime>::get().unwrap_or(0) < lp_namespace_start
+    {
+      pallet_asset_conversion::NextPoolAssetId::<Runtime>::put(lp_namespace_start);
+    }
+    <Balances as NativeMutate<AccountId>>::mint_into(&provider, liquidity)?;
+    for asset_id in output_ids {
+      crate::Assets::force_create(
+        RuntimeOrigin::root(),
+        asset_id,
+        provider.clone().into(),
+        false,
+        1,
+      )?;
+      <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+        asset_id,
+        &provider,
+        liquidity + 1,
+      )?;
+    }
+    crate::DeosRouter::create_pool(RuntimeOrigin::signed(provider.clone()), pair.0, pair.1)?;
+    let pool_account =
+      <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(&pair.0, &pair.1)
+        .map_err(|_| DispatchError::Other("PoolAddressUnavailable"))?;
+    <Balances as NativeMutate<AccountId>>::mint_into(&pool_account, EXISTENTIAL_DEPOSIT)?;
+    let pool_id =
+      <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&pair.0, &pair.1)
+        .map_err(|_| DispatchError::Other("PoolIdUnavailable"))?;
+    let lp_id = pallet_asset_conversion::Pools::<Runtime>::get(pool_id)
+      .ok_or(DispatchError::Other("PoolNotCreated"))?
+      .lp_token;
+    if <pallet_assets::Pallet<Runtime> as polkadot_sdk::frame_support::traits::AccountTouch<
+      u32,
+      AccountId,
+    >>::should_touch(lp_id, &provider)
+    {
+      <pallet_assets::Pallet<Runtime> as polkadot_sdk::frame_support::traits::AccountTouch<
+        u32,
+        AccountId,
+      >>::touch(lp_id, &provider, &provider)?;
+    }
+    AssetConversion::add_liquidity(
+      RuntimeOrigin::signed(provider.clone()),
+      alloc::boxed::Box::new(pair.0),
+      alloc::boxed::Box::new(pair.1),
+      liquidity,
+      liquidity,
+      0,
+      0,
+      provider.clone(),
+    )?;
+    crate::Assets::touch_other(
+      RuntimeOrigin::signed(provider.clone()),
+      lp_id,
+      owner.clone().into(),
+    )?;
+    crate::Assets::transfer(
+      RuntimeOrigin::signed(provider),
+      lp_id,
+      owner.clone().into(),
+      lp_amount + 1,
+    )?;
+    if output_ids
+      .iter()
+      .any(|asset| crate::Assets::balance(*asset, owner) != 0)
+      || crate::System::account(owner).consumers != 0
+    {
+      return Err(DispatchError::Other("RemoveLiquidityOutputAccountRetained"));
+    }
+    Ok(Some((AssetKind::Local(lp_id), pair.0, pair.1, lp_amount)))
+  }
+
   fn setup_stake(owner: &AccountId) -> Result<(AssetKind, Balance), DispatchError> {
     let asset_id = 200_000;
     let amount: Balance = 1_000_000;
@@ -3814,48 +3915,101 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
     Ok((asset, shares))
   }
 
-  fn setup_max_encoded_staking_positions(
+  fn setup_stake_consumer_receipt(
     owner: &AccountId,
-    max: u32,
-  ) -> Result<alloc::vec::Vec<(AssetKind, Balance)>, DispatchError> {
-    use pallet_deos_actors::adapters::StakingOps as _;
-    let assets: alloc::vec::Vec<_> = Self::setup_predicate_assets(owner, max + 1)?
-      .into_iter()
-      .filter(|asset| *asset != AssetKind::Native)
-      .take(max as usize)
-      .collect();
-    assert_eq!(assets.len() as u32, max);
-    let amount = 1_000_000;
-    let mut receipts = alloc::vec::Vec::with_capacity(assets.len());
-    for asset in &assets {
-      let AssetKind::Local(id) = asset else {
-        return Err(DispatchError::Other("BenchmarkLocalStakingAssetRequired"));
-      };
-      <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
-        *id,
-        owner,
-        amount + 1,
-      )?;
-      crate::Staking::register_staking_asset(RuntimeOrigin::root(), *id)?;
-      receipts.push(
-        TmctolStakingOps::share_asset(*asset)
-          .ok_or(DispatchError::Other("BenchmarkStakingReceiptMissing"))?,
-      );
+  ) -> Result<Option<(AssetKind, Balance)>, DispatchError> {
+    let asset_id = 200_101;
+    let amount = Balance::MAX / 4;
+    Self::ensure_local_asset(asset_id, owner)?;
+    <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+      asset_id,
+      owner,
+      amount + 1,
+    )?;
+    crate::Staking::register_staking_asset(RuntimeOrigin::root(), asset_id)?;
+    let receipt = crate::Staking::staked_asset_id_for_queries(asset_id)
+      .ok_or(DispatchError::Other("StakingReceiptMissing"))?;
+    let details = pallet_assets::Asset::<Runtime>::get(receipt)
+      .ok_or(DispatchError::Other("StakingReceiptMissing"))?;
+    crate::Assets::force_asset_status(
+      RuntimeOrigin::root(),
+      receipt,
+      details.owner.into(),
+      details.issuer.into(),
+      details.admin.into(),
+      details.freezer.into(),
+      details.min_balance,
+      false,
+      false,
+    )?;
+    if crate::System::account(owner).consumers != 0 {
+      return Err(DispatchError::Other("StakingConsumerAlreadyPresent"));
     }
-    Self::prepare_max_encoded_asset_accounts(owner, &receipts)?;
-    let positions = assets
-      .into_iter()
-      .map(|asset| {
-        TmctolStakingOps::stake(owner, asset, amount).map_err(|failure| failure.error)?;
-        let shares = TmctolStakingOps::share_balance(owner, asset);
-        if shares == 0 {
-          return Err(DispatchError::Other("BenchmarkStakingSharesMissing"));
-        }
-        Ok((asset, shares))
+    Ok(Some((AssetKind::Local(asset_id), amount)))
+  }
+
+  fn setup_unstake_consumer_output(
+    owner: &AccountId,
+  ) -> Result<Option<(AssetKind, Balance)>, DispatchError> {
+    let asset_id = 200_102;
+    let amount = Balance::MAX / 4;
+    crate::Assets::force_create(
+      RuntimeOrigin::root(),
+      asset_id,
+      polkadot_sdk::sp_runtime::MultiAddress::Id(owner.clone()),
+      false,
+      1,
+    )?;
+    <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+      asset_id,
+      owner,
+      amount + 1,
+    )?;
+    crate::Staking::register_staking_asset(RuntimeOrigin::root(), asset_id)?;
+    let pool_account = crate::Staking::pool_account_for(asset_id);
+    <Balances as NativeMutate<AccountId>>::mint_into(&pool_account, EXISTENTIAL_DEPOSIT)?;
+    crate::Staking::stake(RuntimeOrigin::signed(owner.clone()), asset_id, amount)?;
+    TmctolAssetOps::burn(owner, AssetKind::Local(asset_id), 1).map_err(|failure| failure.error)?;
+    if crate::Assets::balance(asset_id, owner) != 0 || crate::System::account(owner).consumers != 0
+    {
+      return Err(DispatchError::Other("UnstakeOutputAccountRetained"));
+    }
+    Ok(Some((AssetKind::Local(asset_id), amount)))
+  }
+
+  fn liquidity_snapshot(
+    who: &AccountId,
+    asset_a: AssetKind,
+    asset_b: AssetKind,
+  ) -> Result<pallet_deos_actors::BenchmarkLiquiditySnapshot<AssetKind, Balance>, DispatchError> {
+    let id = <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_a, &asset_b)
+      .map_err(|_| DispatchError::Other("PoolIdUnavailable"))?;
+    let pool = pallet_asset_conversion::Pools::<Runtime>::get(id)
+      .map(|info| -> Result<_, DispatchError> {
+        let lp_asset = AssetKind::Local(info.lp_token);
+        Ok(pallet_deos_actors::BenchmarkLiquidityPool {
+          lp_asset,
+          lp_balance: TmctolAssetOps::total_balance(who, lp_asset),
+          reserves: AssetConversion::get_reserves(asset_a, asset_b)?,
+        })
       })
-      .collect::<Result<_, DispatchError>>()?;
-    Self::check_max_encoded_asset_accounts(owner, &receipts)?;
-    Ok(positions)
+      .transpose()?;
+    Ok(pallet_deos_actors::BenchmarkLiquiditySnapshot {
+      input_balances: (
+        TmctolAssetOps::total_balance(who, asset_a),
+        TmctolAssetOps::total_balance(who, asset_b),
+      ),
+      native_free: Balances::free_balance(who),
+      native_reserved: Balances::reserved_balance(who),
+      pool,
+    })
+  }
+
+  fn asset_account_exists(who: &AccountId, asset: AssetKind) -> Option<bool> {
+    match asset {
+      AssetKind::Local(id) => Some(pallet_assets::Account::<Runtime>::contains_key(id, who)),
+      _ => None,
+    }
   }
 
   fn set_asset_account_frozen(
@@ -3965,6 +4119,79 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
     Ok((asset_in, asset_out, 100_000, 1_000_000_000))
   }
 
+  fn setup_swap_consumer_output(
+    owner: &AccountId,
+  ) -> Result<Option<(AssetKind, AssetKind, Balance, Balance)>, DispatchError> {
+    let provider: AccountId =
+      polkadot_sdk::frame_benchmarking::account("swap-liquidity-provider", 0, 0);
+    assert_ne!(&provider, owner);
+    let output_id = 300_201;
+    let asset_in = AssetKind::Native;
+    let asset_out = AssetKind::Local(output_id);
+    let liquidity = 3_000_000_000_000u128;
+    let amount_out = 1_000_000;
+    let lp_namespace_start = primitives::assets::TYPE_LP | 1;
+    if pallet_asset_conversion::NextPoolAssetId::<Runtime>::get().unwrap_or(0) < lp_namespace_start
+    {
+      pallet_asset_conversion::NextPoolAssetId::<Runtime>::put(lp_namespace_start);
+    }
+    <Balances as NativeMutate<AccountId>>::mint_into(&provider, liquidity * 2)?;
+    crate::Assets::force_create(
+      RuntimeOrigin::root(),
+      output_id,
+      provider.clone().into(),
+      false,
+      1,
+    )?;
+    <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+      output_id,
+      &provider,
+      liquidity + 1,
+    )?;
+    crate::DeosRouter::create_pool(RuntimeOrigin::signed(provider.clone()), asset_in, asset_out)?;
+    let pool_account = <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(
+      &asset_in, &asset_out,
+    )
+    .map_err(|_| DispatchError::Other("PoolAddressUnavailable"))?;
+    <Balances as NativeMutate<AccountId>>::mint_into(&pool_account, EXISTENTIAL_DEPOSIT)?;
+    let pool_id =
+      <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_in, &asset_out)
+        .map_err(|_| DispatchError::Other("PoolIdUnavailable"))?;
+    let pool_info = pallet_asset_conversion::Pools::<Runtime>::get(pool_id)
+      .ok_or(DispatchError::Other("PoolNotCreated"))?;
+    if <pallet_assets::Pallet<Runtime> as polkadot_sdk::frame_support::traits::AccountTouch<
+      u32,
+      AccountId,
+    >>::should_touch(pool_info.lp_token, &provider)
+    {
+      <pallet_assets::Pallet<Runtime> as polkadot_sdk::frame_support::traits::AccountTouch<
+        u32,
+        AccountId,
+      >>::touch(pool_info.lp_token, &provider, &provider)?;
+    }
+    AssetConversion::add_liquidity(
+      RuntimeOrigin::signed(provider.clone()),
+      alloc::boxed::Box::new(asset_in),
+      alloc::boxed::Box::new(asset_out),
+      liquidity,
+      liquidity,
+      0,
+      0,
+      provider,
+    )?;
+    <Balances as NativeMutate<AccountId>>::mint_into(
+      &BurnActorAccount::get(),
+      EXISTENTIAL_DEPOSIT,
+    )?;
+    let input_cap =
+      crate::DeosRouter::quote_exact_out(owner.clone(), asset_in, asset_out, amount_out)?.amount_in;
+    if crate::Assets::balance(output_id, owner) != 0 || crate::System::account(owner).consumers != 0
+    {
+      return Err(DispatchError::Other("SwapOutputAccountRetained"));
+    }
+    Ok(Some((asset_in, asset_out, input_cap, amount_out)))
+  }
+
   fn funding_assets(max: u32) -> alloc::vec::Vec<AssetKind> {
     (0..max)
       .map(|index| {
@@ -4023,6 +4250,33 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
         TransactionOutcome::Rollback(result)
       }
     })
+  }
+
+  fn setup_temporary_transfer(
+    owner: &AccountId,
+    actor: &AccountId,
+  ) -> Result<(AssetKind, Balance, AccountId), DispatchError> {
+    let id = 0x3008_0000;
+    let asset = AssetKind::Local(id);
+    let recipient = polkadot_sdk::frame_benchmarking::account("temporary-transfer-recipient", 0, 0);
+    polkadot_sdk::frame_support::ensure!(
+      !<pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::asset_exists(id),
+      DispatchError::Other("TemporaryTransferAssetAlreadyExists")
+    );
+    pallet_assets::Pallet::<Runtime>::force_create(
+      RuntimeOrigin::root(),
+      id,
+      polkadot_sdk::sp_runtime::MultiAddress::Id(owner.clone()),
+      true,
+      2,
+    )?;
+    polkadot_sdk::frame_support::ensure!(
+      TmctolAssetOps::balance(&recipient, asset) == 0,
+      DispatchError::Other("RecipientNotEmpty")
+    );
+    TmctolAssetOps::mint(owner, asset, 2).map_err(|failure| failure.error)?;
+    TmctolAssetOps::mint(actor, asset, 4).map_err(|failure| failure.error)?;
+    Ok((asset, 1, recipient))
   }
 
   fn setup_predicate_assets(
@@ -4185,6 +4439,18 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
     crate::Timestamp::set(polkadot_sdk::frame_system::RawOrigin::None.into(), moment)
   }
 
+  fn prepare_actor_prepass_context() -> DispatchResult {
+    polkadot_sdk::cumulus_pallet_parachain_system::ValidationData::<Runtime>::put(
+      polkadot_sdk::cumulus_primitives_core::PersistedValidationData {
+        parent_head: polkadot_sdk::polkadot_parachain_primitives::primitives::HeadData(Vec::new()),
+        relay_parent_number: 0,
+        relay_parent_storage_root: Default::default(),
+        max_pov_size: 0,
+      },
+    );
+    Ok(())
+  }
+
   fn finalize_scheduler_clock() -> DispatchResult {
     <crate::Timestamp as frame_support::traits::Hooks<crate::BlockNumber>>::on_finalize(
       crate::System::block_number(),
@@ -4341,6 +4607,8 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
       polkadot_sdk::frame_support::storage::storage_prefix(b"PolkadotXcm", b"CurrentMigration");
     polkadot_sdk::sp_io::storage::set(&queue_key, &queue.encode());
     polkadot_sdk::sp_io::storage::clear(&migration_key);
+    // The complete hook owner includes the queue excluded by pallet-xcm's global whitelist.
+    polkadot_sdk::frame_benchmarking::benchmarking::remove_from_whitelist(queue_key.to_vec());
   }
 
   fn execute_maximum_xcm_version_discovery() {
@@ -4355,6 +4623,11 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
       b"PolkadotXcm",
       b"VersionDiscoveryQueue",
     );
+    assert!(
+      !polkadot_sdk::frame_benchmarking::benchmarking::get_whitelist()
+        .iter()
+        .any(|key| key.key == queue_key)
+    );
     let encoded = polkadot_sdk::sp_io::storage::get(&queue_key)
       .expect("XCM discovery queue must be rewritten after traversal"); // deos-bypass: panic-owner — benchmark setup writes the exact storage key and on_initialize always rewrites the taken queue.
     let remaining = Vec::<(xcm::VersionedLocation, u32)>::decode(&mut &encoded[..])
@@ -4368,7 +4641,7 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
     let measured_block = crate::System::block_number().saturating_add(One::one());
     let mut state = pallet_deos_actors::BlockResourceState::new(measured_block);
     state
-      .begin_prepass()
+      .begin_prepass(BlockResourceBudgetValue::get())
       .and_then(|()| state.open_external_phase())
       .expect("benchmark state must enter ExternalPhase"); // deos-bypass: panic-owner — fresh state has no reservations and follows the canonical transition.
     pallet_deos_actors::CurrentBlockResourceState::<Runtime>::put(state);

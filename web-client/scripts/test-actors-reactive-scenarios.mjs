@@ -6,20 +6,27 @@ Zone: Web-client validation entrypoint; composes canonical automation contracts 
 */
 import { encodeAddress } from '@polkadot/util-crypto';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+
+import { readActorsTestMetadata } from './actors-test-metadata.mjs';
 
 import { analyzeActorContract } from '../src/lib/automation/analysis.ts';
 import {
   ACTORS_AUTHORING_CONDITION_TYPES,
+  DEOS_ACTORS_AUTHORING_LIMITS,
   createActorArtifactFromAuthoring,
   validateActorAuthoringContract,
 } from '../src/lib/automation/authoring.ts';
-import { inspectActorContractArtifact } from '../src/lib/automation/contract-artifact.ts';
+import {
+  inspectActorContractArtifact,
+  readActorBehaviorContractSchema,
+} from '../src/lib/automation/contract-artifact.ts';
 
-const metadataBytes = new Uint8Array(
-  await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
-);
+const metadataBytes = await readActorsTestMetadata();
+const authoringLimits = () => ({
+  ...DEOS_ACTORS_AUTHORING_LIMITS,
+  behavior: readActorBehaviorContractSchema(metadataBytes),
+});
 const runtime = {
   genesisHash: `0x${'11'.repeat(32)}`,
   specVersion: 1,
@@ -61,13 +68,16 @@ function activeContract({
   trigger,
   predicates,
   task,
-  completionPolicy,
+  followingTasks = [],
+  closeWhen,
   onError,
 }) {
   return {
     actorType: 'User',
     mutability: 'Mutable',
-    completionPolicy,
+    closeWhen,
+    onUnfunded: 'Close',
+    autoCloseAtCycleNonce: null,
     trigger,
     cooldownBlocks: 0,
     scheduleWindow: null,
@@ -79,16 +89,17 @@ function activeContract({
           predicates.length === 0
             ? null
             : {
-                clauses: [
-                  predicates.map((predicate) => ({
-                    timing: 'Current',
-                    predicate,
-                  })),
-                ],
+                clauses: [predicates],
               },
         task,
         errorPolicy: onError,
       },
+      ...followingTasks.map((task, index) => ({
+        key: `distribution-${index + 1}`,
+        precondition: null,
+        task,
+        errorPolicy: onError,
+      })),
     ],
   };
 }
@@ -112,7 +123,7 @@ function priceBucket({ direction, threshold }) {
     failure:
       'Non-fresh observation skips; Temporary swap failure retries at one cursor; retry exhaustion closes.',
     contract: activeContract({
-      trigger: { type: 'ObservationChange', feed },
+      trigger: { type: 'Cadenced', everyTicks: 12 },
       predicates: [
         {
           type: buying ? 'ObservationBelow' : 'ObservationAbove',
@@ -130,7 +141,14 @@ function priceBucket({ direction, threshold }) {
         slippageParts: 10_000_000,
       },
       onError: { type: 'RetryLater', maxAttempts: 3 },
-      completionPolicy: 'CloseAfterProductiveCycle',
+      closeWhen: {
+        clauses: [
+          [
+            { metric: 'ActionSuccessTotal', threshold: 1 },
+            { metric: 'CycleCompletedTotal', threshold: 1 },
+          ],
+        ],
+      },
     }),
   };
 }
@@ -165,19 +183,26 @@ const partialScenarios = [
       trigger: { type: 'Manual' },
       predicates: [],
       task: {
-        type: 'SplitTransfer',
+        type: 'Transfer',
         asset: native,
-        amount: { type: 'AllAvailable' },
-        legs: [
-          { to: recipient, shareParts: 500_000_000 },
-          {
-            to: encodeAddress(new Uint8Array(32).fill(2), 42),
-            shareParts: 500_000_000,
-          },
-        ],
+        to: recipient,
+        amount: {
+          type: 'CaptureCycleBalance',
+          percentParts: 1_000_000_000,
+          shareParts: 500_000_000,
+        },
       },
+      followingTasks: [
+        {
+          type: 'Transfer',
+          asset: native,
+          to: encodeAddress(new Uint8Array(32).fill(2), 42),
+          amount: { type: 'CycleBalancePercent', parts: 500_000_000 },
+        },
+      ],
       onError: { type: 'AbortCycle' },
-      completionPolicy: 'Persistent',
+      closeWhen: null,
+      onUnfunded: 'Close',
     }),
   },
   {
@@ -206,7 +231,8 @@ const partialScenarios = [
         minLpOut: '1',
       },
       onError: { type: 'RetryLater', maxAttempts: 3 },
-      completionPolicy: 'Persistent',
+      closeWhen: null,
+      onUnfunded: 'Close',
     }),
   },
 ];
@@ -234,7 +260,14 @@ const nonPriceScalar = {
       amount: { type: 'Fixed', value: '100' },
     },
     onError: { type: 'AbortCycle' },
-    completionPolicy: 'CloseAfterProductiveCycle',
+    closeWhen: {
+      clauses: [
+        [
+          { metric: 'ActionSuccessTotal', threshold: 1 },
+          { metric: 'CycleCompletedTotal', threshold: 1 },
+        ],
+      ],
+    },
   }),
 };
 
@@ -253,21 +286,22 @@ test('descending buys and ascending sells lower as independent bounded one-shot 
   assert.deepEqual(
     descendingBuyBuckets.map(
       (scenario) =>
-        scenario.contract.steps[0].precondition.clauses[0][0].predicate
-          .threshold,
+        scenario.contract.steps[0].precondition.clauses[0][0].threshold,
     ),
     ['900000000000', '800000000000', '700000000000'],
   );
   assert.deepEqual(
     ascendingSellBuckets.map(
       (scenario) =>
-        scenario.contract.steps[0].precondition.clauses[0][0].predicate
-          .threshold,
+        scenario.contract.steps[0].precondition.clauses[0][0].threshold,
     ),
     ['1100000000000', '1200000000000', '1300000000000'],
   );
   for (const scenario of [...descendingBuyBuckets, ...ascendingSellBuckets]) {
-    const validation = validateActorAuthoringContract(scenario.contract);
+    const validation = validateActorAuthoringContract(
+      scenario.contract,
+      authoringLimits(),
+    );
     assert.equal(validation.valid, true, scenario.name);
     const inspection = inspectActorContractArtifact(
       artifact(scenario.contract),
@@ -278,15 +312,11 @@ test('descending buys and ascending sells lower as independent bounded one-shot 
     if (!inspection.valid) continue;
     assert.equal(inspection.projection.steps.length, 1, scenario.name);
     assert.equal(
-      inspection.projection.completion.type,
-      'CloseAfterProductiveCycle',
+      inspection.projection.close_when[0][0].metric.type,
+      'ActionSuccessTotal',
       scenario.name,
     );
-    assert.equal(
-      inspection.projection.trigger.type,
-      'ObservationChange',
-      scenario.name,
-    );
+    assert.equal(inspection.projection.trigger.type, 'Cadenced', scenario.name);
   }
 });
 
@@ -304,7 +334,8 @@ test('partial reaction cores lower without inventing reserve-ratio or depth pred
     assert.equal(scenario.data.truthOwner, 'NoCurrentTypedFeed', scenario.name);
     assert.equal(scenario.data.provenance, 'Unavailable', scenario.name);
     assert.equal(
-      validateActorAuthoringContract(scenario.contract).valid,
+      validateActorAuthoringContract(scenario.contract, authoringLimits())
+        .valid,
       true,
       scenario.name,
     );
@@ -327,7 +358,8 @@ test('non-price scalar strategy uses runtime block truth rather than a mislabele
   assert.equal(nonPriceScalar.data.truthOwner, 'Runtime block number');
   assert.equal(nonPriceScalar.data.provenance, 'CanonicalChainCurrentBlock');
   assert.equal(
-    validateActorAuthoringContract(nonPriceScalar.contract).valid,
+    validateActorAuthoringContract(nonPriceScalar.contract, authoringLimits())
+      .valid,
     true,
   );
   const analysis = analyzeActorContract({
@@ -358,6 +390,10 @@ test('every scenario declares availability, data ownership, provenance, and fail
     assert(scenario.data.provenance.length > 0, scenario.name);
     assert(scenario.data.meaning.length > 0, scenario.name);
     assert(scenario.failure.length > 0, scenario.name);
-    assert.equal(validateActorAuthoringContract(scenario.contract).valid, true);
+    assert.equal(
+      validateActorAuthoringContract(scenario.contract, authoringLimits())
+        .valid,
+      true,
+    );
   }
 });

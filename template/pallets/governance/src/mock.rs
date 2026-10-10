@@ -44,6 +44,7 @@ thread_local! {
   static PAYLOAD_COMPATIBILITY_SCHEMA: RefCell<u16> = const { RefCell::new(1) };
   static AUTHORIZED_RUNTIME_UPGRADE: RefCell<Option<pallet_governance::AuthorizedRuntimeUpgrade<H256>>> = const { RefCell::new(None) };
   static PAYLOAD_EXECUTOR_ENABLED: RefCell<bool> = const { RefCell::new(false) };
+  static PAYLOAD_EXECUTION_CALLS: RefCell<u32> = const { RefCell::new(0) };
   static PAYLOAD_EXECUTION_RESULTS: RefCell<BTreeMap<H256, bool>> = RefCell::new(BTreeMap::new());
 }
 
@@ -207,7 +208,7 @@ impl pallet_governance::BenchmarkHelper<AccountId, DomainId, H256, DomainId, u12
   }
 
   fn prepare_maximum_payload_witness(
-    _account: &AccountId,
+    account: &AccountId,
   ) -> Result<
     (
       DomainId,
@@ -219,6 +220,12 @@ impl pallet_governance::BenchmarkHelper<AccountId, DomainId, H256, DomainId, u12
   > {
     use polkadot_sdk::sp_runtime::traits::Hash as _;
     let payload = vec![0u8; 256];
+    let required = <Test as pallet_governance::Config>::PayloadAdmissionWitnessDeposit::get()
+      + <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::minimum_balance();
+    let _ =
+      <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::deposit_creating(
+        account, required,
+      );
     let payload_hash = BlakeTwo256::hash(&payload);
     set_payload_preimage_state_with_len(payload_hash, true, false, Some(payload.len() as u32));
     Ok((
@@ -226,6 +233,21 @@ impl pallet_governance::BenchmarkHelper<AccountId, DomainId, H256, DomainId, u12
       pallet_governance::ProposalPayloadKind::Intent,
       payload_hash,
       payload,
+    ))
+  }
+
+  fn prepare_pending_enactment(
+    account: &AccountId,
+  ) -> Result<
+    (DomainId, pallet_governance::ProposalPayloadKind, H256),
+    polkadot_sdk::sp_runtime::DispatchError,
+  > {
+    let (domain, hash, _) = Self::prepare_primary_eligible_submitter(account)?;
+    set_payload_executor_enabled(true);
+    Ok((
+      domain,
+      pallet_governance::ProposalPayloadKind::L1RootAction,
+      hash,
     ))
   }
 
@@ -394,6 +416,11 @@ impl pallet_governance::ProposalPayloadExecutor<AccountId, DomainId, u32, H256>
     pallet_governance::ProposalExecutionReceipt<AccountId, DomainId, H256>,
     pallet_governance::ProposalExecutionFailureReason,
   > {
+    PAYLOAD_EXECUTION_CALLS.with(|calls| *calls.borrow_mut() += 1);
+    polkadot_sdk::frame_support::storage::unhashed::put(
+      b"mock-governance-payload-effect",
+      &payload_hash,
+    );
     let success = PAYLOAD_EXECUTION_RESULTS
       .with(|results| results.borrow().get(&payload_hash).copied().unwrap_or(true));
     if success {
@@ -417,6 +444,7 @@ parameter_types! {
     polkadot_sdk::sp_runtime::Perbill::from_percent(50);
   pub ProposalVetoMinimumVetoTurnout: polkadot_sdk::sp_runtime::Perbill =
     polkadot_sdk::sp_runtime::Perbill::from_percent(1);
+  pub static MaxEpochCatchUpPerBlock: u32 = 1;
   pub static ProposalLeadInPeriod: Epoch = 0;
   pub static ProposalProtectionPeriod: Epoch = 2;
   pub static ProposalUrgentVotingPeriod: Epoch = 1;
@@ -452,7 +480,7 @@ impl pallet_governance::Config for Test {
   type WinningVoteItemId = u32;
   type Epoch = Epoch;
   type EpochProvider = MockEpochProvider;
-  type MaxEpochCatchUpPerBlock = ConstU32<1>;
+  type MaxEpochCatchUpPerBlock = MaxEpochCatchUpPerBlock;
   type MaxMaturingProposalsPerBlock = ConstU32<3>;
   type MaxPendingEnactmentsPerBlock = ConstU32<4>;
   type MaxFinalizedProposalOutcomesPerBlock = ConstU32<1024>;
@@ -467,7 +495,7 @@ impl pallet_governance::Config for Test {
   type StrategicProposalReserve = ConstU32<1>;
   type MaxActiveProposalsPerAuthor = ConstU32<8>;
   type MaxMaturingProposalsPerEpoch = ConstU32<4>;
-  type MaxPendingEnactmentsPerEpoch = ConstU32<4>;
+  type MaxPendingEnactments = ConstU32<8>;
   type ProposalVotingPeriod = ConstU64<2>;
   type ProposalLeadInPeriod = ProposalLeadInPeriod;
   type ProposalProtectionPeriod = ProposalProtectionPeriod;
@@ -559,6 +587,10 @@ pub fn set_payload_executor_enabled(enabled: bool) {
   PAYLOAD_EXECUTOR_ENABLED.with(|value| *value.borrow_mut() = enabled);
 }
 
+pub fn payload_execution_calls() -> u32 {
+  PAYLOAD_EXECUTION_CALLS.with(|calls| *calls.borrow())
+}
+
 pub fn set_payload_execution_result(hash: H256, success: bool) {
   PAYLOAD_EXECUTION_RESULTS.with(|results| {
     results.borrow_mut().insert(hash, success);
@@ -590,7 +622,9 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
     PAYLOAD_COMPATIBILITY_SCHEMA.with(|schema| *schema.borrow_mut() = 1);
     AUTHORIZED_RUNTIME_UPGRADE.with(|authorization| authorization.borrow_mut().take());
     PAYLOAD_EXECUTOR_ENABLED.with(|enabled| *enabled.borrow_mut() = false);
+    PAYLOAD_EXECUTION_CALLS.with(|calls| *calls.borrow_mut() = 0);
     PAYLOAD_EXECUTION_RESULTS.with(|results| results.borrow_mut().clear());
+    MaxEpochCatchUpPerBlock::set(1);
     ProposalLeadInPeriod::set(0);
     ProposalProtectionPeriod::set(2);
     ProposalUrgentVotingPeriod::set(1);

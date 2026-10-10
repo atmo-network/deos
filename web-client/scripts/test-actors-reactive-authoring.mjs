@@ -8,18 +8,17 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
+import { readActorsTestMetadata } from './actors-test-metadata.mjs';
+
 import { analyzeActorContract } from '../src/lib/automation/analysis.ts';
 import { createActorArtifactFromAuthoring } from '../src/lib/automation/authoring.ts';
-import { actorReactiveCapacityFailureMessage } from '../src/lib/automation/capacity-failure.ts';
 import { inspectActorContractArtifact } from '../src/lib/automation/contract-artifact.ts';
 import { composeActorRuntimeCall } from '../src/lib/automation/governance-composition.ts';
 import { runActorMatchingWasmSimulation } from '../src/lib/automation/matching-wasm.ts';
 import { encodeActorRuntimeSimulationResult } from '../src/lib/automation/runtime-simulation-codec.ts';
 import { simulateActorLocally } from '../src/lib/automation/simulation.ts';
 
-const metadataBytes = new Uint8Array(
-  await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
-);
+const metadataBytes = await readActorsTestMetadata();
 const runtime = {
   genesisHash: `0x${'11'.repeat(32)}`,
   specVersion: 1,
@@ -41,8 +40,17 @@ const feed = {
 const canonicalContract = {
   actorType: 'User',
   mutability: 'Mutable',
-  completionPolicy: 'CloseAfterProductiveCycle',
-  trigger: { type: 'ObservationChange', feed },
+  onUnfunded: 'Close',
+  autoCloseAtCycleNonce: null,
+  closeWhen: {
+    clauses: [
+      [
+        { metric: 'ActionSuccessTotal', threshold: 1 },
+        { metric: 'CycleCompletedTotal', threshold: 1 },
+      ],
+    ],
+  },
+  trigger: { type: 'Cadenced', everyTicks: 12 },
   cooldownBlocks: 0,
   scheduleWindow: null,
   fundingPolicy: { type: 'OwnerOnly' },
@@ -53,21 +61,15 @@ const canonicalContract = {
         clauses: [
           [
             {
-              timing: 'Opening',
-              predicate: {
-                type: 'ObservationBelow',
-                feed,
-                threshold: '1000000000000',
-                maxAgeBlocks: 12,
-              },
+              type: 'ObservationBelow',
+              feed,
+              threshold: '1000000000000',
+              maxAgeBlocks: 12,
             },
             {
-              timing: 'Current',
-              predicate: {
-                type: 'BalanceAbove',
-                asset: native,
-                threshold: '99',
-              },
+              type: 'BalanceAbove',
+              asset: native,
+              threshold: '99',
             },
           ],
         ],
@@ -122,7 +124,7 @@ function localStep() {
 function matchingOutcome(resultScale) {
   return {
     status: 'Closed',
-    closeReason: 'ProductiveCycleCompleted',
+    closeReason: 'BehaviorPolicySatisfied',
     cycleNonce: 1n,
     startCursor: 0,
     runCursor: null,
@@ -156,22 +158,18 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
   );
   assert.equal(inspection.valid, true);
   if (!inspection.valid) return;
-  assert.equal(inspection.projection.trigger.type, 'ObservationChange');
+  assert.equal(inspection.projection.trigger.type, 'Cadenced');
   assert.deepEqual(
-    inspection.projection.steps[0].precondition[0].map((timed) => [
-      timed.timing.type,
-      timed.predicate.type,
-    ]),
-    [
-      ['Opening', 'ObservationBelow'],
-      ['Current', 'BalanceAbove'],
-    ],
+    inspection.projection.steps[0].precondition[0].map(
+      (predicate) => predicate.type,
+    ),
+    ['ObservationBelow', 'BalanceAbove'],
   );
   assert.equal(inspection.projection.steps[0].task.type, 'SwapIn');
   assert.equal(inspection.projection.steps[0].on_error.type, 'RetryLater');
   assert.equal(
-    inspection.projection.completion.type,
-    'CloseAfterProductiveCycle',
+    inspection.projection.close_when[0][0].metric.type,
+    'ActionSuccessTotal',
   );
 
   const analysis = analyzeActorContract({
@@ -181,19 +179,21 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
     weightModel,
   });
   assert.equal(analysis.identity.contractId, artifact.contractId);
-  assert.equal(analysis.trigger.sourceKinds[0], 'ObservationChange');
+  assert.equal(analysis.trigger.kind, 'Cadenced');
+  assert.equal(analysis.trigger.everyTicks, 12);
+  assert.deepEqual(analysis.trigger.sourceKinds, []);
   assert.equal(analysis.steps[0].precondition.mode, 'AnyOf');
   assert.equal(analysis.steps[0].precondition.clauseCount, 1);
   assert.equal(analysis.steps[0].precondition.atomicCount, 2);
   assert.equal(analysis.steps[0].task, 'SwapIn');
   assert.equal(analysis.steps[0].errorPolicy, 'RetryLater');
   assert.equal(analysis.steps[0].retryMaxAttempts, 3);
-  assert.equal(analysis.completionPolicy, 'CloseAfterProductiveCycle');
+  assert.deepEqual(analysis.closeWhen, canonicalContract.closeWhen);
 });
 
 test('reactive strategy preserves topology under persistent lifecycle policy', () => {
   const persistentContract = structuredClone(canonicalContract);
-  persistentContract.completionPolicy = 'Persistent';
+  persistentContract.closeWhen = null;
   const persistentArtifact = createActorArtifactFromAuthoring({
     contract: persistentContract,
     metadataBytes,
@@ -206,8 +206,8 @@ test('reactive strategy preserves topology under persistent lifecycle policy', (
   );
   assert.equal(inspection.valid, true);
   if (!inspection.valid) return;
-  assert.equal(inspection.projection.completion.type, 'Persistent');
-  assert.equal(inspection.projection.trigger.type, 'ObservationChange');
+  assert.deepEqual(inspection.projection.close_when, { $none: true });
+  assert.equal(inspection.projection.trigger.type, 'Cadenced');
   assert.equal(inspection.projection.steps[0].task.type, 'SwapIn');
   assert.notEqual(persistentArtifact.contractId, artifact.contractId);
 });
@@ -225,7 +225,7 @@ test('canonical reactive artifact composes without runtime bucket policy', () =>
   assert.equal(composition.call.method, 'create_user_actor');
 });
 
-test('local projection preserves one-shot readiness, retry, and productive closure', () => {
+test('local projection preserves explicit outcome history through retry', () => {
   const base = {
     artifact,
     blockHash: `0x${'22'.repeat(32)}`,
@@ -233,14 +233,21 @@ test('local projection preserves one-shot readiness, retry, and productive closu
     modelVersion: '1',
     cycleNonce: 1n,
     startCursor: 0,
-    completionPolicy: 'CloseAfterProductiveCycle',
+    closeWhen: {
+      clauses: [
+        [
+          { metric: 'ActionSuccessTotal', threshold: 1 },
+          { metric: 'CycleCompletedTotal', threshold: 1 },
+        ],
+      ],
+    },
+    behaviorLimits: { maxClauses: 4, maxAtomsPerClause: 4 },
     initialState: { nativeBalance: 100n, quoteBalance: 0n },
     steps: [localStep()],
   };
   const notReady = simulateActorLocally({
     ...base,
-    evaluatePredicate(timed, state) {
-      const predicate = timed.predicate;
+    evaluatePredicate(predicate, state) {
       if (predicate.type === 'ObservationBelow') {
         return { kind: 'Value', value: false };
       }
@@ -276,6 +283,7 @@ test('local projection preserves one-shot readiness, retry, and productive closu
     unsuccessfulAttemptsAtCursor: suspended.unsuccessfulAttemptsAtCursor,
     initialState: suspended.state,
     initialCounts: suspended.cumulative,
+    initialBehaviorState: suspended.behavior,
     evaluatePredicate() {
       return { kind: 'Value', value: true };
     },
@@ -286,18 +294,18 @@ test('local projection preserves one-shot readiness, retry, and productive closu
     },
   });
   assert.equal(closed.status, 'Closed');
-  assert.equal(closed.closeReason, 'ProductiveCycleCompleted');
+  assert.equal(closed.closeReason, 'BehaviorPolicySatisfied');
   assert.equal(closed.cumulative.committedEffectfulTasks, 1);
   assert.deepEqual(closed.state, { nativeBalance: 0n, quoteBalance: 90n });
 });
 
-test('matching-Wasm contract accepts canonical productive closure for the fixture', async () => {
+test('matching-Wasm contract accepts canonical outcome-policy closure for the fixture', async () => {
   const resultScale = encodeActorRuntimeSimulationResult(metadataBytes, {
     success: true,
     value: {
       status: {
         type: 'Closed',
-        value: { type: 'ProductiveCycleCompleted', value: undefined },
+        value: { type: 'BehaviorPolicySatisfied', value: undefined },
       },
       cycle_nonce: 1n,
       start_cursor: 0,
@@ -349,18 +357,7 @@ test('matching-Wasm contract accepts canonical productive closure for the fixtur
   });
   assert.equal(requestedContractId, artifact.contractId);
   assert.equal(response.outcome.status, 'Closed');
-  assert.equal(response.outcome.closeReason, 'ProductiveCycleCompleted');
-});
-
-test('reactive capacity failures preserve typed User and total admission boundaries', () => {
-  assert.match(
-    actorReactiveCapacityFailureMessage('CrossingUserCapacityExceeded'),
-    /System reserve cannot be consumed by User Actors/,
-  );
-  assert.match(
-    actorReactiveCapacityFailureMessage('CrossingIndexCapacityExceeded'),
-    /Total Crossing capacity.*fails atomically/,
-  );
+  assert.equal(response.outcome.closeReason, 'BehaviorPolicySatisfied');
 });
 
 test('reactive authoring UI exposes every canonical fixture control', async () => {
@@ -370,6 +367,7 @@ test('reactive authoring UI exposes every canonical fixture control', async () =
       '../src/lib/automation/AutomationPredicateEditor.svelte',
       '../src/lib/automation/AutomationTaskEditor.svelte',
       '../src/lib/automation/AutomationStepEditor.svelte',
+      '../src/lib/automation/AutomationOutcomeEditor.svelte',
       '../src/lib/widgets/AutomationWidget.svelte',
     ].map((path) => readFile(new URL(path, import.meta.url), 'utf8')),
   );
@@ -377,17 +375,12 @@ test('reactive authoring UI exposes every canonical fixture control', async () =
   assert(sources[1].includes('ACTORS_AUTHORING_CONDITION_TYPES'));
   assert(!sources[3].includes('disabled={total === 1}'));
   for (const control of [
-    'ObservationChange',
+    'Cadenced',
     'SwapIn',
     'RetryLater',
-    'Close after productive cycle',
-    'Opening-only Contract',
-    'Persistent',
-    'CrossingUserCapacityExceeded',
-    'CrossingIndexCapacityExceeded',
-    'Service cost scales boundedly with subscribed pages',
-    'Repeated fires while already latched coalesce',
-    'backpressure may defer service',
+    'Outcome condition',
+    'Zero-Step Contract',
+    'No outcome rule',
   ]) {
     assert(source.includes(control), `${control} control is missing`);
   }

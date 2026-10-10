@@ -1,6 +1,7 @@
 use crate::*;
 use alloc::vec::Vec;
 use frame::prelude::*;
+use polkadot_sdk::frame_support::transactional;
 impl<T: Config> Pallet<T> {
   pub(crate) fn proposal_execution_authority_for_payload_kind(
     payload_kind: ProposalPayloadKind,
@@ -55,14 +56,45 @@ impl<T: Config> Pallet<T> {
     outcome: FinalizedProposalOutcome<T::Epoch>,
     current_epoch: T::Epoch,
   ) -> DispatchResult {
+    ensure!(
+      !FinalizedProposals::<T>::contains_key(domain, item_id),
+      Error::<T>::ProposalAlreadyFinalized
+    );
+    FinalizedProposalIdsByDomain::<T>::try_mutate(domain, |ids| -> DispatchResult {
+      ensure!(
+        !ids.contains(&item_id),
+        Error::<T>::ProposalAlreadyFinalized
+      );
+      ids
+        .try_push(item_id)
+        .map_err(|_| Error::<T>::FinalizedProposalIndexFull)?;
+      Ok(())
+    })?;
     FinalizedProposals::<T>::insert(
       domain,
       item_id,
       FinalizedProposalRecord {
-        outcome,
+        outcome: outcome.clone(),
         execution_detail: None,
       },
     );
+    if matches!(
+      outcome,
+      FinalizedProposalOutcome::Approved {
+        enactment: ProposalEnactmentOutcome::NotAttempted,
+        ..
+      }
+    ) {
+      return Ok(());
+    }
+    Self::admit_terminal_cleanup(domain, item_id, current_epoch)
+  }
+
+  fn admit_terminal_cleanup(
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+    current_epoch: T::Epoch,
+  ) -> DispatchResult {
     let retention = T::FinalizedProposalOutcomeRetentionEpochs::get();
     let expiry_epoch = Self::add_epochs(current_epoch, retention.into())?;
     FinalizedProposalOutcomeExpiryBuckets::<T>::try_mutate(
@@ -87,20 +119,11 @@ impl<T: Config> Pallet<T> {
   ) -> Result<bool, DispatchError> {
     let enactment_delay = T::ProposalEnactmentDelay::get();
     if enactment_delay.is_zero() {
-      ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
+      Self::release_pending_enactment(domain, item_id);
       return Ok(false);
     }
     let enactment_epoch = Self::add_epochs(finalized_epoch, enactment_delay)?;
-    let touch = FinalizedProposalTouch { domain, item_id };
-    ProposalPendingEnactmentAt::<T>::insert(domain, item_id, enactment_epoch);
-    PendingEnactmentBuckets::<T>::try_mutate(enactment_epoch, |bucket| -> DispatchResult {
-      if !bucket.contains(&touch) {
-        bucket
-          .try_push(touch.clone())
-          .map_err(|_| Error::<T>::PendingEnactmentBucketFull)?;
-      }
-      Ok(())
-    })?;
+    Self::admit_pending_enactment(domain, item_id, enactment_epoch)?;
     Self::deposit_event(Event::ProposalEnactmentScheduled {
       domain,
       item_id,
@@ -109,6 +132,49 @@ impl<T: Config> Pallet<T> {
     });
     Ok(true)
   }
+  pub(crate) fn admit_pending_enactment(
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+    due: T::Epoch,
+  ) -> DispatchResult {
+    let touch = FinalizedProposalTouch { domain, item_id };
+    PendingEnactments::<T>::try_mutate(|members| -> DispatchResult {
+      ensure!(
+        !members.contains(&touch),
+        Error::<T>::ProposalAlreadyFinalized
+      );
+      members
+        .try_push(touch)
+        .map_err(|_| Error::<T>::PendingEnactmentsFull)?;
+      Ok(())
+    })?;
+    ProposalPendingEnactmentAt::<T>::insert(domain, item_id, due);
+    Ok(())
+  }
+
+  fn release_pending_enactment(domain: T::DomainId, item_id: T::WinningVoteItemId) {
+    ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
+    PendingEnactments::<T>::mutate_exists(|maybe_members| {
+      if let Some(members) = maybe_members {
+        if let Some(index) = members
+          .iter() // deos-bypass: bounded-iter — MaxPendingEnactments members
+          .position(|touch| touch.domain == domain && touch.item_id == item_id)
+        {
+          members.remove(index);
+          let cursor = PendingEnactmentCursor::<T>::get() as usize;
+          if members.is_empty() {
+            *maybe_members = None;
+            PendingEnactmentCursor::<T>::kill();
+          } else {
+            PendingEnactmentCursor::<T>::put(
+              (cursor.saturating_sub(usize::from(index < cursor)) % members.len()) as u32,
+            );
+          }
+        }
+      }
+    });
+  }
+
   pub(crate) fn update_finalized_proposal(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
@@ -124,6 +190,7 @@ impl<T: Config> Pallet<T> {
       Ok(())
     })
   }
+  #[transactional]
   pub(crate) fn maybe_execute_proposal_payload(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
@@ -133,6 +200,22 @@ impl<T: Config> Pallet<T> {
   ) -> DispatchResult {
     let metadata = ProposalMetadataByItem::<T>::get(domain, item_id)
       .ok_or(Error::<T>::ProposalMetadataMissing)?;
+    ensure!(
+      matches!(FinalizedProposals::<T>::get(domain, item_id).map(|record| record.outcome),
+        Some(FinalizedProposalOutcome::Approved {
+          approval,
+          enactment: ProposalEnactmentOutcome::NotAttempted,
+        }) if approval.approved_epoch == approved_epoch && approval.winner_count == winner_count),
+      Error::<T>::ProposalExecutionNotPending,
+    );
+    if !matches!(
+      metadata.payload_kind,
+      ProposalPayloadKind::Intent | ProposalPayloadKind::L2SignalToL1
+    ) && !T::ProposalPayloadExecutor::can_execute(metadata.payload_kind)
+    {
+      return Ok(());
+    }
+    Self::admit_terminal_cleanup(domain, item_id, execution_epoch)?;
     match metadata.payload_kind {
       ProposalPayloadKind::Intent | ProposalPayloadKind::L2SignalToL1 => {
         Self::update_finalized_proposal(
@@ -149,7 +232,7 @@ impl<T: Config> Pallet<T> {
           },
           None,
         )?;
-        ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
+        Self::release_pending_enactment(domain, item_id);
         Self::deposit_event(Event::ProposalAdvisoryFinalized {
           domain,
           item_id,
@@ -160,9 +243,6 @@ impl<T: Config> Pallet<T> {
         Ok(())
       }
       _ => {
-        if !T::ProposalPayloadExecutor::can_execute(metadata.payload_kind) {
-          return Ok(());
-        }
         let authority = Self::proposal_execution_authority_for_payload_kind(metadata.payload_kind);
         if !T::ProposalPayloadPreimageProvider::have_preimage(&metadata.payload_hash) {
           Self::update_finalized_proposal(
@@ -181,7 +261,7 @@ impl<T: Config> Pallet<T> {
               crate::ProposalExecutionFailureReason::MissingPreimage,
             )),
           )?;
-          ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
+          Self::release_pending_enactment(domain, item_id);
           Self::deposit_event(Event::ProposalExecutionFailed {
             domain,
             item_id,
@@ -193,14 +273,25 @@ impl<T: Config> Pallet<T> {
           });
           return Ok(());
         }
-        match T::ProposalPayloadExecutor::execute(
-          domain,
-          item_id,
-          metadata.payload_kind,
-          metadata.payload_hash,
-        ) {
+        let execution: Result<_, DispatchError> =
+          polkadot_sdk::frame_support::storage::with_transaction(|| {
+            match T::ProposalPayloadExecutor::execute(
+              domain,
+              item_id,
+              metadata.payload_kind,
+              metadata.payload_hash,
+            ) {
+              Ok(receipt) => {
+                polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(Ok(receipt)))
+              }
+              Err(reason) => {
+                polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok(Err(reason)))
+              }
+            }
+          });
+        match execution? {
           Ok(receipt) => {
-            ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
+            Self::release_pending_enactment(domain, item_id);
             let execution_detail = match receipt {
               crate::ProposalExecutionReceipt::Generic => {
                 crate::ProposalExecutionSuccessDetail::Generic
@@ -297,7 +388,7 @@ impl<T: Config> Pallet<T> {
               },
               Some(crate::ProposalExecutionDetail::Failed(reason)),
             )?;
-            ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
+            Self::release_pending_enactment(domain, item_id);
             Self::deposit_event(Event::ProposalExecutionFailed {
               domain,
               item_id,
@@ -342,10 +433,13 @@ impl<T: Config> Pallet<T> {
     RecentFinalizedProposal<T::AccountId, T::DomainId, T::WinningVoteItemId, T::Hash, T::Epoch>,
     T::MaxRecentFinalizedProposalsPerDomain,
   > {
-    let mut proposals = FinalizedProposals::<T>::iter_prefix(domain)
-      .map(|(item_id, finalization)| RecentFinalizedProposal {
-        identity: ProposalIdentity { domain, item_id },
-        finalization,
+    let mut proposals = FinalizedProposalIdsByDomain::<T>::get(domain)
+      .into_iter()
+      .filter_map(|item_id| {
+        FinalizedProposals::<T>::get(domain, item_id).map(|finalization| RecentFinalizedProposal {
+          identity: ProposalIdentity { domain, item_id },
+          finalization,
+        })
       })
       .collect::<Vec<_>>();
     proposals.sort_by(|left, right| {

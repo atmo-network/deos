@@ -21,27 +21,27 @@ const upgradeEvidence = await readFile(
   'utf8',
 );
 
-test('browser Actor summaries consume compact Contract and Run heads only', () => {
+test('browser Actor summaries consume compact Contract head and Run state only', () => {
   assert.match(adapter, /Actors\.ActorContractHead\.getValue/);
-  assert.match(adapter, /Actors\.ActorRunHead\.getValue/);
+  assert.match(adapter, /Actors\.ActorRunState\.getValue/);
   assert.match(adapter, /readActorControlProjection/);
   assert.doesNotMatch(adapter, /Actors\.ActorIdentities\.getValue/);
   assert.doesNotMatch(adapter, /Actors\.ActorHot\.getValue/);
   assert.doesNotMatch(adapter, /Actors\.ActorContract\.getValue/);
-  assert.doesNotMatch(adapter, /Actors\.ActorRunState\.getValue/);
   assert.doesNotMatch(adapter, /Actors\.ActorContractTailChunk\.getValue/);
+  assert.doesNotMatch(adapter, /Actors\.ActorRunHead\.getValue/);
   assert.doesNotMatch(adapter, /Actors\.ActorRunPayload\.getValue/);
 });
 
-test('canonical browser control reads classify one bounded owner and corruption', () => {
-  assert.match(controlProjection, /Actors\.ActorControlLocators\.getValue/);
-  assert.match(
+test('canonical browser control reads semantic/process owners with metadata and generation checks', () => {
+  assert.match(controlProjection, /actors\.ActorSemanticStates/);
+  assert.match(controlProjection, /actors\.ActorProcesses/);
+  assert.match(controlProjection, /generation mismatch/);
+  assert.match(controlProjection, /Canonical Actors metadata is unavailable/);
+  assert.doesNotMatch(
     controlProjection,
-    /Actors\.ActorUnsignaledControlCells\.getValue/,
+    /ActorControlLocators|ActorUnsignaledControlCells|ActorReadyFrameChunks|ActorWaitingFrameChunks/,
   );
-  assert.match(controlProjection, /Actors\.ActorReadyFrameChunks\.getValue/);
-  assert.match(controlProjection, /Actors\.ActorWaitingFrameChunks\.getValue/);
-  assert.match(controlProjection, /both dormant and active control owners/);
 });
 
 test('upgrade evidence records canonical control and compact Contract head without reconstructing tails', () => {

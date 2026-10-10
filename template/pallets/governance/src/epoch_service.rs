@@ -92,6 +92,10 @@ impl<T: Config> Pallet<T> {
       !ActiveProposals::<T>::contains_key(domain, item_id),
       Error::<T>::ProposalAlreadyActive
     );
+    ensure!(
+      !FinalizedProposals::<T>::contains_key(domain, item_id),
+      Error::<T>::ProposalAlreadyFinalized
+    );
     let active_count =
       u32::try_from(ActiveProposalIdsByDomain::<T>::decode_len(domain).unwrap_or(0))
         .map_err(|_| Error::<T>::ActiveProposalCapReached)?;
@@ -447,7 +451,6 @@ impl<T: Config> Pallet<T> {
           return Weight::zero();
         };
         if !ProposalMaturityBuckets::<T>::get(candidate).is_empty()
-          || !PendingEnactmentBuckets::<T>::get(candidate).is_empty()
           || !FinalizedProposalOutcomeExpiryBuckets::<T>::get(candidate).is_empty()
           || !ExpiryBuckets::<T>::get(candidate).is_empty()
         {
@@ -475,12 +478,9 @@ impl<T: Config> Pallet<T> {
       return Weight::zero();
     };
     let mut phase = initial_phase;
-    for _ in 0..4 {
+    for _ in 0..3 {
       let phase_had_work = match phase {
         EpochServicePhase::Maturing => !ProposalMaturityBuckets::<T>::get(service_epoch).is_empty(),
-        EpochServicePhase::PendingEnactment => {
-          !PendingEnactmentBuckets::<T>::get(service_epoch).is_empty()
-        }
         EpochServicePhase::FinalizedOutcome => {
           !FinalizedProposalOutcomeExpiryBuckets::<T>::get(service_epoch).is_empty()
         }
@@ -490,9 +490,6 @@ impl<T: Config> Pallet<T> {
         let phase_weight = match phase {
           EpochServicePhase::Maturing => {
             Self::service_maturing_proposals(service_base_epoch, service_epoch)
-          }
-          EpochServicePhase::PendingEnactment => {
-            Self::service_pending_enactments(service_base_epoch, service_epoch)
           }
           EpochServicePhase::FinalizedOutcome => {
             Self::service_finalized_proposal_outcomes(service_base_epoch, service_epoch)
@@ -505,9 +502,6 @@ impl<T: Config> Pallet<T> {
           EpochServicePhase::Maturing => {
             ProposalMaturityBuckets::<T>::get(service_epoch).is_empty()
           }
-          EpochServicePhase::PendingEnactment => {
-            PendingEnactmentBuckets::<T>::get(service_epoch).is_empty()
-          }
           EpochServicePhase::FinalizedOutcome => {
             FinalizedProposalOutcomeExpiryBuckets::<T>::get(service_epoch).is_empty()
           }
@@ -515,8 +509,7 @@ impl<T: Config> Pallet<T> {
         };
         if phase_drained {
           let next_phase = match phase {
-            EpochServicePhase::Maturing => EpochServicePhase::PendingEnactment,
-            EpochServicePhase::PendingEnactment => EpochServicePhase::FinalizedOutcome,
+            EpochServicePhase::Maturing => EpochServicePhase::FinalizedOutcome,
             EpochServicePhase::FinalizedOutcome => EpochServicePhase::RewardExpiry,
             EpochServicePhase::RewardExpiry => EpochServicePhase::Maturing,
           };
@@ -528,8 +521,7 @@ impl<T: Config> Pallet<T> {
         return base_weight.saturating_add(phase_weight);
       }
       phase = match phase {
-        EpochServicePhase::Maturing => EpochServicePhase::PendingEnactment,
-        EpochServicePhase::PendingEnactment => EpochServicePhase::FinalizedOutcome,
+        EpochServicePhase::Maturing => EpochServicePhase::FinalizedOutcome,
         EpochServicePhase::FinalizedOutcome => EpochServicePhase::RewardExpiry,
         EpochServicePhase::RewardExpiry => {
           LastProcessedEpoch::<T>::put(service_epoch);
@@ -648,91 +640,45 @@ impl<T: Config> Pallet<T> {
     T::WeightInfo::service_maturing_proposals(processed_entries)
   }
 
-  pub(crate) fn service_pending_enactments(
-    last_processed_epoch: u32,
-    current_epoch: T::Epoch,
-  ) -> Weight {
-    let Ok(current_epoch_u32) = Self::epoch_to_u32(current_epoch) else {
+  pub(crate) fn service_pending_enactments(current_epoch: T::Epoch) -> Weight {
+    if Self::epoch_to_u32(current_epoch).is_err() {
       return Weight::zero();
-    };
-    let Some(first_epoch_u32) = last_processed_epoch.checked_add(1) else {
-      return Weight::zero();
-    };
-    let mut processed_entries = 0u32;
-    for epoch_u32 in first_epoch_u32..=current_epoch_u32 {
-      let Ok(epoch) = Self::epoch_from_u32(epoch_u32) else {
-        return Weight::zero();
-      };
-      let stored_bucket = PendingEnactmentBuckets::<T>::take(epoch);
-      let service_limit = T::MaxPendingEnactmentsPerBlock::get() as usize;
-      let mut entries = stored_bucket.into_inner();
-      let remainder = (entries.len() > service_limit).then(|| entries.split_off(service_limit));
-      let bucket: BoundedVec<_, T::MaxPendingEnactmentsPerEpoch> =
-        BoundedVec::truncate_from(entries);
-      if let Some(remainder) = remainder {
-        PendingEnactmentBuckets::<T>::insert(epoch, BoundedVec::truncate_from(remainder));
+    }
+    let visits = (PendingEnactments::<T>::decode_len().unwrap_or(0) as u32)
+      .min(T::MaxPendingEnactmentsPerBlock::get());
+    for _ in 0..visits {
+      let members = PendingEnactments::<T>::get();
+      if members.is_empty() {
+        break;
       }
-      let Some(next_processed_entries) = processed_entries.checked_add(bucket.len() as u32) else {
-        return Weight::MAX;
-      };
-      processed_entries = next_processed_entries;
-      for touch in bucket {
-        let Some(enactment_epoch) =
-          ProposalPendingEnactmentAt::<T>::get(touch.domain, touch.item_id)
-        else {
-          continue;
-        };
-        if enactment_epoch != epoch {
-          continue;
-        }
-        let Some(finalization) = FinalizedProposals::<T>::get(touch.domain, touch.item_id) else {
-          ProposalPendingEnactmentAt::<T>::remove(touch.domain, touch.item_id);
-          continue;
-        };
-        let FinalizedProposalOutcome::Approved {
-          approval,
-          enactment: ProposalEnactmentOutcome::NotAttempted,
-        } = finalization.outcome
-        else {
-          ProposalPendingEnactmentAt::<T>::remove(touch.domain, touch.item_id);
-          continue;
-        };
-        let approved_epoch = approval.approved_epoch;
-        let winner_count = approval.winner_count;
-        let execution_attempt = Self::maybe_execute_proposal_payload(
-          touch.domain,
-          touch.item_id,
-          approved_epoch,
-          winner_count,
-          current_epoch,
-        );
-        if execution_attempt.is_err()
-          || ProposalPendingEnactmentAt::<T>::contains_key(touch.domain, touch.item_id)
+      let index = PendingEnactmentCursor::<T>::get() as usize % members.len();
+      let touch = &members[index];
+      if ProposalPendingEnactmentAt::<T>::get(touch.domain, touch.item_id)
+        .is_some_and(|due| due <= current_epoch)
+      {
+        if let Some(FinalizedProposalRecord {
+          outcome:
+            FinalizedProposalOutcome::Approved {
+              approval,
+              enactment: ProposalEnactmentOutcome::NotAttempted,
+            },
+          ..
+        }) = FinalizedProposals::<T>::get(touch.domain, touch.item_id)
         {
-          let next_epoch = epoch_u32
-            .checked_add(1)
-            .and_then(|next_epoch| Self::epoch_from_u32(next_epoch).ok());
-          if let Some(next_epoch) = next_epoch {
-            let next_touch = FinalizedProposalTouch {
-              domain: touch.domain,
-              item_id: touch.item_id,
-            };
-            let _ = PendingEnactmentBuckets::<T>::try_mutate(
-              next_epoch,
-              |next_bucket| -> DispatchResult {
-                if !next_bucket.contains(&next_touch) {
-                  next_bucket
-                    .try_push(next_touch.clone())
-                    .map_err(|_| Error::<T>::PendingEnactmentBucketFull)?;
-                }
-                Ok(())
-              },
-            );
-          }
+          let _ = Self::maybe_execute_proposal_payload(
+            touch.domain,
+            touch.item_id,
+            approval.approved_epoch,
+            approval.winner_count,
+            current_epoch,
+          );
         }
+      }
+      if ProposalPendingEnactmentAt::<T>::contains_key(touch.domain, touch.item_id) {
+        PendingEnactmentCursor::<T>::put(((index + 1) % members.len()) as u32);
       }
     }
-    T::WeightInfo::service_pending_enactments(processed_entries)
+    T::WeightInfo::service_pending_enactments(visits)
   }
 
   pub(crate) fn service_finalized_proposal_outcomes(
@@ -768,6 +714,14 @@ impl<T: Config> Pallet<T> {
       processed_entries = next_processed_entries;
       for touch in bucket {
         FinalizedProposals::<T>::remove(touch.domain, touch.item_id);
+        FinalizedProposalIdsByDomain::<T>::mutate_exists(touch.domain, |maybe_ids| {
+          if let Some(ids) = maybe_ids {
+            ids.retain(|item_id| *item_id != touch.item_id);
+            if ids.is_empty() {
+              *maybe_ids = None;
+            }
+          }
+        });
         ProposalMetadataByItem::<T>::remove(touch.domain, touch.item_id);
         ProposalPendingEnactmentAt::<T>::remove(touch.domain, touch.item_id);
         ProposalWinningPrimaryOptionByItem::<T>::remove(touch.domain, touch.item_id);

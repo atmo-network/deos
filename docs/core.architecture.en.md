@@ -21,7 +21,7 @@ Token-driven actor flows follow this bounded coordination pattern:
 1. `Provenance-Aware Ingress`: Source/asset trigger filters and funding-source policy decide whether a deposit influences readiness or funding snapshots; ordinary balance credit remains separate from execution authority.
 2. `Plan-Local Statelessness`: Steps read current state without mutable cross-step scratch storage, while bounded lifecycle, readiness, queue, funding accumulator/snapshot, and observability state remains explicit on-chain.
 3. `Donation Sensitivity`: Assets transferred to a sovereign account remain real balances, but only configured tasks and authorized trigger/funding semantics determine whether and when they affect protocol execution. A donation is not automatically a burn or liquidity contribution.
-4. `Reactive Resilience`: Explicit `StepErrorPolicy`, cooldowns, paged FIFO readiness, and exact temporal wakeups provide bounded backpressure. A false Precondition may skip a Step and failures may abort a cycle; subsequent execution still requires a valid trigger and sufficient two-dimensional budget.
+4. `Reactive Resilience`: Explicit `StepErrorPolicy`, cooldowns, one persistent Service ring with per-block rounds, and exact temporal deadlines provide bounded backpressure. A false Precondition may skip a Step and failures may abort a cycle; subsequent execution still requires a valid trigger and sufficient two-dimensional budget.
 5. `Explicit Read-Model Split`: DEOS separates bounded authoritative on-chain values/projections that clients can consume directly from externally indexed materializations used for archive/search/analytics. Canonical product flows should rely on raw on-chain state when a bounded projection is the real protocol contract; unbounded history and heavy dashboard aggregation should remain off-chain instead of being smuggled into consensus state. The project-wide subsystem matrix and design checklist live in [`read-model.contract.en.md`](./read-model.contract.en.md).
 
 ## 3. Actor Architecture & Economic Topology
@@ -183,14 +183,14 @@ Block N:
 The system implements "Economic Backpressure" to handle volatility gracefully.
 
 - `Problem`: If DEX conditions are unfavorable (high slippage, low liquidity), executing a swap is dangerous.
-- `Solution`: A final failure may use `ContinueNextStep` to advance, while a Mutable plan may use `RetryLater` only for an adapter-classified Temporary failure. Cooldown schedules the unresolved suffix through the canonical FIFO/wakeup substrate.
+- `Solution`: A final failure may use `ContinueNextStep` to advance, while a Mutable plan may use `RetryLater` only for an adapter-classified Temporary failure. Cooldown schedules the unresolved suffix through the canonical Service ring and Deadline substrate.
 - `Result`: Temporary incapacity can preserve a committed prefix and resume at the same step. Permanent and unsupported failures never create Continuation.
 
 ### 4.3 Adapter Architecture
 
 Actors delegates host behavior through typed runtime contracts:
 
-Reactive work follows `specialize detection -> unify activation -> unify execution`: Manual calls, certified address movement, broad observation changes, sparse observation crossings, and cadence deadlines retain distinct bounded detectors, then share one readiness latch, placement contract, cutoff, and FIFO.
+Reactive work follows `specialize detection -> unify activation -> unify execution`: Manual calls, certified address movement, and AtTime/Cadenced deadlines retain distinct bounded detectors, then share one readiness latch, placement contract, cutoff, and FIFO. Observations never activate Actors; they are read only by execution-time Step predicates.
 
 - `AssetOps`: transferable balances, transfer, burn, mint, minimum-balance, and deposit checks
 - `DexOps`: caller-aware exact-input and exact-output swaps

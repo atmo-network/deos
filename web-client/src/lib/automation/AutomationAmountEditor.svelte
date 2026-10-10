@@ -12,12 +12,14 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
     amount: ActorAuthoringAmount;
     label?: string;
     compact?: boolean;
+    allowCycleBalance?: boolean;
   };
 
   let {
     amount = $bindable(),
     label = 'Amount mode',
     compact = false,
+    allowCycleBalance = false,
   }: Props = $props();
 
   function selectAmountType(event: Event) {
@@ -26,8 +28,8 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
     amount =
       type === 'Fixed'
         ? { type, value: '0' }
-        : type === 'AllAvailable'
-          ? { type }
+        : type === 'CaptureCycleBalance'
+          ? { type, percentParts: 1_000_000_000, shareParts: 500_000_000 }
           : { type, parts: 500_000_000 };
   }
 
@@ -35,13 +37,12 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
     switch (amount.type) {
       case 'Fixed':
         return 'Artifact value; live capacity still applies';
-      case 'PercentageOfCurrent':
-      case 'AllAvailable':
+      case 'Percent':
         return 'Re-observed at each step attempt';
-      case 'PercentageAtOpening':
-        return 'Frozen at logical-cycle start';
-      case 'PercentageOfLastFunding':
-        return 'Frozen from the latest accepted funding';
+      case 'CaptureCycleBalance':
+        return 'Capture once at this Transfer. Later Steps use this volume; new ingress waits for the next cycle. User Steps still need their own action fees.';
+      case 'CycleBalancePercent':
+        return 'Share of the preceding capture of this asset. A skipped capture skips this Transfer.';
     }
   });
 </script>
@@ -55,10 +56,11 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
       selectClass="h-9 py-1.5 text-xs"
     >
       <option value="Fixed">Fixed</option>
-      <option value="PercentageOfCurrent">% current</option>
-      <option value="PercentageAtOpening">% at opening</option>
-      <option value="PercentageOfLastFunding">% last funding</option>
-      <option value="AllAvailable">All available</option>
+      <option value="Percent">% current</option>
+      {#if allowCycleBalance}
+        <option value="CaptureCycleBalance">Capture distribution</option>
+        <option value="CycleBalancePercent">% captured volume</option>
+      {/if}
     </SelectField>
     {#if amount.type === 'Fixed'}
       <TextField
@@ -68,7 +70,26 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
         bind:value={amount.value}
         inputClass="h-9 py-1.5 text-xs tabnum"
       />
-    {:else if amount.type !== 'AllAvailable'}
+    {:else if amount.type === 'CaptureCycleBalance'}
+      <div class="grid gap-2">
+        <NumberInput
+          label="Volume (% current, perbill)"
+          min={1}
+          max={1000000000}
+          step={1}
+          bind:value={amount.percentParts}
+          class="h-9 py-1.5 text-xs tabnum"
+        />
+        <NumberInput
+          label="This transfer's share (perbill)"
+          min={1}
+          max={1000000000}
+          step={1}
+          bind:value={amount.shareParts}
+          class="h-9 py-1.5 text-xs tabnum"
+        />
+      </div>
+    {:else}
       <NumberInput
         label="Perbill parts"
         min={0}

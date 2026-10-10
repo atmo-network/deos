@@ -6,11 +6,17 @@ Zone: Automation domain capability; consumes canonical Actor Contract inspection
 */
 import { ACTORS_MAX_RETRY_ATTEMPTS } from './actors-protocol-bounds.ts';
 import {
+  type ActorCloseWhen,
+  type ActorOnUnfunded,
+  validateActorCloseWhen,
+} from './behavior-policy.ts';
+import {
   type ActorContractArtifact,
   type ActorContractHex,
   type ActorContractProjection,
   type ActorContractRuntimeIdentity,
   inspectActorContractArtifact,
+  readActorBehaviorContractSchema,
 } from './contract-artifact.ts';
 import {
   type ActorCostSegment,
@@ -34,7 +40,7 @@ export type {
   ActorTaskName,
 } from './semantic-manifest.ts';
 
-export const ACTORS_STATIC_ANALYZER_VERSION = '10' as const;
+export const ACTORS_STATIC_ANALYZER_VERSION = '13' as const;
 
 export type ActorRequiredAdapter =
   | 'AssetOps'
@@ -43,8 +49,8 @@ export type ActorRequiredAdapter =
   | 'LiquidityOps';
 
 export type ActorStaticObservationWindow =
+  | 'cycle-balance-capture'
   | 'artifact-time'
-  | 'logical-cycle-start'
   | 'step-attempt-time'
   | 'retry-time';
 
@@ -74,7 +80,6 @@ export type ActorStaticWeightModel = {
   taskUpper: (input: {
     task: ActorTaskName;
     parameters: ActorContractProjection;
-    splitLegs: number;
   }) => { weight: ActorWeight; executionFeeUpper: bigint };
   lifecycleOverhead: ActorCostSegment;
   fundingPromotionOverhead: ActorCostSegment;
@@ -111,8 +116,7 @@ export type ActorAmountSemantics = {
   dataDependencies: Array<
     | 'artifact-value'
     | 'current-balance-or-shares'
-    | 'opening-snapshot'
-    | 'last-funding-snapshot'
+    | 'cycle-balance-snapshot'
     | 'task-policy-capacity'
   >;
   minimumBalanceDependency: 'task-policy';
@@ -146,7 +150,7 @@ export type ActorStaticStepAnalysis = {
   predicates: Array<{
     type: ActorPredicateName;
     value: ActorContractProjection;
-    timing: 'Opening' | 'Current';
+    timing: 'Current';
     observation: 'balance' | 'block-number' | 'scalar-observation';
     readSurface:
       | ActorContractProjection
@@ -158,7 +162,7 @@ export type ActorStaticStepAnalysis = {
           nonFreshResult: 'false';
         };
     pure: true;
-    observationWindow: 'step-attempt-time' | 'cycle-opening-frozen';
+    observationWindow: 'step-attempt-time';
     boundedReadCount: 1;
   }>;
   task: ActorTaskName;
@@ -170,10 +174,7 @@ export type ActorStaticStepAnalysis = {
   failureControls: ActorStaticFailureControl[];
   availability: 'UserAndSystem' | 'SystemOnly';
   weightOwner: string;
-  boundedInternalAlgorithm:
-    | 'None'
-    | 'PalletSplitFanout'
-    | 'RuntimeAdapterContract';
+  boundedInternalAlgorithm: 'None' | 'RuntimeAdapterContract';
   requiredAdapters: ActorRequiredAdapter[];
   costs: {
     evaluation: ActorStaticCost;
@@ -230,43 +231,20 @@ export type ActorStaticSuffixEnvelope = {
 };
 
 export type ActorStaticTriggerAnalysis = {
-  kind:
-    | 'Manual'
-    | 'AddressEvent'
-    | 'ObservationChange'
-    | 'ObservationCrossing'
-    | 'AtTime'
-    | 'Cadenced';
+  kind: 'Manual' | 'AddressEvent' | 'AtTime' | 'Cadenced';
   afterTicks: number | null;
   everyTicks: number | null;
-  sourceKinds: Array<
-    'Manual' | 'AddressEvent' | 'ObservationChange' | 'ObservationCrossing'
-  >;
-  observationFeeds: ActorContractProjection[];
+  sourceKinds: Array<'Manual' | 'AddressEvent'>;
 };
 
 export type ActorStaticFinding =
   | {
       kind: 'ExternallySignalledAdmission';
-      trigger:
-        | 'Manual'
-        | 'AddressEvent'
-        | 'ObservationChange'
-        | 'ObservationCrossing';
-      sourceKinds: Array<
-        'Manual' | 'AddressEvent' | 'ObservationChange' | 'ObservationCrossing'
-      >;
+      trigger: 'Manual' | 'AddressEvent';
+      sourceKinds: Array<'Manual' | 'AddressEvent'>;
     }
   | { kind: 'OneShotTemporalAdmission'; afterTicks: number }
   | { kind: 'PeriodicAdmission'; everyTicks: number }
-  | {
-      kind: 'TriggerAmountCompatibilityViolation';
-      steps: number[];
-      sourceKinds: Array<
-        'Manual' | 'AddressEvent' | 'ObservationChange' | 'ObservationCrossing'
-      >;
-      reason: 'AddressEventOnlyRequired';
-    }
   | {
       kind: 'CommittedEffectBeforeRetryableStep';
       before: number;
@@ -295,15 +273,14 @@ export type ActorStaticFinding =
       orderingProtection: false;
     }
   | {
-      kind: 'SplitTransferDepositPreflight';
+      kind: 'TransferDepositPreflight';
       step: number;
       failureClass: 'Temporary';
       atomic: true;
     }
   | {
-      kind: 'SplitTransferLegBelowKnownMinimum';
+      kind: 'TransferBelowKnownMinimum';
       step: number;
-      leg: number;
       asset: ActorContractProjection;
       recipient: ActorContractProjection;
       amount: string;
@@ -354,7 +331,12 @@ export type ActorContractStaticAnalysis = {
   contract: 'Installed';
   actorType: ActorContractArtifact['actorType'];
   mutability: ActorContractArtifact['mutability'];
-  completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle';
+  closeWhen: ActorCloseWhen | null;
+  onUnfunded: ActorOnUnfunded;
+  costCoverage: {
+    scope: 'ExistingStructuralModel';
+    excludedOwners: Array<'OutcomePolicy' | 'FinancialWait'>;
+  };
   autoCloseAtCycleNonce: bigint | null;
   cooldownBlocks: number;
   trigger: ActorStaticTriggerAnalysis;
@@ -641,10 +623,8 @@ function taskAmounts(
             return 'artifact-value';
           case 'CurrentBalanceOrShares':
             return 'current-balance-or-shares';
-          case 'OpeningSnapshot':
-            return 'opening-snapshot';
-          case 'LastFundingSnapshot':
-            return 'last-funding-snapshot';
+          case 'CycleBalanceSnapshot':
+            return 'cycle-balance-snapshot';
           case 'TaskPolicyCapacity':
             return 'task-policy-capacity';
         }
@@ -655,8 +635,8 @@ function taskAmounts(
         switch (amount.valueObservationWindow) {
           case 'ArtifactTime':
             return 'artifact-time' as const;
-          case 'LogicalCycleStart':
-            return 'logical-cycle-start' as const;
+          case 'CaptureStepTime':
+            return 'cycle-balance-capture' as const;
           case 'StepAttemptTime':
             return 'step-attempt-time' as const;
         }
@@ -734,14 +714,8 @@ function taskSemantics(
   };
 }
 
-function predicateAnalysis(timedPredicate: ActorContractProjection) {
-  const timed = record(timedPredicate, 'TimedPredicate');
-  const timing = variant(timed.timing, 'TimedPredicate.timing');
-  if (timing.type !== 'Opening' && timing.type !== 'Current') {
-    throw new Error(`Unsupported ObservationTiming variant: ${timing.type}`);
-  }
-  const observationTiming = timing.type as 'Opening' | 'Current';
-  const parsed = variant(timed.predicate, 'TimedPredicate.predicate');
+function predicateAnalysis(predicate: ActorContractProjection) {
+  const parsed = variant(predicate, 'Predicate');
   const semantics = actorPredicateSemantics(parsed.type);
   const label = `Predicate.${semantics.predicate}`;
   const readSurface = (() => {
@@ -788,14 +762,11 @@ function predicateAnalysis(timedPredicate: ActorContractProjection) {
   return {
     type: semantics.predicate,
     value: parsed.value,
-    timing: observationTiming,
+    timing: 'Current' as const,
     observation,
     readSurface,
     pure: semantics.pure,
-    observationWindow:
-      observationTiming === 'Opening'
-        ? ('cycle-opening-frozen' as const)
-        : ('step-attempt-time' as const),
+    observationWindow: 'step-attempt-time' as const,
     boundedReadCount: semantics.boundedReadCount,
   };
 }
@@ -838,12 +809,8 @@ function stepCost(
   task: ActorTaskName,
   parameters: ActorContractProjection,
 ) {
-  const splitLegs =
-    task === 'SplitTransfer'
-      ? array(member(parameters, 'legs', task), `${task}.legs`).length
-      : 0;
   const evaluationWeight = model.evaluationWeight(conditionCount);
-  const upper = model.taskUpper({ task, parameters, splitLegs });
+  const upper = model.taskUpper({ task, parameters });
   const forecast = forecastActorCosts({
     artifact,
     blockHash: artifact.genesisHash,
@@ -1098,7 +1065,7 @@ function suffixEnvelopes(
         suffix.flatMap((step) => {
           const effects: ActorStaticSuffixEnvelope['committedEffectClasses'] =
             [];
-          if (step.task === 'Transfer' || step.task === 'SplitTransfer') {
+          if (step.task === 'Transfer') {
             effects.push('transfer');
           }
           if (step.economicSurface.mintExposure) effects.push('mint');
@@ -1165,7 +1132,6 @@ function parseTrigger(
         afterTicks: null,
         everyTicks: null,
         sourceKinds: ['Manual'],
-        observationFeeds: [],
       };
     case 'AddressEvent':
       return {
@@ -1173,52 +1139,7 @@ function parseTrigger(
         afterTicks: null,
         everyTicks: null,
         sourceKinds: ['AddressEvent'],
-        observationFeeds: [],
       };
-    case 'ObservationChange':
-      return {
-        kind: 'ObservationChange',
-        afterTicks: null,
-        everyTicks: null,
-        sourceKinds: ['ObservationChange'],
-        observationFeeds: [
-          member(trigger.value, 'feed', 'Trigger.ObservationChange'),
-        ],
-      };
-    case 'ObservationCrossing': {
-      const direction = variant(
-        member(trigger.value, 'direction', 'Trigger.ObservationCrossing'),
-        'Trigger.ObservationCrossing.direction',
-      );
-      if (direction.type !== 'Rising' && direction.type !== 'Falling') {
-        throw new Error(
-          `Unsupported CrossingDirection variant: ${direction.type}`,
-        );
-      }
-      const threshold = unsignedBigInt(
-        member(trigger.value, 'threshold', 'Trigger.ObservationCrossing'),
-        'Trigger.ObservationCrossing.threshold',
-      );
-      const rearmThreshold = unsignedBigInt(
-        member(trigger.value, 'rearm_threshold', 'Trigger.ObservationCrossing'),
-        'Trigger.ObservationCrossing.rearm_threshold',
-      );
-      if (
-        (direction.type === 'Rising' && rearmThreshold >= threshold) ||
-        (direction.type === 'Falling' && rearmThreshold <= threshold)
-      ) {
-        throw new Error('Trigger.ObservationCrossing has invalid hysteresis');
-      }
-      return {
-        kind: 'ObservationCrossing',
-        afterTicks: null,
-        everyTicks: null,
-        sourceKinds: ['ObservationCrossing'],
-        observationFeeds: [
-          member(trigger.value, 'feed', 'Trigger.ObservationCrossing'),
-        ],
-      };
-    }
     case 'AtTime': {
       const afterTicks = safeInteger(
         member(trigger.value, 'after_ticks', 'Trigger.AtTime'),
@@ -1232,7 +1153,6 @@ function parseTrigger(
         afterTicks,
         everyTicks: null,
         sourceKinds: [],
-        observationFeeds: [],
       };
     }
     case 'Cadenced': {
@@ -1248,7 +1168,6 @@ function parseTrigger(
         afterTicks: null,
         everyTicks,
         sourceKinds: [],
-        observationFeeds: [],
       };
     }
     default:
@@ -1267,24 +1186,6 @@ function findings(
   minimumBalanceEvidence?: ActorMinimumBalanceEvidence,
 ): ActorStaticFinding[] {
   const results: ActorStaticFinding[] = [];
-  const triggerAmountSteps = steps
-    .filter((step) =>
-      step.amounts.some(
-        (amount) => amount.resolution === 'PercentageAtOpening',
-      ),
-    )
-    .map((step) => step.index);
-  if (
-    triggerAmountSteps.length > 0 &&
-    (trigger == null || trigger.kind !== 'AddressEvent')
-  ) {
-    results.push({
-      kind: 'TriggerAmountCompatibilityViolation',
-      steps: triggerAmountSteps,
-      sourceKinds: trigger?.sourceKinds ?? [],
-      reason: 'AddressEventOnlyRequired',
-    });
-  }
   if (trigger?.kind === 'AtTime') {
     results.push({
       kind: 'OneShotTemporalAdmission',
@@ -1316,72 +1217,50 @@ function findings(
         orderingProtection: false,
       });
     }
-    if (step.task === 'SplitTransfer') {
+    if (step.task === 'Transfer') {
       results.push({
-        kind: 'SplitTransferDepositPreflight',
+        kind: 'TransferDepositPreflight',
         step: step.index,
         failureClass: 'Temporary',
         atomic: true,
       });
       const amount = variant(
-        member(step.parameters, 'amount', 'SplitTransfer'),
-        'SplitTransfer.amount',
+        member(step.parameters, 'amount', 'Transfer'),
+        'Transfer.amount',
       );
       if (amount.type === 'Fixed' && minimumBalanceEvidence != null) {
-        const asset = member(step.parameters, 'asset', 'SplitTransfer');
+        const asset = member(step.parameters, 'asset', 'Transfer');
+        const recipient = member(step.parameters, 'to', 'Transfer');
         const evidence = minimumBalanceEvidence.entries.find(
           (entry) => fingerprint(entry.asset) === fingerprint(asset),
         );
-        if (evidence != null) {
-          const total = unsignedBigInt(
-            amount.value,
-            'SplitTransfer.amount.Fixed',
-          );
-          const minimumBalance = evidenceBalance(
+        const recipientEvidence = evidence?.recipientBalances.find(
+          (entry) => fingerprint(entry.recipient) === fingerprint(recipient),
+        );
+        if (
+          evidence != null &&
+          recipientEvidence != null &&
+          evidenceBalance(
+            recipientEvidence.balance,
+            'Transfer recipient balance',
+          ) === 0n
+        ) {
+          const value = unsignedBigInt(amount.value, 'Transfer.amount.Fixed');
+          const minimum = evidenceBalance(
             evidence.minimumBalance,
-            'SplitTransfer minimum balance',
+            'Transfer minimum balance',
           );
-          array(
-            member(step.parameters, 'legs', 'SplitTransfer'),
-            'SplitTransfer.legs',
-          ).forEach((leg, legIndex) => {
-            const recipient = member(
-              leg,
-              'to',
-              `SplitTransfer.legs[${legIndex}]`,
-            );
-            const recipientEvidence = evidence.recipientBalances.find(
-              (candidate) =>
-                fingerprint(candidate.recipient) === fingerprint(recipient),
-            );
-            if (
-              recipientEvidence == null ||
-              evidenceBalance(
-                recipientEvidence.balance,
-                `SplitTransfer.legs[${legIndex}] recipient balance`,
-              ) !== 0n
-            ) {
-              return;
-            }
-            const share = unsignedBigInt(
-              member(leg, 'share', `SplitTransfer.legs[${legIndex}]`),
-              `SplitTransfer.legs[${legIndex}].share`,
-            );
-            const legAmount = (total * share) / 1_000_000_000n;
-            if (legAmount > 0n && legAmount < minimumBalance) {
-              results.push({
-                kind: 'SplitTransferLegBelowKnownMinimum',
-                step: step.index,
-                leg: legIndex,
-                asset,
-                recipient,
-                amount: legAmount.toString(),
-                minimumBalance: minimumBalance.toString(),
-                evidenceIdentity: minimumBalanceEvidence.identity,
-                evidenceBlockHash: minimumBalanceEvidence.blockHash,
-              });
-            }
-          });
+          if (value > 0n && value < minimum)
+            results.push({
+              kind: 'TransferBelowKnownMinimum',
+              step: step.index,
+              asset,
+              recipient,
+              amount: value.toString(),
+              minimumBalance: minimum.toString(),
+              evidenceIdentity: minimumBalanceEvidence.identity,
+              evidenceBlockHash: minimumBalanceEvidence.blockHash,
+            });
         }
       }
     }
@@ -1449,13 +1328,7 @@ function findings(
   }
   for (const dependency of dependencies) {
     const reader = steps[dependency.toStep];
-    if (
-      reader.amounts.some(
-        (amount) =>
-          amount.resolution === 'PercentageOfCurrent' ||
-          amount.resolution === 'AllAvailable',
-      )
-    ) {
+    if (reader.amounts.some((amount) => amount.resolution === 'Percent')) {
       results.push({
         kind: 'PreExistingBalanceMixedWithCurrentRunOutput',
         writer: dependency.fromStep,
@@ -1524,7 +1397,44 @@ export function analyzeActorContract(input: {
   }
   const contract = inspection.projection;
   const trigger = parseTrigger(contract);
-  let completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle';
+  const behaviorLimits = readActorBehaviorContractSchema(input.metadataBytes);
+  const projectedClose = member(contract, 'close_when', 'ActorContract');
+  const closeWhen = isNoneProjection(projectedClose)
+    ? null
+    : validateActorCloseWhen(
+        {
+          clauses: array(projectedClose, 'ActorContract.close_when').map(
+            (clause, clauseIndex) =>
+              array(clause, `close_when[${clauseIndex}]`).map(
+                (atom, atomIndex) => ({
+                  metric: variant(
+                    member(atom, 'metric', 'close_when atom'),
+                    'close_when metric',
+                  ).type,
+                  threshold: safeInteger(
+                    member(atom, 'threshold', 'close_when atom'),
+                    `close_when[${clauseIndex}][${atomIndex}].threshold`,
+                  ),
+                }),
+              ),
+          ),
+        },
+        behaviorLimits,
+      );
+  const unfunded = variant(
+    member(contract, 'on_unfunded', 'ActorContract'),
+    'ActorContract.on_unfunded',
+  );
+  if (unfunded.type !== 'Close' && unfunded.type !== 'AwaitFunding') {
+    throw new Error(`Unsupported fee-shortfall policy: ${unfunded.type}`);
+  }
+  if (
+    input.artifact.actorType === 'System' &&
+    unfunded.type === 'AwaitFunding'
+  ) {
+    throw new Error('AwaitFunding is User-only; System Actors are fee-exempt');
+  }
+  const onUnfunded = unfunded.type;
   const cooldownBlocks = safeInteger(
     member(contract, 'cooldown_blocks', 'ActorContract'),
     'ActorContract.cooldown_blocks',
@@ -1543,17 +1453,6 @@ export function analyzeActorContract(input: {
         );
   let steps: ActorStaticStepAnalysis[] = [];
   let forecastInputs: ActorStepCostInput[] = [];
-  const projectedPolicy = variant(
-    member(contract, 'completion', 'ActorContract'),
-    'ActorContract.completion',
-  );
-  if (
-    projectedPolicy.type !== 'Persistent' &&
-    projectedPolicy.type !== 'CloseAfterProductiveCycle'
-  ) {
-    throw new Error(`Unsupported completion policy: ${projectedPolicy.type}`);
-  }
-  completionPolicy = projectedPolicy.type;
   ({ steps, forecastInputs } = parseSteps(
     input.artifact,
     member(contract, 'steps', 'ActorContract'),
@@ -1587,7 +1486,15 @@ export function analyzeActorContract(input: {
     contract: 'Installed',
     actorType: input.artifact.actorType,
     mutability: input.artifact.mutability,
-    completionPolicy,
+    closeWhen,
+    onUnfunded,
+    costCoverage: {
+      scope: 'ExistingStructuralModel',
+      excludedOwners: [
+        ...(closeWhen === null ? [] : ['OutcomePolicy' as const]),
+        ...(onUnfunded === 'Close' ? [] : ['FinancialWait' as const]),
+      ],
+    },
     autoCloseAtCycleNonce,
     cooldownBlocks,
     trigger,

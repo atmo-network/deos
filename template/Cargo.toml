@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.7.26"
+version = "0.7.27"
 license = "MIT-0"
 authors = ["DEOS Contributors"]
 homepage = "https://github.com/atmo-network/deos"
@@ -8,7 +8,7 @@ edition = "2024"
 
 [workspace]
 default-members = ["pallets/router", "runtime"]
-members = ["pallets/actors", "pallets/actors/embedding-runtime", "pallets/asset-registry", "pallets/router", "pallets/router/embedding-runtime", "pallets/governance", "pallets/oracle", "pallets/oracle/embedding-runtime", "pallets/session-rotation", "pallets/staking", "pallets/tmc", "primitives", "runtime"]
+members = ["pallets/actors", "pallets/actors/embedding-runtime", "pallets/asset-registry", "pallets/router", "pallets/router/embedding-runtime", "pallets/governance", "pallets/oracle", "pallets/oracle/embedding-runtime", "pallets/session-rotation", "pallets/staking", "pallets/tmc", "primitives", "runtime", "tools/pvf-validation"]
 resolver = "2"
 
 [workspace.lints.rust]
@@ -63,13 +63,13 @@ pallet-session-rotation = { package = "pallet-deos-session-rotation", path = "./
 pallet-staking = { package = "pallet-deos-staking", path = "./pallets/staking", default-features = false }
 pallet-tmc = { package = "pallet-deos-tmc", path = "./pallets/tmc", default-features = false }
 
-# Polkadot SDK umbrella crate
-polkadot-sdk = { version = "2606.0.0", default-features = false }
+# Polkadot SDK polkadot-stable2609 umbrella crate
+polkadot-sdk = { version = "=2609.0.0", default-features = false }
 
 # Polkadot SDK individual crates
-frame = { package = "polkadot-sdk-frame", version = "0.18.0", default-features = false }
-cumulus-pallet-parachain-system = { version = "0.29.0", default-features = false }
-substrate-wasm-builder = "34.0.0"
+frame = { package = "polkadot-sdk-frame", version = "0.19.0", default-features = false }
+cumulus-pallet-parachain-system = { version = "=0.31.0", default-features = false }
+substrate-wasm-builder = "=35.0.0"
 
 # External crates
 codec = { package = "parity-scale-codec", version = "3.6", default-features = false, features = ["derive"] }
@@ -81,13 +81,12 @@ scale-info = { version = "2.11", default-features = false, features = ["derive"]
 serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 smallvec = "1.11"
-sp-api = { version = "43.0.0", default-features = false }
-sp-arithmetic = { version = "28.0.1", default-features = false }
+sp-api = { version = "44.0.0", default-features = false }
+sp-arithmetic = { version = "29.0.0", default-features = false }
 
-# Temporary minimal backport of Polkadot SDK PR #12408 / merge 408895c27a5aff4bac99e956df5426983566f8cb.
-# Remove when the selected SDK line contains full-balance Asset Conversion reserve semantics.
 [patch.crates-io]
-pallet-asset-conversion = { path = "vendor/pallet-asset-conversion" }
+# stable2609 still needs generated client transaction-depth restoration after explicit scopes.
+sp-api-proc-macro = { path = "vendor/sp-api-proc-macro" }
 
 [profile.release]
 opt-level = 3
