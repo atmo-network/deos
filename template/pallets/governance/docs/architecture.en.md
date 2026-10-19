@@ -281,7 +281,7 @@ Native tests cover delay longer than retention, repeated unavailable service and
 
 The pending-service benchmark uses a separate host helper for executable payload preparation; maximum admission-witness preparation remains independent. Ordinary approval epoch one now selects service/due as one plus configured `ProposalEnactmentDelay`, using checked epoch arithmetic and rejecting unrepresentable block context rather than saturating it. Setup rejects advisory kinds, unavailable executors and absent preimages. After service, verification requires the original approval, actual `Enacted` epoch, a success detail and released pending authority for every admitted item, so advisory completion or recorded execution failure cannot substitute for execution. The native mock benchmark exercises the executor transaction.
 
-Seeded approvals establish benchmark authority, not a public proposal history. Distinct-preimage/effect/failure profiles, global pending capacity, maximum discovery and cleanup, nested transactions and simultaneous pending plus historical servicing still need complete cost owners and applicable generated bindings. The executor interface currently returns no inner Weight. The [reference integration](../../../../docs/actors.integration.en.md#governance-activation-flows) owns its concrete L2 payload and qualification.
+Seeded approvals establish benchmark authority, not a public proposal history. Distinct-preimage/effect/failure profiles, global pending capacity, maximum discovery and cleanup, nested transactions and simultaneous pending plus historical servicing still need complete cost owners and applicable generated bindings. The executor interface currently returns no inner Weight. The [reference integration](../../../../docs/deos/actors.integration.en.md#governance-activation-flows) owns its concrete L2 payload and qualification.
 
 Extra `service_pending_enactments_full_topology` fills the configured global pending set and starts at its due tail, leaving earlier peers not yet due. Due sources use approval epoch one; future peers use epoch two and its exact ordinary due, never an approval later than the service epoch. A zero-delay host with nonempty future peers explicitly skips this impossible joint fixture before host preparation; zero delay remains supported by the simple profile.
 
@@ -442,15 +442,9 @@ This is intentionally retained as a recovery / narrow-control surface.
 
 ### 6. Auto-finalization on `on_initialize`
 
-The pallet's only hook is `on_initialize`, which calls `service_current_epoch(current_epoch)`.
-Today that routine services four bounded bucket families in order:
+`on_initialize` first calls `service_pending_enactments(current_epoch)`, then `service_current_epoch(current_epoch)`, and returns their combined Weight. The chronological worker selects at most one nonempty maturity, finalized-outcome or reward-expiry phase per invocation; the bounded epoch-service description above owns selection and continuation.
 
-1. `service_maturing_proposals(...)`
-2. `service_pending_enactments(...)`
-3. `service_finalized_proposal_outcomes(...)`
-4. `service_expiring_accounts(...)`
-
-That means pending enactment is no longer merely query/status scaffolding inside the pallet itself. The remaining gap sits one layer higher: executable payload kinds still need real runtime dispatch wiring before those bounded due-enactment attempts can do useful work on the reference runtime.
+The pallet defines no separate `on_idle` or `on_finalize` work hook. Unfinished bounded buckets remain obligations for later initialization calls, not an implicit same-block finalization pass. Executable payload behavior is supplied by the host's `ProposalPayloadExecutor`; its complete cost qualification is separate from the hook's reported Weight.
 
 #### Maturity servicing
 
@@ -749,7 +743,7 @@ This is the core boundedness win of the pallet: service cost tracks due bucket e
 
 ## Governance Read-Model Contract
 
-This subsystem follows the project-wide [`read-model.contract.en.md`](../../../../docs/read-model.contract.en.md) split.
+This subsystem follows the project-wide [`read-model.contract.en.md`](../../../../docs/deos/read-model.contract.en.md) split.
 
 ### Canonical on-chain governance projections
 
@@ -962,7 +956,7 @@ The pallet ships only bounded GovXP input counters. Richer identity layers, any 
 
 `Config::MaxCidBytes` exposes the shared CID bound. `CidBytesOf<T>` binds the executor receipt, success detail, retained finalization/query and treasury-spend event to that bound; the public records carry CID, treasury account, beneficiary/asset, base/scalar, target/actual amounts and capacity-limited status. The host owns CID parsing, declared-treasury authorization and payout semantics; the generic pallet retains and publishes the executor's typed result under the existing bounded finalization lifecycle.
 
-`ProposalExecutionFailureReason` keeps `InsufficientTreasuryCapacity` distinct from generic dispatch refusal and before `DispatchFailed` in the canonical codec; the codec-order regression checks all variants. Larger records and changed source contracts require host benchmarks, metadata and client agreement before complete specification §6.2 acceptance. Concrete reference realization and remaining gates belong to the [DEOS capital-loop architecture](../../../../docs/core.architecture.en.md#63-second-order-bldr-tmctol-and-capital-loop).
+`ProposalExecutionFailureReason` keeps `InsufficientTreasuryCapacity` distinct from generic dispatch refusal and before `DispatchFailed` in the canonical codec; the codec-order regression checks all variants. Larger records and changed source contracts require host benchmarks, metadata and client agreement before complete specification §6.2 acceptance. Concrete reference realization and remaining gates belong to the [DEOS capital-loop architecture](../../../../docs/deos/core.architecture.en.md#63-second-order-bldr-tmctol-and-capital-loop).
 
 ## Conclusion
 

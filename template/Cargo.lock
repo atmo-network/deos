@@ -4251,6 +4251,7 @@ dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
  "sc-block-builder",
+ "sc-client-db",
  "sc-executor",
  "scale-info",
  "serde_json",

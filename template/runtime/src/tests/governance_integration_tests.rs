@@ -2026,6 +2026,409 @@ fn finalized_cleanup_benchmark_verifies_reference_maximum() {
   });
 }
 
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn finalized_cleanup_diverse_benchmark_preserves_shared_population() {
+  for n in [2, 1_024] {
+    new_test_ext().execute_with(|| {
+      Governance::verify_diverse_finalized_cleanup_benchmark(n).unwrap();
+      for (domain, removed) in [(101, n.div_ceil(2)), (102, n / 2)] {
+        let ids = pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain);
+        assert_eq!(ids.len(), (8_192 - removed) as usize);
+      }
+      println!(
+        "GOVERNANCE_DIVERSE_BENCHMARK_SOURCE_V1 n={n} total=16384 domains=2 remaining={}",
+        16_384 - n
+      );
+    });
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn finalized_cleanup_initialization_exposes_system_quarter_mismatch() {
+  new_test_ext().execute_with(|| {
+    type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+    let (domain, expiry) = Governance::prepare_maximum_finalized_cleanup_hook().unwrap();
+    let n = <Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerBlock::get();
+    let before = pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain);
+    let future = pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::iter()
+      .filter(|(epoch, _)| *epoch > expiry)
+      .collect::<Vec<_>>();
+    assert_eq!(before.len(), 16_384);
+    assert_eq!(n, 1_024);
+    assert!(pallet_governance::PendingEnactments::<Runtime>::get().is_empty());
+    let issuance = Balances::total_issuance();
+    let alice = System::account(ALICE);
+    let bob = System::account(BOB);
+    System::set_block_number(expiry);
+    pallet_governance::LastProcessedEpoch::<Runtime>::put(expiry - 1);
+    let charged = Governance::on_initialize(expiry);
+    let expected = <W as pallet_governance::WeightInfo>::service_pending_enactments(0)
+      .saturating_add(<W as pallet_governance::WeightInfo>::service_epoch_catch_up())
+      .saturating_add(<W as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(n));
+    assert_eq!(charged, expected);
+    let quarter = crate::MAXIMUM_BLOCK_WEIGHT / 4;
+    let index_bytes = before.encoded_size();
+    assert_eq!(index_bytes, 65_540);
+    assert!(
+      charged.proof_size() < index_bytes as u64,
+      "known owner coverage gap: full retained index is read by cleanup"
+    );
+    assert!(
+      charged.ref_time() > quarter.ref_time(),
+      "known configured policy violation"
+    );
+    assert!(charged.proof_size() <= quarter.proof_size());
+    assert!(charged.all_lte(crate::configs::governance_config::GovernanceFixedWeight::get()));
+    assert_eq!(
+      pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain).as_slice(),
+      &before[n as usize..]
+    );
+    for item in before.iter().take(n as usize) {
+      assert!(!pallet_governance::FinalizedProposals::<Runtime>::contains_key(domain, item));
+      assert!(!pallet_governance::ProposalMetadataByItem::<Runtime>::contains_key(domain, item));
+    }
+    for (epoch, bucket) in future {
+      assert_eq!(
+        pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(epoch),
+        bucket
+      );
+    }
+    assert!(
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry).is_empty()
+    );
+    assert_eq!(
+      pallet_governance::CurrentEpochServicePhase::<Runtime>::get(),
+      pallet_governance::EpochServicePhase::RewardExpiry
+    );
+    assert_eq!(Balances::total_issuance(), issuance);
+    assert_eq!(System::account(ALICE), alice);
+    assert_eq!(System::account(BOB), bob);
+    println!(
+      "GOVERNANCE_FIXED_CLEANUP_CALLER_V1 {}",
+      serde_json::json!({
+        "syntheticBenchmarkState": true, "notPhysicalTiming": true, "due": n,
+        "remaining": before.len() - n as usize, "expiry": expiry,
+        "retainedIndexEncodedBytes": index_bytes, "codecBytesAreNotMeasuredProof": true,
+        "charged": [charged.ref_time(), charged.proof_size()],
+        "quarter": [quarter.ref_time(), quarter.proof_size()]
+      })
+    );
+  });
+}
+
+#[test]
+fn finalized_cleanup_due_bucket_admits_distinct_domain_indices() {
+  new_test_ext().execute_with(|| {
+    let domains = [101, 102];
+    let item = 7;
+    let hash = note_advisory_preimage(ALICE, b"domain-diverse cleanup source");
+    for (birth, item) in [(1, 7), (2, 8)] {
+      System::set_block_number(birth);
+      for domain in domains {
+        assert_ok!(Governance::submit_proposal(
+          RuntimeOrigin::root(),
+          domain,
+          item,
+          ALICE,
+          pallet_governance::ProposalCadenceMode::Ordinary,
+          pallet_governance::ProposalPayloadKind::Intent,
+          hash,
+        ));
+        assert_ok!(Governance::resolve_proposal(
+          RuntimeOrigin::root(),
+          domain,
+          item,
+          vec![ALICE].try_into().unwrap(),
+        ));
+        assert_eq!(
+          pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain).as_slice(),
+          if birth == 1 { &[7][..] } else { &[7, 8][..] }
+        );
+        assert!(pallet_governance::FinalizedProposals::<Runtime>::contains_key(domain, item));
+      }
+    }
+    let due = Governance::proposal_pending_enactment_at(domains[0], item).unwrap();
+    assert_eq!(
+      Governance::proposal_pending_enactment_at(domains[0], 8),
+      Some(due + 1)
+    );
+    assert_eq!(
+      Governance::proposal_pending_enactment_at(domains[1], item),
+      Some(due)
+    );
+    System::set_block_number(due);
+    Governance::on_initialize(due);
+    for domain in domains {
+      assert!(Governance::proposal_pending_enactment_at(domain, item).is_none());
+    }
+    System::set_block_number(due + 1);
+    Governance::on_initialize(due + 1);
+    let buckets = pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::iter()
+      .filter(|(_, entries)| entries.iter().any(|e| domains.contains(&e.domain)))
+      .collect::<Vec<_>>();
+    assert_eq!(buckets.len(), 2, "adjacent public finalized expiry cohorts");
+    let expiry = buckets.iter().map(|(epoch, _)| *epoch).min().unwrap();
+    let due_bucket =
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry);
+    let future_bucket =
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry + 1);
+    for domain in domains {
+      assert!(
+        due_bucket
+          .iter()
+          .any(|e| e.domain == domain && e.item_id == item)
+      );
+    }
+    assert_ne!(
+      pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::hashed_key_for(domains[0]),
+      pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::hashed_key_for(domains[1])
+    );
+    let future = domains.map(|domain| {
+      (
+        pallet_governance::FinalizedProposals::<Runtime>::get(domain, 8),
+        pallet_governance::ProposalMetadataByItem::<Runtime>::get(domain, 8),
+      )
+    });
+    let balances = (
+      Balances::total_issuance(),
+      System::account(ALICE),
+      System::account(BOB),
+    );
+    // Explicit maintenance-cursor fixture, not a claim of full public block history.
+    pallet_governance::LastProcessedEpoch::<Runtime>::put(expiry - 1);
+    System::set_block_number(expiry);
+    let charged = Governance::on_initialize(expiry);
+    type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+    assert_eq!(
+      charged,
+      <W as pallet_governance::WeightInfo>::service_pending_enactments(0)
+        .saturating_add(<W as pallet_governance::WeightInfo>::service_epoch_catch_up())
+        .saturating_add(
+          <W as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(2)
+        )
+    );
+    for (index, domain) in domains.into_iter().enumerate() {
+      assert_eq!(
+        pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain).as_slice(),
+        &[8]
+      );
+      assert!(!pallet_governance::FinalizedProposals::<Runtime>::contains_key(domain, item));
+      assert!(!pallet_governance::ProposalMetadataByItem::<Runtime>::contains_key(domain, item));
+      assert_eq!(
+        pallet_governance::FinalizedProposals::<Runtime>::get(domain, 8),
+        future[index].0
+      );
+      assert_eq!(
+        pallet_governance::ProposalMetadataByItem::<Runtime>::get(domain, 8),
+        future[index].1
+      );
+    }
+    assert!(
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry).is_empty()
+    );
+    assert_eq!(
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry + 1),
+      future_bucket
+    );
+    assert_eq!(
+      (
+        Balances::total_issuance(),
+        System::account(ALICE),
+        System::account(BOB)
+      ),
+      balances
+    );
+    type Index = polkadot_sdk::frame_support::BoundedVec<
+      u32,
+      <Runtime as pallet_governance::Config>::MaxRecentFinalizedProposalsPerDomain,
+    >;
+    type Bucket = polkadot_sdk::frame_support::BoundedVec<
+      pallet_governance::FinalizedProposalTouch<u32, u32>,
+      <Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerEpoch,
+    >;
+    let index_value_upper = Index::max_encoded_len();
+    let bucket_value_upper = Bucket::max_encoded_len();
+    let two_domain_value_upper = bucket_value_upper
+      .checked_add(index_value_upper.checked_mul(2).unwrap())
+      .unwrap();
+    println!(
+      "GOVERNANCE_CLEANUP_DOMAIN_SOURCE_V1 {}",
+      serde_json::json!({
+        "publicRootProposalAndResolution": true, "domains": domains, "item": item,
+        "expiry": expiry, "retainedIndexKeys": 2,
+        "syntheticCleanupCursor": true, "removed": 2, "futureRetained": 2,
+        "maximumIndexValueBytes": index_value_upper, "maximumBucketValueBytes": bucket_value_upper,
+        "twoDomainValueUpperNotProofOrReachableLower": two_domain_value_upper,
+        "charged": [charged.ref_time(), charged.proof_size()],
+        "notMaximumJointGeometryOrMeasuredProof": true
+      })
+    );
+  });
+}
+
+#[test]
+fn cleanup_co_read_estimate_does_not_collapse_distinct_keys() {
+  use polkadot_sdk::frame_support::traits::StorageInfoTrait;
+  let information = <Governance as StorageInfoTrait>::storage_info();
+  let metadata = |name: &[u8]| {
+    information
+      .iter()
+      .find(|entry| entry.storage_name == name)
+      .unwrap()
+  };
+  let bucket = metadata(b"FinalizedProposalOutcomeExpiryBuckets");
+  let index = metadata(b"FinalizedProposalIdsByDomain");
+  assert_eq!(bucket.max_size, Some(8_214));
+  assert_eq!(index.max_size, Some(65_560));
+  assert_eq!(bucket.max_values, None);
+  assert_eq!(index.max_values, None);
+  // Conditional SDK model only: five map layers at default1M entries plus two prefix layers.
+  // Neither default cardinality nor balanced trie depth is certified by these metadata rows.
+  let path_estimate = 7u64 * 15 * 33;
+  let bucket_estimate = u64::from(bucket.max_size.unwrap()) + path_estimate;
+  let index_estimate = u64::from(index.max_size.unwrap()) + path_estimate;
+  let composed = |distinct_domains: u64| {
+    bucket_estimate
+      .checked_add(index_estimate.checked_mul(distinct_domains).unwrap())
+      .unwrap()
+  };
+  assert_eq!((bucket_estimate, index_estimate), (11_679, 69_025));
+  assert_eq!(composed(1), 80_704);
+  assert_eq!(composed(2), 149_729);
+  assert!(
+    bucket_estimate.max(index_estimate) < 74_428,
+    "rejected generated max-prefix estimate misses retained recorded read proof"
+  );
+  assert!(
+    composed(1) >= 74_428,
+    "finite observed coverage is not a production upper"
+  );
+  println!(
+    "GOVERNANCE_CLEANUP_CONDITIONAL_PROOF_V1 {}",
+    serde_json::json!({
+      "assumedMapEntries": 1_000_000, "assumedMapDepth": 5, "prefixLayers": 2,
+      "mapCardinalityMetadataBounded": false,
+      "perBucket": bucket_estimate, "perIndex": index_estimate,
+      "oneDomain": composed(1), "twoDomains": composed(2),
+      "notProductionBound": true
+    })
+  );
+}
+
+#[test]
+fn cleanup_present_key_path_bound_excludes_absence() {
+  use polkadot_sdk::{
+    sp_core::{Blake2Hasher, H256},
+    sp_trie::{
+      LayoutV1, MemoryDB, Trie, TrieDBBuilder, TrieDBMutBuilder, TrieLayout, TrieMut,
+      recorder::Recorder,
+    },
+  };
+  type Layout = LayoutV1<Blake2Hasher>;
+  fn observe(
+    db: &MemoryDB<Blake2Hasher>,
+    root: H256,
+    key: &[u8],
+    value: &[u8],
+  ) -> (bool, usize, usize) {
+    let recorder = Recorder::<Blake2Hasher>::default();
+    let present = {
+      let mut sink = recorder.as_trie_recorder(root);
+      TrieDBBuilder::<Layout>::new(db, &root)
+        .with_recorder(&mut sink)
+        .build()
+        .get(key)
+        .unwrap()
+        .is_some()
+    };
+    let bytes = recorder.estimate_encoded_size();
+    let proof = recorder.drain_storage_proof();
+    (
+      present,
+      bytes,
+      proof
+        .iter_nodes()
+        .filter(|node| node.as_slice() != value)
+        .map(|node| node.len())
+        .max()
+        .unwrap(),
+    )
+  }
+  assert_eq!(
+    crate::VERSION.state_version(),
+    polkadot_sdk::sp_core::storage::StateVersion::V1
+  );
+  assert!(!Layout::USE_EXTENSION);
+  assert_eq!(Layout::MAX_INLINE_VALUE, Some(33));
+  let key = pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::hashed_key_for(17);
+  assert_eq!(key.len(), 52);
+  assert_eq!(
+    pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::hashed_key_for(101).len(),
+    52
+  );
+  let nibbles = key.len() * 2;
+  // Present-key path: <=104 consumed nibbles + terminal; every partial is within that key.
+  // V1 node upper: header2 + partial52 + bitmap2 + value33 + sixteen child references33.
+  let node_upper = 2 + key.len() + 2 + 33 + 16 * 33;
+  let node_record_upper = vec![0u8; node_upper].encoded_size();
+  let value = vec![7u8; 8_194];
+  let present_only_upper = (nibbles + 1) * node_record_upper + value.encoded_size();
+  let mut results = Vec::new();
+  for absent in [false, true] {
+    let mut db = MemoryDB::<Blake2Hasher>::default();
+    let mut root = H256::default();
+    {
+      let mut trie = TrieDBMutBuilder::<Layout>::new(&mut db, &mut root).build();
+      for position in 0..nibbles {
+        let shift = if position % 2 == 0 { 4 } else { 0 };
+        let old = (key[position / 2] >> shift) & 15;
+        for nibble in 0u8..16 {
+          if nibble == old {
+            continue;
+          }
+          let mut sibling = key.clone();
+          sibling[position / 2] = (sibling[position / 2] & !(15 << shift)) | (nibble << shift);
+          trie.insert(&sibling, &[9u8; 32]).unwrap();
+        }
+      }
+      if absent {
+        let mut longer = key.clone();
+        longer.resize(20_000, 3);
+        trie.insert(&longer, &[9u8; 32]).unwrap();
+      } else {
+        trie.insert(&key, &value).unwrap();
+      }
+    }
+    let (present, recorded, largest_node) = observe(&db, root, &key, &value);
+    assert_eq!(present, !absent);
+    if present {
+      assert!(largest_node <= node_upper);
+      assert!(recorded <= present_only_upper);
+    } else {
+      assert!(
+        largest_node > node_upper,
+        "absence does not bound terminal partial by queried key length"
+      );
+      assert!(
+        recorded > present_only_upper,
+        "counterexample to applying the present-key envelope to absence"
+      );
+    }
+    results.push(serde_json::json!({"present": present, "recordedBytes": recorded, "largestStructuralNode": largest_node}));
+  }
+  println!(
+    "GOVERNANCE_TRIE_PATH_SCOPE_V1 {}",
+    serde_json::json!({
+      "syntheticTrieNotRuntimeHistory": true, "keyBytes": key.len(), "siblingKeys": 15 * nibbles,
+      "nodeUpper": node_upper, "nodeRecordUpper": node_record_upper,
+      "presentOnlyReadUpper": present_only_upper,
+      "excludes": "absence, deletion/commit witnesses, child tries, full storage-proof/container/network PoV", "results": results
+    })
+  );
+}
+
 #[test]
 fn maximum_cid_invoice_pending_batch_preserves_capacity_prefix_and_future_member() {
   use pallet_governance::{

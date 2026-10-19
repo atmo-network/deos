@@ -4,7 +4,7 @@
 
 ## SDK baseline
 
-This pallet uses the workspace's locked Polkadot SDK 2609 dependency line. The [reference integration owner](../../../docs/actors.integration.en.md#sdk-dependency-line) records exact SDK pins and package/runtime/caller validation scope; node qualification is a separate reference-composition concern, not a reusable pallet contract.
+This pallet uses the workspace's locked Polkadot SDK 2609 dependency line. The [reference integration owner](../../../docs/deos/actors.integration.en.md#sdk-dependency-line) records exact SDK pins and package/runtime/caller validation scope; node qualification is a separate reference-composition concern, not a reusable pallet contract.
 
 ## Scope
 
@@ -25,6 +25,8 @@ The current kernel/runtime slice provides:
 - Exhaustive package-owned instruction contracts for every Task, Predicate, amount resolution, and error policy, with weight ownership delegated to the single `WeightInfo` interface
 - Genesis provisioning of System actors through runtime configuration
 
+The [Service-turn contract](./docs/specification.en.md#32-block-rounds-and-service-order) now has a native-tested canonical consumer for plain Close-mode collector refusal after full admission and safe Actor rollback. Only round/cursor bookkeeping commits. Its additional physical completion port defaults to unavailable; without a qualified host bound, collector refusal still retains the head and halts. [Package architecture](./docs/architecture.en.md#persistent-service-execution) owns the exact delta and test domain; native declaration tokens do not enable the DEOS reference or establish production costs.
+
 ## Key rule
 
 DEOS Actors is a **bounded deterministic actor runtime**, not a general-purpose smart-contract VM.
@@ -32,7 +34,7 @@ Actors execute declarative plans against runtime adapters under explicit Service
 
 `Percent` reads the applicable live balance or share surface at every execution attempt. `Fixed` preserves its authored debit and fails rather than silently shrinking when current capacity is insufficient.
 
-Active Actor Contracts author optional `close_when` and `on_unfunded`. The legacy completion enum is removed. Present outcome policy and AwaitFunding are currently refused until their installed state, transitions and resource owners exist; absent `close_when` and OnUnfunded Close retain independent lifecycle terminals and current funding dispositions. Gate B in the root backlog owns complete execution and client/artifact closure.
+Active Actor Contracts author optional `close_when` and `on_unfunded`. The legacy completion enum is removed. Present outcome policy requires available host Control, inspection and Close declarations plus ordinary admission; missing policy resources return `BehaviorPolicyUnavailable`, not arithmetic overflow. Native complete-declaration models retain admission, without qualifying production costs. AwaitFunding remains unavailable. Absent `close_when` and OnUnfunded Close retain independent lifecycle terminals and current funding dispositions. The [embedding guide](docs/embedding.md) owns host obligations; Gate B in the root backlog owns complete production/client/artifact closure.
 
 `StopCycle` provides one fieldless successful terminal control. It emits `CycleStopped`, completes through normal summary and auto-close handling, and cannot select a cursor or mutate Actor lifecycle.
 
@@ -85,6 +87,8 @@ From the DEOS checkout, run `./scripts/ci-local.sh --only tests --package pallet
 
 The test/benchmark-only tariff candidate conformance runs through `./scripts/ci-local.sh --only tests --package pallet-deos-actors-embedding-fixture --all-features --test-filter pipeline_tariff_candidate`. It checks diagnostic declaration/identity composition, not live admission, backing or calibrated prices; the embedding guide owns those boundaries.
 
+The consumed-refusal family runs through `./scripts/ci-local.sh --only tests --package pallet-deos-actors --all-features --test-filter service_refusal`. It uses native declaration tokens to check canonical rollback, cursor completion, paid rights and frozen resource accounting; it is not a physical benchmark or production enablement.
+
 ## Fee-envelope evidence example
 
 The package-owned example generates deterministic fee-envelope vectors bound to an embedding runtime's metadata and production Actors weights. It requires explicit artifact paths and does not require a DEOS repository layout:
@@ -106,4 +110,4 @@ The current kernel does not yet include:
 - Unbounded task graphs or unmetered loops
 - Direct pallet-specific business logic embedded into Actors core
 
-See the package-owned [DEOS Actors Architecture](./docs/architecture.en.md), [DEOS Actors Specification](./docs/specification.en.md), and [embedding guide](./docs/embedding.md) for reusable implementation, semantics, and host obligations. Concrete reference composition belongs to [`docs/actors.integration.en.md`](../../../docs/actors.integration.en.md).
+See the package-owned [DEOS Actors Architecture](./docs/architecture.en.md), [DEOS Actors Specification](./docs/specification.en.md), and [embedding guide](./docs/embedding.md) for reusable implementation, semantics, and host obligations. Concrete reference composition belongs to [`docs/deos/actors.integration.en.md`](../../../docs/deos/actors.integration.en.md).

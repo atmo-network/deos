@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { readConcept } from "./okf-frontmatter.mjs";
 
-const [wikiArgument = "wiki", minLinesArgument = "18"] = process.argv.slice(2);
+const [wikiArgument = "wiki/deos", minLinesArgument = "18"] = process.argv.slice(2);
 const wikiDir = resolve(wikiArgument);
 const minimumBodyLines = Number(minLinesArgument);
 const failures = [];

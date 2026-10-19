@@ -335,6 +335,46 @@ where
   Ok((domain, current_epoch))
 }
 
+/// A shared total population across two domains, not a Cartesian per-domain maximum.
+fn seed_diverse_finalized_outcomes<T: Config>(n: u32) -> Result<(T::Epoch, u32), BenchmarkError>
+where
+  T::DomainId: From<u32>,
+  T::Epoch: From<u32>,
+  T::WinningVoteItemId: From<u32>,
+{
+  let total = T::MaxRecentFinalizedProposalsPerDomain::get();
+  let per_epoch = T::MaxFinalizedProposalOutcomesPerEpoch::get();
+  let retention = T::FinalizedProposalOutcomeRetentionEpochs::get();
+  if n < 2
+    || n > total
+    || n > per_epoch
+    || n > T::MaxFinalizedProposalOutcomesPerBlock::get()
+    || per_epoch == 0
+    || (total - n).div_ceil(per_epoch) > retention
+  {
+    return Err(BenchmarkError::Skip);
+  }
+  let expiry = Pallet::<T>::add_epochs(1u32.into(), retention.into())?;
+  for index in 0..total {
+    let finalized_epoch: T::Epoch = if index < n {
+      1
+    } else {
+      2 + (index - n) / per_epoch
+    }
+    .into();
+    Pallet::<T>::record_finalized_proposal_outcome(
+      (101 + index % 2).into(),
+      benchmark_item_id::<T>(index),
+      FinalizedProposalOutcome::Rejected {
+        finalized_epoch,
+        reason: ProposalRejectionReason::NoVotes,
+      },
+      finalized_epoch,
+    )?;
+  }
+  Ok((expiry, total))
+}
+
 fn current_epoch_u32<T: Config>(epoch: T::Epoch) -> u32 {
   epoch.saturated_into::<u32>()
 }
@@ -1114,6 +1154,21 @@ mod benches {
       )
     }
 
+    /// Reuse the bounded benchmark state for a host's complete initialization-hook witness.
+    pub fn prepare_maximum_finalized_cleanup_hook()
+    -> Result<(T::DomainId, T::Epoch), BenchmarkError> {
+      seed_maximum_finalized_outcomes::<T>(T::MaxFinalizedProposalOutcomesPerBlock::get())
+    }
+
+    /// Verify a finite two-domain source without collecting physical samples.
+    pub fn verify_diverse_finalized_cleanup_benchmark(n: u32) -> Result<(), BenchmarkError> {
+      use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, BenchmarkingSetup};
+      <service_finalized_proposal_outcomes_diverse as BenchmarkingSetup<T>>::unit_test_instance(
+        &service_finalized_proposal_outcomes_diverse,
+        &[(BenchmarkParameter::n, n)],
+      )
+    }
+
     /// Verify this host's configured maximum without recording benchmark measurements.
     pub fn verify_maximum_finalized_cleanup_benchmark() -> Result<(), BenchmarkError> {
       use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, BenchmarkingSetup};
@@ -1217,6 +1272,80 @@ mod benches {
     }
     assert_eq!(PendingEnactments::<T>::get(), pending_before);
     assert_eq!(PendingEnactmentCursor::<T>::get(), pending_cursor_before);
+    Ok(())
+  }
+
+  #[benchmark(extra)]
+  fn service_finalized_proposal_outcomes_diverse(n: Linear<2, 1024>) -> Result<(), BenchmarkError> {
+    let (expiry, total) = seed_diverse_finalized_outcomes::<T>(n)?;
+    let domains: [T::DomainId; 2] = [101u32.into(), 102u32.into()];
+    let indices = domains.map(|domain| FinalizedProposalIdsByDomain::<T>::get(domain));
+    assert_eq!(
+      indices.iter().map(|ids| ids.len()).sum::<usize>(),
+      total as usize
+    );
+    let due = FinalizedProposalOutcomeExpiryBuckets::<T>::get(expiry);
+    assert_eq!(due.len(), n as usize);
+    assert!(
+      domains
+        .iter()
+        .all(|domain| due.iter().any(|touch| &touch.domain == domain))
+    );
+    let future_records = (n..total)
+      .map(|index| {
+        let domain: T::DomainId = (101 + index % 2).into();
+        let item = benchmark_item_id::<T>(index);
+        (domain, item, FinalizedProposals::<T>::get(domain, item))
+      })
+      .collect::<Vec<_>>();
+    let future_buckets = (1..=T::FinalizedProposalOutcomeRetentionEpochs::get())
+      .map(|offset| {
+        let epoch = Pallet::<T>::add_epochs(expiry, offset.into())?;
+        Ok((
+          epoch,
+          FinalizedProposalOutcomeExpiryBuckets::<T>::get(epoch),
+        ))
+      })
+      .collect::<Result<Vec<_>, DispatchError>>()?;
+    let now = current_epoch_u32::<T>(expiry);
+    let previous_epoch: T::Epoch = (now - 1).into();
+    LastProcessedEpoch::<T>::put(previous_epoch);
+    frame_system::Pallet::<T>::set_block_number(now.into());
+    #[block]
+    {
+      let _ = Pallet::<T>::service_finalized_proposal_outcomes(now - 1, expiry);
+    }
+    for touch in &due {
+      assert!(!FinalizedProposals::<T>::contains_key(
+        touch.domain,
+        touch.item_id
+      ));
+    }
+    for (position, domain) in domains.into_iter().enumerate() {
+      let expected = indices[position]
+        .iter()
+        .copied()
+        .filter(|id| {
+          !due
+            .iter()
+            .any(|touch| touch.domain == domain && touch.item_id == *id)
+        })
+        .collect::<Vec<_>>();
+      assert_eq!(
+        FinalizedProposalIdsByDomain::<T>::get(domain).as_slice(),
+        expected.as_slice()
+      );
+    }
+    assert!(FinalizedProposalOutcomeExpiryBuckets::<T>::get(expiry).is_empty());
+    for (domain, item, record) in future_records {
+      assert_eq!(FinalizedProposals::<T>::get(domain, item), record);
+    }
+    for (epoch, bucket) in future_buckets {
+      assert_eq!(
+        FinalizedProposalOutcomeExpiryBuckets::<T>::get(epoch),
+        bucket
+      );
+    }
     Ok(())
   }
 

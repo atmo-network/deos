@@ -45,16 +45,18 @@ Rust blocks declaring public types, calls, events, or errors are normative shape
 13. Close deletes process semantics and MUST preserve sovereign custody (§10.3, §11.3).
 14. Observations never activate Actors; they are read only by Step predicates at the actual check or Attempt (§5.1, §7.2).
 15. Unknown capability, stale authority, unbounded work, invalid actual Weight, or unknown downstream failure MUST fail closed.
-16. Rejected control transitions restore Actors state, events, scheduler state, and Actors fee movement to pre-state. Host nonce and ordinary transaction-payment effects are outside this definition.
+16. Rejected explicit control transitions restore Actors state, events, scheduler state, and Actors fee movement to pre-state. A fully admitted turn satisfying §3.2's safe-refusal conditions consumes its Service opportunity through only the qualified enclosing control commit; host nonce and ordinary transaction-payment effects remain outside Actor rollback.
 
 ### 2.2 Atomicity terms
 
 | Term | Meaning |
 | --- | --- |
-| Rejected control transition | Call returns `Err`; Actors-owned state and events equal pre-state. |
+| Rejected control transition | An explicit control call returns `Err`; Actors-owned state and events equal pre-state. |
 | Provisional Task commit | Task layer succeeded inside the current Step transaction but is not durable until that transaction commits. |
 | Committed unsuccessful attempt | The current Step transaction durably commits suspension or failure; fees owned by that committed transition remain charged. |
-| Rolled-back scheduler attempt | The current Step transaction fails; residence, run, Task effects, Actors fees, and Actors events equal pre-attempt state. |
+| Rolled-back Actor transition | The Actor transaction fails; its residence semantics, Run, Task effects, Actors fees, and Actor events equal pre-attempt state. The enclosing Service disposition is separate (§3.2). |
+| Consumed refused Service turn | A fully admitted turn safely rolls back its Actor transition, then commits only qualified round-consideration/cursor bookkeeping. It creates no Step outcome or authored retry. |
+| Unadmitted or unsafe Service refusal | The turn cannot be issued or safely completed; the exact head and prior attempt authority remain, incurred work stays accounted, and the pass stops. |
 
 ---
 
@@ -76,7 +78,7 @@ Each Active Actor owns exactly one generation-bound process. A serving process h
 
 A temporal Trigger (`AtTime`, `Cadenced`) MAY additionally own one independent Trigger deadline. That deadline is detector authority, not a residence, and cannot execute the Actor directly.
 
-After completion or abort, Idle without a pending signal or Run MUST leave Service. Without a window it keeps Protocol Disabled process authority; an independent window expiry owns its Block Deadline. Temporal detector authority survives this placement, and a parked-balance plan owns its bounded current-state review and dependency episode. Passive waiting performs no recurring Actor-specific inspection or rent. A new useful Trigger restores ordinary paid readiness with B+1 admission; it is not owner pause or deactivation. Capacity and collector/invariant refusals still preserve their original owed work and head rather than silently becoming passive.
+After completion or abort, Idle without a pending signal or Run MUST leave Service. Without a window it keeps Protocol Disabled process authority; an independent window expiry owns its Block Deadline. Temporal detector authority survives this placement, and a parked-balance plan owns its bounded current-state review and dependency episode. Passive waiting performs no recurring Actor-specific inspection or rent. A new useful Trigger restores ordinary paid readiness with B+1 admission; it is not owner pause or deactivation. Capacity and collector/invariant refusals preserve their original owed Actor work rather than silently becoming passive. Capacity barriers retain the exact head; a qualified consumed refused turn may advance only enclosing Service control under §3.2.
 
 A useful Idle occurrence preserves its paid latch in one primary Block Deadline when known window/cooldown eligibility is later than `B + 1`; its key is the earlier of eligibility and independent window expiry. Otherwise it publishes Pending Service for `B + 1`. A due Deadline return still obeys the next-round rule. Known future eligibility MUST NOT cause repeated Actor-specific Service checks during the delay.
 
@@ -92,9 +94,24 @@ Every residence transfer is transactional: the complete transition commits, or t
 
 One block owns one immutable round identity shared by every Actor pass. The outcome MUST equal that of a snapshot of the ordered eligible membership taken at the round boundary, but implementations MUST NOT enumerate the ring to achieve it. A member receives at most one ordinary turn per round, and at most one Step commits for an Actor per block. A member admitted or reentered in block `B` is ineligible until `B + 1`. Removal never donates its turn; remove/reinsert and generation replacement cannot reset the same-block guards.
 
-Admission fixes initial ring order; service then preserves cyclic encounter order among residents. A successful Step whose continuation is due next round retains membership and advances the Service cursor. Every newly admitted, reentered, or replacement membership is placed behind all current residents as encountered from the persistent next-encounter cursor. After `A` advances in `A -> B -> C`, admitting `D` before the next block yields next-round order `B -> C -> A -> D`.
+Admission fixes initial ring order; service then preserves cyclic encounter order among residents. A successful Step whose continuation is due next round retains membership and advances the Service cursor. A consumed refused turn also advances the cursor while retaining the same owed Actor transition under the rules below. Every newly admitted, reentered, or replacement membership is placed behind all current residents as encountered from the persistent next-encounter cursor. After `A` advances in `A -> B -> C`, admitting `D` before the next block yields next-round order `B -> C -> A -> D`.
 
-Head, tail, and interior removal, Deadline transfer, parking, close, and additions preserve the encounter order of survivors. The valid Service head is authoritative: it cannot be bypassed, no cheap/heavy/System/User reordering exists, and when its complete transition does not fit, the pass stops and later residents remain untouched. Certified absence of current work is a distinct fully admitted transition and may detach the head. Empty, stale, already-served, and ineligible physical entries have explicit bounded traversal and cannot cause an infinite wrap.
+Head, tail, and interior removal, Deadline transfer, parking, close, and additions preserve the encounter order of survivors. The valid Service head is authoritative before turn admission: no cheap/heavy/System/User reordering exists, and when its complete transition does not fit, the pass stops and later residents remain untouched. Advancing after a consumed refused turn is completion of that head's admitted turn, not bypass of an unadmitted head. Certified absence of current work is a distinct fully admitted transition and may detach the head. Empty, stale, already-served, and ineligible physical entries have explicit bounded traversal and cannot cause an infinite wrap.
+
+A turn is issued only after authenticating its generation and round eligibility and admitting its complete Control/effect maximum in both Weight dimensions. The Control upper MUST cover incurred discovery, the Actor branch, safe rollback and the enclosing Service-control completion, plus independently required reachable cleanup. Preliminary inspection or a partial paired reservation does not issue a turn. Financial admission and unavailable-capability gates remain independently authoritative.
+
+| Encounter disposition | Actor transition | Service consequence |
+| --- | --- | --- |
+| Capacity barrier before complete admission | No new Actor transition | Retain the exact head; stop without consuming its turn; account for performed inspection |
+| Committed Actor transition, including an authored typed failure | Commit normal Step/control semantics and applicable fees | Consume the turn and publish its ordinary successor |
+| Fully admitted, safely rolled-back Actor transition | Restore its semantic/economic pre-state; commit no new Actor fee or Step result | Consume one turn through qualified round/cursor control; continue in cyclic order while capacity remains |
+| Unqualified rollback, inconsistent infrastructure, or untrustworthy resource evidence | No permission to fabricate a result | Fail closed; do not continue on an assumed consumed turn |
+
+The refused-turn classification MUST be deterministic and bounded; it is not an author-selected error policy or an off-chain decision. A consumed refused turn requires evidenced rollback completeness, a valid restored generation/source and trustworthy incurred-Weight settlement within the admitted maxima. Collector refusal, including a common recipient fault, is not by itself a whole-pass halt when these conditions hold. Unknown errors MUST NOT be blanket-converted into this disposition. Corrupt ring authority, invalid actual Weight or an unavailable complete rollback/control bound cannot qualify it. If the enclosing Service-control commit cannot be validated or completed, its tentative changes MUST also roll back and the pass MUST stop.
+
+The only retained change after Actor rollback is the bounded Service round-consideration and next-encounter bookkeeping necessary to finish that issued turn. Its exact field/key write set MUST be qualified; it MUST NOT mutate custody, holds, paid readiness, Run, nonce, outcomes, behavior monitors or lifetime semantics. The Actor's owed transition remains eligible only under ordinary round/time rules. The consumed turn MUST prevent a second Prepass/Drain attempt in the same round, including remove/reinsert or generation replacement; it grants no new activation, priority, backoff, retry flag, refusal counter or scheduler. Earlier committed Steps and paid Pipeline authority remain intact.
+
+This disposition is a Service result, never a new `StepOutcome`: it consumes no authored `max_attempts`, creates no Task/Step/Cycle observation or `close_when` input, and contributes neither `CommittedSteps` nor `DistinctActorsCommitted`. Actor rollback followed by Service-control commit does not preserve the whole pre-encounter storage root. An outer caller or block rollback still reverts both scopes. Reports MUST separate consumed refused turns from committed progress; an all-refused round is not useful recovery merely because the cursor advanced or the round ended.
 
 Level-sensitive recurrence checks current state after Cycle completion no earlier than the next round and cannot start twice in one block. While an Actor is Running, in retry Deadline, Pending, or Live, repeated Manual or source hints coalesce and create no second Cycle, cursor reset, retry reset, or fee claim. Cadence misses coalesce into one current check without catch-up. One-shot temporal service has no recurrence after its completed or terminal Cycle.
 
@@ -191,7 +208,8 @@ SemanticContractId = Blake2_256(
       cooldown_blocks,
       window,
       funding,
-      completion,
+      close_when,
+      on_unfunded,
       parked_balance_activation,
       auto_close_at_cycle_nonce,
     ),
@@ -228,11 +246,11 @@ Each Step carries one runtime-owned resource envelope with a maximum Actor Contr
 
 Admission MUST reject a Contract whose largest reachable Service encounter cannot fit a fresh guaranteed base turn in either Weight dimension. Control includes common inspection, the current-Step/zero-Step owner, reachable placement and terminal cleanup, after reserving mandatory Prepass, both Deadline frontiers, bounded parked review and finalization. Task effects must independently fit the Actor effect base turn; idle borrowing or a combined `on_idle` reserve cannot establish this guarantee. Configured minimum domains belong to admission authority; a dynamic block allocation MUST preserve those Control and both economic base minima.
 
-The Pipeline fee envelope is the generated maximum **reachable** chargeable Actor Control work of one complete admitted Pipeline. It includes Opening exactly once (§6.2), each reachable current-Step control path (§7.1), retry control up to authored bounds (§7.5), and the reachable Cycle-completion work (§6.6). It excludes Trigger work (§5.2), Task effects (§12.1), and final Actor-state destruction through Close or minimal apoptosis (§10.3–§10.4), whose economic owner is creation (§8.2). It MUST NOT be the sum of mutually exclusive Step maxima; Opening-only work is not multiplied by Step 0 retries and Cycle-finalization work is not multiplied across Steps.
+The Pipeline fee envelope is the generated maximum **reachable** chargeable Actor Control work of one complete admitted Pipeline. It includes Opening exactly once (§6.2), each reachable current-Step control path (§7.1), retry control up to authored bounds (§7.5), and the reachable Cycle-completion work (§6.6). It excludes Trigger work (§5.2), Task effects (§12.1), bounded protocol service overhead (§8.8), and final Actor-state destruction through Close or minimal apoptosis (§10.3–§10.4), whose economic owner is creation (§8.2). It MUST NOT be the sum of mutually exclusive Step maxima; Opening-only work is not multiplied by Step 0 retries and Cycle-finalization work is not multiplied across Steps.
 
 `StopCycle` has no Temporary Task failure or unpaid Action liability, so its authored retry allowance adds no visits. A present precondition may skip it or produce a Permanent error handled by §7.5; an absent precondition always completes the Cycle and excludes later Step execution from pricing. The complete authored body, current-Step loading geometry, holds and destruction remain independently bounded and funded; reachability exclusion MUST NOT truncate those owners.
 
-An admitted turn's Actor-specific Service discovery, loaded-state inspection and outer ring transition belong to that Pipeline's control price, independently of the inner current-Step host port. This does not back inspections before an Opening that never commits, or arbitrary repeated collector/invariant refusals.
+A committed admitted turn's Actor-specific Service discovery, loaded-state inspection and outer ring transition belong to that Pipeline's control price, independently of the inner current-Step host port. Autonomous pre-Opening refusals and other uncommitted Service refusals belong to bounded protocol operating overhead (§8.8), not to an uncollected future Pipeline fee.
 
 Fee ownership does not reduce physical resource admission. Step and lifecycle Weight envelopes MUST still reserve and account for every reachable close branch in both RefTime and ProofSize. Chargeable Cycle control and creation-backed destruction require explicit non-overlapping cost owners; subtracting an unrelated public-close coefficient from a complete-Step measurement does not establish that partition.
 
@@ -451,7 +469,7 @@ Opening is the only transition that consumes paid readiness into one Cycle. It M
 7. Emit `CycleStarted` (§13.2).
 8. For a nonempty Contract, process Step 0 in the same current-Step transaction (§7.1), including its Action-liability AwaitFunding transition (§10.7); for a zero-Step Contract, finalize atomically (§6.5).
 
-Opening MUST NOT partially occur. Insufficient Pipeline payment follows `on_unfunded`: `Close` invokes minimal apoptosis with `CycleAdmissionInsufficient` (§10.4), while `AwaitFunding` preserves paid readiness and the unpaid Opening (§10.7). Inconsistent hold authority fails closed as an Actor invariant; the prior Trigger fee remains final (§8.3). A Pipeline fee-collection failure despite valid capacity rolls back the entire Opening, keeps the latch consumable, and preserves the Service head.
+Opening MUST NOT partially occur. Insufficient Pipeline payment follows `on_unfunded`: `Close` invokes minimal apoptosis with `CycleAdmissionInsufficient` (§10.4), while `AwaitFunding` preserves paid readiness and the unpaid Opening (§10.7). Inconsistent hold authority fails closed as an Actor invariant; the prior Trigger fee remains final (§8.3). A Pipeline fee-collection failure despite valid capacity rolls back the entire Opening and keeps the latch consumable. Its enclosing Service turn follows §3.2: qualified complete admission and safe rollback may consume the turn without an Opening, while a capacity barrier or unqualified fault retains the head and stops.
 
 ### 6.3 Current Attempt inputs
 
@@ -493,6 +511,8 @@ generation/process/Service/Contract validation
 + retained Service, Deadline, Parked, Disabled, or close placement
 + Actors events
 ```
+
+The enclosing Service turn may commit only its qualified round/cursor disposition after this Actor transaction rolls back (§3.2). That control commit is not a committed Step, Task failure, suspension or Cycle boundary and cannot alter the restored Actor semantic or economic fields.
 
 A Task MUST NOT be split across blocks, and earlier committed Steps are never rolled back by later failure. After a committed Step, `last_committed_step_block` equals the current block; a second Step commit for the same Actor in that block MUST fail closed independently of residence correctness.
 
@@ -776,7 +796,7 @@ TriggerFee = WeightToFee(maximum generated control Weight of one useful family-s
 
 A User Trigger fee is charged exactly once, from fee-native balance above `MinUserBalance`, before `pending_signal: false -> true` (§5.2, §11.4). Redundant latched-period activity charges nothing (§5.3). A useful User `manual_trigger` charges the complete generated Manual occurrence owner to the sovereign account and returns `Pays::No`; a redundant, rejected, underfunded, or System Manual call retains ordinary transaction payment and charges no Trigger fee. Automatic source producers pay their own source work; the Actor pays only its occurrence. Committed Trigger fees are nonrefundable and independent of later Pipeline admission.
 
-One paid readiness may additionally back fixed work for its single owed Opening wait under §8.7, including zero-Step Opening. This dedicated component MUST NOT reuse ordinary occurrence, Pipeline control or destruction backing. An unpaid AtTime occurrence still requires previously secured installation/producer backing; its future Trigger fee cannot pay its own wait entry. Repeated tentative returns and refusal work remain separately bounded and backed.
+One paid readiness may additionally back fixed work for its single owed Opening wait under §8.7, including zero-Step Opening. This dedicated component MUST NOT reuse ordinary occurrence, Pipeline control or destruction backing. An unpaid AtTime occurrence still requires previously secured installation/producer backing; its future Trigger fee cannot pay its own wait entry. Committed financial return work retains its separate backing under §8.7; uncommitted autonomous Service refusals follow §8.8. Neither owner may be counted twice.
 
 The first additional financial Service inspection at Opening belongs to this dedicated readiness backing, for both zero-Step and nonempty Pipelines. Pipeline pricing MUST exclude that inspection once and retain separate backing for later Step and retry inspections. Fixed Opening-wait and Action-wait recovery work remain distinct from the initial inspection.
 
@@ -817,8 +837,9 @@ No two economic surfaces may charge the same Weight or retained byte:
 | User process admission and eventual complete state destruction | Actor Creation Fee (§8.2) |
 | Retained Actor state | Actor State Hold (§8.2) |
 | Useful readiness `false -> true` | Trigger Fee (§8.3) |
-| Complete admitted Pipeline control | Pipeline Machine Fee (§8.4) |
-| Invoked Task effect | Action Fee (§8.5) |
+| Complete committed admitted Pipeline control | Pipeline Machine Fee (§8.4) |
+| Invoked Task effect in a committed Attempt, including typed failure | Action Fee (§8.5) |
+| Autonomous pre-Opening refusals and other uncommitted Service refusals | Bounded protocol operating overhead (§8.8); no additional Actor fee |
 | Router trading, staking, and other native fees | underlying host mechanism (§12.1) |
 
 ### 8.7 Financial-wait economic obligations
@@ -837,7 +858,19 @@ A waiting episode means one continuous wait for the same unpaid service boundary
 
 An installation that can publish an unconsumed AtTime occurrence MUST secure its fixed unpaid-occurrence wait work atomically with installation, before autonomous service becomes possible. Backing applies to that generation and semantic Contract only. Activation from Dormant or semantic replacement publishing an unconsumed occurrence cannot reuse an earlier installation's allowance; an exact no-op or technical re-certification creates no new owed occurrence. The host owns this installation-payment composition independently of the original Trigger liability and refundable state hold.
 
-These work owners MUST remain disjoint from Action effects, ordinary Pipeline control and final destruction. Repeated wait/resume episodes and funded-at-expiry recovery MUST NOT reuse an exhausted allowance. Creation's destruction backing alone does not fund unlimited solvent expiry checks. Refundable state holds do not pay for work. Exact tariff, reachable episode bounds, reservation and producer composition require physical qualification before production admission; this contract supplies no numeric coefficient or implicit funding source.
+These work owners MUST remain disjoint from Action effects, ordinary Pipeline control and final destruction. Repeated wait/resume episodes and funded-at-expiry recovery MUST NOT reuse an exhausted allowance. Creation's destruction backing alone does not fund unlimited solvent expiry checks. Refundable state holds do not pay for work. Exact tariff, reachable episode bounds, reservation and producer composition require physical qualification before production admission; this contract supplies no numeric coefficient or implicit funding source. The protocol overhead classification in §8.8 does not waive these committed wait-transition and producer obligations.
+
+### 8.8 Bounded protocol service overhead
+
+Autonomous pre-Opening Service inspection that refuses or rolls back without a committed Opening, and other uncommitted Service refusals, are explicitly accepted bounded operating expenses of the protocol. A pre-Opening prefix in a turn whose Opening commits remains ordinary Pipeline Control (§4.4); chronological position alone does not make it overhead. They create no fifth Actor fee, refusal surcharge, per-Actor escrow or remaining-budget account, recurring rent, or new refusal counter. The host accepts this operating cost per encounter and per block; it need not prove a finite lifetime refusal count or treat one historical Actor payment as funding every future refusal.
+
+Classification follows the owning transaction, not merely an error result. An invoked Task's typed failure whose enclosing Attempt commits retains its Action fee, Pipeline Control owner and authored retry/terminal semantics (§§7.5, 8.4–8.5), even when Task-local effects roll back. If the Actor transition refuses and rolls back, its tentative fees, progress, outcomes and retry changes roll back too; previously committed Steps and paid Pipeline authority survive. A turn satisfying §3.2's conditions still commits its qualified Service disposition; an unqualified refusal stops. Incurred work remains physically accounted, including any invoked effect work in its effect domain, and belongs to protocol overhead rather than a newly committed Actor payment.
+
+Every such encounter MUST have conservative physical admission and accounting in RefTime and ProofSize, including post-rollback Service completion. Aggregate refused work MUST remain inside the existing frozen block-resource domains; effect work MUST NOT be relabeled Control. Service order, generation, Q1, B+1 and the §3.2 admission/safety barriers remain authoritative: consumed refused turns permit neither a hot retry loop nor bypass of an unadmitted head. Capacity refusal is not insolvency and MUST NOT consume paid readiness or select apoptosis. Actor rollback preserves the owed source; only qualified enclosing Service bookkeeping may change.
+
+The four Actor fee owners remain unchanged. Creation-backed final destruction, refundable state holds and an uncollected future Pipeline fee MUST NOT be relabeled as unlimited refusal funding. External calls and certified producers retain their existing transaction/effect owners, including refused preflight or consequence work; committed optional wait transitions retain §8.7 backing. Accepting protocol overhead creates no monetary transfer, issuance source, fee-allocation leg, dedicated reserve or parallel allocator, and is not proof that existing fee revenue covers it.
+
+Production acceptance MUST qualify per-encounter and aggregate block costs over supported source, geometry, caller and host domains, together with useful-work, head-progress and fairness impact. A resource ceiling is not a monetary payment or evidence that the operating cost is small. This classification grants no authority to invoke an unfunded Action, waive actual-Weight validation, bypass unavailable price/authority gates or spend protected balances.
 
 ---
 
@@ -869,13 +902,13 @@ Every block contains exactly one mandatory Actor Prepass inherent after required
 
 Ordinary external extrinsics then consume Shared Economic capacity, including any `ActorBaseTurn` the base pass left unused. After external dispatch, Actor Drain MAY continue from the same cursor and round using the remaining Actor Control meter and remaining Shared Economic capacity. Drain MUST NOT execute current-block readiness, grant a second Step to one Actor, reorder the head, or exceed the actual remainder.
 
-Current-block publications use next-block eligibility, and a resident already considered in the current round cannot execute again; together these prevent same-block Actor recursion without any per-Step ticket. A maximum valid Step may be the only Actor Step in a block: this is paid bounded service, not starvation. Pipeline- or Action-fee collector failure rolls back the current transition, preserves the Service head, and stops the pass; it is not a Task failure.
+Current-block publications use next-block eligibility, and a resident already considered in the current round cannot execute again; together these prevent same-block Actor recursion without any per-Step ticket. A maximum valid Step may be the only Actor Step in a block: this is paid bounded service, not starvation. Pipeline- or Action-fee collector failure rolls back the Actor transition and is not a Task failure. After complete turn admission, qualified safe rollback and incurred-Weight settlement consume that turn and permit the next resident under §3.2; before admission or without trustworthy completion, the exact head remains and the pass stops.
 
 ### 9.3 Liveness
 
-Given a finite bounded Service population, recurring conforming Actor Control and Shared Economic capacity, finite stale churn, eventual placement capacity, successful fee collection when valid payment capacity exists, and no structural invariant fault, all eligible residents receive service in persistent ring order. No fixed block latency is promised; a larger runnable population MAY lengthen inter-Step gaps while preserving order and eventual service.
+Given a finite bounded Service population, recurring conforming Actor Control and Shared Economic capacity, finite stale churn, eventual placement capacity and trustworthy Service infrastructure, all continuously eligible residents receive admitted turns in persistent cyclic order. Qualified safely refused turns count as service opportunities, not committed Step progress. No fixed block latency is promised; a larger runnable population MAY lengthen inter-Step gaps.
 
-Without successful fee collection, the Service head MAY block later service despite spare Weight; only restored prerequisites or already-authorized lifecycle transitions resolve that obstruction. Starvation telemetry MUST NOT change priority, order, or execution authority.
+Successful fee collection and valid Task prerequisites remain necessary for the affected Actor's committed progress. A qualified refused turn does not by itself block later residents while capacity remains, but common collector faults may consume multiple turns and exhaust the block budget without useful work. Admission barriers and unqualified infrastructure faults still stop service. Starvation reporting MUST distinguish consumed refusals from useful recovery and MUST NOT change priority, order, or execution authority.
 
 ---
 
@@ -1337,7 +1370,8 @@ A runtime conforms iff:
 14. Calls, events, APIs, and errors follow §13;
 15. Storage integrity and deployed upgrades follow §14.1 and §14.2;
 16. Generated Weight upper-bounds every admitted control and effect branch in both dimensions;
-17. Simulation is rollback-only and observationally equivalent to zero or one production current-Step transition.
+17. Simulation is rollback-only and observationally equivalent to zero or one production current-Step transition;
+18. A consumed refused Service turn satisfies §3.2's admission, rollback, allowed-state-delta, same-round, accounting and metric boundaries without inventing a Step result.
 
 ---
 

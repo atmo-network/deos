@@ -58,6 +58,14 @@ mod pvf_fixture;
 #[cfg(not(feature = "runtime-benchmarks"))]
 use crate as pvf_runtime;
 
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[path = "production_block_replay/transfer_baseline.rs"]
+mod transfer_baseline;
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[path = "production_block_replay/pvf_first.rs"]
+mod pvf_first;
+
 const PREPARED_W1_ACTORS: u32 = 128;
 const W1_TARGET_CYCLES: u32 = 10_000;
 const W1_TARGET_BLOCKS: u32 = 100;
@@ -91,8 +99,8 @@ const CONTROL_ATTRIBUTION_BLOCKS: u32 = 9;
 /// Exact-Wasm profiles fail closed on other bytes. This identity is not a certificate of
 /// complete Weight/resource, host or release acceptance.
 const ACCEPTED_PRODUCTION_WASM_SHA256: [u8; 32] = [
-  0x5c, 0x1f, 0x79, 0x7c, 0xd5, 0x32, 0x81, 0xda, 0x0d, 0xa8, 0x69, 0x6e, 0xf9, 0xcd, 0x05, 0x08,
-  0x70, 0xbb, 0x2b, 0xbc, 0xe0, 0xeb, 0x72, 0xde, 0x2f, 0xc4, 0xd3, 0x13, 0x3d, 0x9a, 0x5c, 0xfc,
+  0x8c, 0xc3, 0xb9, 0x38, 0xfc, 0xbe, 0x72, 0x0e, 0xd3, 0x28, 0xa9, 0x54, 0x6d, 0x9b, 0xa2, 0xc1,
+  0x07, 0x02, 0x6c, 0xbe, 0x71, 0xa0, 0x0b, 0x9b, 0x86, 0xe6, 0x8d, 0x70, 0xd1, 0x52, 0x98, 0xfb,
 ];
 const REFERENCE_ACTIVE_SYSTEM_ACTORS: u32 = 3;
 const REFERENCE_SYSTEM_ACTOR_IDENTITIES: u32 = 15;
@@ -13101,10 +13109,14 @@ impl OneStepServiceTrace {
   }
 
   fn for_schedule(actor_ids: &[ActorId], schedule: WorkloadSchedule) -> Self {
+    Self::for_schedule_at(actor_ids, schedule, 1)
+  }
+
+  fn for_schedule_at(actor_ids: &[ActorId], schedule: WorkloadSchedule, signal_block: u32) -> Self {
     let mut trace = Self::new(actor_ids);
     for (index, actor_id) in actor_ids.iter().enumerate() {
       if schedule.uses_manual_trigger(index as u32) {
-        trace.signal(*actor_id, 1);
+        trace.signal(*actor_id, signal_block);
       }
     }
     trace
@@ -13421,6 +13433,90 @@ fn one_step_service_trace_matches_runtime_latches() {
   }
 }
 
+#[derive(Clone, Copy)]
+struct TransferCampaignWindow {
+  first_block: u32,
+  blocks: u32,
+  replay_wasm: bool,
+}
+
+/// One W1 author/import/service-trace loop shared by scoped successful economic profiles.
+/// Observer queries run only after execution and proof collection.
+fn visit_schedule_campaign(
+  wasm: &[u8],
+  fixture: &PreparedActorFixture,
+  demand: UserDemand,
+  schedule: WorkloadSchedule,
+  window: TransferCampaignWindow,
+  mut observe: impl FnMut(&AuthoredBlock, Option<&WasmProofMetrics>, &OneStepServiceTrace),
+) -> OneStepServiceTrace {
+  assert!(window.first_block > 0 && window.blocks > 0);
+  let mut state = fixture.storage.clone();
+  let mut parent = parent_header_for(state.clone(), wasm, window.first_block - 1);
+  let mut signer_nonce = 0;
+  let mut service =
+    OneStepServiceTrace::for_schedule_at(&fixture.actor_ids, schedule, window.first_block - 1);
+  for block in window.first_block..window.first_block.checked_add(window.blocks).unwrap() {
+    let authored = author_complete_block_after(
+      state,
+      wasm,
+      &parent,
+      block,
+      demand,
+      &fixture.signer,
+      signer_nonce,
+      &fixture.actor_profiles,
+    );
+    assert_eq!(
+      authored.metrics.actor_steps,
+      authored.metrics.distinct_actors
+    );
+    if fixture
+      .actor_profiles
+      .values()
+      .all(|profile| profile.task == Some(WorkloadTask::Transfer))
+    {
+      assert_successful_transfer_outcomes(&authored.metrics);
+    } else {
+      assert!(
+        fixture
+          .actor_profiles
+          .values()
+          .all(|profile| profile.task == Some(WorkloadTask::RouterSwapOut))
+      );
+      assert_eq!(
+        authored.metrics.non_successful_steps, 0,
+        "purchase evidence requires successful Tasks"
+      );
+      assert_eq!(
+        authored.metrics.actor_steps,
+        authored.metrics.swap_out_steps
+      );
+      assert_eq!(
+        authored.metrics.completed_cycles,
+        authored.metrics.swap_out_steps
+      );
+    }
+    service.observe(&authored.metrics, block);
+    assert_complete_block_replays_natively(&authored, wasm);
+    let proof = window.replay_wasm.then(|| {
+      replay_complete_block_in_wasm(
+        &authored,
+        wasm,
+        &format!("{}-campaign-{block}", demand.label()),
+      )
+    });
+    observe(&authored, proof.as_ref(), &service);
+    signer_nonce = signer_nonce
+      .checked_add(authored.metrics.user_calls)
+      .unwrap();
+    parent = authored.block.header.clone();
+    state = authored.post_state;
+  }
+  service.assert_terminal_state(wasm, state);
+  service
+}
+
 fn run_schedule_campaign(
   wasm: &[u8],
   workload: &str,
@@ -13458,11 +13554,7 @@ fn run_schedule_campaign(
   let fixture = prepare_actor_fixture(wasm, added_actor_count, workload_schedule);
   assert_eq!(fixture.actor_ids.len() as u32, added_actor_count);
 
-  let mut pre_state = fixture.storage;
-  let mut parent = parent_header_for(pre_state.clone(), wasm, 1);
-  let mut signer_nonce = 0;
   let mut total_cycles = 0u32;
-  let mut service = OneStepServiceTrace::for_schedule(&fixture.actor_ids, workload_schedule);
   let mut steps = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
   let mut control_ref_time = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
   let mut control_proof_size = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
@@ -13481,82 +13573,70 @@ fn run_schedule_campaign(
   let mut verification_storage_proof = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
   let mut verification_compact_proof = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
 
-  for block_number in 2..W1_TARGET_BLOCKS.saturating_add(2) {
-    let authored = author_complete_block_after(
-      pre_state,
-      wasm,
-      &parent,
-      block_number,
-      demand,
-      &fixture.signer,
-      signer_nonce,
-      &fixture.actor_profiles,
-    );
-    match demand {
-      UserDemand::ActorOnly => {
-        assert_eq!(authored.metrics.user_calls, 0);
-        assert_eq!(authored.metrics.user_dispatch, Weight::zero());
-        assert!(authored.metrics.next_user_weight.is_none());
+  let next_control_maximum = fixture.next_control_maximum;
+  let service = visit_schedule_campaign(
+    wasm,
+    &fixture,
+    demand,
+    workload_schedule,
+    TransferCampaignWindow {
+      first_block: 2,
+      blocks: W1_TARGET_BLOCKS,
+      replay_wasm: true,
+    },
+    |authored, proof, _service| {
+      match demand {
+        UserDemand::ActorOnly => {
+          assert_eq!(authored.metrics.user_calls, 0);
+          assert_eq!(authored.metrics.user_dispatch, Weight::zero());
+          assert!(authored.metrics.next_user_weight.is_none());
+        }
+        UserDemand::ContinuousValid => {
+          assert!(authored.metrics.user_calls > 0);
+          let next_user = authored
+            .metrics
+            .next_user_weight
+            .expect("continuous demand records its first inadmissible valid call");
+          let remaining = BlockResourceBudgetValue::get()
+            .limits()
+            .user_base_turn()
+            .checked_sub(&authored.metrics.user_dispatch)
+            .unwrap_or_else(Weight::zero);
+          assert!(
+            !next_user.all_lte(remaining),
+            "continuous demand must reach the User base-turn frontier"
+          );
+          user_bound_blocks = user_bound_blocks.saturating_add(1);
+        }
+        UserDemand::RefTimeHeavy | UserDemand::ContinuousShared => {
+          unreachable!("the W1/W2 schedule campaign only prepares User-base-turn remarks")
+        }
       }
-      UserDemand::ContinuousValid => {
-        assert!(authored.metrics.user_calls > 0);
-        let next_user = authored
-          .metrics
-          .next_user_weight
-          .expect("continuous demand records its first inadmissible valid call");
-        let remaining = BlockResourceBudgetValue::get()
-          .limits()
-          .user_base_turn()
-          .checked_sub(&authored.metrics.user_dispatch)
-          .unwrap_or_else(Weight::zero);
-        assert!(
-          !next_user.all_lte(remaining),
-          "continuous demand must reach the User base-turn frontier"
-        );
-        user_bound_blocks = user_bound_blocks.saturating_add(1);
+      total_cycles = total_cycles.saturating_add(authored.metrics.completed_cycles);
+      steps.push(u64::from(authored.metrics.actor_steps));
+      control_ref_time.push(authored.metrics.actor_control.ref_time());
+      control_proof_size.push(authored.metrics.actor_control.proof_size());
+      effect_ref_time.push(authored.metrics.actor_effect.ref_time());
+      effect_proof_size.push(authored.metrics.actor_effect.proof_size());
+      user_calls.push(u64::from(authored.metrics.user_calls));
+      user_ref_time.push(authored.metrics.user_dispatch.ref_time());
+      user_proof_size.push(authored.metrics.user_dispatch.proof_size());
+      let control_remaining = actor_control_limit
+        .checked_sub(&authored.metrics.actor_control)
+        .unwrap_or_else(Weight::zero);
+      control_remaining_ref_time.push(control_remaining.ref_time());
+      control_remaining_proof_size.push(control_remaining.proof_size());
+      if !next_control_maximum.all_lte(control_remaining) {
+        control_bound_blocks = control_bound_blocks.saturating_add(1);
       }
-      UserDemand::RefTimeHeavy | UserDemand::ContinuousShared => {
-        unreachable!("the W1/W2 schedule campaign only prepares User-base-turn remarks")
-      }
-    }
-    assert_eq!(
-      authored.metrics.actor_steps,
-      authored.metrics.distinct_actors
-    );
-    assert_successful_transfer_outcomes(&authored.metrics);
-    service.observe(&authored.metrics, block_number);
-    total_cycles = total_cycles.saturating_add(authored.metrics.completed_cycles);
-    steps.push(u64::from(authored.metrics.actor_steps));
-    control_ref_time.push(authored.metrics.actor_control.ref_time());
-    control_proof_size.push(authored.metrics.actor_control.proof_size());
-    effect_ref_time.push(authored.metrics.actor_effect.ref_time());
-    effect_proof_size.push(authored.metrics.actor_effect.proof_size());
-    signer_nonce = signer_nonce.saturating_add(authored.metrics.user_calls);
-    user_calls.push(u64::from(authored.metrics.user_calls));
-    user_ref_time.push(authored.metrics.user_dispatch.ref_time());
-    user_proof_size.push(authored.metrics.user_dispatch.proof_size());
-    let control_remaining = actor_control_limit
-      .checked_sub(&authored.metrics.actor_control)
-      .unwrap_or_else(Weight::zero);
-    control_remaining_ref_time.push(control_remaining.ref_time());
-    control_remaining_proof_size.push(control_remaining.proof_size());
-    if !fixture.next_control_maximum.all_lte(control_remaining) {
-      control_bound_blocks = control_bound_blocks.saturating_add(1);
-    }
-    let proof = replay_complete_block_in_wasm(
-      &authored,
-      wasm,
-      &format!("{}-campaign-{block_number}", demand.label()),
-    );
-    execution_storage_proof.push(proof.execution_storage_proof_bytes);
-    execution_compact_proof.push(proof.execution_compact_proof_bytes);
-    verification_storage_proof.push(proof.verification_storage_proof_bytes);
-    verification_compact_proof.push(proof.verification_compact_proof_bytes);
-    parent = authored.block.header.clone();
-    pre_state = authored.post_state;
-  }
+      let proof = proof.expect("legacy campaign retains exact-Wasm proof replay");
+      execution_storage_proof.push(proof.execution_storage_proof_bytes);
+      execution_compact_proof.push(proof.execution_compact_proof_bytes);
+      verification_storage_proof.push(proof.verification_storage_proof_bytes);
+      verification_compact_proof.push(proof.verification_compact_proof_bytes);
+    },
+  );
 
-  service.assert_terminal_state(wasm, pre_state);
   let service_summary = service.summary(1, W1_TARGET_BLOCKS + 1);
   let distinct_progressed = service_summary["distinctProgressedActors"]
     .as_u64()
@@ -17013,6 +17093,290 @@ fn full_executive_prepass_prefix_excludes_its_provisional_reservation() {
       assert!(Actors::finalized_block_resource_telemetry().is_some());
     });
   }
+}
+
+#[test]
+fn full_executive_freeze_join_requires_authorship_finalize_owner() {
+  use polkadot_sdk::frame_support::traits::{Hooks, PalletInfoAccess};
+
+  let fixture = prepare_actor_fixture(&[], 0, WorkloadSchedule::ManualOnly);
+  let parent = parent_header_for(fixture.storage.clone(), &[], 1);
+  let pre_state = fixture.storage.clone();
+  let mut ext = TestExternalities::new(fixture.storage);
+  let block = ext.execute_with(|| {
+    let header = Header::new(
+      2,
+      Default::default(),
+      Default::default(),
+      parent.hash(),
+      Digest {
+        logs: vec![DigestItem::PreRuntime(
+          polkadot_sdk::sp_consensus_aura::AURA_ENGINE_ID,
+          2u64.encode(),
+        )],
+      },
+    );
+    Executive::initialize_block(&header);
+    let author_key = polkadot_sdk::frame_support::storage::storage_prefix(
+      <crate::Authorship as PalletInfoAccess>::name().as_bytes(),
+      b"Author",
+    );
+    let cached_author = polkadot_sdk::sp_io::storage::get(&author_key)
+      .expect("real initialization caches the consensus author");
+    let mut prefix_at_freeze = None;
+    let extrinsics = inherent_data_for(&parent, 2).create_extrinsics();
+    for extrinsic in extrinsics.iter().cloned() {
+      let prepass = matches!(
+        extrinsic.function,
+        RuntimeCall::Actors(pallet_deos_actors::Call::actor_prepass {})
+      );
+      if prepass {
+        assert!(prefix_at_freeze.is_none(), "one canonical Prepass");
+        let prefix = System::block_weight().total();
+        let info = extrinsic.get_dispatch_info();
+        assert_eq!(info.extension_weight, Weight::zero());
+        assert_eq!(info.call_weight, BlockResourceBudgetValue::get().maximum_block());
+        let overhead = crate::configs::RuntimeBlockWeights::get()
+          .get(info.class)
+          .base_extrinsic
+          .checked_add(&Weight::from_parts(0, extrinsic.encode().len() as u64))
+          .expect("bare inherent overhead fits");
+        prefix_at_freeze = Some(
+          prefix
+            .checked_add(&overhead)
+            .expect("settled prefix plus retained overhead fits"),
+        );
+      }
+      assert_ok!(Executive::apply_extrinsic(extrinsic));
+      if prepass {
+        let state = Actors::block_resource_state().expect("Prepass freezes resource authority");
+        assert_eq!(state.budget().unwrap(), BlockResourceBudgetValue::get());
+        let actual_actor = state
+          .usage()
+          .actor_control_used()
+          .checked_add(&state.usage().actor_effect_used())
+          .expect("Actor settlement fits");
+        assert_eq!(
+          System::block_weight().total(),
+          prefix_at_freeze.unwrap().checked_add(&actual_actor).unwrap(),
+          "ordinary Executive reclaims the provisional maximum, retaining prefix/overhead",
+        );
+      }
+    }
+    assert!(prefix_at_freeze.is_some());
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::get(&author_key),
+      Some(cached_author.clone()),
+      "the author cache is still live after initialization, context and Actor Prepass",
+    );
+    let before = System::block_weight();
+    let root_before = polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version());
+    // Probe the actual late hook, then roll it back before ordinary block finalization.
+    polkadot_sdk::sp_io::storage::start_transaction();
+    crate::Authorship::on_finalize(2);
+    assert!(polkadot_sdk::sp_io::storage::get(&author_key).is_none());
+    assert_eq!(System::block_weight(), before);
+    let hook_root = polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version());
+    assert_ne!(hook_root, root_before);
+    polkadot_sdk::sp_io::storage::rollback_transaction();
+    assert_eq!(polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version()), root_before);
+    assert_eq!(polkadot_sdk::sp_io::storage::get(&author_key), Some(cached_author));
+
+    // An independent one-key deletion must explain the complete hook's storage delta.
+    polkadot_sdk::sp_io::storage::start_transaction();
+    polkadot_sdk::sp_io::storage::clear(&author_key);
+    assert_eq!(polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version()), hook_root);
+    polkadot_sdk::sp_io::storage::rollback_transaction();
+    assert_eq!(polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version()), root_before);
+    assert_eq!(System::block_weight(), before);
+    let pair = |weight: Weight| [weight.ref_time(), weight.proof_size()];
+    println!(
+      "FIXED_PREFIX_JOIN_EXCLUSION_V1 {}",
+      serde_json::json!({
+        "settledPrefixIncludingPrepassOverhead": pair(prefix_at_freeze.unwrap()),
+        "callbackQuoteAlreadyRegisteredDuringInitialization": pair(crate::configs::AuthorshipFixedWeight::get()),
+        "lateHookNewFrameRegistration": [0, 0],
+        "lateAuthorCacheDeletion": true,
+        "hookDeltaEqualsSingleKeyDeletion": true,
+        "scope": "prepared native full Executive block and reversible hook probe; source coverage exclusion, not numeric underpricing or a dynamic budget",
+      })
+    );
+    let header = Executive::finalize_block();
+    assert!(polkadot_sdk::sp_io::storage::get(&author_key).is_none());
+    assert!(Actors::finalized_block_resource_telemetry().is_some());
+    Block { header, extrinsics }
+  });
+  let authored_top = ext.execute_with(current_top_storage);
+  let mut imported = TestExternalities::new(pre_state);
+  imported.execute_with(|| Executive::execute_block(block.into()));
+  assert_eq!(
+    imported.execute_with(current_top_storage).top,
+    authored_top.top
+  );
+  println!("FIXED_PREFIX_JOIN_IMPORT_V1 block=2 rootAndTopStateEqual=true");
+}
+
+#[test]
+fn full_executive_authorship_accepts_foreign_pre_runtime_digest() {
+  use polkadot_sdk::{
+    cumulus_pallet_aura_ext::BlockExecutor,
+    frame_support::traits::{ExecuteBlock, PalletInfoAccess},
+    sp_consensus_aura::{digests::CompatibleDigestItem, sr25519::AuthorityPair},
+  };
+
+  let pre_state = reference_genesis_storage(&[]);
+  let parent = parent_header_for(pre_state.clone(), &[], 0);
+  let signer = AuthorityPair::from_string("//Alice", None).unwrap();
+  let header_limit =
+    polkadot_sdk::cumulus_primitives_core::relay_chain::MAX_HEAD_DATA_SIZE as usize;
+  let empty_header_bytes = Header::new(
+    1,
+    Default::default(),
+    Default::default(),
+    parent.hash(),
+    Digest::default(),
+  )
+  .encoded_size();
+  let runtime_header_limit = crate::configs::RuntimeBlockLength::get().max_header_size() as usize;
+  let mut rows = Vec::new();
+  let mut encoded_extrinsics = None;
+  for foreign in [false, true] {
+    let mut logs = Vec::new();
+    if foreign {
+      // A genuine header input, not an extrinsic or new runtime ingress interface.
+      logs.push(DigestItem::PreRuntime(*b"test", vec![7; 4_096]));
+    }
+    logs.push(DigestItem::PreRuntime(
+      polkadot_sdk::sp_consensus_aura::AURA_ENGINE_ID,
+      1u64.encode(),
+    ));
+    let digest = Digest { logs };
+    let digest_bytes = digest.encoded_size();
+    assert!(empty_header_bytes + digest_bytes <= runtime_header_limit);
+    let data = inherent_data_for(&parent, 1);
+    let mut authoring = TestExternalities::new(pre_state.clone());
+    let (block, digest_reads, initialization_weight, extrinsic_bytes, block_size) = authoring
+      .execute_with(|| {
+        let authorities = polkadot_sdk::pallet_aura::Authorities::<Runtime>::get();
+        assert_eq!(authorities.len(), 2);
+        assert_eq!(authorities[1], signer.public());
+        let validators = polkadot_sdk::pallet_session::Validators::<Runtime>::get();
+        assert_eq!(validators.len(), 2);
+        let header = Header::new(
+          1,
+          Default::default(),
+          Default::default(),
+          parent.hash(),
+          digest.clone(),
+        );
+        let trace = super::h1_storage_trace::recorded(|| {
+          let sample = super::h1_storage_trace::Sample::new();
+          sample.phase("initialize", || {
+            Executive::initialize_block(&header);
+          });
+          sample.finish().unwrap()
+        });
+        assert_eq!(System::digest(), digest);
+        let author_key = polkadot_sdk::frame_support::storage::storage_prefix(
+          <crate::Authorship as PalletInfoAccess>::name().as_bytes(),
+          b"Author",
+        );
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::get(&author_key).map(|value| value.to_vec()),
+          Some(validators[1].encode())
+        );
+        assert_eq!(trace["owners"]["Authorship.Author"]["calls"]["Put"], 1);
+        let digest_reads = trace["owners"]["System.Digest"].clone();
+        assert!(digest_reads["calls"]["Get"].as_u64().unwrap() > 0);
+        assert!(digest_reads["get_value_bytes"].as_u64().unwrap() >= digest_bytes as u64);
+        let initialization_weight = System::block_weight().total();
+        let extrinsics = data.create_extrinsics();
+        if let Some(expected) = &encoded_extrinsics {
+          assert_eq!(
+            &extrinsics.encode(),
+            expected,
+            "only the header input changes"
+          );
+        } else {
+          encoded_extrinsics = Some(extrinsics.encode());
+        }
+        for extrinsic in extrinsics.iter().cloned() {
+          assert_ok!(Executive::apply_extrinsic(extrinsic));
+        }
+        let extrinsic_bytes = extrinsics.iter().map(Encode::encoded_size).sum::<usize>();
+        let block_size = System::block_size() as usize;
+        // FRAME initializes header/digest overhead, then deposit_log adds the runtime log.
+        assert_eq!(
+          block_size,
+          extrinsic_bytes + empty_header_bytes + System::digest().encoded_size()
+        );
+        let header = Executive::finalize_block();
+        assert!(polkadot_sdk::sp_io::storage::get(&author_key).is_none());
+        (
+          Block { header, extrinsics },
+          digest_reads,
+          initialization_weight,
+          extrinsic_bytes,
+          block_size,
+        )
+      });
+    let authored_top = authoring.execute_with(current_top_storage);
+    let mut sealed = block.clone();
+    sealed.header.digest_mut().push(DigestItem::aura_seal(
+      signer.sign(block.header.hash().as_bytes()),
+    ));
+    assert!(sealed.header.encoded_size() <= header_limit);
+    assert_eq!(
+      sealed
+        .header
+        .digest()
+        .logs
+        .iter()
+        .filter(|item| item.as_pre_runtime().is_some())
+        .cloned()
+        .collect::<Vec<_>>(),
+      digest.logs
+    );
+    let mut imported = TestExternalities::new(pre_state.clone());
+    imported.execute_with(|| {
+      crate::apis::validate_context_inherent_geometry(&data).unwrap();
+      assert!(data.check_extrinsics(&sealed.clone().into()).ok());
+      <BlockExecutor<Runtime, Executive> as ExecuteBlock<Block>>::execute_block(
+        sealed.clone().into(),
+      );
+    });
+    assert_eq!(
+      imported.execute_with(current_top_storage).top,
+      authored_top.top
+    );
+    rows.push(serde_json::json!({
+      "foreignPreRuntimeDigestsBeforeAura": usize::from(foreign),
+      "preRuntimeDigestBytes": digest_bytes,
+      "sealedHeaderBytes": sealed.header.encoded_size(),
+      "sdkHeaderCeilingBytes": header_limit,
+      "runtimeHeaderCeilingBytes": runtime_header_limit,
+      "initializationHeaderOverheadBytes": empty_header_bytes + digest_bytes,
+      "blockSizeBeforeFinalizeBytes": block_size,
+      "extrinsicBytes": extrinsic_bytes,
+      "initializationDeclaredWeight": [initialization_weight.ref_time(), initialization_weight.proof_size()],
+      "initializeSystemDigest": digest_reads,
+      "nativeAuraImportTopStateMatches": true,
+    }));
+  }
+  assert_eq!(rows[0]["preRuntimeDigestBytes"], 15);
+  assert_eq!(rows[1]["preRuntimeDigestBytes"], 4_118);
+  assert_eq!(
+    rows[0]["initializationDeclaredWeight"],
+    rows[1]["initializationDeclaredWeight"]
+  );
+  assert_eq!(rows[0]["extrinsicBytes"], rows[1]["extrinsicBytes"]);
+  println!(
+    "AUTHORSHIP_DIGEST_DOMAIN_V1 {}",
+    serde_json::json!({
+      "rows": rows,
+      "scope": "native Executive/Aura imports and source header-ceiling conformance; not PVF acceptance or physical cost",
+    })
+  );
 }
 
 #[test]

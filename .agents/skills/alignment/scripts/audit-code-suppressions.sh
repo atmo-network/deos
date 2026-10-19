@@ -48,7 +48,7 @@ run_audit() {
     local matches
     matches="$({
         rg -n "$pattern" "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/web-client/scripts" "$PROJECT_ROOT/scripts" || true
-        rg -n "$pattern" "$PROJECT_ROOT/simulator" --glob '*.js' || true
+        rg -n "$pattern" "$PROJECT_ROOT/simulators" --glob '*.js' || true
     } || true)"
     if [[ -n "$matches" ]]; then
         log_error "Broad code suppression detected"

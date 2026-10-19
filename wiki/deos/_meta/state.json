@@ -1,0 +1,1282 @@
+{
+  "generated_at": "2026-08-21",
+  "mode": "incremental-sync",
+  "source_root": "../../docs",
+  "default_locale": "en",
+  "available_locales": [
+    "en",
+    "ru"
+  ],
+  "pages": {
+    "index": {
+      "path": {
+        "en": "index.en.md",
+        "ru": "index.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "DEOS Wiki",
+        "ru": "Вики DEOS"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/README.md",
+          "../../README.md"
+        ],
+        "ru": [
+          "../../docs/deos/README.md",
+          "../../README.md"
+        ]
+      }
+    },
+    "deos-framework": {
+      "path": {
+        "en": "overview/deos-framework.en.md",
+        "ru": "overview/deos-framework.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "DEOS Framework Overview",
+        "ru": "Обзор фреймворка DEOS"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../docs/deos/core.architecture.en.md"
+        ],
+        "ru": [
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../docs/deos/core.architecture.en.md"
+        ]
+      }
+    },
+    "actor-system": {
+      "path": {
+        "en": "overview/actor-system.en.md",
+        "ru": "overview/actor-system.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Actors System",
+        "ru": "Система Actors"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md",
+          "../../docs/deos/actors.integration.en.md",
+          "../../docs/deos/oracle.integration.en.md",
+          "../../docs/deos/actors-control-plane.contract.en.md",
+          "../../template/pallets/actors/docs/embedding.md",
+          "../../docs/deos/core.architecture.en.md"
+        ],
+        "ru": [
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md",
+          "../../docs/deos/actors.integration.en.md",
+          "../../docs/deos/oracle.integration.en.md",
+          "../../docs/deos/actors-control-plane.contract.en.md",
+          "../../template/pallets/actors/docs/embedding.md",
+          "../../docs/deos/core.architecture.en.md"
+        ]
+      }
+    },
+    "actor": {
+      "path": {
+        "en": "overview/actor.en.md",
+        "ru": "overview/actor.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "AA-Actor",
+        "ru": "AA-Актор"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md",
+          "../../docs/deos/actors.integration.en.md",
+          "../../docs/deos/core.architecture.en.md"
+        ],
+        "ru": [
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md",
+          "../../docs/deos/actors.integration.en.md",
+          "../../docs/deos/core.architecture.en.md"
+        ]
+      }
+    },
+    "router": {
+      "path": {
+        "en": "overview/router.en.md",
+        "ru": "overview/router.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "DEOS Router",
+        "ru": "DEOS Router"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../template/pallets/router/docs/architecture.en.md",
+          "../../docs/deos/oracle.integration.en.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/router/docs/specification.en.md"
+        ],
+        "ru": [
+          "../../template/pallets/router/docs/architecture.en.md",
+          "../../docs/deos/oracle.integration.en.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/router/docs/specification.en.md"
+        ]
+      }
+    },
+    "typed-observations": {
+      "path": {
+        "en": "overview/typed-observations.en.md",
+        "ru": "overview/typed-observations.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Typed Observations",
+        "ru": "Типизированные наблюдения"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../template/pallets/oracle/docs/specification.en.md",
+          "../../template/pallets/oracle/docs/architecture.en.md",
+          "../../docs/deos/oracle.integration.en.md"
+        ],
+        "ru": [
+          "../../template/pallets/oracle/docs/specification.en.md",
+          "../../template/pallets/oracle/docs/architecture.en.md",
+          "../../docs/deos/oracle.integration.en.md"
+        ]
+      }
+    },
+    "token-minting-curve": {
+      "path": {
+        "en": "overview/token-minting-curve.en.md",
+        "ru": "overview/token-minting-curve.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Token Minting Curve",
+        "ru": "Token Minting Curve"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../template/pallets/tmc/docs/architecture.en.md",
+          "../../docs/deos/tmctol.specification.en.md"
+        ],
+        "ru": [
+          "../../template/pallets/tmc/docs/architecture.en.md",
+          "../../docs/deos/tmctol.specification.en.md"
+        ]
+      }
+    },
+    "governance": {
+      "path": {
+        "en": "overview/governance.en.md",
+        "ru": "overview/governance.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Governance",
+        "ru": "Управление"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../template/pallets/governance/docs/architecture.en.md",
+          "../../docs/deos/manifesto.en.md"
+        ],
+        "ru": [
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../template/pallets/governance/docs/architecture.en.md",
+          "../../docs/deos/manifesto.en.md"
+        ]
+      }
+    },
+    "asset-identity": {
+      "path": {
+        "en": "overview/asset-identity.en.md",
+        "ru": "overview/asset-identity.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Asset Identity",
+        "ru": "Идентичность активов"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../template/pallets/asset-registry/docs/architecture.en.md",
+          "../../docs/deos/core.architecture.en.md"
+        ],
+        "ru": [
+          "../../template/pallets/asset-registry/docs/architecture.en.md",
+          "../../docs/deos/core.architecture.en.md"
+        ]
+      }
+    },
+    "randomness-strategy": {
+      "path": {
+        "en": "overview/randomness-strategy.en.md",
+        "ru": "overview/randomness-strategy.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Randomness Strategy",
+        "ru": "Стратегия использования случайности"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/core.architecture.en.md",
+          "../../docs/deos/manifesto.en.md"
+        ],
+        "ru": [
+          "../../docs/deos/core.architecture.en.md",
+          "../../docs/deos/manifesto.en.md"
+        ]
+      }
+    },
+    "runtime-patterns": {
+      "path": {
+        "en": "overview/runtime-patterns.en.md",
+        "ru": "overview/runtime-patterns.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Runtime Patterns",
+        "ru": "Принципы среды исполнения"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/core.architecture.en.md"
+        ],
+        "ru": [
+          "../../docs/deos/core.architecture.en.md"
+        ]
+      }
+    },
+    "reference-client": {
+      "path": {
+        "en": "overview/reference-client.en.md",
+        "ru": "overview/reference-client.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Reference Client",
+        "ru": "Эталонный клиент"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../web-client/docs/architecture.en.md",
+          "../../web-client/README.md",
+          "../../web-client/src/lib/ui/README.md",
+          "../../docs/deos/read-model.contract.en.md"
+        ],
+        "ru": [
+          "../../web-client/docs/architecture.en.md",
+          "../../web-client/README.md",
+          "../../web-client/src/lib/ui/README.md",
+          "../../docs/deos/read-model.contract.en.md"
+        ]
+      }
+    },
+    "start-here": {
+      "path": {
+        "en": "getting-started/start-here.en.md",
+        "ru": "getting-started/start-here.ru.md"
+      },
+      "page_type": "getting-started",
+      "title": {
+        "en": "Start Here",
+        "ru": "С чего начать"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../template/README.md",
+          "../../web-client/README.md",
+          "../../scripts/README.md",
+          "../../simulators/tmctol/README.md"
+        ],
+        "ru": [
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../template/README.md",
+          "../../web-client/README.md",
+          "../../scripts/README.md",
+          "../../simulators/tmctol/README.md"
+        ]
+      }
+    },
+    "first-steps": {
+      "path": {
+        "en": "getting-started/first-steps.en.md",
+        "ru": "getting-started/first-steps.ru.md"
+      },
+      "page_type": "getting-started",
+      "title": {
+        "en": "First Steps",
+        "ru": "Первые шаги"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../docs/deos/read-model.contract.en.md"
+        ],
+        "ru": [
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../docs/deos/read-model.contract.en.md"
+        ]
+      }
+    },
+    "reading-paths": {
+      "path": {
+        "en": "getting-started/reading-paths.en.md",
+        "ru": "getting-started/reading-paths.ru.md"
+      },
+      "page_type": "getting-started",
+      "title": {
+        "en": "Reading Paths",
+        "ru": "Маршруты чтения"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/README.md",
+          "../../README.md",
+          "../../CHANGELOG.md",
+          "../../web-client/README.md",
+          "../../template/README.md",
+          "../../scripts/README.md"
+        ],
+        "ru": [
+          "../../docs/deos/README.md",
+          "../../README.md",
+          "../../CHANGELOG.md",
+          "../../web-client/README.md",
+          "../../template/README.md",
+          "../../scripts/README.md"
+        ]
+      }
+    },
+    "tmctol-standard": {
+      "path": {
+        "en": "concepts/tmctol-standard.en.md",
+        "ru": "concepts/tmctol-standard.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "TMCTOL Standard",
+        "ru": "Стандарт TMCTOL"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../README.md"
+        ],
+        "ru": [
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../README.md"
+        ]
+      }
+    },
+    "token-driven-automation": {
+      "path": {
+        "en": "concepts/token-driven-automation.en.md",
+        "ru": "concepts/token-driven-automation.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Token-Driven Automation",
+        "ru": "Токен-управляемая автоматизация"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../docs/deos/actors.integration.en.md",
+          "../../docs/deos/oracle.integration.en.md",
+          "../../README.md"
+        ],
+        "ru": [
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../docs/deos/actors.integration.en.md",
+          "../../docs/deos/oracle.integration.en.md",
+          "../../README.md"
+        ]
+      }
+    },
+    "routing-and-minting-loop": {
+      "path": {
+        "en": "concepts/routing-and-minting-loop.en.md",
+        "ru": "concepts/routing-and-minting-loop.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Routing and Minting Loop",
+        "ru": "Контур маршрутизации и эмиссии"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../template/pallets/router/docs/architecture.en.md",
+          "../../template/pallets/tmc/docs/architecture.en.md",
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../template/pallets/router/docs/specification.en.md"
+        ],
+        "ru": [
+          "../../template/pallets/router/docs/architecture.en.md",
+          "../../template/pallets/tmc/docs/architecture.en.md",
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../template/pallets/router/docs/specification.en.md"
+        ]
+      }
+    },
+    "staking": {
+      "path": {
+        "en": "overview/staking.en.md",
+        "ru": "overview/staking.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Staking",
+        "ru": "Стейкинг"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../template/pallets/staking/docs/specification.en.md",
+          "../../template/pallets/staking/docs/architecture.en.md",
+          "../../template/pallets/governance/docs/specification.en.md"
+        ],
+        "ru": [
+          "../../template/pallets/staking/docs/specification.en.md",
+          "../../template/pallets/staking/docs/architecture.en.md",
+          "../../template/pallets/governance/docs/specification.en.md"
+        ]
+      }
+    },
+    "read-model-split": {
+      "path": {
+        "en": "concepts/read-model-split.en.md",
+        "ru": "concepts/read-model-split.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Read-Model Split",
+        "ru": "Разделение данных для чтения"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/read-model.contract.en.md",
+          "../../docs/deos/core.architecture.en.md"
+        ],
+        "ru": [
+          "../../docs/deos/read-model.contract.en.md",
+          "../../docs/deos/core.architecture.en.md"
+        ]
+      }
+    },
+    "governance-domains": {
+      "path": {
+        "en": "concepts/governance-domains.en.md",
+        "ru": "concepts/governance-domains.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Governance Domains",
+        "ru": "Домены управления"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../template/pallets/governance/docs/architecture.en.md",
+          "../../template/pallets/staking/docs/specification.en.md"
+        ],
+        "ru": [
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../template/pallets/governance/docs/architecture.en.md",
+          "../../template/pallets/staking/docs/specification.en.md"
+        ]
+      }
+    },
+    "generated-wiki": {
+      "path": {
+        "en": "concepts/generated-wiki.en.md",
+        "ru": "concepts/generated-wiki.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Generated Wiki",
+        "ru": "Собранная вики"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/README.md",
+          "../../web-client/docs/architecture.en.md",
+          "../../web-client/README.md",
+          "_meta/navigation.json",
+          "_meta/state.json",
+          "_meta/graph.json",
+          "_meta/aliases.json",
+          "_meta/locales.json"
+        ],
+        "ru": [
+          "../../docs/deos/README.md",
+          "../../web-client/docs/architecture.en.md",
+          "../../web-client/README.md",
+          "_meta/navigation.json",
+          "_meta/state.json",
+          "_meta/graph.json",
+          "_meta/aliases.json",
+          "_meta/locales.json"
+        ]
+      }
+    },
+    "domain-map": {
+      "path": {
+        "en": "concepts/domain-map.en.md",
+        "ru": "concepts/domain-map.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Domain Map",
+        "ru": "Карта доменов"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../AGENTS.md",
+          "../../docs/deos/README.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../web-client/docs/architecture.en.md"
+        ],
+        "ru": [
+          "../../AGENTS.md",
+          "../../docs/deos/README.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../web-client/docs/architecture.en.md"
+        ]
+      }
+    },
+    "physics-vs-politics": {
+      "path": {
+        "en": "comparisons/physics-vs-politics.en.md",
+        "ru": "comparisons/physics-vs-politics.ru.md"
+      },
+      "page_type": "comparison",
+      "title": {
+        "en": "Physics-First vs Politics-First",
+        "ru": "Экономическая физика прежде политики"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/manifesto.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../docs/deos/tmctol.specification.en.md"
+        ],
+        "ru": [
+          "../../docs/deos/manifesto.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../docs/deos/tmctol.specification.en.md"
+        ]
+      }
+    },
+    "newcomer-faq": {
+      "path": {
+        "en": "faq/newcomer-faq.en.md",
+        "ru": "faq/newcomer-faq.ru.md"
+      },
+      "page_type": "faq",
+      "title": {
+        "en": "Newcomer FAQ",
+        "ru": "Вопросы новичков"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../docs/deos/manifesto.en.md",
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../template/pallets/staking/docs/specification.en.md",
+          "../../docs/deos/read-model.contract.en.md",
+          "../../web-client/docs/architecture.en.md",
+          "../../web-client/README.md"
+        ],
+        "ru": [
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../docs/deos/manifesto.en.md",
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../template/pallets/staking/docs/specification.en.md",
+          "../../docs/deos/read-model.contract.en.md",
+          "../../web-client/docs/architecture.en.md",
+          "../../web-client/README.md"
+        ]
+      }
+    },
+    "status": {
+      "path": {
+        "en": "development/status.en.md",
+        "ru": "development/status.ru.md"
+      },
+      "page_type": "status",
+      "title": {
+        "en": "Development Status",
+        "ru": "Статус разработки"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../BACKLOG.md",
+          "../../CHANGELOG.md",
+          "../../web-client/README.md",
+          "../../web-client/docs/architecture.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md"
+        ],
+        "ru": [
+          "../../BACKLOG.md",
+          "../../CHANGELOG.md",
+          "../../web-client/README.md",
+          "../../web-client/docs/architecture.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md"
+        ]
+      }
+    },
+    "core-terms": {
+      "path": {
+        "en": "glossary/core-terms.en.md",
+        "ru": "glossary/core-terms.ru.md"
+      },
+      "page_type": "glossary",
+      "title": {
+        "en": "Core Terms",
+        "ru": "Базовые термины"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../BACKLOG.md",
+          "../../CHANGELOG.md",
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../template/pallets/staking/docs/specification.en.md",
+          "../../template/pallets/router/docs/specification.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../template/pallets/governance/docs/architecture.en.md",
+          "../../docs/deos/read-model.contract.en.md",
+          "../../web-client/docs/architecture.en.md",
+          "../../web-client/README.md"
+        ],
+        "ru": [
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../BACKLOG.md",
+          "../../CHANGELOG.md",
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../template/pallets/staking/docs/specification.en.md",
+          "../../template/pallets/router/docs/specification.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../template/pallets/governance/docs/architecture.en.md",
+          "../../docs/deos/read-model.contract.en.md",
+          "../../web-client/docs/architecture.en.md",
+          "../../web-client/README.md"
+        ]
+      }
+    },
+    "end-to-end-flows": {
+      "path": {
+        "en": "concepts/end-to-end-flows.en.md",
+        "ru": "concepts/end-to-end-flows.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "End-to-End Flows",
+        "ru": "Сквозные сценарии"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../template/pallets/router/docs/architecture.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md",
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../template/pallets/staking/docs/architecture.en.md"
+        ],
+        "ru": [
+          "../../template/pallets/router/docs/architecture.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md",
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../template/pallets/staking/docs/architecture.en.md"
+        ]
+      }
+    },
+    "architecture-diagrams": {
+      "path": {
+        "en": "concepts/architecture-diagrams.en.md",
+        "ru": "concepts/architecture-diagrams.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Architecture Diagrams",
+        "ru": "Архитектурные схемы"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md",
+          "../../template/pallets/router/docs/architecture.en.md",
+          "../../template/pallets/governance/docs/architecture.en.md",
+          "../../template/pallets/staking/docs/architecture.en.md"
+        ],
+        "ru": [
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md",
+          "../../template/pallets/router/docs/architecture.en.md",
+          "../../template/pallets/governance/docs/architecture.en.md",
+          "../../template/pallets/staking/docs/architecture.en.md"
+        ]
+      }
+    },
+    "token-surfaces": {
+      "path": {
+        "en": "concepts/token-surfaces.en.md",
+        "ru": "concepts/token-surfaces.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Token Surfaces",
+        "ru": "Роли токенов"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../template/pallets/staking/docs/specification.en.md",
+          "../../template/primitives/src/ecosystem.rs"
+        ],
+        "ru": [
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../template/pallets/staking/docs/specification.en.md",
+          "../../template/primitives/src/ecosystem.rs"
+        ]
+      }
+    },
+    "builder-economy": {
+      "path": {
+        "en": "concepts/builder-economy.en.md",
+        "ru": "concepts/builder-economy.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "$BLDR Builder Economy",
+        "ru": "Экономика созидателей $BLDR"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/README.md",
+          "../../docs/deos/manifesto.en.md",
+          "../../docs/deos/framework-instance.contract.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../template/pallets/governance/docs/architecture.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/tmc/docs/architecture.en.md"
+        ],
+        "ru": [
+          "../../docs/deos/README.md",
+          "../../docs/deos/manifesto.en.md",
+          "../../docs/deos/framework-instance.contract.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../template/pallets/governance/docs/architecture.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/tmc/docs/architecture.en.md"
+        ]
+      }
+    },
+    "economic-thresholds": {
+      "path": {
+        "en": "concepts/economic-thresholds.en.md",
+        "ru": "concepts/economic-thresholds.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Economic Thresholds",
+        "ru": "Экономические пороги"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../simulators/tmctol/README.md",
+          "../../AGENTS.md"
+        ],
+        "ru": [
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../simulators/tmctol/README.md",
+          "../../AGENTS.md"
+        ]
+      }
+    },
+    "forking-deos": {
+      "path": {
+        "en": "usage/forking-deos.en.md",
+        "ru": "usage/forking-deos.ru.md"
+      },
+      "page_type": "usage",
+      "title": {
+        "en": "Forking DEOS",
+        "ru": "Создание форка DEOS"
+      },
+      "status": "active",
+      "audience": "developer",
+      "sources": {
+        "en": [
+          "../../AGENTS.md",
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../template/pallets/actors/docs/embedding.md",
+          "../../template/README.md",
+          "../../web-client/README.md"
+        ],
+        "ru": [
+          "../../AGENTS.md",
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../template/pallets/actors/docs/embedding.md",
+          "../../template/README.md",
+          "../../web-client/README.md"
+        ]
+      }
+    },
+    "parachain-context": {
+      "path": {
+        "en": "concepts/parachain-context.en.md",
+        "ru": "concepts/parachain-context.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Parachain Context",
+        "ru": "DEOS в экосистеме парачейнов"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../AGENTS.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/asset-registry/docs/architecture.en.md",
+          "../../template/README.md"
+        ],
+        "ru": [
+          "../../AGENTS.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/asset-registry/docs/architecture.en.md",
+          "../../template/README.md"
+        ]
+      }
+    },
+    "tol-bucket-scenarios": {
+      "path": {
+        "en": "concepts/tol-bucket-scenarios.en.md",
+        "ru": "concepts/tol-bucket-scenarios.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "TOL Bucket Scenarios",
+        "ru": "Сценарии корзин TOL"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md",
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../AGENTS.md"
+        ],
+        "ru": [
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../template/pallets/actors/docs/architecture.en.md",
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../AGENTS.md"
+        ]
+      }
+    },
+    "invariant-map": {
+      "path": {
+        "en": "concepts/invariant-map.en.md",
+        "ru": "concepts/invariant-map.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Invariant and Threat Map",
+        "ru": "Карта инвариантов и угроз"
+      },
+      "status": "active",
+      "audience": "developer",
+      "sources": {
+        "en": [
+          "../../AGENTS.md",
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/router/docs/architecture.en.md",
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../web-client/docs/architecture.en.md"
+        ],
+        "ru": [
+          "../../AGENTS.md",
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../template/pallets/router/docs/architecture.en.md",
+          "../../template/pallets/actors/docs/specification.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../web-client/docs/architecture.en.md"
+        ]
+      }
+    },
+    "economic-claim-levels": {
+      "path": {
+        "en": "concepts/economic-claim-levels.en.md",
+        "ru": "concepts/economic-claim-levels.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Economic Claim Levels",
+        "ru": "Уровни экономических утверждений"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../AGENTS.md",
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../simulators/tmctol/README.md"
+        ],
+        "ru": [
+          "../../AGENTS.md",
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../simulators/tmctol/README.md"
+        ]
+      }
+    },
+    "repository-structure": {
+      "path": {
+        "en": "implementation/repository-structure.en.md",
+        "ru": "implementation/repository-structure.ru.md"
+      },
+      "page_type": "implementation",
+      "title": {
+        "en": "Repository Structure",
+        "ru": "Структура репозитория"
+      },
+      "status": "active",
+      "audience": "developer",
+      "sources": {
+        "en": [
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../template/README.md",
+          "../../web-client/README.md"
+        ],
+        "ru": [
+          "../../README.md",
+          "../../docs/deos/README.md",
+          "../../template/README.md",
+          "../../web-client/README.md"
+        ]
+      }
+    },
+    "tech-stack": {
+      "path": {
+        "en": "implementation/tech-stack.en.md",
+        "ru": "implementation/tech-stack.ru.md"
+      },
+      "page_type": "implementation",
+      "title": {
+        "en": "Tech Stack",
+        "ru": "Технологический стек"
+      },
+      "status": "active",
+      "audience": "developer",
+      "sources": {
+        "en": [
+          "../../README.md",
+          "../../template/README.md",
+          "../../web-client/README.md",
+          "../../scripts/README.md"
+        ],
+        "ru": [
+          "../../README.md",
+          "../../template/README.md",
+          "../../web-client/README.md",
+          "../../scripts/README.md"
+        ]
+      }
+    },
+    "tmctol-formulas": {
+      "path": {
+        "en": "math/tmctol-formulas.en.md",
+        "ru": "math/tmctol-formulas.ru.md"
+      },
+      "page_type": "math",
+      "title": {
+        "en": "TMCTOL Formulas",
+        "ru": "Формулы TMCTOL"
+      },
+      "status": "active",
+      "audience": "developer",
+      "sources": {
+        "en": [
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../simulators/tmctol/README.md"
+        ],
+        "ru": [
+          "../../docs/deos/tmctol.specification.en.md",
+          "../../simulators/tmctol/README.md"
+        ]
+      }
+    },
+    "scripts-layer": {
+      "path": {
+        "en": "usage/scripts-layer.en.md",
+        "ru": "usage/scripts-layer.ru.md"
+      },
+      "page_type": "usage",
+      "title": {
+        "en": "Scripts Layer",
+        "ru": "Слой скриптов"
+      },
+      "status": "active",
+      "audience": "developer",
+      "sources": {
+        "en": [
+          "../../scripts/README.md",
+          "../../AGENTS.md"
+        ],
+        "ru": [
+          "../../scripts/README.md",
+          "../../AGENTS.md"
+        ]
+      }
+    },
+    "three-layer-validation": {
+      "path": {
+        "en": "development/three-layer-validation.en.md",
+        "ru": "development/three-layer-validation.ru.md"
+      },
+      "page_type": "development",
+      "title": {
+        "en": "Three-Layer Validation",
+        "ru": "Трёхуровневая проверка"
+      },
+      "status": "active",
+      "audience": "developer",
+      "sources": {
+        "en": [
+          "../../AGENTS.md",
+          "../../simulators/tmctol/README.md",
+          "../../template/README.md",
+          "../../web-client/README.md"
+        ],
+        "ru": [
+          "../../AGENTS.md",
+          "../../simulators/tmctol/README.md",
+          "../../template/README.md",
+          "../../web-client/README.md"
+        ]
+      }
+    },
+    "contributing": {
+      "path": {
+        "en": "community/contributing.en.md",
+        "ru": "community/contributing.ru.md"
+      },
+      "page_type": "community",
+      "title": {
+        "en": "Contributing Guidelines",
+        "ru": "Руководство участника"
+      },
+      "status": "active",
+      "audience": "developer",
+      "sources": {
+        "en": [
+          "../../AGENTS.md",
+          "../../README.md",
+          "../../BACKLOG.md",
+          "../../CHANGELOG.md"
+        ],
+        "ru": [
+          "../../AGENTS.md",
+          "../../README.md",
+          "../../BACKLOG.md",
+          "../../CHANGELOG.md"
+        ]
+      }
+    },
+    "deos-in-60-seconds": {
+      "path": {
+        "en": "getting-started/deos-in-60-seconds.en.md",
+        "ru": "getting-started/deos-in-60-seconds.ru.md"
+      },
+      "page_type": "getting-started",
+      "title": {
+        "en": "DEOS in 60 Seconds",
+        "ru": "DEOS за 60 секунд"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "sources": {
+        "en": [
+          "../../AGENTS.md",
+          "../../README.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../docs/deos/tmctol.specification.en.md"
+        ],
+        "ru": [
+          "../../AGENTS.md",
+          "../../README.md",
+          "../../docs/deos/core.architecture.en.md",
+          "../../docs/deos/tmctol.specification.en.md"
+        ]
+      }
+    },
+    "partner-pitch": {
+      "path": {
+        "en": "getting-started/partner-pitch.en.md",
+        "ru": "getting-started/partner-pitch.ru.md"
+      },
+      "page_type": "getting-started",
+      "title": {
+        "en": "Partner Pitch",
+        "ru": "Предложение для партнёров"
+      },
+      "status": "active",
+      "audience": "partner",
+      "sources": {
+        "en": [
+          "../../README.md",
+          "../../AGENTS.md",
+          "../../docs/deos/manifesto.en.md",
+          "../../docs/deos/tmctol.specification.en.md"
+        ],
+        "ru": [
+          "../../README.md",
+          "../../AGENTS.md",
+          "../../docs/deos/manifesto.en.md",
+          "../../docs/deos/tmctol.specification.en.md"
+        ]
+      }
+    },
+    "executive-summary": {
+      "path": {
+        "en": "getting-started/executive-summary.en.md",
+        "ru": "getting-started/executive-summary.ru.md"
+      },
+      "page_type": "getting-started",
+      "title": {
+        "en": "Executive Summary",
+        "ru": "Краткое резюме"
+      },
+      "status": "active",
+      "audience": "partner",
+      "sources": {
+        "en": [
+          "../../README.md",
+          "../../AGENTS.md",
+          "../../BACKLOG.md",
+          "../../CHANGELOG.md",
+          "../../docs/deos/manifesto.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../docs/deos/tmctol.specification.en.md"
+        ],
+        "ru": [
+          "../../README.md",
+          "../../AGENTS.md",
+          "../../BACKLOG.md",
+          "../../CHANGELOG.md",
+          "../../docs/deos/manifesto.en.md",
+          "../../template/pallets/governance/docs/specification.en.md",
+          "../../docs/deos/tmctol.specification.en.md"
+        ]
+      }
+    }
+  }
+}

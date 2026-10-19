@@ -72,6 +72,7 @@ pub trait WeightInfo {
   /// policy-bearing Close owner: no host may silently price a policy inspection as zero.
   fn behavior_service_inspection() -> Weight;
   fn fee_collection() -> Weight;
+  /// Invoked receipt envelope: optional failed-result event plus Action-fee receipt, not effects.
   fn action_invocation_receipt() -> Weight;
   fn predicate_set_evaluation(predicates: u32) -> Weight;
   fn predicate_asset_evaluation(predicates: u32) -> Weight;
@@ -136,12 +137,18 @@ pub trait WeightInfo {
     Self::scheduler_inner_opening_complete_max(tail_chunks)
   }
   fn scheduler_inner_opening_progress_min(tail_chunks: u32) -> Weight;
+  /// User inner progress, including Pipeline collection and retained hold reconciliation.
+  fn scheduler_inner_opening_user_progress_min(tail_chunks: u32) -> Weight;
   fn scheduler_inner_opening_progress_max(tail_chunks: u32) -> Weight;
   fn scheduler_inner_running_complete(steps_in_fragment: u32, predicates: u32) -> Weight;
   fn scheduler_inner_running_progress(steps_in_fragment: u32, predicates: u32) -> Weight;
   fn scheduler_inner_suspended_tail_retry(steps_in_fragment: u32, predicates: u32) -> Weight;
+  /// User retry Control including retained hold, excluding Task effect and Action collection.
+  fn scheduler_inner_suspended_user_tail_retry(steps_in_fragment: u32, predicates: u32) -> Weight;
   fn scheduler_inner_suspended_tail_complete(steps_in_fragment: u32, predicates: u32) -> Weight;
   fn scheduler_inner_suspended_tail_progress(steps_in_fragment: u32, predicates: u32) -> Weight;
+  /// User resumed progress Control through zero resolution, excluding effects and Action fees.
+  fn scheduler_inner_suspended_user_tail_progress(steps_in_fragment: u32, predicates: u32) -> Weight;
   fn scheduler_inner_suspended_head_retry(
     tail_opening_amount_entries: u32,
     current_predicates: u32,
@@ -937,6 +944,10 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Weight::from_parts(20_000_000_000, 600_000)
   }
 
+  fn scheduler_inner_opening_user_progress_min(_: u32) -> Weight {
+    Weight::from_parts(20_000_000_000, 600_000)
+  }
+
   fn scheduler_inner_opening_progress_max(_: u32) -> Weight {
     Weight::from_parts(20_000_000_000, 600_000)
   }
@@ -950,6 +961,14 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn scheduler_inner_suspended_tail_retry(_: u32, _: u32) -> Weight {
+    Weight::from_parts(20_000_000_000, 600_000)
+  }
+
+  fn scheduler_inner_suspended_user_tail_retry(_: u32, _: u32) -> Weight {
+    Weight::from_parts(20_000_000_000, 600_000)
+  }
+
+  fn scheduler_inner_suspended_user_tail_progress(_: u32, _: u32) -> Weight {
     Weight::from_parts(20_000_000_000, 600_000)
   }
 
@@ -1204,6 +1223,9 @@ impl WeightInfo for TestWeightInfo {
   fn scheduler_inner_opening_progress_min(_: u32) -> Weight {
     Weight::from_parts(20_000_000_000, 600_000)
   }
+  fn scheduler_inner_opening_user_progress_min(_: u32) -> Weight {
+    Weight::from_parts(20_000_000_000, 600_000)
+  }
   fn scheduler_inner_opening_progress_max(_: u32) -> Weight {
     Weight::from_parts(20_000_000_000, 600_000)
   }
@@ -1214,6 +1236,12 @@ impl WeightInfo for TestWeightInfo {
     Weight::from_parts(20_000_000_000, 600_000)
   }
   fn scheduler_inner_suspended_tail_retry(_: u32, _: u32) -> Weight {
+    Weight::from_parts(20_000_000_000, 600_000)
+  }
+  fn scheduler_inner_suspended_user_tail_retry(_: u32, _: u32) -> Weight {
+    Weight::from_parts(20_000_000_000, 600_000)
+  }
+  fn scheduler_inner_suspended_user_tail_progress(_: u32, _: u32) -> Weight {
     Weight::from_parts(20_000_000_000, 600_000)
   }
   fn scheduler_inner_suspended_tail_complete(_: u32, _: u32) -> Weight {

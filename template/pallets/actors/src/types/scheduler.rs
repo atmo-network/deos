@@ -90,6 +90,9 @@ pub enum ServiceRoundEncounter {
   /// The eligible head holds no admitted work this round; its Idle residence was retained and the
   /// bounded cursor advanced without executing a Step or recording an attempt.
   NoWork(ActorRef),
+  /// A fully admitted Actor worker safely rolled back; only its Service turn committed.
+  /// This is neither a Step outcome nor a committed Actor attempt.
+  ConsumedRefusal(ActorRef),
   /// The global circuit breaker is active, so the eligible head keeps its exact placement and no
   /// Step effect or ordinary automatic terminal close runs this round.
   BreakerRefused(ActorRef),

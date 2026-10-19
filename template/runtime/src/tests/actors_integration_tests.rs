@@ -1206,7 +1206,9 @@ fn runtime_step_control_models_bound_current_step_quotes() {
     minimal_opening_actual,
     crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_progress_min(
       maximum_opening_tail_chunks,
-    ),
+    ).max(crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_user_progress_min(
+      maximum_opening_tail_chunks,
+    )),
   );
   assert!(minimal_opening_actual.all_lte(minimal_opening_maximum));
   let minimal_failed_actual = RuntimeStepControlWeight::actual_control_weight(
@@ -1393,8 +1395,14 @@ fn runtime_step_control_models_bound_current_step_quotes() {
   .expect("Suspended progress actual evidence exists");
   assert_eq!(
     suspended_progress,
+    // The shared context has no Actor class axis, so both complete profiles must fit.
     crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_tail_progress(
       4, 0,
+    )
+    .max(
+      crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_user_tail_progress(
+        4, 0,
+      ),
     ),
   );
   assert!(suspended_progress.all_lte(tail_maximum));
@@ -1415,6 +1423,11 @@ fn runtime_step_control_models_bound_current_step_quotes() {
     suspended,
     crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_tail_retry(
       4, 0,
+    )
+    .max(
+      crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_user_tail_retry(
+        4, 0,
+      ),
     ),
   );
   assert!(suspended.all_lte(tail_maximum));
@@ -7602,13 +7615,14 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
     let first_usage = Actors::block_resource_state()
       .expect("first retry usage exists")
       .usage();
+    // Each attempted Task includes one current invocation receipt; Deadline-only return does not.
     assert_eq!(
       (
         first_usage.actor_control_used(),
         first_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(11_144_991_000, 168_042),
+        Weight::from_parts(11_147_296_000, 168_042),
         Weight::from_parts(3_417_634_000, 19_253)
       )
     );
@@ -7638,7 +7652,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         second_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(8_605_163_000, 119_838),
+        Weight::from_parts(8_607_468_000, 119_838),
         Weight::from_parts(3_417_634_000, 19_253)
       ),
       "the second failure owns long-Deadline placement rather than another Service turn"
@@ -7691,7 +7705,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         resumed_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(12_385_725_000, 142_066),
+        Weight::from_parts(12_388_030_000, 142_066),
         Weight::from_parts(3_417_634_000, 19_253)
       ),
       "returned Service owns the third failed effect separately from Deadline return"
@@ -12172,7 +12186,80 @@ fn session_rotation_hook_uses_the_generated_bounded_owner() {
 }
 
 #[test]
+fn governance_prefix_charge_is_registered_once_but_freeze_retains_its_maximum() {
+  use pallet_governance::WeightInfo as _;
+  use polkadot_sdk::frame_executive::OnInitializeWithWeightRegistration;
+  use polkadot_sdk::sp_runtime::StateVersion;
+
+  seeded_test_ext().execute_with(|| {
+    type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+    System::set_block_number(1);
+    assert!(pallet_governance::PendingEnactments::<Runtime>::get().is_empty());
+    assert_eq!(pallet_governance::LastProcessedEpoch::<Runtime>::get(), 0);
+    let configured = BlockResourceBudgetValue::get();
+    let maximum = GovernanceFixedWeight::get();
+    let quiet = W::service_pending_enactments(0)
+      .checked_add(&W::service_epoch_catch_up())
+      .expect("quiet Governance declarations fit");
+    let before = System::block_weight();
+    // Invoke the SDK's actual per-pallet Executive registration wrapper, not a copied debit.
+    let charged = <(crate::Governance,) as OnInitializeWithWeightRegistration<Runtime>>::on_initialize_with_weight_registration(1);
+    assert_eq!(charged, quiet);
+    assert_eq!(pallet_governance::LastProcessedEpoch::<Runtime>::get(), 1);
+    let mut expected_registered = before;
+    expected_registered.accrue(charged, DispatchClass::Mandatory);
+    assert_eq!(System::block_weight(), expected_registered);
+    assert!(charged.all_lte(maximum));
+    assert_ne!(charged, maximum);
+
+    let root_before_finalize = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+    crate::Governance::on_finalize(1);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+      root_before_finalize
+    );
+    assert_eq!(System::block_weight(), expected_registered);
+    ensure_actor_prepass_context();
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+    let frozen = Actors::block_resource_state()
+      .expect("ordinary Prepass freezes its resource state")
+      .budget()
+      .expect("Prepass budget is available");
+    assert_eq!(frozen, configured);
+    assert_eq!(frozen.fixed_envelope(), FixedBlockWeight::get());
+    assert_eq!(System::block_weight(), expected_registered);
+
+    let non_governance = configured
+      .fixed_envelope()
+      .checked_sub(&maximum)
+      .expect("configured fixed composition contains Governance once");
+    let declaration_only_replacement = non_governance
+      .checked_add(&charged)
+      .expect("counterfactual declaration sum fits");
+    assert!(declaration_only_replacement.all_lte(frozen.fixed_envelope()));
+    assert_ne!(declaration_only_replacement, frozen.fixed_envelope());
+    let pair = |weight: Weight| [weight.ref_time(), weight.proof_size()];
+    println!(
+      "GOVERNANCE_PREFIX_OWNER_V1 {}",
+      serde_json::json!({
+        "governanceMaximum": pair(maximum),
+        "registeredQuietCharge": pair(charged),
+        "frozenFixed": pair(frozen.fixed_envelope()),
+        "nonGovernanceConfiguredFixed": pair(non_governance),
+        "declarationOnlyGovernanceReplacement": pair(declaration_only_replacement),
+        "systemQuarter": pair(crate::MAXIMUM_BLOCK_WEIGHT / 4),
+        "scope": "isolated real hook/SDK registration plus direct contextual Prepass; not full Executive, physical cost or an installed credit",
+      })
+    );
+  });
+}
+
+#[test]
 fn message_queue_service_is_fixed_initialize_work_not_external_idle_work() {
+  use polkadot_sdk::frame_executive::OnInitializeWithWeightRegistration;
+  use polkadot_sdk::pallet_message_queue::WeightInfo as _;
+  use polkadot_sdk::sp_runtime::StateVersion;
+
   assert!(MessageQueue::index() < Actors::index());
   assert_eq!(
     <<Runtime as polkadot_sdk::pallet_message_queue::Config>::ServiceWeight as Get<
@@ -12188,6 +12275,53 @@ fn message_queue_service_is_fixed_initialize_work_not_external_idle_work() {
   );
   assert!(XcmpQueue::index() < Actors::index());
   assert_ne!(XcmpQueue::on_idle_weight(), Weight::zero());
+
+  seeded_test_ext().execute_with(|| {
+    type W = <Runtime as polkadot_sdk::pallet_message_queue::Config>::WeightInfo;
+    System::set_block_number(1);
+    assert!(polkadot_sdk::pallet_message_queue::ServiceHead::<Runtime>::get().is_none());
+    let configured = BlockResourceBudgetValue::get();
+    let before = System::block_weight();
+    let charged = <(MessageQueue,) as OnInitializeWithWeightRegistration<Runtime>>::on_initialize_with_weight_registration(1);
+    assert_eq!(charged, W::bump_service_head());
+    assert_ne!(charged, Weight::zero());
+    assert!(charged.all_lte(MessageQueueServiceWeight::get()));
+    assert_ne!(charged, MessageQueueServiceWeight::get());
+    let mut expected_registered = before;
+    expected_registered.accrue(charged, DispatchClass::Mandatory);
+    assert_eq!(System::block_weight(), expected_registered);
+    assert!(polkadot_sdk::pallet_message_queue::ServiceHead::<Runtime>::get().is_none());
+
+    ensure_actor_prepass_context();
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+    let frozen = Actors::block_resource_state()
+      .expect("ordinary Prepass freezes the resource state")
+      .budget()
+      .expect("Prepass budget is available");
+    assert_eq!(frozen, configured);
+    assert_eq!(System::block_weight(), expected_registered);
+
+    let root_after_prepass = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+    let idle = MessageQueue::on_idle(1, Weight::MAX);
+    assert_eq!(idle, Weight::zero());
+    MessageQueue::on_finalize(1);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+      root_after_prepass
+    );
+    assert_eq!(System::block_weight(), expected_registered);
+    let pair = |weight: Weight| [weight.ref_time(), weight.proof_size()];
+    println!(
+      "MESSAGE_QUEUE_PREFIX_OWNER_V1 {}",
+      serde_json::json!({
+        "configuredServiceCap": pair(MessageQueueServiceWeight::get()),
+        "registeredEmptyRingCharge": pair(charged),
+        "idleCharge": pair(idle),
+        "frozenFixed": pair(frozen.fixed_envelope()),
+        "scope": "empty ready ring, native hook/SDK registration and direct contextual Prepass; no processor, full Executive, physical cost or installed credit",
+      })
+    );
+  });
 }
 
 #[test]
@@ -15483,12 +15617,12 @@ fn zero_step_and_productive_cleanup_complete_path_matrix_is_exact() {
     zero_step,
     (Weight::from_parts(3_811_182_000, 50_963), Weight::zero())
   );
-  // Close retains the admitted Step maximum plus lifecycle cleanup. This is a conservative
-  // resource charge, not evidence that a persistent-completion benchmark measured destruction.
+  // Close retains the admitted Step maximum (including one current invocation receipt) plus
+  // lifecycle cleanup. This charge is not physical evidence of measured destruction.
   assert_eq!(
     productive_cleanup,
     (
-      Weight::from_parts(13_399_391_000, 152_988),
+      Weight::from_parts(13_401_696_000, 152_988),
       Weight::from_parts(1_463_533_000, 6_196),
     )
   );
@@ -15677,10 +15811,11 @@ fn running_middle_complete_path_is_exact() {
       Actors::on_finalize(block);
     }
     let measured = middle.expect("middle Running measurement exists");
+    // The exact Control charge includes one current invocation receipt for the transfer.
     assert_eq!(
       measured,
       (
-        Weight::from_parts(4_749_999_832, 56_402),
+        Weight::from_parts(4_752_304_832, 56_402),
         Weight::from_parts(1_463_533_000, 6_196),
       )
     );
@@ -16995,6 +17130,21 @@ fn create_paired_drain_prefix(
   budget: pallet_deos_actors::BlockResourceBudget,
   running: bool,
 ) -> (Vec<ActorId>, Weight) {
+  let prefix = prepare_paired_drain_prefix(budget, running, |steps| {
+    create_system(ALICE, manual_schedule(), None, steps)
+  });
+  for id in &prefix.0 {
+    assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), *id));
+  }
+  prefix
+}
+
+/// Return funded, inactive prefix Actors so callers can use a later public activation block.
+pub(super) fn prepare_paired_drain_prefix(
+  budget: pallet_deos_actors::BlockResourceBudget,
+  running: bool,
+  mut create: impl FnMut(RuntimeContractSteps) -> ActorId,
+) -> (Vec<ActorId>, Weight) {
   assert_ok!(create_pool(
     RuntimeOrigin::signed(ALICE),
     AssetKind::Native,
@@ -17032,7 +17182,7 @@ fn create_paired_drain_prefix(
   let steps = BoundedVec::try_from(steps).unwrap();
   let ids = (0..=capacity)
     .map(|_| {
-      let id = create_system(ALICE, manual_schedule(), None, steps.clone());
+      let id = create(steps.clone());
       fund_native(id, 10_000 * crate::UNIT);
       assert_ok!(mint_tokens(
         ASSET_A,
@@ -17040,7 +17190,6 @@ fn create_paired_drain_prefix(
         &actor_account(id),
         10 * crate::UNIT
       ));
-      assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), id));
       id
     })
     .collect::<Vec<_>>();
@@ -17048,6 +17197,16 @@ fn create_paired_drain_prefix(
 }
 
 fn close_paired_drain_head(ids: &[ActorId], effect: Weight) {
+  close_paired_drain_head_with(ids, effect, |id| {
+    assert_ok!(Actors::close_actor(RuntimeOrigin::root(), id));
+  });
+}
+
+pub(super) fn close_paired_drain_head_with(
+  ids: &[ActorId],
+  effect: Weight,
+  close: impl FnOnce(ActorId),
+) {
   use pallet_deos_actors::BlockResourceDomain;
   let executed = System::events()
     .into_iter()
@@ -17113,7 +17272,7 @@ fn close_paired_drain_head(ids: &[ActorId], effect: Weight) {
     )
     .unwrap();
   pallet_deos_actors::CurrentBlockResourceState::<Runtime>::put(state);
-  assert_ok!(Actors::close_actor(RuntimeOrigin::root(), actor_id));
+  close(actor_id);
   assert_eq!(Actors::service_header().round_block, round);
   assert_eq!(
     (

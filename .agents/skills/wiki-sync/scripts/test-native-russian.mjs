@@ -275,7 +275,7 @@ test("covers every graph relation with one compact endpoint-independent Russian 
     "utf8",
   );
   const graph = JSON.parse(
-    readFileSync(resolve(projectRoot, "wiki/_meta/graph.json"), "utf8"),
+    readFileSync(resolve(projectRoot, "wiki/deos/_meta/graph.json"), "utf8"),
   );
   const labels = parseRussianRelationLabels();
   const relationTypes = new Set(graph.edges.map(({ type }) => type));
@@ -326,9 +326,9 @@ test("keeps targeted reviewer acceptance labels without claiming full-surface fl
 
 test("guards reviewed Actors grammar and Russian formula explanations", () => {
   const actorsFiles = [
-    "wiki/concepts/end-to-end-flows.ru.md",
-    "wiki/development/status.ru.md",
-    "wiki/concepts/token-driven-automation.ru.md",
+    "wiki/deos/concepts/end-to-end-flows.ru.md",
+    "wiki/deos/development/status.ru.md",
+    "wiki/deos/concepts/token-driven-automation.ru.md",
   ];
   for (const path of actorsFiles) {
     const source = readFileSync(resolve(projectRoot, path), "utf8");
@@ -336,7 +336,7 @@ test("guards reviewed Actors grammar and Russian formula explanations", () => {
     assert.match(source, /разреженное состояние Continuation/u, path);
   }
   const status = readFileSync(
-    resolve(projectRoot, "wiki/development/status.ru.md"),
+    resolve(projectRoot, "wiki/deos/development/status.ru.md"),
     "utf8",
   );
   assert.doesNotMatch(status, /конкретных источника субсидии/u);
@@ -346,7 +346,7 @@ test("guards reviewed Actors grammar and Russian formula explanations", () => {
   );
 
   const actorSystem = readFileSync(
-    resolve(projectRoot, "wiki/overview/actor-system.ru.md"),
+    resolve(projectRoot, "wiki/deos/overview/actor-system.ru.md"),
     "utf8",
   );
   assert.doesNotMatch(actorSystem, /все еще/u);
@@ -359,14 +359,14 @@ test("guards reviewed Actors grammar and Russian formula explanations", () => {
   assert.match(actorSystem, /Публикация наблюдения никогда не будит актора/u);
 
   const staking = readFileSync(
-    resolve(projectRoot, "wiki/overview/staking.ru.md"),
+    resolve(projectRoot, "wiki/deos/overview/staking.ru.md"),
     "utf8",
   );
   assert.doesNotMatch(staking, /Устаревшие общий механизм/u);
   assert.match(staking, /Удалены общий механизм поблочных наград/u);
 
   const formulas = readFileSync(
-    resolve(projectRoot, "wiki/math/tmctol-formulas.ru.md"),
+    resolve(projectRoot, "wiki/deos/math/tmctol-formulas.ru.md"),
     "utf8",
   );
   assert.match(
@@ -381,63 +381,63 @@ test("guards reviewed Actors grammar and Russian formula explanations", () => {
 test("keeps reviewed Russian navigation labels equal to canonical page titles", () => {
   const fixtures = [
     [
-      "wiki/index.ru.md",
+      "wiki/deos/index.ru.md",
       "Токен-управляемая автоматизация",
       "concepts/token-driven-automation.ru.md",
     ],
     [
-      "wiki/index.ru.md",
+      "wiki/deos/index.ru.md",
       "Контур маршрутизации и эмиссии",
       "concepts/routing-and-minting-loop.ru.md",
     ],
     [
-      "wiki/index.ru.md",
+      "wiki/deos/index.ru.md",
       "Token Minting Curve",
       "overview/token-minting-curve.ru.md",
     ],
-    ["wiki/index.ru.md", "Создание форка DEOS", "usage/forking-deos.ru.md"],
+    ["wiki/deos/index.ru.md", "Создание форка DEOS", "usage/forking-deos.ru.md"],
     [
-      "wiki/index.ru.md",
+      "wiki/deos/index.ru.md",
       "Руководство участника",
       "community/contributing.ru.md",
     ],
     [
-      "wiki/getting-started/reading-paths.ru.md",
+      "wiki/deos/getting-started/reading-paths.ru.md",
       "Токен-управляемая автоматизация",
       "../concepts/token-driven-automation.ru.md",
     ],
     [
-      "wiki/getting-started/reading-paths.ru.md",
+      "wiki/deos/getting-started/reading-paths.ru.md",
       "Контур маршрутизации и эмиссии",
       "../concepts/routing-and-minting-loop.ru.md",
     ],
     [
-      "wiki/getting-started/reading-paths.ru.md",
+      "wiki/deos/getting-started/reading-paths.ru.md",
       "Token Minting Curve",
       "../overview/token-minting-curve.ru.md",
     ],
     [
-      "wiki/getting-started/reading-paths.ru.md",
+      "wiki/deos/getting-started/reading-paths.ru.md",
       "Создание форка DEOS",
       "../usage/forking-deos.ru.md",
     ],
     [
-      "wiki/concepts/domain-map.ru.md",
+      "wiki/deos/concepts/domain-map.ru.md",
       "Токен-управляемая автоматизация",
       "token-driven-automation.ru.md",
     ],
     [
-      "wiki/concepts/domain-map.ru.md",
+      "wiki/deos/concepts/domain-map.ru.md",
       "Контур маршрутизации и эмиссии",
       "routing-and-minting-loop.ru.md",
     ],
     [
-      "wiki/concepts/domain-map.ru.md",
+      "wiki/deos/concepts/domain-map.ru.md",
       "Token Minting Curve",
       "../overview/token-minting-curve.ru.md",
     ],
     [
-      "wiki/concepts/economic-claim-levels.ru.md",
+      "wiki/deos/concepts/economic-claim-levels.ru.md",
       "Карта инвариантов и угроз",
       "invariant-map.ru.md",
     ],
@@ -450,7 +450,7 @@ test("keeps reviewed Russian navigation labels equal to canonical page titles", 
     );
   }
   const claims = readFileSync(
-    resolve(projectRoot, "wiki/concepts/economic-claim-levels.ru.md"),
+    resolve(projectRoot, "wiki/deos/concepts/economic-claim-levels.ru.md"),
     "utf8",
   );
   assert.equal(

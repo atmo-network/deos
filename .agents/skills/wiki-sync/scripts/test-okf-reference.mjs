@@ -29,7 +29,7 @@ const source = pinned.source;
 const sourceWiki = resolve(
   dirname(defaultReferencePath),
   "../../../..",
-  "wiki",
+  "wiki/deos",
 );
 const sandboxes = [];
 
@@ -95,7 +95,7 @@ function sandbox(wikiVersion = pinned.lock.pinned_version) {
   sandboxes.push(root);
   const referencePath = join(root, "okf-reference.md");
   cpSync(defaultReferencePath, referencePath);
-  const wiki = join(root, "wiki");
+  const wiki = join(root, "wiki/deos");
   writeFileSync(join(root, "placeholder"), "");
   return {
     root,

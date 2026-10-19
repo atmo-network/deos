@@ -15,7 +15,7 @@ Usage: pvf-assurance.sh --fixtures DIR --para-id ID [OPTIONS]
 Validate exported PVF candidates with the current SDK ValidationHost and pinned workers.
 
 Options:
-  --fixtures DIR       Existing actor_finalization_close/actor_retention_close export
+  --fixtures DIR       Existing proof-bound params/PVD/block/expected-result export
   --para-id ID         Declared local candidate parachain identity (required)
   --wasm PATH          Explicit Wasm (default: canonical production-profile output)
   --insecure-local     Explicitly permit best-effort hardening for trusted local code
@@ -41,7 +41,7 @@ Side effects:
   an owned short-lived worker/cache directory and starts/stops local workers.
   No executable-bundle download, account, runtime source, Wasm, deployment or
   generated Weight mutation. Candidate execution has no network connection.
-  --fixtures must already exist; candidate generation is a separate public example.
+  --fixtures must already exist; generation is a separate public example or native export test.
   --cpu-trace never overwrites files; failed runs retain partial diagnostics.
 EOF
 }

@@ -260,8 +260,39 @@ impl RuntimeStepControlWeight {
     }
   }
 
-  // Bind the same finite User header profiles consumed by maximum and actual Control selection.
-  fn production_weight_identity_from_user_opening(user_opening: &[Weight]) -> Option<[u8; 32]> {
+  fn opening_progress_control_weight(tail_chunks: u32) -> Weight {
+    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    // The shared context has no Actor class axis; cover both complete measured owners.
+    Self::component_max(
+      ControlWeights::scheduler_inner_opening_progress_min(tail_chunks),
+      ControlWeights::scheduler_inner_opening_user_progress_min(tail_chunks),
+    )
+  }
+
+  fn suspended_tail_retry_control_weight(steps: u32, predicates: u32) -> Weight {
+    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    Self::component_max(
+      ControlWeights::scheduler_inner_suspended_tail_retry(steps, predicates),
+      ControlWeights::scheduler_inner_suspended_user_tail_retry(steps, predicates),
+    )
+  }
+
+  fn suspended_tail_progress_control_weight(steps: u32, predicates: u32) -> Weight {
+    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    // Retain the legacy System inclusive upper; the User profile has a pure Control boundary.
+    Self::component_max(
+      ControlWeights::scheduler_inner_suspended_tail_progress(steps, predicates),
+      ControlWeights::scheduler_inner_suspended_user_tail_progress(steps, predicates),
+    )
+  }
+
+  // Bind each finite User profile, including components hidden by the shared maximum.
+  fn production_weight_identity_from_user_profiles(
+    user_opening: &[Weight],
+    user_progress: &[Weight],
+    user_tail_retry: &[Weight],
+    user_tail_progress: &[Weight],
+  ) -> Option<[u8; 32]> {
     type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
     let tail_plan = (1..=4)
       .map(ControlWeights::current_step_plan_running_tail)
@@ -396,7 +427,7 @@ impl RuntimeStepControlWeight {
     Some(
       (
         *b"DEOS_ACTOR_STEP_CONTROL_WEIGHT",
-        *b"DEOS_ACTOR_CONTROL_ACTUAL_V15",
+        *b"DEOS_ACTOR_CONTROL_ACTUAL_V17",
         (
           ControlWeights::service_round_begin_populated(),
           ControlWeights::service_round_probe_eligible(),
@@ -414,6 +445,7 @@ impl RuntimeStepControlWeight {
           opening_complete,
           opening_progress,
           user_opening,
+          user_progress,
         ),
         ControlWeights::current_step_plan_opening_head(),
         ControlWeights::current_step_plan_suspended_head(),
@@ -424,6 +456,7 @@ impl RuntimeStepControlWeight {
           suspended_tail_retry,
           suspended_tail_complete,
           suspended_tail_progress,
+          (user_tail_retry, user_tail_progress),
           suspended_head_retry,
           suspended_head_complete,
           suspended_head_progress,
@@ -526,7 +559,30 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
     let user_opening = (0..=maximum_tail_chunks)
       .map(Self::user_opening_control_weight)
       .collect::<alloc::vec::Vec<_>>();
-    Self::production_weight_identity_from_user_opening(&user_opening)
+    let user_progress = (1..=maximum_tail_chunks)
+      .map(crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_user_progress_min)
+      .collect::<alloc::vec::Vec<_>>();
+    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    let user_tail_retry = (1..=pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK)
+      .flat_map(|steps| {
+        (0..=ActorMaxPredicatesPerStep::get()).map(move |predicates| {
+          ControlWeights::scheduler_inner_suspended_user_tail_retry(steps, predicates)
+        })
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let user_tail_progress = (2..=pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK)
+      .flat_map(|steps| {
+        (0..=ActorMaxPredicatesPerStep::get()).map(move |predicates| {
+          ControlWeights::scheduler_inner_suspended_user_tail_progress(steps, predicates)
+        })
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    Self::production_weight_identity_from_user_profiles(
+      &user_opening,
+      &user_progress,
+      &user_tail_retry,
+      &user_tail_progress,
+    )
   }
 
   fn maximum_control_weight(
@@ -668,7 +724,7 @@ impl RuntimeStepControlWeight {
       } else {
         Self::component_max(
           non_progress_min,
-          ControlWeights::scheduler_inner_opening_progress_min(context.opening_tail_chunks),
+          Self::opening_progress_control_weight(context.opening_tail_chunks),
         )
       };
       Self::component_max(composed, direct)
@@ -712,7 +768,7 @@ impl RuntimeStepControlWeight {
     };
     let atomic = Self::component_max(
       atomic,
-      ControlWeights::scheduler_inner_suspended_tail_retry(
+      Self::suspended_tail_retry_control_weight(
         context.steps_in_fragment,
         context.predicate_evaluation_units,
       ),
@@ -727,7 +783,7 @@ impl RuntimeStepControlWeight {
     let atomic = if context.steps_in_fragment >= 2 {
       Self::component_max(
         atomic,
-        ControlWeights::scheduler_inner_suspended_tail_progress(
+        Self::suspended_tail_progress_control_weight(
           context.steps_in_fragment,
           context.predicate_evaluation_units,
         ),
@@ -785,7 +841,7 @@ impl RuntimeStepControlWeight {
       && context.opening_tail_chunks > 0
       && context.predicate_evaluation_units == 0
     {
-      return separate(ControlWeights::scheduler_inner_opening_progress_min(
+      return separate(Self::opening_progress_control_weight(
         context.opening_tail_chunks,
       ));
     }
@@ -830,7 +886,7 @@ impl RuntimeStepControlWeight {
       && context.cursor > 0
       && context.steps_in_fragment >= 2
     {
-      return separate(ControlWeights::scheduler_inner_suspended_tail_progress(
+      return separate(Self::suspended_tail_progress_control_weight(
         context.steps_in_fragment,
         context.predicate_evaluation_units,
       ));
@@ -840,7 +896,7 @@ impl RuntimeStepControlWeight {
       && execution.placement == StepControlPlacement::Wakeup
       && context.cursor > 0
     {
-      return separate(ControlWeights::scheduler_inner_suspended_tail_retry(
+      return separate(Self::suspended_tail_retry_control_weight(
         context.steps_in_fragment,
         context.predicate_evaluation_units,
       ));

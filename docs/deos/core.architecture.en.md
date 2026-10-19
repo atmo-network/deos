@@ -1,0 +1,367 @@
+# DEOS Core Architecture: The Token-Driven Economic Automaton
+
+## 1. Executive Summary
+
+The DEOS (Deterministic Economic Operating System) framework, currently instantiated in this repository through the TMCTOL standard, combines dedicated economic pallets with a bounded actor scheduler. Token movement can act as an explicit coordination message rather than requiring one bespoke privileged call per flow.
+
+The runtime remains a deterministic state machine. Actors become eligible through typed balance ingress, timers, or manual governance/owner signals, then execute only fully admitted work through runtime adapters. Route-specific validation mitigates some manipulation paths, but it does not provide blanket immunity to intra-block ordering, MEV, flash-loan, or sandwich risks.
+
+Recurring protocol automation that current bounded tasks/adapters can express — including burning, liquidity provisioning, treasury routing, and protocol-token buyback patterns — uses declarative `pallet-deos-actors` Actor Contracts with ordered Steps. The reference runtime reserves a finite System actor constellation, while TMC, routing, Oracle, staking, balances, and AMM mechanics remain owned by their dedicated pallets. A flow that cannot preserve custody, atomicity, or production-budget admission through existing primitives does not ship merely because its vector shape is bounded.
+
+## 2. Core Philosophy: The "Omnivorous" Machine
+
+### 2.1 The Coordination Rule
+
+Token-driven actor flows follow this bounded coordination pattern:
+
+> `Authorized balance ingress → Admitted deterministic transition → Observable balance/state result`
+
+### 2.2 Key Architectural Properties
+
+1. `Provenance-Aware Ingress`: Source/asset trigger filters and funding-source policy decide whether a deposit influences readiness or funding snapshots; ordinary balance credit remains separate from execution authority.
+2. `Plan-Local Statelessness`: Steps read current state without mutable cross-step scratch storage, while bounded lifecycle, readiness, queue, funding accumulator/snapshot, and observability state remains explicit on-chain.
+3. `Donation Sensitivity`: Assets transferred to a sovereign account remain real balances, but only configured tasks and authorized trigger/funding semantics determine whether and when they affect protocol execution. A donation is not automatically a burn or liquidity contribution.
+4. `Reactive Resilience`: Explicit `StepErrorPolicy`, cooldowns, one persistent Service ring with per-block rounds, and exact temporal deadlines provide bounded backpressure. A false Precondition may skip a Step and failures may abort a cycle; subsequent execution still requires a valid trigger and sufficient two-dimensional budget.
+5. `Explicit Read-Model Split`: DEOS separates bounded authoritative on-chain values/projections that clients can consume directly from externally indexed materializations used for archive/search/analytics. Canonical product flows should rely on raw on-chain state when a bounded projection is the real protocol contract; unbounded history and heavy dashboard aggregation should remain off-chain instead of being smuggled into consensus state. The project-wide subsystem matrix and design checklist live in [`read-model.contract.en.md`](./read-model.contract.en.md).
+
+## 3. Actor Architecture & Economic Topology
+
+### 3.1 The Actor Constellation
+
+The reference runtime composes dedicated mechanism pallets with bounded System Actors and User actors. TMC owns issuance, DEOS Router owns route selection, DEOS Oracle owns current typed observations, and Actors owns admitted orchestration through host-provided adapters.
+
+The concrete DEOS System address catalog, genesis states, Actor Contract families, governance activation paths, runtime bounds, and operational surfaces live in [DEOS Actors Integration](./actors.integration.en.md). DEOS Oracle publication, Router sampling, reactive Actor ingress, client provenance, and rollback composition live in [DEOS Oracle Integration](./oracle.integration.en.md).
+
+### 3.2 Runtime Composition DAG
+
+The five changing subsystems remain reusable leaf packages. Concrete DEOS composition exists only in `template/runtime`: Governance exports bounded policy and participation projections; DEOS Staking owns custody, native value, security epochs, and reward liability; DEOS Router executes typed economic routes; DEOS Oracle owns bounded current observations; and DEOS Actors owns autonomous scheduling and execution through narrow host adapters.
+
+```text
+Governance projections ─┐
+DEOS Staking custody ───┼─> DEOS runtime adapters/composition
+DEOS Router execution ──┤                 │
+DEOS Oracle current truth ────────────────┤
+DEOS Actors scheduler <───────────────────┘
+```
+
+The arrows denote capability use, not storage ownership transfer. A reusable pallet does not depend directly on another one of these five pallets, inspect or repair its storage, or reinterpret its canonical state. Runtime adapters may read an owner's public projection and invoke its public contract transactionally; callbacks return facts or typed failures to the composition root. The diff-aware alignment gate enforces the package-dependency boundary through `audit-runtime-composition-dag.sh`.
+
+Runtime-facing failures keep cause and retry policy orthogonal. DEOS Router exposes `RouterFailureClass` plus `RetryDisposition::{Permanent, RetryLater}`; its Actors adapter maps only that disposition to Actors' package-local `RetryClass::{Permanent, Temporary}` while preserving the Router cause until the signed-dispatch boundary. Other Actors adapters likewise classify concrete host causes before returning `TaskFailure`; unknown dispatch failures default to Permanent. No adapter infers retry from error text, pallet identity, or a raw `DispatchError`.
+
+#### 3.2.1 Public Surface Closure Map
+
+Package specifications own intended semantics; package architecture maps own shipped storage, calls, events, errors, traits, and bounded views; code and metadata own exhaustive names.
+
+| Owner | Composition family | Cross-system invariant |
+| --- | --- | --- |
+| [Governance](../../template/pallets/governance/docs/specification.en.md) | Proposal/preimage admission, transferable vote-source custody, voting, resolution, enactment, cleanup, and participation memory | Domain lanes, author caps, preimage integrity, source non-reuse, maturity, and strategic reserve are checked before economics or mutation |
+| [DEOS Staking](../../template/pallets/staking/docs/specification.en.md) | Pool/receipt, LP nomination, governance custody, session security, certified reward, claim, compound, and atomic expiry | One mode and `SessionIndex` owner bind bounded custody, frozen rights, conservative backing, exact liability, and automatic transactional settlement |
+| [DEOS Actors](../../template/pallets/actors/docs/specification.en.md) | Actor Contract lifecycle, trigger, scheduler, simulation, sweep, and repair | Canonical typed contracts execute bounded FIFO attempts with explicit preconditions, paid failure, atomic task effects, and one Continuation owner |
+| [DEOS Router](../../template/pallets/router/docs/specification.en.md) | Pool registration, quote preparation, and atomic exact-input/output swap | Prepared identity, maximum recipient output, concrete failure cause, retry disposition, Oracle publication, and fee ingress commit together |
+| [DEOS Oracle](../../template/pallets/oracle/docs/specification.en.md) | Feed admission, lifecycle, typed publication, and bounded observation views | Producer authority, aggregation, semantic no-op revision rules, atomic publication, and deferred reactive fanout have one owner |
+
+Package architecture maps keep executable anchors beside their owning invariants; repository audits validate closure without copying exhaustive symbol or test inventories into this composition map.
+
+Errors are fail-closed causes within these families, not independent mechanisms. Events report committed transitions from the same mutators. Runtime adapters may compose only these public contracts and projections; they do not create shadow storage or alternate policy.
+
+### 3.3 Type System Foundation: The Bitmask Architecture
+
+To guarantee O(1) execution complexity and maximal interoperability, the architecture relies on a high-performance `Bitmask Identification Strategy` implemented in `primitives/src/assets.rs`.
+
+#### 3.3.1 Asset Taxonomy
+
+The system uses a 32-bit ID space where the most significant nibble (4 bits) determines the asset category. Five production types are currently defined — additional nibbles are reserved for future use.
+
+| Nibble | Mask | Constant | Description |
+| --- | --- | --- | --- |
+| `0x1` | `0x1000_0000` | `TYPE_PROTOCOL` | Protocol-native tokens ($VETO, $BLDR) |
+| `0x5` | `0x5000_0000` | `TYPE_STAKED` | Native/local staking receipt assets |
+| `0x6` | `0x6000_0000` | `TYPE_STAKED_FOREIGN` | Foreign staking receipt assets |
+| `0x7` | `0x7000_0000` | `TYPE_LP` | Liquidity Pool shares |
+| `0xF` | `0xF000_0000` | `TYPE_FOREIGN` | XCM foreign assets |
+
+Nibbles `0x0`, `0x2`–`0x4`, `0x8`–`0xE` are reserved. The `0x0` nibble is intentionally unused — zero type bits cause false positives in `(id & MASK_TYPE) == TYPE` checks.
+
+Native token ($NTVE) uses `AssetKind::Native` enum variant, not a bitmask ID.
+
+#### Protocol Tokens
+
+| Token | AssetKind | ID | Role |
+| --- | --- | --- | --- |
+| `$NTVE` | `Native` | — | Sovereign currency, L1 TMC emission |
+| `$VETO` | `Local(0x1000_0001)` | `0x1000_0001` | Protocol protection-governance token |
+| `$BLDR` | `Local(0x1000_0002)` | `0x1000_0002` | Builder incentive token, L2 TMC emission |
+
+#### 3.3.2 Zero-Cost Abstractions
+
+This architecture enables "Zero-Cost Inspection" where complex economic properties are verified via bitwise operations rather than storage reads.
+
+- `Asset Classification`: Automatically detects asset types (Protocol, LP, Foreign) via bitmask matching for routing decisions.
+- `Routing Logic`: The Router uses bitmask inspection to determine optimal paths (e.g., Native-anchored multi-hop for non-Native pairs) without storage lookups.
+- `Security`: Namespace isolation prevents LP token ID collisions with Protocol Tokens. On clean-slate genesis, `NextPoolAssetId` is initialized into `TYPE_LP` space so newly minted pool LP IDs are `AssetKind::is_lp()`-detectable by bitmask.
+
+> `Fee Policy`: All asset pairs pay the same flat Router fee (default 0.5%). No discounts or special rates based on asset type. Fee rate is configurable via governance.
+
+### 3.4 Actor Responsibilities
+
+#### DEOS Router (Pallet — The Decision Engine)
+
+_The intellectual layer atop raw liquidity._
+
+- `Function`: Mechanism-only aggregation. Among candidate routes it always selects **max recipient output** (`max_by_key` on `expected_output`), not a policy score:
+  - `Market Liquidity`: Direct XYK swaps.
+  - `Protocol Liquidity`: Direct minting via TMC when that path delivers more output.
+  - `Complex Paths`: Multi-hop Native-anchored XYK routes.
+- `Multi-Curve Routing`: For any pair where `has_curve(to) && supports_collateral(to, from)`, the Router considers TMC as a candidate route. This generalizes beyond Native-only minting to support `$BLDR` and future protocol tokens.
+- `Security mitigations (not complete MEV defense)`: Every actual XYK leg validates its prepared directional quote against the current reference, then publishes the leg's pre-execution reserve ratio immediately before market execution. Authored exact-input/output bounds remain mandatory. This launch line has no commit/reveal or ordering protection — do not claim flash-loan or sandwich immunity.
+- `Execution`: Uses `Balance-Delta Verification` — measures the physical change in the recipient's balance rather than relying on theoretical quotes.
+
+#### TMC (Pallet — The Ceiling)
+
+_The algorithmic issuer._
+
+- `Function`: Unidirectional token emission along a linear price curve. TMC is a `pure minting machine` — it knows nothing about downstream routing, splitting, or liquidity provisioning.
+- `Multi-Curve Architecture`: Each curve is identified by its `minted_asset` (formerly `native_asset`). The system supports multiple concurrent curves:
+  - L1: `minted_asset = Native`, `foreign_asset = Foreign` (e.g., USDC)
+  - L2: `minted_asset = Local(BLDR_ASSET_ID)`, `foreign_asset = Native`
+- `MintOutputResolver`: Maps each `minted_asset` to explicit collateral and minted-liquidity output accounts. The reference L1 route sends both outputs to the Liquidity Actor; the `$BLDR` route sends `$NTVE` collateral directly to the BLDR Liquidity Actor and the minted `$BLDR` share to the BLDR Splitter.
+- `Role`: Sets the "Hard Ceiling" on price. If market price > curve price, the Router automatically routes trades through TMC, creating arbitrage that feeds the protocol.
+
+#### System Actors Composition
+
+System Actors roles compose bounded burn, fee allocation, liquidity, custody, treasury, protocol-token, and staking-support flows without moving their domain mechanics into the scheduler. Token movement can connect actors, but each receiving role still needs an admitted program, valid trigger and funding policy, healthy adapters, and sufficient two-dimensional budget.
+
+The canonical role-to-address mapping, active versus dormant genesis state, plan ordering, percentages, cadence, and activation prerequisites belong to [DEOS Actors Integration](./actors.integration.en.md). Fee routing policy remains governed by the framework and TMCTOL contracts linked from that integration map.
+
+### 3.5 Token Lifecycle Orchestration
+
+Token onboarding composes explicit asset registration, pool or curve creation, and governance-controlled actor activation. No implicit cross-pallet callback installs an economic policy. The Asset Registry, Router, TMC, governance, and Actors integration documents own the concrete order, prerequisites, and failure boundaries for their respective parts.
+
+### 3.6 Antifragile Design Principles
+
+- `Fail-fast over silent drift`: Actors step errors use explicit `ContinueNextStep`, `AbortCycle`, or Mutable-only `RetryLater`; only adapter-classified Temporary failure may suspend. No silent retry heuristic exists.
+- `Static operations`: Tasks own no mutable workflow memory. Sparse scheduler-owned Continuation records only bounded unresolved-suffix progress while a Mutable run remains suspended.
+- `Observable automation`: One `CycleStarted` and terminal `CycleSummary` bound each logical cycle; continuation events correlate attempts. Sparse starvation transitions expose scheduler-budget phase changes.
+- `Bounded execution`: Actors admits opening plans or unresolved retry suffixes plus terminal cleanup under both Weight dimensions. No unbounded loops exist.
+- `Public-call dispatchability`: A runtime matrix enumerates all 60 public custom-pallet call families at maximum valid bounded input and requires each production-generated `Weight(RefTime, ProofSize)` to fit the Normal-class `max_extrinsic` and `max_total` envelopes. The protocol-coherence audit rejects an unreviewed custom dispatch-class override so the matrix's class contract cannot drift silently.
+
+## 4. Deterministic Execution via Actors Scheduler
+
+### 4.1 The Unified Execution Model
+
+Actors-managed recurring automation executes through one `pallet-deos-actors` scheduler; task adapters call the dedicated pallets that own minting, routing, staking, balances, and AMM state.
+
+#### Execution Architecture
+
+```
+Block N:
+  on_initialize:
+    - Bounded bookkeeping only; never execute Actors cycles
+
+  on_idle(remaining_weight):
+    - Admit the generated fixed hook base in both Weight dimensions
+    - Drain one saturated-queue tombstone unit when required
+    - Run bounded zombie-sweep housekeeping
+    - Drain exact due wakeups, snapshot the paged-FIFO tail cutoff, and scan from QueueHead
+    - Process actors in deterministic FIFO order up to MaxExecutionsPerBlock:
+        1. Reserve the complete actor-probe bound
+        2. Apply trigger, cooldown, breaker, window, fee, and lifecycle gates
+        3. Admit the complete opening plan or unresolved Continuation suffix plus pure cleanup
+        4. Execute the bounded attempt through runtime adapters
+        5. Leave weight-deferred head work in place and append late work beyond the cutoff
+```
+
+#### Key Properties
+
+- `Budget-capped`: Every housekeeping, queue, cycle, and close unit starts only after two-dimensional admission against the remaining `on_idle` budget.
+- `Deterministic FIFO fairness`: Monotonic tickets preserve bounded FIFO carry-over without class-weight knobs or queue reconstruction; measured stress profiles, rather than a System/User alternation claim, own the current fairness SLO.
+- `Starvation observability`: After the fixed hook base is admitted, a live FIFO head stalled by Weight, fee collection, or an invariant advances sparse `IdleStarvationState`; detection and recovery remain observability-only and never dispatch emergency work in `on_initialize`.
+- `Deferred service`: Weight blockage and rolled-back fee-infrastructure failure retain the same FIFO head for later service; only Idle consumption of paid readiness tests complete User Pipeline capacity, and shortfall selects `CycleAdmissionInsufficient` without refunding prior Trigger fees.
+
+### 4.2 Resilience: Backpressure via Cooldown
+
+The system implements "Economic Backpressure" to handle volatility gracefully.
+
+- `Problem`: If DEX conditions are unfavorable (high slippage, low liquidity), executing a swap is dangerous.
+- `Solution`: A final failure may use `ContinueNextStep` to advance, while a Mutable plan may use `RetryLater` only for an adapter-classified Temporary failure. Cooldown schedules the unresolved suffix through the canonical Service ring and Deadline substrate.
+- `Result`: Temporary incapacity can preserve a committed prefix and resume at the same step. Permanent and unsupported failures never create Continuation.
+
+### 4.3 Adapter Architecture
+
+Actors delegates host behavior through typed runtime contracts:
+
+Reactive work follows `specialize detection -> unify activation -> unify execution`: Manual calls, certified address movement, and AtTime/Cadenced deadlines retain distinct bounded detectors, then share one readiness latch, placement contract, cutoff, and FIFO. Observations never activate Actors; they are read only by execution-time Step predicates.
+
+- `AssetOps`: transferable balances, transfer, burn, mint, minimum-balance, and deposit checks
+- `DexOps`: caller-aware exact-input and exact-output swaps
+- `LiquidityOps`: liquidity addition/removal plus adapter-owned donation balancing and receipt-suppression semantics
+- `StakingOps`: runtime-defined stake positions, shares, and transferable share assets
+- `FeeCollector`, `FundingAuthority`, direct ingress, task-failure retry class, task weights, and atomicity hooks: host-owned authority, metering, provenance, and lifecycle integration
+
+Adapters own runtime-specific mechanics while Actors owns plan resolution, admission, task-scoped rollback, and observable error-policy handling. The portable contract lives in the package-owned [specification](../../template/pallets/actors/docs/specification.en.md) and [embedding guide](../../template/pallets/actors/docs/embedding.md); the current DEOS binding lives in [DEOS Actors Integration](./actors.integration.en.md).
+
+The Actors package specification owns the exhaustive amount-resolution variants and execution semantics; this composition map owns only their runtime adapter boundary.
+
+## 5. Network Architecture: The Connected Automaton
+
+The DEOS reference runtime extends its "Omnivorous" philosophy to the Polkadot ecosystem via XCM (Cross-Consensus Messaging), treating foreign chains as just another source of balance ingress.
+
+### 5.1 XCM Integration Strategy
+
+The parachain acts as a `Sovereign Liquidity Hub`, accepting assets from Relay Chain and Sibling Parachains after governance registration in the Asset Registry.
+
+- `Ingress Protocol`: The system accepts registered reserve assets through `ReserveAssetDeposited`; teleporting is disabled by both the executor and the pallet dispatch filter.
+- `Asset Identity`: The local balances currency `$NTVE` is concrete XCM `Here`, and the runtime reserves that Location against foreign registration, linking, and migration. Relay `Parent` and distinct sibling-origin assets enter separate governance-registered `0xF...` `pallet-assets` ledgers; collision checks and the bidirectional registry prevent ledger aliasing, and a relay reserve deposit cannot mint `$NTVE`.
+- `Asset Mapping (Hybrid)`: Bidirectional `Location <-> AssetId` is stored on-chain in the Asset Registry; IDs are generated once at registration (`hash(Location)`) and then persisted as the stable identity contract. This protects against XCM location-key drift while keeping forward lookup, reverse lookup, and bijectivity O(1).
+- `Holding Register`: Incoming assets are held temporarily before dispatch to the asset transactor. `XcmConfig::MaxAssetsIntoHolding = 1` caps this register while `FixedWeightBounds` is active, so one generated saturated foreign-asset Actors deposit envelope safely prices every instruction; multi-asset holding requires an instruction-specific weigher before activation. Ordinary and surplus-deposit tests preserve exact holdings and state on unknown mappings, unconvertible destinations, and Actors ingress rejection.
+- `Sovereign Transact Surface`: The current reference line keeps barrier/origin-conversion plumbing for paid and explicit unpaid execution classes, but exposes no sovereign-XCM runtime-call dispatch surface by default; both `XcmExecuteFilter = Nothing` and `SafeCallFilter = Nothing` keep arbitrary execution fail-closed unless a later constitutional/runtime slice explicitly opts concrete calls in.
+
+### 5.2 Foreign Asset Transactor
+
+The `ForeignAssetsTransactor` (configured in `xcm_config.rs`) provides the bridge between XCM locations and the internal `pallet-assets` registry.
+
+- `Storage Lookup`: Uses the Asset Registry mapping (O(1) storage) to resolve `Location -> AssetId` (`0xF...` namespace), with symmetric reverse lookup available when runtime integration needs `AssetId -> Location`.
+- `Governance-Gated Onboarding`: New assets are registered via registry extrinsics (deterministic ID, manual ID, or linking pre-created `0xF...`), then consumed by XCM flows.
+
+### 5.3 Cross-Chain Identity
+
+- `Sovereignty`: The parachain maintains sovereign accounts on other chains to manage its own liquidity reserves.
+- `Sibling Recognition`: `ForeignAssetsFromSibling` filter ensures that assets originating from sibling parachains are recognized as valid reserve assets, enabling seamless cross-chain swaps.
+- `Controller Separation`: XCMP queue control remains Root-only on the current line even though relay/sibling/account-style XCM origins can still be converted for other executor/controller plumbing; origin conversion does not itself widen queue-control authority.
+
+### 5.4 Randomness and Collator Gate
+
+The current runtime owns no local VRF, entropy membership, reveal committee, or randomness reward economy. During the trusted invulnerable-collator phase, consumers that need bounded sampling may use the previous block hash without claiming same-block fairness; Actors itself exposes deterministic cadence and no probabilistic trigger.
+
+Permissionless collators and a stronger randomness contract remain gated on a production-ready, parachain-consumable per-block relay/protocol beacon. Existing epoch-scale relay randomness does not satisfy that gate. If a qualifying beacon appears, the preferred integration is a weight-accounted consensus hook that materializes one compact per-block snapshot while retaining the existing consensus rule; local threshold randomness is reconsidered only if the relay path cannot meet the contract.
+
+## 6. Economic Guarantees
+
+### 6.1 The Price Corridor
+
+The interaction of actors creates a conditionally bounded economy:
+
+- `Ceiling`: Enforced by TMC. Multiple curves such as Native and `$BLDR` each define independent ceilings.
+- `Floor`: Reported from TOL bucket reserves that qualify under the TMCTOL floor metric and bucket-accounting rules. The concrete custody accounts and active-policy lanes belong to the Actors integration map.
+- `Compression`: Burn Actor execution reduces live supply and liquidity-actor LP provisioning can strengthen counted reserves. Bidirectional compression holds only under the named preconditions: protected counted reserves, explicit sellable-pressure assumptions, live burn execution, and healthy liquidity accounting.
+
+### 6.2 Deflationary Velocity
+
+`DEOS Router` acts as a vacuum for circulating supply.
+
+- `Mechanism`: High base fee (e.g., 0.5%) + Protocol Priority Routing.
+- `Outcome`: System value capture is prioritized over LP revenue. The protocol captures the spread to burn its own supply.
+
+### 6.3 Second-Order `$BLDR` TMCTOL and Capital Loop
+
+The [Builder Economy Contract](./builder-economy.contract.en.md) owns the normative composition of second-order TMCTOL and Builder governance; this section maps that contract into the current DEOS architecture. TOL is an asset-scoped treasury-owned liquidity topology, not a fixed four-bucket shape. The TOL component of reference first-order Native/foreign TMCTOL uses Bucket Anchor (`A`), Bucket Builder (`B`), Bucket Capital (`C`), and Bucket Dormant (`D`), with paired treasuries for B/C/D. The TOL component of second-order `$BLDR` TMCTOL has no lettered bucket family. Its bucket has reusable Anchor type and the human name BLDR Anchor; BLDR Treasury is a separate multi-asset treasury owner rather than another bucket. Their sovereign accounts hold consensus-frozen LP and spendable invoice custody respectively; the former belongs to a sealed dormant Immutable identity, while the latter belongs to a dormant Mutable treasury identity.
+
+```text
+User acquires $BLDR through Router
+  → TMC branch: about 1/3 recipient + 1/3 immutable anchor lane + 1/3 direct BLDR Treasury
+  → XYK branch: existing $BLDR moves from market reserves to recipient
+
+Parent Bucket B releases LP gradually
+  → Treasury B receives $NTVE + foreign reserves
+  → both assets route into $BLDR
+  → half of recipient $BLDR burns
+  → half enters BLDR Treasury
+```
+
+All `$NTVE` collateral received by the `$BLDR` TMC is directed to the BLDR Liquidity Actor, and all resulting LP is assigned to BLDR Anchor. The shared first-/second-order anchor invariant is approximately one third of total issuance directed to immutable protocol-owned liquidity. Collateral is deliberately asymmetric: first-order Bucket A receives half under the reference four-bucket allocation, while BLDR Anchor receives all Native collateral.
+
+Route effects remain distinct. An XYK acquisition is issuance-contracting by the burned half. A TMC acquisition creates full curve issuance, sends its protocol allocation through the existing BLDR Splitter, then burns only half of the recipient output; it can remain net issuance-positive while strengthening anchor liquidity and BLDR Treasury.
+
+The shipped runtime currently realizes the `$BLDR` TMC, BLDR Splitter, and anchor/treasury path and an optional Treasury B plan that spends only Native and burns all acquired `$BLDR`. The Builder Economy contract defines the target dual-reserve 50/50 capital bridge analytically; the simulator does not model that Builder composition. Runtime composition, liveness projection, and production evidence remain open until the plan consumes both Treasury B reserve assets and separates recipient burn from recycled treasury funding.
+
+The reference invoice executor in `template/runtime/src/configs/governance_config.rs` now selects payout from enactment-time `Assets::reducible_balance` with the same Expendable/Polite ledger policy as its transfer: checked scalar target first, refusal below `min(base,target)`, otherwise `min(target,spendable)`. Thus only an above-base premium may clip. `l2_treasury_spend_base_floor_enforces_scalar_minimums` covers full/floor/partial/reduced/overflow cases; competing invoices consume current capacity without reservation, and frozen-source/receiver-provider failures preserve payout balances, issuance and Fee Sink. Tests use public proposal/vote/resolution plus prepared epoch service, not complete consensus chronology.
+
+`l2_treasury_spend_rejects_source_dust_roundup` covers a separate SDK boundary: a minimum10 asset with treasury105 and an approved100 payout would otherwise credit105 through `Assets::transfer`. The executor now prevalidates nonzero withdrawal and rejects nonzero source dust before dispatch; it never increases payout above the computed amount or adds a compensating transfer/transaction. Zero-amount transfer semantics are retained.
+
+Invoice witness preparation and execution use the bounded typed-source decoder owned by §7.3 before amount selection or payout. `l2_treasury_spend_admission_and_enactment_share_exact_decoder` covers a canonical control, trailing/truncated bytes, an invalid CID, empty input and wrong domain. Malformed admin-submitted proposals cannot bypass the executor by omitting a witness: direct refusal preserves the complete root, and pending enactment records `InvalidPreimage` without payout. These are native prepared-epoch witnesses, not full consensus chronology.
+
+`governance_treasury_account` now resolves the configured account through `SovereignIndex`, canonical `Actors::actor_identity` and the matching occupied System sovereign locator, requiring the declared sovereign and Mutable class. Invoice witness preparation and current signed-witness compatibility use this live owner; enactment independently resolves it again. A closed or Immutable source cannot authorize custody merely because the address still has balances. Pure `governance_payload_authority` retains domain/kind routing for pre-fetch without repeating the live loader there.
+
+`l2_treasury_spend_rechecks_live_treasury_authority` covers close and genuine Immutable recreation before witness, after witness and after approval: preparation/submission refuse with exact pre-state, and failed enactment transfers nothing. Mutable recreation of the same sovereign account restores eligibility without pretending the old Actor id survived. `l2_treasury_spend_keeps_mutable_treasury_lifecycle_independent` pays from dormant/active Mutable sources while preserving identity, Contract, process and Run. These are native public-control/prepared-epoch sources, not complete consensus chronology or physical bounds.
+
+The reference executor reports `InsufficientTreasuryCapacity` only when current spendability falls below `min(base,target)`, retaining zero payout. `l2_treasury_spend_base_floor_enforces_scalar_minimums` checks the stored reason and failure event separately from arithmetic overflow; the competing-invoice test checks the later capacity refusal. Frozen spendability also selects this reason, while dust roundup, beneficiary-provider and live-authority refusals retain `DispatchFailed`. These classifications do not infer solvency from approval.
+
+`TacticalTreasuryInvoicePayload` now encodes `invoice_cid`, `treasury_account`, `beneficiary`, `payout_asset`, then `base_amount`; the fixed funding enum is removed. The shared queryable Governance `MaxCidBytes` is 96. `decode_tactical_treasury_invoice` builds on the exact typed decoder, parses with pinned `cid` 0.11.3, requires CIDv1 and exact lowercase unpadded base32 canonical spelling, and never fetches content. The declared treasury must equal the live domain-approved Mutable System source at preparation and enactment; the reference permits BLDR Treasury only.
+
+`l2_treasury_spend_rejects_noncanonical_invoice_identity` covers empty, URL, uppercase, CIDv0, invalid UTF-8, malformed and over-bound identities, plus upstream-accepted `/ipfs/` paths and decoded trailing-byte aliases. Parsing alone is insufficient: runtime canonical equality rejects those aliases before effects. `l2_treasury_spend_rejects_foreign_payload_treasury` rejects a funded signer, BLDR Anchor and a different System treasury through preparation and public admin enactment, preserving both candidate/source balances, issuance and Fee Sink. The existing live-role/recreation/lifecycle guards remain independent of the payload account field.
+
+The generic receipt, retained detail and event now carry invoice CID, explicit treasury, beneficiary/asset, base/scalar, target/actual amounts and capacity-limited status. These are bounded canonical-chain observations, not reserved entitlements or permanent history. The scalar boundary matrix checks the complete stored receipt, including clipped premium. `l2_treasury_spend_invoice_codec_matches_browser_source_vector` and the client regression agree on the source codec order and both compact CID-length modes; these vectors do not qualify deployed metadata.
+
+Source fetching, CID parsing/canonicalization, live authority, ledger/effect work and the larger retained receipt need complete caller/Weight qualification. The locked runtime target graph activates `cid/alloc`, while native defaults add `cid/std`; no-std uses separate varint/in-memory I/O paths. Offline graph/source provenance review does not replace compiled no-std/Wasm agreement or fresh advisory clearance. Coordinated metadata/descriptors/Wasm, remaining whole-runtime/per-payload Executive coverage, live RPC and rendered client convergence remain separate gates; old artifacts cannot decode the changed source ABI.
+
+`maximum_cid_invoice_pending_batch_preserves_capacity_prefix_and_future_member` constructs five distinct maximum-length Invoice preimages through public preimage/proposal/vote/resolution. Four same-due approvals use the configured four-visit service budget: treasury550 pays200,200,150, then records capacity failure without undoing paid prefixes. A fifth later-due member retains its record, metadata, pointer and cursor, then pays200 at its original due after funding. Exact receipts, terminal expiry, issuance, Fee Sink and treasury identity are checked in default and all-features native contexts. This is Root-admin proposal/prepared-epoch evidence, not signed witness admission, full Executive history, global pending capacity or a benchmark cost bound. No new helper/profile is introduced; the existing shared-parameter benchmark remains separate.
+
+The existing `signed_tactical_treasury_submission_collects_opening_fee_and_records_signer` fixture covers both 59-byte and maximum96-byte CID sources, including the182-byte payload. It checks exact witness authority/length/compatibility/deposit, reserve/refund independently from the preimage reserve, author/hash metadata, Opening Fee event and Fee Sink credit, consumed witness and atomic refusal of replay without a new witness. Native/custody issuance and treasury identity stay unchanged. Default and all-features focused runs qualify signed-origin pallet admission only: they do not execute Executive transaction payment, measure cached identity-loader cost, prove no-std/Wasm applicability or replace the separate live-role/recreation matrix. Evidence is in `template/target/release-0727-invoice-signed-maximum/qualification.json`.
+
+## 7. Runtime Topology
+
+### 7.1 Pallet Inventory
+
+| Pallet | Role | Hooks |
+| --- | --- | --- |
+| `pallet-deos-actors` | Bounded System and User actor platform | `on_initialize`, `on_idle` |
+| `pallet-deos-router` | Max-output routing and trading fees | Extrinsic-driven |
+| `pallet-deos-oracle` | Current typed observation truth | Extrinsic and producer-hook driven |
+| `pallet-deos-tmc` | Multi-curve issuance | Extrinsic-driven |
+| `pallet-deos-asset-registry` | Foreign asset registry | Extrinsic-driven |
+| `pallet-asset-conversion` | Uniswap V2-like AMM pools | Extrinsic-driven |
+| `pallet-assets` | Fungible asset ledger | — |
+| `pallet-balances` | Native token ledger | — |
+
+### 7.2 Composition Boundary
+
+Actors replaces bespoke recurring manager loops with one bounded orchestration substrate, while dedicated pallets retain asset, market, staking, governance, and issuance mechanics. [DEOS Actors Integration](./actors.integration.en.md) owns the concrete reference composition; package documents remain reusable outside the DEOS actor catalog.
+
+### 7.3 Closed Authority Inventory
+
+The reference runtime admits no implicit governance-equivalent signer. Runtime integrity tests exercise every configured privileged origin against Root and an ordinary signed account, while subsystem specifications and tests own the explicit non-Root exceptions, typed execution paths, and their non-guarantees.
+
+| Surface | Admitted authority | Closed boundary |
+| --- | --- | --- |
+| Actors System control and global breaker | Root; mutable System actors are owned by the Actors pallet account | Every active and dormant genesis owner must equal the non-signable pallet-derived control account |
+| Governance administration | Root | Signed ingress creates only policy-admitted bounded proposals and cannot dispatch Root directly |
+| Governance payload execution | `L1RootAction -> Root-equivalent`; treasury and parameter kinds -> domain adapters; advisory kinds -> non-executable | The five payload kinds form one tested exhaustive authority map |
+| Runtime upgrades | Governance-approved typed `L1RootAction` authorizes one code hash; later external application may transport only the already-authorized bytes | Direct signed authorization fails `BadOrigin`; `$VETO` alone cannot create upgrade intent |
+| Router, Staking, TMC, Asset Registry, Oracle registration, preimage management, XCM administration, and XCMP control | Root | Ordinary signed origins are rejected by each configured origin |
+| Collator updates | Root or the explicit relay `StakingAdmin` executive plurality | Ordinary signed origins and unrelated XCM origins are rejected |
+| Oracle publication | Signed call plus feed-local producer identity | Signing alone grants no feed registration or publication authority for another producer |
+| XCM unpaid execution | Relay parent and its executive plurality only | Siblings require paid execution; arbitrary `Transact`, pallet execute, and teleport surfaces remain disabled |
+| Protocol custody | Distinct pallet-derived Fee Sink, staking ingress, security reward, liquidity, LP lock, and Governance custody accounts | Runtime integrity rejects account aliasing; custody identity grants no signing or control authority |
+
+`template/runtime/src/configs/governance_config.rs::decode_bounded_governance_payload` owns domain, encoded ceiling and complete SCALE consumption for typed L1 upgrade and Invoice payloads, shared by witness validation and execution. Parameter changes retain their exact call allowlist; advisory validation remains separately bounded. No typed decoder substitutes for the source-fetch and complete physical/caller owners.
+
+The executor queries compact SDK preimage length first. Absent or requested-but-unnoted sources retain `MissingPreimage`; available non-executable kinds return `UnsupportedCall`, and executable domain checks reuse the pure domain/kind authority owner before the per-kind ceiling. Only admitted lengths reach `QueryPreimage::fetch(hash, Some(len))`, avoiding a second compact lookup and rejecting oversized values before their storage read. This relies on coherent SDK status and hash/length-keyed bytes; it retains SDK status normalization rather than promising a read-only query over legacy states.
+
+`governance_executor_preflight_never_reads_rejected_byte_values` commits public setup before recording only execution. Recorded keys exclude `PreimageFor` for each executable ceiling+1, wrong domain, SDK-maximum oversized bytes, advisory refusal and absent/requested-unavailable sources; a canonical upgrade control does read its exact value key. Direct refusals preserve the full root. Key absence is native source-boundary evidence, not read multiplicity, universal RefTime/ProofSize, price sufficiency, or old-Wasm equivalence; complete compact-status, normalization, fetch/decode and caller costs remain independently qualified.
+
+`l1_root_action_admission_and_enactment_share_exact_decoder` tests canonical, trailing, truncated, empty and wrong-domain sources. Direct refusal preserves the complete storage root; admin resolution/pending enactment records `InvalidPreimage` and preserves a prior System upgrade authorization and Fee Sink, while the canonical control authorizes the target hash. This is native prepared-epoch conformance, not complete consensus chronology or actual code application. Existing signed-witnessed enactment separately tests committed-hash selection.
+
+Retained optimized native `tests::governance_integration_tests` module evidence covers 54 default and 50 all-features cases; `template/target/release-0727-governance-optimized/qualification.json` owns the finite command/results and source/binary identities. Default covers `signed_l2_actor_admission_then_parked_churn_imports_complete_blocks` on both named presets, including its real signed Governance prefix. Benchmarking replaces production vote power and excludes five production-vote scenarios; all-features adds custody try-state coverage rather than repeating that chronology. Prepared-epoch Invoice witnesses remain prepared-epoch evidence. This aggregate does not qualify the whole runtime, exact Wasm, live metadata, physical maxima or tariffs, and need not be repeated without changed relevant inputs.
+
+The cfg-only finalized-cleanup helper prepares a canonical 96-byte CID Invoice with the BLDR Treasury account, using ordinary Root asset/System Actor constructors when absent and the shared runtime decoder to reject invalid source authority. `finalized_invoice_benchmark_template_matches_real_enactment` recreates the treasury through that constructor, then obtains the identical maximum-sized record through public proposal/vote/resolution and prepared-epoch enactment; it checks actual payout, issuance and Fee Sink. This is not full Executive chronology. Current native all-features module validation covers 54 cases, including this template control, reference cleanup maximum, distinct-source Invoice batch and pending-fixture delay consistency; no new optimized-default chronology was needed for cfg-only fixture changes. Benchmark-source evidence lives in `template/target/release-0727-finalized-invoice-fixture/qualification.json`; raw measurements, complete cost ownership and coordinated bindings remain separate.
+
+`finalized_cleanup_benchmark_verifies_reference_maximum` invokes the existing cleanup fixture with SDK `NoopRecording` against all 16,384 entries of one configured domain index and its unchanged 1,024-entry cleanup maximum. Due result/metadata/winning-option removal leaves exactly 15,360 maximum-sized retained peers, unchanged future expiry buckets and pending list/cursor. Pending is empty in this source; nonempty mixed topology remains separate. This is native fixture verification, not raw measurement, full multi-domain/companion/hook maximum or an update to older Wasm observations. `template/target/release-0727-reference-cleanup-native/qualification.json` owns its finite source and command identities.
+
+`pending_benchmark_fixtures_preserve_ordinary_delay_on_reference_host` verifies the existing simple four-visit profile and both 128-member full-topology cleanup outcomes through native SDK observer recording. Setup now uses approval1/due43,201 and future approval2/due43,202, preserving ordinary delay43,200 rather than synthetic due2/3. Future peer records/metadata/due pointers and exact refusal-root/cursor behavior remain checked. These are seeded benchmark states, not a reconstructed public queue history. Native package coverage additionally verifies zero-delay impossibility and the first positive-delay boundary. `template/target/release-0727-pending-delay-fixture/qualification.json` owns scope/identities; older raw/Wasm topology points retain their prior setup scope and do not become current evidence.
+
+## 8. Conclusion
+
+The DEOS architecture transforms the blockchain from a passive ledger into an `Active Economic Automaton`.
+
+By separating dedicated economic mechanisms from production-admitted `pallet-deos-actors` automation, the system provides:
+
+1. `Bounded trade safety`: Direct routes combine slippage with pre-swap EMA deviation guards; multi-hop and full MEV/sandwich resistance are out of scope for this launch line (see DEOS Router architecture).
+2. `Composable Automation`: bounded Actors tasks and runtime adapters compose reconfigurable flows only when the resulting plan fits production admission and preserves custody/atomicity. New actor graphs avoid runtime code changes when existing primitives satisfy that contract; new mechanics require an admitted adapter or core-task review.
+3. `Multi-Token Economy`: L1 (Native) and L2 (`$BLDR`) economies operate independently with shared infrastructure. Each has its own TMC curve, liquidity pools, liquidity actor, and TOL buckets.
+4. `Bounded Background Execution`: Actors uses budget-capped `on_idle`, bounded `on_initialize` bookkeeping, and durable carry-over rather than claiming zero congestion under every workload.
+5. `Conditional Automation`: Activated, funded actors can burn, provision liquidity, or route treasury value when adapters, pools, triggers, and safety conditions remain healthy; dormant or unadmitted policy targets do not produce effects.
+6. `Focused Ownership`: Dedicated pallets own minting, routing, staking, assets, and AMM mechanics while Actors owns bounded orchestration, avoiding duplicated manager loops without turning the actor kernel into a universal VM.
+
+---
+
+- `Last Updated`: July 2026

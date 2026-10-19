@@ -3,7 +3,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-WIKI_DIR="$PROJECT_ROOT/wiki"
+WIKI_DIR="$PROJECT_ROOT/wiki/deos"
 MIN_BODY_LINES="${MIN_BODY_LINES:-18}"
 
 usage() {
@@ -15,8 +15,8 @@ navigation/graph reachability. Short pages and graph leaves remain non-blocking
 consolidation candidates.
 
 Options:
-  --wiki-dir <path>              Override the wiki directory (default: ./wiki)
-  --wiki-dir=<path>              Override the wiki directory (default: ./wiki)
+  --wiki-dir <path>              Override the wiki directory (default: ./wiki/deos)
+  --wiki-dir=<path>              Override the wiki directory (default: ./wiki/deos)
   --min-body-lines <n> Short-page threshold (default: 18)
   -h, --help           Show this help message
 EOF

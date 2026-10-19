@@ -11,6 +11,9 @@ INCLUDE_OCCUPANCY_PROFILE="${INCLUDE_OCCUPANCY_PROFILE:-0}"
 # refresh rather than to release acceptance. They stay runnable with INCLUDE_NIGHTLY_HEAVY=1.
 INCLUDE_NIGHTLY_HEAVY="${INCLUDE_NIGHTLY_HEAVY:-0}"
 QUICK_MODE="${QUICK_MODE:-0}"
+H1_DIAGNOSTIC=0
+INTEGRATED_TRANSFER_BASELINE=0
+TRANSFER_BASELINE_PROFILE=""
 INTEGRATED_W0_W1=0
 INTEGRATED_W1_ACTOR_ONLY=0
 INTEGRATED_W1_CONTINUOUS_USER=0
@@ -64,20 +67,33 @@ Usage: actors-assurance.sh [OPTIONS]
 Runs the DEOS Actors assurance contract across the package archive, external-consumer fixture, and deos-runtime.
 
 Source identity hashes tracked and untracked source bytes and executable mode in
-template, scripts, web-client, simulator, docs, .github, .cargo, and root build configuration.
+template, scripts, web-client, simulators, docs, .github, .cargo, and root build configuration.
 It includes staged changes and committed content, is independent of checkout path
 and commit packaging, and excludes build outputs, .papi metadata/descriptors, and Skills.
 Weight, production Wasm, and metadata retain their separate artifact identities.
 
-self-test checks source identity in an isolated temporary Git repository, without
-Cargo, network access, or build artifacts. The assurance gate also runs it automatically.
+self-test checks source identity in an isolated temporary Git repository and
+H1 diagnostic mode exclusivity, without Cargo, network access, or build artifacts.
+The assurance gate also runs it automatically.
 
 Options:
   --skip-occupancy-profile   Skip the gating 10k occupancy profile
   --quick                    Run only fast checks (Clippy + light tests)
+  --h1-diagnostic            Run native isolated public User 1/2/4/8/12-Step,
+                             recipient-retry and authored nonce-Close diagnostics.
+                             No Wasm/metadata/npm prerequisite; no capacity acceptance.
+                             Compares plain/observed final roots; named SDK state events only.
+                             DEOS_VERBOSE=1 exposes ACTORS_H1 JSON rows and identities.
   --exact-heavy-profile NAME Run one declared runtime/package heavy profile
   --production-reference-replay
                              Run the current pinned production-Wasm block/proof replay
+  --router-predicate-baseline PROFILE
+                                 Run Router+4 true predicates: short, system-first,
+                                 user-first; exact production-Wasm/proof replay.
+  --transfer-baseline PROFILE     Run scoped Transfer tests: short, system-first,
+                                  user-first, system-recurring, user-recurring.
+                                  Only explicit recurring selection runs 2 x (64+100).
+                                  Each command has a 60-minute bound; never builds Wasm.
   --integrated-w0-w1              Run only the full-Executive W0/W1 preparation gate
   --integrated-w1-actor-only      Run the exact-Wasm 100-block Actor-only W1 campaign
   --integrated-w1-continuous-user Run the exact-Wasm 100-block continuous-user W1 campaign
@@ -177,6 +193,9 @@ parse_args() {
             --quick)
                 QUICK_MODE=1
                 ;;
+            --h1-diagnostic)
+                H1_DIAGNOSTIC=1
+                ;;
             --exact-heavy-profile)
                 [[ $# -ge 2 ]] || {
                     log_error "--exact-heavy-profile requires a profile name"
@@ -187,6 +206,28 @@ parse_args() {
                 ;;
             --production-reference-replay)
                 PRODUCTION_REFERENCE_REPLAY=1
+                ;;
+            --router-predicate-baseline)
+                [[ $# -ge 2 ]] || { log_error '--router-predicate-baseline requires a profile'; exit 2; }
+                [[ "$INTEGRATED_TRANSFER_BASELINE" == 0 ]] || { log_error 'Select one economic baseline profile'; exit 2; }
+                case "$2" in
+                    short|system-first|user-first) ;;
+                    *) log_error "Unknown Router predicate baseline: $2"; exit 2 ;;
+                esac
+                INTEGRATED_TRANSFER_BASELINE=1
+                TRANSFER_BASELINE_PROFILE="router-$2"
+                shift
+                ;;
+            --transfer-baseline)
+                [[ $# -ge 2 ]] || { log_error '--transfer-baseline requires a profile'; exit 2; }
+                [[ "$INTEGRATED_TRANSFER_BASELINE" == 0 ]] || { log_error 'Select one Transfer baseline profile'; exit 2; }
+                case "$2" in
+                    short|system-first|user-first|system-recurring|user-recurring) ;;
+                    *) log_error "Unknown Transfer baseline profile: $2"; exit 2 ;;
+                esac
+                INTEGRATED_TRANSFER_BASELINE=1
+                TRANSFER_BASELINE_PROFILE="$2"
+                shift
                 ;;
             --integrated-w0-w1)
                 INTEGRATED_W0_W1=1
@@ -245,7 +286,11 @@ parse_args() {
         esac
         shift
     done
-    local integrated_count=$((INTEGRATED_W0_W1 + INTEGRATED_W1_ACTOR_ONLY + INTEGRATED_W1_CONTINUOUS_USER + INTEGRATED_W2_SCHEDULES + INTEGRATED_W3_OPENING_MATRIX + INTEGRATED_W4_HETEROGENEOUS_EFFECTS + INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP + INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE + INTEGRATED_CURRENT_W7_DEADLINES + INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER + INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE + INTEGRATED_W9_RESOURCE_INDEPENDENCE + INTEGRATED_CONTROL_ATTRIBUTION + INTEGRATED_FUNDED_USER_ACTION))
+    local integrated_count=$((INTEGRATED_TRANSFER_BASELINE + INTEGRATED_W0_W1 + INTEGRATED_W1_ACTOR_ONLY + INTEGRATED_W1_CONTINUOUS_USER + INTEGRATED_W2_SCHEDULES + INTEGRATED_W3_OPENING_MATRIX + INTEGRATED_W4_HETEROGENEOUS_EFFECTS + INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP + INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE + INTEGRATED_CURRENT_W7_DEADLINES + INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER + INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE + INTEGRATED_W9_RESOURCE_INDEPENDENCE + INTEGRATED_CONTROL_ATTRIBUTION + INTEGRATED_FUNDED_USER_ACTION))
+    if [[ "$H1_DIAGNOSTIC" == "1" && ( "$QUICK_MODE" == "1" || "$integrated_count" -gt 0 || "$BACKPRESSURE_AUDIT" == "1" || "$PRODUCTION_REFERENCE_REPLAY" == "1" || -n "$EXACT_HEAVY_PROFILE" ) ]]; then
+        log_error "--h1-diagnostic selects one independent native diagnostic cohort"
+        exit 2
+    fi
     if [[ "$integrated_count" -gt 1 ]]; then
         log_error "Select exactly one integrated workload cohort"
         exit 2
@@ -311,7 +356,7 @@ worktree_evidence_identity() {
     (
         cd "$PROJECT_ROOT" || exit 1
         git ls-files --cached --others --exclude-standard -z -- \
-            template scripts web-client simulator docs .github .cargo \
+            template scripts web-client simulators docs .github .cargo \
             ':/*.toml' ':/*.json' .gitignore .gitattributes .npmrc \
             ':(exclude,glob)**/target/**' ':(exclude,glob)**/node_modules/**' \
             ':(exclude,glob)**/build/**' ':(exclude,glob)**/dist/**' \
@@ -338,6 +383,7 @@ worktree_evidence_identity() {
 
 run_self_test() (
     local fixture
+    local QUICK_MODE=0
     require_commands bash git sha256sum sort mktemp
     fixture="$(mktemp -d "${TMPDIR:-/tmp}/deos-source-identity.XXXXXX")"
     trap 'rm -rf -- "$fixture"' EXIT
@@ -346,6 +392,48 @@ run_self_test() (
     assert_equal() { [[ "$1" == "$2" ]] || { log_error "$3"; exit 1; }; }
     assert_changed() { [[ "$1" != "$2" ]] || { log_error "$3"; exit 1; }; }
 
+    (parse_args --h1-diagnostic; [[ "$H1_DIAGNOSTIC" == "1" ]])
+    local baseline_profile conflicting_mode
+    for baseline_profile in short system-first user-first system-recurring user-recurring; do
+        (parse_args --transfer-baseline "$baseline_profile"; [[ "$TRANSFER_BASELINE_PROFILE" == "$baseline_profile" && "$INTEGRATED_TRANSFER_BASELINE" == 1 ]])
+    done
+    for conflicting_mode in --quick --integrated-w0-w1 --h1-diagnostic --production-reference-replay --backpressure-audit; do
+        if (parse_args --transfer-baseline short "$conflicting_mode") >/dev/null 2>&1; then
+            log_error "Transfer baseline accepted conflicting mode: $conflicting_mode"; exit 1
+        fi
+    done
+    if (parse_args --transfer-baseline short --transfer-baseline user-recurring) >/dev/null 2>&1; then
+        log_error 'Transfer baseline accepted duplicate selectors'; exit 1
+    fi
+    if (parse_args --transfer-baseline unknown) >/dev/null 2>&1 || (parse_args --transfer-baseline) >/dev/null 2>&1; then
+        log_error 'Transfer baseline accepted missing/unknown profile'; exit 1
+    fi
+    for baseline_profile in short system-first user-first; do
+        (parse_args --router-predicate-baseline "$baseline_profile"; [[ "$TRANSFER_BASELINE_PROFILE" == "router-$baseline_profile" && "$INTEGRATED_TRANSFER_BASELINE" == 1 ]])
+    done
+    for conflicting_mode in --quick --integrated-w0-w1 --h1-diagnostic --production-reference-replay --backpressure-audit; do
+        if (parse_args --router-predicate-baseline short "$conflicting_mode") >/dev/null 2>&1; then
+            log_error "Router predicate baseline accepted conflicting mode: $conflicting_mode"; exit 1
+        fi
+    done
+    if (parse_args --router-predicate-baseline short --transfer-baseline short) >/dev/null 2>&1 \
+        || (parse_args --transfer-baseline short --router-predicate-baseline short) >/dev/null 2>&1 \
+        || (parse_args --router-predicate-baseline short --router-predicate-baseline user-first) >/dev/null 2>&1 \
+        || (parse_args --router-predicate-baseline unknown) >/dev/null 2>&1 \
+        || (parse_args --router-predicate-baseline) >/dev/null 2>&1; then
+        log_error 'Router predicate baseline accepted invalid/duplicate selector'; exit 1
+    fi
+    local conflicting
+    for conflicting in --quick --integrated-w0-w1 --production-reference-replay --backpressure-audit; do
+        if (parse_args --h1-diagnostic "$conflicting") >/dev/null 2>&1; then
+            log_error "H1 diagnostic accepted conflicting mode: $conflicting"
+            exit 1
+        fi
+    done
+    if (parse_args --h1-diagnostic --exact-heavy-profile maximum_dormant_identity_population_adds_no_idle_scan) >/dev/null 2>&1; then
+        log_error 'H1 diagnostic accepted a heavy-profile cohort'
+        exit 1
+    fi
     git -C "$fixture" init -q
     git -C "$fixture" config user.name 'Source identity test'
     git -C "$fixture" config user.email 'source-identity@example.invalid'
@@ -395,7 +483,7 @@ run_self_test() (
         log_error 'Symlink source must fail closed instead of certifying external bytes'
         exit 1
     fi
-    log_success 'Actors source identity self-test passed'
+    log_success 'Actors source identity and diagnostic selection self-test passed'
 )
 
 capture_evidence_identity() {
@@ -506,6 +594,41 @@ verify_heavy_profiles_resolve_exactly_once() {
         log_info "  exact package profile: ${profile} (1 test)"
     done
     log_success "All package heavy profiles resolve to exactly one test"
+}
+
+run_transfer_baseline_gate() {
+    local prefix='tests::production_block_replay::transfer_baseline::transfer_baseline'
+    local profile listing native
+    require_commands timeout
+    listing="$(cd "$TEMPLATE_DIR" && SKIP_WASM_BUILD=1 timeout 60m cargo test --release --lib -p deos-runtime --locked -- --list)"
+    case "$TRANSFER_BASELINE_PROFILE" in
+        router-*)
+            prefix='tests::production_block_replay::transfer_baseline::router_predicate_baseline'
+            case "$TRANSFER_BASELINE_PROFILE" in
+                router-short) profile="${prefix}_short_replays_exact_production_wasm" ;;
+                router-system-first) profile="${prefix}_system_first" ;;
+                router-user-first) profile="${prefix}_user_first" ;;
+            esac
+            ;;
+        short)
+            profile="${prefix}_short_replays_exact_production_wasm"
+            for native in short_profiles first_block_preserves_partial_fifo owner_partition_and_phase_contract fee_sink_allocations_reconcile legacy_runner_preserves_demand_modes; do
+                [[ "$(printf '%s\n' "$listing" | grep -Fxc "${prefix}_${native}: test")" == 1 ]] || {
+                    log_error "Missing/duplicate short native profile: $native"; return 1;
+                }
+            done
+            run_shell_step "Transfer baseline: short native conformance only" "60" \
+                "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 cargo test --lib -p deos-runtime --locked 'tests::production_block_replay::transfer_baseline::transfer_baseline_' -- --nocapture"
+            ;;
+        *)
+            profile="${prefix}_${TRANSFER_BASELINE_PROFILE//-/_}"
+            ;;
+    esac
+    [[ "$(printf '%s\n' "$listing" | grep -Fxc "$profile: test")" == 1 ]] || {
+        log_error "Transfer baseline must select exactly one declared profile: $profile"; return 1;
+    }
+    run_shell_step "Economic baseline: exact production-Wasm $TRANSFER_BASELINE_PROFILE" "60" \
+        "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release --lib -p deos-runtime --locked '$profile' -- --exact --ignored --nocapture"
 }
 
 run_integrated_w0_w1_gate() {
@@ -918,8 +1041,43 @@ run_backpressure_audit() {
     done
 }
 
+run_h1_diagnostic() {
+    require_directory "$TEMPLATE_DIR" "Template directory"
+    hydrate_local_tool_paths
+    require_commands cargo rustc git sha256sum timeout
+    case "$CARGO_PROFILE" in
+        release|dev) ;;
+        *) log_error 'H1 diagnostic requires CARGO_PROFILE=release|dev'; return 2 ;;
+    esac
+    local minutes="${DEOS_TEST_TIMEOUT_MINUTES:-15}"
+    [[ "$minutes" =~ ^[1-9][0-9]*$ ]] || { log_error 'DEOS_TEST_TIMEOUT_MINUTES must be positive'; return 2; }
+    local source_before weight_before listing
+    source_before="$(worktree_evidence_identity)"
+    weight_before="$(sha256sum "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" | awk '{print $1}')"
+    log_info "H1 native diagnostic source: $source_before"
+    log_info "H1 declared Actors Weight: $weight_before"
+    log_info "H1 HEAD/tree anchors (not a clean-tree certificate): $(git -C "$PROJECT_ROOT" rev-parse HEAD 'HEAD^{tree}' | tr '\n' ' ')"
+    (cd "$TEMPLATE_DIR" && rustc --version --verbose && cargo --version)
+    log_info 'Executor: native library test; no production or benchmark Wasm executes'
+    local profile='tests::actors_h1_diagnostic::h1_public_user_lengths_report_declared_cost_and_q1'
+    listing="$(cd "$TEMPLATE_DIR" && SKIP_WASM_BUILD=1 timeout "${minutes}m" cargo test --profile "$CARGO_PROFILE" -p deos-runtime --locked --lib -- --list)"
+    [[ "$(printf '%s\n' "$listing" | grep -Fxc "$profile: test" || true)" == "1" ]] || {
+        log_error 'H1 diagnostic must select exactly one non-ignored runtime test'
+        return 1
+    }
+    run_shell_step "H1 public User workflow diagnostic" "$minutes" \
+        "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 cargo test --profile '$CARGO_PROFILE' -p deos-runtime --locked --lib '$profile' -- --exact --nocapture"
+    [[ "$(worktree_evidence_identity)" == "$source_before" ]] || { log_error 'H1 source changed during execution'; return 1; }
+    [[ "$(sha256sum "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" | awk '{print $1}')" == "$weight_before" ]] || { log_error 'H1 Weight changed during execution'; return 1; }
+    log_success 'H1 diagnostic retained source and declared Weight; physical/capacity qualification remains open'
+}
+
 main() {
     parse_args "$@"
+    if [[ "$H1_DIAGNOSTIC" == "1" ]]; then
+        run_h1_diagnostic
+        return
+    fi
     phase_banner "DEOS Actors assurance"
     check_prerequisites
     capture_evidence_identity
@@ -934,6 +1092,8 @@ main() {
         run_production_reference_replay
     elif [[ "$INTEGRATED_W0_W1" == "1" ]]; then
         run_integrated_w0_w1_gate
+    elif [[ "$INTEGRATED_TRANSFER_BASELINE" == "1" ]]; then
+        run_transfer_baseline_gate
     elif [[ "$INTEGRATED_W1_ACTOR_ONLY" == "1" ]]; then
         run_integrated_w1_campaign_gate actor-only
     elif [[ "$INTEGRATED_W1_CONTINUOUS_USER" == "1" ]]; then

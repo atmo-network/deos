@@ -28,7 +28,7 @@ impl Drop for IsolatedBlock {
   }
 }
 
-fn with_isolated_block<R>(block: BlockNumber, run: impl FnOnce() -> R) -> R {
+pub(super) fn with_isolated_block<R>(block: BlockNumber, run: impl FnOnce() -> R) -> R {
   assert!(
     ISOLATED_BLOCK.get().is_none(),
     "isolated scopes cannot nest"

@@ -229,7 +229,7 @@ impl Convert<Location, AssetId> for LocationToAssetIdConverter {
 
 ## Asset Registry Read-Model Contract
 
-This subsystem follows the project-wide [`read-model.contract.en.md`](../../../../docs/read-model.contract.en.md) split.
+This subsystem follows the project-wide [`read-model.contract.en.md`](../../../../docs/deos/read-model.contract.en.md) split.
 
 ### Canonical on-chain asset-registry projections
 

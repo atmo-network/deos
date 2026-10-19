@@ -2370,5 +2370,7 @@ mod lifecycle;
 mod market_tasks;
 mod pipeline_tariff;
 mod scheduling;
+mod service_head_allowance;
+mod service_refusal;
 mod storage_and_api;
 mod wakeups;
