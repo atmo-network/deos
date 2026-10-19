@@ -36,7 +36,7 @@ pub mod constants {
   mod test_db_weights {
     use polkadot_sdk::*;
 
-    use super::constants::ParityDbWeight as W;
+    use super::ParityDbWeight as W;
     use frame_support::weights::constants;
 
     /// Checks that all weights exist and have sane values.
@@ -44,6 +44,11 @@ pub mod constants {
     // you can delete it.
     #[test]
     fn sane() {
+      assert_eq!(
+        core::any::TypeId::of::<W>(),
+        core::any::TypeId::of::<super::ParityDbWeight>(),
+        "Sanity checks must use the local getter",
+      );
       // At least 1 µs.
       assert!(
         W::get().reads(1).ref_time() >= constants::WEIGHT_REF_TIME_PER_MICROS,

@@ -1,4 +1,4 @@
-//! Fixed-corpus hole-prefix inputs for the closed retention construction.
+//! Current-native storage catalogue and guarded fixed-corpus hole-prefix diagnostics.
 mod actor_retention_corpus;
 #[path = "actor_retention_hole_domain/birth.rs"]
 mod birth;
@@ -25,6 +25,7 @@ use polkadot_sdk::{
 use serde_json::json;
 
 const CAP: usize = 63;
+const CURRENT_NATIVE_TYPED_STORAGE_OWNERS: usize = 240;
 
 fn nibble<const N: usize>(key: &[u8; N], depth: usize) -> u8 {
   assert!(depth < 2 * N);
@@ -143,7 +144,7 @@ fn runtime_namespace_stems() -> std::collections::BTreeSet<Vec<u8>> {
       }
     }
   }
-  assert_eq!(storage_count, 239);
+  assert_eq!(storage_count, CURRENT_NATIVE_TYPED_STORAGE_OWNERS);
   assert!(
     stems.insert(
       polkadot_sdk::frame_support::storage::storage_prefix(b"XcmpQueue", b"InboundXcmpStatus")
@@ -554,7 +555,7 @@ fn runtime_storage_catalog() -> serde_json::Value {
       }
     }
   }
-  assert_eq!(entries.len(), 239);
+  assert_eq!(entries.len(), CURRENT_NATIVE_TYPED_STORAGE_OWNERS);
   let complete_stems = runtime_namespace_stems();
   let outside_metadata = complete_stems
     .difference(&stems)

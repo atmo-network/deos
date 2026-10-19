@@ -6,7 +6,7 @@ DEOS is a Polkadot SDK framework for building protocol economies. It moves recur
 
 **TMCTOL** is the flagship standard implemented on DEOS. DEOS provides the reusable substrate; TMCTOL defines one concrete economy running on it.
 
-[Start in 60 seconds](./wiki/getting-started/deos-in-60-seconds.en.md) | [Evaluate DEOS](./wiki/getting-started/partner-pitch.en.md) | [Read the specification](./docs/tmctol.specification.en.md) | [Run locally](#run-locally)
+[Start in 60 seconds](./wiki/deos/getting-started/deos-in-60-seconds.en.md) | [Evaluate DEOS](./wiki/deos/getting-started/partner-pitch.en.md) | [Read the specification](./docs/deos/tmctol.specification.en.md) | [Run locally](#run-locally)
 
 ---
 
@@ -15,7 +15,7 @@ DEOS is a Polkadot SDK framework for building protocol economies. It moves recur
 - **TMC — deterministic issuance.** A unidirectional curve defines how assets enter circulation without promising protocol redemption.
 - **TOL — owned liquidity.** Mint output can accumulate into protected and governed liquidity lanes under an explicit bucket policy.
 - **DEOS Router — max-output execution.** A bounded set of XYK, TMC, and Native-anchored routes compete by expected recipient output.
-- **DEOS Actors — autonomous operations.** Typed execution plans drive the Burn Actor, Liquidity Actor, splitters, buckets, and treasuries within storage and block-weight bounds.
+- **DEOS Actors — autonomous operations.** Typed Actor Contracts orchestrate admitted burn, liquidity and treasury flows within storage and block-weight bounds.
 - **Governance — constrained change.** Domain-scoped primary/protection tracks execute typed payloads instead of exposing unrestricted administration.
 
 DEOS makes deterministic execution claims, not deterministic market-outcome claims. Liquidity support, burn dynamics, oracle guards, and governance safety hold only under the preconditions defined in the specifications.
@@ -28,7 +28,7 @@ DEOS owns reusable mechanisms: runtime primitives, invariants, adapters, bounded
 
 A downstream ecosystem owns its identity, dApps, launch policy, labor model, treasury choices, token names, and concrete economic parameters.
 
-Read the [Framework / Instance Contract](./docs/framework-instance.contract.en.md) before turning the reference topology into a product.
+Read the [Framework / Instance Contract](./docs/deos/framework-instance.contract.en.md) before turning the reference topology into a product.
 
 ---
 
@@ -42,11 +42,15 @@ Read the [Framework / Instance Contract](./docs/framework-instance.contract.en.m
 
 ### Start the network
 
+The reference topology requires an independently qualified source-built Omni Node containing the client transaction-depth correction. The published SDK bundle alone is insufficient; see the [selected SDK and caller qualification](./docs/deos/actors.integration.en.md#sdk-dependency-line). Once that artifact is available:
+
 ```bash
+DEOS_OMNI_NODE_PATH=/absolute/path/to/qualified/polkadot-omni-node \
+DEOS_OMNI_NODE_SHA256="${QUALIFIED_OMNI_SHA256:?Set the independently verified artifact digest}" \
 ./scripts/bootstrap-local-network.sh
 ```
 
-This builds the runtime, prepares the chain specification, downloads the required operator binaries, and starts a local Zombienet network through Omni Node.
+The workflow verifies/selects that node before building the runtime, prepares the chain specification, and starts local Zombienet using `polkadot-omni-node-deos`. A previously installed selection can be reused with `--skip-download`; it still must pass its receipt/digest checks. Downloading the retained `stable2609-1` bundle does not qualify the source-only `stable2609-2` graph, workers or resource bounds. No downstream production launch is supported before DEOS `1.0`.
 
 ### Start the reference client
 
@@ -70,23 +74,26 @@ See [`scripts/README.md`](./scripts/README.md) for individual operator workflows
 
 | Path | Role | Entrypoint |
 | --- | --- | --- |
-| `docs/` | Specifications and shipped architecture | [`docs/README.md`](./docs/README.md) |
+| `docs/` | Documentation namespaces; DEOS contracts in `docs/deos/` | [`docs/README.md`](./docs/README.md) |
 | `template/` | Runtime, pallets, primitives, weights, tests | [`template/README.md`](./template/README.md) |
 | `web-client/` | Browser reference client | [`web-client/README.md`](./web-client/README.md) |
-| `simulator/` | Deterministic TMCTOL mathematical reference | [`simulator/README.md`](./simulator/README.md) |
+| `simulators/` | Independent economic models; TMCTOL mathematical reference | [`simulators/README.md`](./simulators/README.md) |
 | `scripts/` | Bootstrap, validation, benchmarks, administration | [`scripts/README.md`](./scripts/README.md) |
-| `wiki/` | Guided newcomer and frontend knowledge layer | [`wiki/index.en.md`](./wiki/index.en.md) [`wiki/index.ru.md`](./wiki/index.ru.md) |
+| `wiki/` | Guided newcomer and frontend knowledge layer | [`wiki/deos/index.en.md`](./wiki/deos/index.en.md) [`wiki/deos/index.ru.md`](./wiki/deos/index.ru.md) |
+
+Upstream documentation lives in `docs/deos/`; forks can add a separate documentation namespace without editing the DEOS index. Economic models live independently under `simulators/`. Package-owned documentation remains beside its code; neither container implements automatic overrides or a shared simulation engine.
 
 ### Core contracts
 
-- [TMCTOL Specification](./docs/tmctol.specification.en.md)
-- [Builder Economy Contract](./docs/builder-economy.contract.en.md)
+- [TMCTOL Specification](./docs/deos/tmctol.specification.en.md)
+- [Builder Economy Contract](./docs/deos/builder-economy.contract.en.md)
 - [DEOS Actors Specification](./template/pallets/actors/docs/specification.en.md)
 - [DEOS Actors External Runtime Embedding Guide](./template/pallets/actors/docs/embedding.md)
-- [DEOS Actors Control-Plane Contract](./docs/actors-control-plane.contract.en.md)
+- [DEOS Actors Control-Plane Contract](./docs/deos/actors-control-plane.contract.en.md)
 - [Governance Specification](./template/pallets/governance/docs/specification.en.md)
-- [Read-Model Contract](./docs/read-model.contract.en.md)
-- [Core Architecture](./docs/core.architecture.en.md)
+- [Read-Model Contract](./docs/deos/read-model.contract.en.md)
+- [State Witness and Resource Accounting Contract](./docs/deos/state-witness-accounting.contract.en.md)
+- [Core Architecture](./docs/deos/core.architecture.en.md)
 
 ---
 
@@ -107,7 +114,7 @@ Select narrower or escalated routes through the [Project Skill Graph](./.agents/
 When tokenomics, formulas, thresholds, or invariants change:
 
 ```bash
-node ./simulator/tests.js
+node ./simulators/tmctol/tests.js
 ```
 
 ---

@@ -1,13 +1,13 @@
 ---
 name: wiki-sync
-description: Compiles and maintains `/wiki` as a generated, provenance-aware, cross-linked semantic projection of `/docs`. Supports automatic incremental sync and forced rebuild/lint/repair/consolidation flows. The generated wiki must remain suitable both for agent reasoning and for frontend-rendered onboarding/reference experiences for project newcomers.
+description: Owns layered Wiki knowledge compilation and the optional mdBook website pipeline, including its compiler, theme, tests and authorized publication. mdBook is the only website renderer; an optional embedding client is only an iframe host. Supports incremental sync, rebuild, lint, repair, consolidation and provenance-aware onboarding.
 ---
 
 # Wiki Sync Skill
 
 ## Purpose
 
-This skill maintains a generated `/wiki` directory as a semantic projection of the human-authored `/docs` directory.
+This skill maintains a generated `/wiki` directory as a semantic projection of authoritative project knowledge, including root and package-owned documentation. It also owns the end-to-end knowledge-to-website workflow: project knowledge → layered `/wiki` → standalone static build → separately authorized, explicitly configured hosting.
 
 `/docs` is the normative source layer.  
 `/wiki` is the compiled interpretation layer.
@@ -20,6 +20,20 @@ The generated `/wiki` MUST serve two audiences simultaneously:
 2. Human newcomers, which need clear onboarding-oriented explanations, stable navigation, and low-friction discovery of core concepts
 
 The agent MUST optimize wiki output for both machine readability and frontend rendering quality. Token savings are a useful side effect of a compact semantic projection, not the primary objective; the primary objective is truthful, navigable, provenance-aware project exploration.
+
+## Website and Embedding Ownership
+
+Follow the [Wiki Publication and Embedding Contract](../../../docs/deos/wiki-publication.contract.en.md). mdBook is the sole renderer of the standalone website, which owns navigation, declared semantic-layer filters, localization, search, graph navigation, provenance presentation and responsive layout. The repository's MVP publishes only DEOS in EN/RU; downstream projections and brands belong to their forks. Keep extension mechanisms generic rather than predeclaring a particular downstream layer. The compiler/theme/tests live in this Skill's `site/`; the [site README](site/README.md), [projection contract](site/docs/routing.contract.en.md) and implementation map own their concrete entrypoints and current boundaries.
+
+The DEOS base plane is `/wiki/deos/`; `/wiki` is the layered container. Plane validation defaults to that declared bundle and accepts `--wiki-dir` for an explicit root. Localized paths and `_meta` entries are plane-relative; repository provenance is resolved from its owning page (or the declared manifest source root), not from the process working directory. Preserve one logical graph and do not restore the former flat tree. Cross-plane compilation and public URL mapping belong to the standalone site; content storage paths are not website routes.
+
+If embedding is explicitly prioritized later, the web-client owns only a validated trusted-origin iframe and its lifecycle within the tiling interface. Do not implement or preserve a competing Wiki frontend there as the target architecture. Migrate only after the site and embed work; inspect consumers before retiring legacy loaders, content state, dependencies and renderer tests. Preserve OKF, provenance, graph and localization checks.
+
+This is an optional Skill-owned publication capability, not a project build dependency. `scripts/build-site.sh` owns Bash orchestration. `site/src` and support leaves compile Markdown/SUMMARY and prepare native search data, URL-state adapters and asset bindings; they must not become an alternate Markdown/HTML renderer. The site's architecture map owns that concrete post-render boundary. Project packages, root build/CI and release validation must not call or import it. The Skill may consume project-owned pure contracts and public tools; its generated static artifact needs no Skill at runtime. Publication, DNS and external account/hosting changes still require explicit authorization.
+
+Generate one composed graph and a linear mdBook view from explicit metadata order, not guessed numeric weights, filenames or graph degree. Linear adjacency never adds semantic edges. Preserve typed edges and graph cycles, and share canonical identities across locales; `SUMMARY.md` is disposable output, not a second authority.
+
+Use URL-driven integration first, no parent-to-frame DOM access and no required `postMessage` for basic operation. Validate actual hosting/embedding policy and distinguish local browser evidence from externally gated production checks. The canonical contract owns detailed security, lifecycle and acceptance requirements; open migration work belongs only in root `BACKLOG.md`. Working DEOS EN/RU reading, navigation, search and graph traversal close the MVP; full zoom/accessibility qualification, embedding and publication are separate follow-ups, not prerequisites for returning to higher-priority backlog work.
 
 ## Core Model
 
@@ -40,9 +54,9 @@ The agent MUST NEVER silently preserve a wiki claim that conflicts with updated 
 
 Read the bundled [Open Knowledge Format reference](references/okf-reference.md) before changing Wiki schema, validation, provenance, lifecycle, trust, or reserved-file behavior. This directly readable Markdown atom embeds its lock metadata and the full adopted upstream source; project extensions remain subordinate to it.
 
-`/wiki` is an explicitly declared strict OKF v0.2 bundle. Root `index.md` declares `okf_version: "0.2"`; exact `index.md` is reserved and is not a localized concept or graph node. Every other Markdown concept uses canonical `type`, `description`, and structured `sources[].resource`. DEOS locale, audience, related-link, and explicit lifecycle fields remain compatible extensions. Do not emit `page_type` or `summary` aliases, and never infer `generated`, `verified`, `stale_after`, attestation, or freshness evidence from dates, Git history, or structural validation.
+The DEOS plane at `/wiki/deos` is an explicitly declared strict OKF v0.2 bundle. Its root `index.md` declares `okf_version: "0.2"`; reserved index files are not localized concepts or graph nodes. The outer `/wiki/index.md` is container navigation, not a second bundle declaration. Concept files use canonical `type`, `description`, and structured `sources[].resource`. DEOS locale, audience, related-link, and explicit lifecycle fields remain compatible extensions. Do not emit `page_type` or `summary` aliases, and never infer `generated`, `verified`, `stale_after`, attestation, or freshness evidence from dates, Git history, or structural validation.
 
-Strict OKF scope ends at `/wiki`; `/docs`, repository context, Skills, and unrelated Markdown are not members of this bundle merely because they use frontmatter.
+Strict OKF scope is rooted at each explicitly declared plane bundle; `/docs`, container navigation, repository context, Skills, and unrelated Markdown are not concepts merely because they use frontmatter. Validate additional planes at their declared roots before composing them; one logical graph does not require recursively treating every container file as a DEOS concept.
 
 The reference frontmatter is the only publication atom. Its embedded lock binds the adopted version, immutable upstream revision and blob, upstream-source SHA-256, deterministic body SHA-256, and separate DEOS Wiki adoption state without a self-referential whole-file hash or a second rename. Before changing OKF schema, provenance, lifecycle, reserved files, or validation, agents MUST run the optional network freshness check:
 
@@ -52,7 +66,7 @@ npm run okf:check --prefix .agents/skills/wiki-sync
 
 Lifecycle output is `current`, `unknown`, `review-pending`, or `adopted`. `current` means the pinned source matches the freshest upstream `GoogleCloudPlatform/knowledge-catalog/okf/SPEC.md`; it does not newly prove Wiki compatibility. `unknown` means GitHub was unavailable while the verified local atom remains valid. `review-pending` is read-only classification. `adopted` is emitted only after successful publication and is the canonical embedded adoption status. This network check is intentionally outside ordinary offline completion gates.
 
-Reference refresh is staged and explicit. `npm run okf:sync --prefix .agents/skills/wiki-sync -- --reviewed` fetches metadata, then one immutable commit, checks blob and SHA identities, and publishes the single atom only after strict tests pass. Changed content under the same version additionally needs `--allow-same-version-revision`; a newer minor needs `--allow-version-change`; a newer major needs `--allow-breaking-version`. Version changes are refused until `wiki/index.md` already declares the migrated version. These flags record review authority only: agents MUST first inspect the candidate semantics and complete the dependent validator/schema migration. Never describe reference freshness as protocol adoption.
+Reference refresh is staged and explicit. `npm run okf:sync --prefix .agents/skills/wiki-sync -- --reviewed` fetches metadata, then one immutable commit, checks blob and SHA identities, and publishes the single atom only after strict tests pass. Changed content under the same version additionally needs `--allow-same-version-revision`; a newer minor needs `--allow-version-change`; a newer major needs `--allow-breaking-version`. Version changes are refused until `wiki/deos/index.md` already declares the migrated version. These flags record review authority only: agents MUST first inspect the candidate semantics and complete the dependent validator/schema migration. Never describe reference freshness as protocol adoption.
 
 ### Layer Semantics
 
@@ -170,14 +184,14 @@ The skill SHOULD work even if `/wiki` does not yet exist.
 The skill MAY create the following files or directories under `/wiki`:
 
 ```text
-/wiki/index.en.md
-/wiki/index.<locale>.md
-/wiki/_meta/
-/wiki/_meta/navigation.json
-/wiki/_meta/state.json
-/wiki/_meta/graph.json
-/wiki/_meta/aliases.json
-/wiki/_meta/locales.json
+/wiki/deos/index.en.md
+/wiki/deos/index.<locale>.md
+/wiki/deos/_meta/
+/wiki/deos/_meta/navigation.json
+/wiki/deos/_meta/state.json
+/wiki/deos/_meta/graph.json
+/wiki/deos/_meta/aliases.json
+/wiki/deos/_meta/locales.json
 ```
 
 Exact layout MAY vary by repository convention, but the semantic roles MUST remain stable.
@@ -187,24 +201,26 @@ Exact layout MAY vary by repository convention, but the semantic roles MUST rema
 A preferred layout is:
 
 ```text
-/wiki/index.en.md
-/wiki/index.<locale>.md
-/wiki/overview/
-/wiki/getting-started/
-/wiki/concepts/
-/wiki/entities/
-/wiki/processes/
-/wiki/decisions/
-/wiki/comparisons/
-/wiki/glossary/
-/wiki/faq/
-/wiki/status/
-/wiki/timeline/
-/wiki/_meta/navigation.json
-/wiki/_meta/state.json
-/wiki/_meta/graph.json
-/wiki/_meta/aliases.json
-/wiki/_meta/locales.json
+/wiki/index.md                 # Layer-container navigation, not a concept.
+/wiki/deos/index.md            # Declares the DEOS strict OKF bundle.
+/wiki/deos/index.en.md
+/wiki/deos/index.<locale>.md
+/wiki/deos/overview/
+/wiki/deos/getting-started/
+/wiki/deos/concepts/
+/wiki/deos/entities/
+/wiki/deos/processes/
+/wiki/deos/decisions/
+/wiki/deos/comparisons/
+/wiki/deos/glossary/
+/wiki/deos/faq/
+/wiki/deos/status/
+/wiki/deos/timeline/
+/wiki/deos/_meta/navigation.json
+/wiki/deos/_meta/state.json
+/wiki/deos/_meta/graph.json
+/wiki/deos/_meta/aliases.json
+/wiki/deos/_meta/locales.json
 ```
 
 If the repository already has a different wiki layout, the agent SHOULD adapt to the existing structure rather than forcing a migration unless the user explicitly requests restructuring.
@@ -276,9 +292,9 @@ If repository conventions allow, the agent SHOULD maintain:
 - `aliases.json` for canonical naming and alias resolution, with alias maps grouped by language key
 - `locales.json` for supported locales, default locale, and localized page or metadata entrypoints
 
-## Frontend Rendering Contract
+## Standalone Website Rendering Contract
 
-Because the `/wiki` directory is used as the content source for a frontend knowledge section, the agent MUST keep the wiki structurally suitable for rendering in a client UI.
+The `/wiki` directory supplies the independently deployable Wiki website, not an in-client Markdown renderer. The agent MUST keep the knowledge bundle suitable for the website's single rendering implementation and agent traversal. The website owns both standalone and embedded presentation; the iframe host consumes URLs only.
 
 The agent MUST prefer:
 
@@ -885,7 +901,7 @@ The agent MUST NOT create or update `wiki/log.<locale>.md` files unless the repo
 
 For this repository, meaningful completed wiki work belongs in `CHANGELOG.md`, while open wiki work belongs in `BACKLOG.md` only when it remains a concrete unfinished deliverable.
 
-A delivery-history entry SHOULD include impacted areas and concise rationale without duplicating metadata already stored in `/wiki/_meta`.
+A delivery-history entry SHOULD include impacted areas and concise rationale without duplicating metadata already stored in the selected plane's `_meta`.
 
 ## Failure Behavior
 

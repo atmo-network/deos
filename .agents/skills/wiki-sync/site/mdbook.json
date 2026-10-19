@@ -1,0 +1,21 @@
+{
+  "version": "0.5.4",
+  "artifacts": {
+    "Linux-x86_64": {
+      "file": "mdbook-v0.5.4-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7"
+    },
+    "Linux-aarch64": {
+      "file": "mdbook-v0.5.4-aarch64-unknown-linux-musl.tar.gz",
+      "sha256": "753e5c5c363ee8a56972344dcf91466f005a51db84a7aeffe427ae3ef83d6d44"
+    },
+    "Darwin-x86_64": {
+      "file": "mdbook-v0.5.4-x86_64-apple-darwin.tar.gz",
+      "sha256": "a47d7bf0d5d670cff9ee6cce95537cbeb62dc10704d9e7131ffbd13e2b59a5de"
+    },
+    "Darwin-arm64": {
+      "file": "mdbook-v0.5.4-aarch64-apple-darwin.tar.gz",
+      "sha256": "03e8a6d8b13a2971e0b3280affd03b388373c1485e26f73407c3a76b0b1838df"
+    }
+  }
+}

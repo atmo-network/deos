@@ -78,6 +78,10 @@ fn execute_close(
   sdk_wasm: Option<&[u8]>,
   pvf_output: Option<&std::path::Path>,
 ) {
+  if sdk_wasm.is_some() || pvf_output.is_some() {
+    actor_retention_native_api::ensure_artifact_profile()
+      .expect("Wasm-bound native preparation profile");
+  }
   assert_eq!(
     prepared.contract.steps.len(),
     <Runtime as Config>::MaxContractSteps::get() as usize
@@ -685,7 +689,10 @@ mod tests {
 }
 
 fn main() {
-  let args = std::env::args().collect::<Vec<_>>();
+  run_with_args(std::env::args().collect());
+}
+
+fn run_with_args(args: Vec<String>) {
   if args.len() == 2 && args[1] == "--help" {
     println!(
       "Fixed-corpus native public Close.\nUsage: actor_retention_close FIXED_PAGE_JSON [--api-import|--api-builder|--sdk-wasm PATH|--pvf-fixture PATH NEW_DIR]\nRuns both runtime-owned presets with one signed User Close, the configured watch bound and three body tails. The target joins maximum-width AddressEvent/funding allowlists, a present window and maximum cooldown with twelve maximum-encoded RemoveLiquidity Tasks and four maximum-width predicates each; ParkedBalance excludes policy/nonce terminals. Other Actors retain prior bodies. Reports native elapsed nanoseconds for signed call, finalization, memory commits and complete import, with setup/proof diagnostics outside timing. --api-import uses a generated SDK Core client and StateMachine to verify full native import and late invalid-root rollback with proof recording. --api-builder uses the SDK BlockBuilder through generated Core/BlockBuilder APIs. It checks injected executor and response-decode errors after actual Close, dirty-overlay/proof/diagnostic-extension rollback, successful retry, rejected duplicate and reused finalization; it requires corrected SDK transaction-depth restoration. SDK modes use compiled Rust by default. --sdk-wasm PATH selects actual Wasm for the same builder/provider/error checks, forbids native fallback and checks the complete runtime version; code is supplied externally to SDK execution. --pvf-fixture PATH NEW_DIR binds explicit code in parent storage and exports compact-proof-bound Aura-sealed inputs after complete native seal/state reconciliation; real PVF workers are a separate caller. The output directory must be new. Preparation and the independent expected state remain native and outside the encoded chain. No mode runs a live node. No full-history, complete resource maximum, tariff, compact PoV, physical RefTime or production-Wasm certificate is supplied."
@@ -698,6 +705,7 @@ fn main() {
       (Some(mode.as_str()), None, None)
     }
     [_, _, flag, path] if flag == "--sdk-wasm" => {
+      actor_retention_native_api::ensure_artifact_profile().expect("Wasm request profile");
       let code = std::fs::read(path).expect("selected SDK diagnostic Wasm is readable");
       println!(
         "sdk_execution=wasm sdk_wasm_sha256={} sdk_wasm_bytes={} code_source=external",
@@ -707,6 +715,7 @@ fn main() {
       (Some("--api-builder"), Some(code), None)
     }
     [_, _, flag, path, output] if flag == "--pvf-fixture" => {
+      actor_retention_native_api::ensure_artifact_profile().expect("PVF request profile");
       let code = std::fs::read(path).expect("selected PVF diagnostic Wasm is readable");
       let output = std::path::PathBuf::from(output);
       std::fs::create_dir(&output).expect("PVF output must be a new directory");
@@ -739,4 +748,44 @@ fn main() {
   println!(
     "Both prepared native public Close blocks reconciled. Full-history and production resource qualification remain separate."
   );
+}
+
+#[cfg(all(
+  test,
+  feature = "benchmark-authority-scaffolding",
+  not(feature = "runtime-benchmarks")
+))]
+#[test]
+fn native_fixture_requests_refuse_before_io() {
+  let output = std::env::temp_dir().join(format!(
+    "deos-denied-retention-request-{}",
+    std::process::id()
+  ));
+  assert!(!output.exists());
+  let missing = output.join("missing.wasm").to_string_lossy().into_owned();
+  for tail in [
+    vec!["--sdk-wasm".into(), missing.clone()],
+    vec![
+      "--pvf-fixture".into(),
+      missing.clone(),
+      output.to_string_lossy().into_owned(),
+    ],
+  ] {
+    let args = ["actor_retention_close".into(), missing.clone()]
+      .into_iter()
+      .chain(tail)
+      .collect();
+    let panic = std::panic::catch_unwind(|| run_with_args(args)).unwrap_err();
+    let message = panic
+      .downcast_ref::<String>()
+      .map(String::as_str)
+      .or_else(|| panic.downcast_ref::<&str>().copied())
+      .expect("guard panic has a message");
+    assert!(
+      message.contains("native admission fixture cannot"),
+      "wrong refusal: {message}"
+    );
+    assert!(!output.exists(), "denied request must not create output");
+  }
+  run_with_args(vec!["actor_retention_close".into(), "--help".into()]);
 }

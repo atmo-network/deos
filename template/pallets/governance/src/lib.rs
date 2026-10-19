@@ -10,6 +10,7 @@ use frame::traits::StorageVersion;
 use polkadot_sdk::frame_support::weights::Weight;
 
 pub use pallet::*;
+pub use polkadot_sdk::sp_core::U256;
 
 pub type CidBytesOf<T> = polkadot_sdk::frame_support::BoundedVec<u8, <T as Config>::MaxCidBytes>;
 
@@ -37,7 +38,7 @@ pub trait ProposalVoteWeightProvider<AccountId, DomainId, ItemId, Epoch> {
     domain: DomainId,
     context: &ProposalVoteContext<ItemId, Epoch>,
     account: &AccountId,
-  ) -> u32;
+  ) -> U256;
 }
 
 #[derive(
@@ -254,8 +255,8 @@ impl<AccountId, DomainId, ItemId, Epoch>
     _domain: DomainId,
     _context: &ProposalVoteContext<ItemId, Epoch>,
     _account: &AccountId,
-  ) -> u32 {
-    1
+  ) -> U256 {
+    U256::one()
   }
 }
 
@@ -1008,15 +1009,15 @@ pub mod pallet {
     pub reduce_voters: u32,
     pub veto_voters: u32,
     pub pass_voters: u32,
-    pub aye_weight: u64,
-    pub nay_weight: u64,
-    pub amplify_weight: u64,
-    pub approve_weight: u64,
-    pub reduce_weight: u64,
-    pub veto_weight: u64,
-    pub pass_weight: u64,
-    pub turnout_weight: u64,
-    pub veto_turnout_weight: u64,
+    pub aye_weight: U256,
+    pub nay_weight: U256,
+    pub amplify_weight: U256,
+    pub approve_weight: U256,
+    pub reduce_weight: U256,
+    pub veto_weight: U256,
+    pub pass_weight: U256,
+    pub turnout_weight: U256,
+    pub veto_turnout_weight: U256,
   }
 
   #[derive(
@@ -1046,9 +1047,9 @@ pub mod pallet {
     Binary {
       aye_voters: u32,
       nay_voters: u32,
-      aye_weight: u64,
-      nay_weight: u64,
-      turnout_weight: u64,
+      aye_weight: U256,
+      nay_weight: U256,
+      turnout_weight: U256,
       leading_option: Option<ProposalPrimaryTrackOption>,
     },
     Invoice {
@@ -1056,14 +1057,14 @@ pub mod pallet {
       approve_voters: u32,
       reduce_voters: u32,
       nay_voters: u32,
-      amplify_weight: u64,
-      approve_weight: u64,
-      reduce_weight: u64,
-      nay_weight: u64,
-      positive_weight: u64,
-      turnout_weight: u64,
+      amplify_weight: U256,
+      approve_weight: U256,
+      reduce_weight: U256,
+      nay_weight: U256,
+      positive_weight: U256,
+      turnout_weight: U256,
       leading_positive_option: Option<ProposalPrimaryTrackOption>,
-      leading_positive_weight: u64,
+      leading_positive_weight: U256,
     },
   }
 
@@ -1076,8 +1077,8 @@ pub mod pallet {
       maturity_epoch: Epoch,
     },
     VetoPassing {
-      veto_weight: u64,
-      pass_weight: u64,
+      veto_weight: U256,
+      pass_weight: U256,
       mode: VetoCancellationMode,
     },
     PassingAye,
@@ -1134,7 +1135,7 @@ pub mod pallet {
     },
     VetoCancelled {
       finalized_epoch: Epoch,
-      veto_weight: u64,
+      veto_weight: U256,
     },
   }
 
@@ -1282,8 +1283,8 @@ pub mod pallet {
   pub struct ProposalBallot<AccountId, Epoch> {
     pub account: AccountId,
     pub vote_epoch: Epoch,
-    pub weight: u64,
-    pub raw_power: u64,
+    pub weight: U256,
+    pub raw_power: U256,
   }
 
   #[derive(
@@ -1299,8 +1300,8 @@ pub mod pallet {
   pub struct ProposalFrozenBallot<Epoch> {
     pub vote: ProposalVoteKind,
     pub vote_epoch: Epoch,
-    pub weight: u64,
-    pub raw_power: u64,
+    pub weight: U256,
+    pub raw_power: U256,
   }
 
   #[derive(
@@ -1310,9 +1311,9 @@ pub mod pallet {
     pub governance_lock_until: Option<Epoch>,
     pub ordinary_power_profile: crate::ProposalVotePowerProfile,
     pub protection_power_profile: crate::ProposalVotePowerProfile,
-    pub current_ordinary_weight: u64,
-    pub current_protection_weight: u64,
-    pub current_protection_raw_power: u64,
+    pub current_ordinary_weight: U256,
+    pub current_protection_weight: U256,
+    pub current_protection_raw_power: U256,
     pub frozen_ordinary_ballot: Option<ProposalFrozenBallot<Epoch>>,
     pub frozen_protection_ballot: Option<ProposalFrozenBallot<Epoch>>,
   }
@@ -1333,15 +1334,15 @@ pub mod pallet {
 
   #[derive(Clone, Copy, Debug, PartialEq, Eq)]
   pub struct VetoCancellation {
-    pub veto_weight: u64,
-    pub pass_weight: u64,
+    pub veto_weight: U256,
+    pub pass_weight: U256,
     pub mode: VetoCancellationMode,
   }
 
   #[derive(Clone, Copy, Debug, PartialEq, Eq)]
   pub struct UrgentAuthorization {
-    pub pass_weight: u64,
-    pub total_protection_supply: u64,
+    pub pass_weight: U256,
+    pub total_protection_supply: U256,
   }
 
   pub type MaturingProposalTouch<DomainId, ItemId> = ProposalIdentity<DomainId, ItemId>;
@@ -1703,8 +1704,8 @@ pub mod pallet {
       domain: T::DomainId,
       item_id: T::WinningVoteItemId,
       authorization_epoch: T::Epoch,
-      pass_weight: u64,
-      total_protection_supply: u64,
+      pass_weight: U256,
+      total_protection_supply: U256,
     },
     ProposalAutoFinalizationDeferred {
       domain: T::DomainId,
@@ -1807,8 +1808,8 @@ pub mod pallet {
       domain: T::DomainId,
       item_id: T::WinningVoteItemId,
       epoch: T::Epoch,
-      veto_weight: u64,
-      pass_weight: u64,
+      veto_weight: U256,
+      pass_weight: U256,
       mode: VetoCancellationMode,
       active_count: u32,
     },

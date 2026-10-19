@@ -31,6 +31,52 @@ use crate::configs::{
 
 pub(crate) const CONTEXT_GEOMETRY_INHERENT_IDENTIFIER: sp_inherents::InherentIdentifier =
   *b"deosctx0";
+const CONTEXT_ORDER_INHERENT_IDENTIFIER: sp_inherents::InherentIdentifier = *b"deosord0";
+
+fn valid_prepass_context_order(block: &<Block as BlockT>::LazyBlock) -> bool {
+  use sp_runtime::traits::{ExtrinsicCall, ExtrinsicLike, LazyBlock};
+  let (mut timestamp, mut validation, mut prepass) = (false, false, false);
+  // Three reference providers; inspect one successor only to reject a duplicate inherent.
+  for extrinsic in block.extrinsics().take(4) {
+    let Ok(extrinsic) = extrinsic else {
+      return false;
+    };
+    if !extrinsic.is_bare() {
+      return prepass;
+    }
+    match extrinsic.call() {
+      RuntimeCall::Timestamp(pallet_timestamp::Call::set { .. }) if !timestamp && !prepass => {
+        timestamp = true
+      }
+      RuntimeCall::ParachainSystem(
+        cumulus_pallet_parachain_system::Call::set_validation_data { .. },
+      ) if !validation && !prepass => validation = true,
+      RuntimeCall::Actors(pallet_deos_actors::Call::actor_prepass {})
+        if timestamp && validation && !prepass =>
+      {
+        prepass = true
+      }
+      RuntimeCall::Timestamp(_)
+      | RuntimeCall::ParachainSystem(
+        cumulus_pallet_parachain_system::Call::set_validation_data { .. },
+      )
+      | RuntimeCall::Actors(pallet_deos_actors::Call::actor_prepass {}) => return false,
+      _ => return prepass,
+    }
+  }
+  prepass
+}
+
+fn context_order_fatal_result() -> sp_inherents::CheckInherentsResult {
+  let mut result = sp_inherents::CheckInherentsResult::new();
+  result
+    .put_error(
+      CONTEXT_ORDER_INHERENT_IDENTIFIER,
+      &sp_inherents::MakeFatalError::from(()),
+    )
+    .expect("a fresh fixed-size context-order error must encode"); // deos-bypass: panic-owner — Fresh result and unit fatal error have fixed infallible encoding.
+  result
+}
 
 fn with_actor_prepass_inherent_data(
   mut data: sp_inherents::InherentData,
@@ -301,7 +347,12 @@ impl pallet_deos_actors::ActorEligibilityApi<Block, BlockNumber, Balance> for Ru
             if validate_context_inherent_geometry(&data).is_err() {
                 return context_geometry_fatal_result();
             }
-            with_actor_prepass_inherent_data(data).check_extrinsics(&block)
+            let result = with_actor_prepass_inherent_data(data).check_extrinsics(&block);
+            if !result.ok() || valid_prepass_context_order(&block) {
+                result
+            } else {
+                context_order_fatal_result()
+            }
         }
     }
 

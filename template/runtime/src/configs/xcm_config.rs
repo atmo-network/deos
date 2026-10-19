@@ -1122,34 +1122,38 @@ mod tests {
 
   #[test]
   fn test_safe_call_filter_now_denies_representative_runtime_calls() {
-    let user_call = RuntimeCall::System(frame_system::Call::remark { remark: Vec::new() });
-    let admin_call =
-      RuntimeCall::Staking(pallet_staking::Call::register_staking_asset { asset_id: 1 });
-    let queue_control_call =
-      RuntimeCall::XcmpQueue(cumulus_pallet_xcmp_queue::Call::suspend_xcm_execution {});
-    let raw_storage_call = RuntimeCall::System(frame_system::Call::set_storage {
-      items: vec![(vec![0xfe; 713], vec![7])],
-    });
-    assert!(
-      !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
-        &user_call,
-      )
-    );
-    assert!(
-      !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
-        &admin_call,
-      )
-    );
-    assert!(
-      !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
-        &queue_control_call,
-      )
-    );
-    assert!(
-      !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
-        &raw_storage_call,
-      )
-    );
+    let calls = [
+      RuntimeCall::System(frame_system::Call::remark { remark: Vec::new() }),
+      RuntimeCall::Staking(pallet_staking::Call::register_staking_asset { asset_id: 1 }),
+      RuntimeCall::XcmpQueue(cumulus_pallet_xcmp_queue::Call::suspend_xcm_execution {}),
+      RuntimeCall::System(frame_system::Call::set_storage {
+        items: vec![(vec![0xfe; 713], vec![7])],
+      }),
+      RuntimeCall::Governance(pallet_governance::Call::cast_vote {
+        domain: 101,
+        item_id: 110,
+        vote: pallet_governance::ProposalVoteKind::Veto,
+      }),
+      RuntimeCall::Governance(pallet_governance::Call::resolve_proposal_from_votes {
+        domain: 101,
+        item_id: 110,
+      }),
+      RuntimeCall::Governance(pallet_governance::Call::force_resolve_proposal_from_votes {
+        domain: 101,
+        item_id: 110,
+      }),
+      RuntimeCall::Governance(pallet_governance::Call::reject_proposal {
+        domain: 101,
+        item_id: 110,
+      }),
+    ];
+    for call in calls {
+      assert!(
+        !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
+          &call
+        )
+      );
+    }
   }
 
   #[test]

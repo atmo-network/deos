@@ -36,7 +36,7 @@ impl frame_system::Config for Test {
 }
 
 thread_local! {
-  static PROPOSAL_VOTE_WEIGHTS: RefCell<BTreeMap<AccountId, u32>> = RefCell::new(BTreeMap::new());
+  static PROPOSAL_VOTE_WEIGHTS: RefCell<BTreeMap<AccountId, crate::U256>> = RefCell::new(BTreeMap::new());
   static PROPOSAL_VOTE_CONTEXTS: RefCell<Vec<(DomainId, u32, Epoch, Epoch, Epoch, Epoch, AccountId)>> = const { RefCell::new(Vec::new()) };
   static VETO_VOTE_WEIGHTS: RefCell<BTreeMap<AccountId, u64>> = RefCell::new(BTreeMap::new());
   static VETO_TOTAL_ISSUANCE: RefCell<u64> = const { RefCell::new(0) };
@@ -46,6 +46,7 @@ thread_local! {
   static PAYLOAD_EXECUTOR_ENABLED: RefCell<bool> = const { RefCell::new(false) };
   static PAYLOAD_EXECUTION_CALLS: RefCell<u32> = const { RefCell::new(0) };
   static PAYLOAD_EXECUTION_RESULTS: RefCell<BTreeMap<H256, bool>> = RefCell::new(BTreeMap::new());
+  static PAYLOAD_EXECUTION_REMOVE_FINALIZATION: RefCell<bool> = const { RefCell::new(false) };
 }
 
 pub struct MockEpochProvider;
@@ -63,7 +64,7 @@ impl pallet_governance::ProposalVoteWeightProvider<AccountId, DomainId, u32, Epo
     domain: DomainId,
     context: &pallet_governance::ProposalVoteContext<u32, Epoch>,
     account: &AccountId,
-  ) -> u32 {
+  ) -> crate::U256 {
     PROPOSAL_VOTE_CONTEXTS.with(|contexts| {
       contexts.borrow_mut().push((
         domain,
@@ -75,7 +76,13 @@ impl pallet_governance::ProposalVoteWeightProvider<AccountId, DomainId, u32, Epo
         *account,
       ));
     });
-    PROPOSAL_VOTE_WEIGHTS.with(|weights| *weights.borrow().get(account).unwrap_or(&1))
+    PROPOSAL_VOTE_WEIGHTS.with(|weights| {
+      weights
+        .borrow()
+        .get(account)
+        .copied()
+        .unwrap_or_else(crate::U256::one)
+    })
   }
 }
 
@@ -178,8 +185,9 @@ impl pallet_governance::ProposalSubmissionEligibilityProvider<AccountId, DomainI
 {
   fn has_primary_governance_power(domain: DomainId, account: &AccountId) -> bool {
     domain == 42
-      && PROPOSAL_VOTE_WEIGHTS
-        .with(|weights| weights.borrow().get(account).copied().unwrap_or_default() > 0)
+      && PROPOSAL_VOTE_WEIGHTS.with(|weights| {
+        weights.borrow().get(account).copied().unwrap_or_default() > crate::U256::zero()
+      })
   }
 }
 
@@ -241,7 +249,7 @@ impl
   ) -> Result<(DomainId, H256, Vec<u8>), polkadot_sdk::sp_runtime::DispatchError> {
     use polkadot_sdk::sp_runtime::traits::Hash as _;
     PROPOSAL_VOTE_WEIGHTS.with(|weights| {
-      weights.borrow_mut().insert(*account, 1);
+      weights.borrow_mut().insert(*account, crate::U256::one());
     });
     let payload = vec![0u8; 32];
     let payload_hash = BlakeTwo256::hash(&payload);
@@ -460,8 +468,8 @@ impl
   }
 
   fn execute(
-    _domain: DomainId,
-    _item_id: u32,
+    domain: DomainId,
+    item_id: u32,
     _payload_kind: pallet_governance::ProposalPayloadKind,
     payload_hash: H256,
   ) -> Result<
@@ -476,6 +484,9 @@ impl
     let success = PAYLOAD_EXECUTION_RESULTS
       .with(|results| results.borrow().get(&payload_hash).copied().unwrap_or(true));
     if success {
+      if PAYLOAD_EXECUTION_REMOVE_FINALIZATION.with(|fault| *fault.borrow()) {
+        crate::FinalizedProposals::<Test>::remove(domain, item_id);
+      }
       Ok(pallet_governance::ProposalExecutionReceipt::Generic)
     } else {
       Err(pallet_governance::ProposalExecutionFailureReason::DispatchFailed)
@@ -582,9 +593,9 @@ impl pallet_governance::Config for Test {
   type WeightInfo = ();
 }
 
-pub fn set_vote_weight(account: AccountId, weight: u32) {
+pub fn set_vote_weight(account: AccountId, weight: impl Into<crate::U256>) {
   PROPOSAL_VOTE_WEIGHTS.with(|weights| {
-    weights.borrow_mut().insert(account, weight);
+    weights.borrow_mut().insert(account, weight.into());
   });
 }
 
@@ -644,6 +655,10 @@ pub fn payload_execution_calls() -> u32 {
   PAYLOAD_EXECUTION_CALLS.with(|calls| *calls.borrow())
 }
 
+pub fn set_payload_execution_remove_finalization(enabled: bool) {
+  PAYLOAD_EXECUTION_REMOVE_FINALIZATION.with(|fault| *fault.borrow_mut() = enabled);
+}
+
 pub fn set_payload_execution_result(hash: H256, success: bool) {
   PAYLOAD_EXECUTION_RESULTS.with(|results| {
     results.borrow_mut().insert(hash, success);
@@ -677,6 +692,7 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
     PAYLOAD_EXECUTOR_ENABLED.with(|enabled| *enabled.borrow_mut() = false);
     PAYLOAD_EXECUTION_CALLS.with(|calls| *calls.borrow_mut() = 0);
     PAYLOAD_EXECUTION_RESULTS.with(|results| results.borrow_mut().clear());
+    PAYLOAD_EXECUTION_REMOVE_FINALIZATION.with(|fault| *fault.borrow_mut() = false);
     MaxEpochCatchUpPerBlock::set(1);
     ProposalLeadInPeriod::set(0);
     ProposalProtectionPeriod::set(2);

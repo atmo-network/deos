@@ -11,7 +11,7 @@ Experiments are decision instruments, not output. Open one only when a real impl
 
 ## Ownership Boundary
 
-This skill owns falsifiable physical hypotheses, exact baseline and controlled-comparison contracts, live Experiment Records, track indexes, interpretation and decisions, benchmark evidence authority, and next-gradient selection.
+This skill owns falsifiable physical hypotheses, exact baseline and controlled-comparison contracts, live Experiment Records, track indexes and their canonical best-verified-result tables, interpretation and decisions, benchmark evidence authority, and next-gradient selection.
 
 It does not own protocol semantics, benchmark command implementations, generated Weight, tests, architecture-document truth or open work. `BACKLOG.md` owns remaining work; specifications own semantics; code, tests and generated artifacts own implementation truth. Project documentation may cite a live Experiment ID as compact provenance. Deleting this skill must not affect builds, tests, CI, release validation or runtime behavior.
 
@@ -31,7 +31,7 @@ An experiment MUST NOT silently redefine semantics. If evidence shows the specif
 ├ scripts/validate-record-normalization.sh
 ├ templates/EXP-NNN.md
 └ tracks/<track>/
-   ├ experiments.md      charter, Current Records, hazards, principles, history
+   ├ experiments.md      charter, Best Verified Results, Current Records, hazards, principles, history
    └ EXP-NNN.md          live records only
 ```
 
@@ -41,6 +41,17 @@ An experiment MUST NOT silently redefine semantics. If evidence shows the specif
 - `One record per mechanism family`: Each record owns one physical mechanism family (unique `Physical mechanism`). A new design question about that mechanism becomes a new obligation row in its record, never a new record; open a new record only for a mechanism family no record owns. A track should hold a handful of live records; the validator warns above six.
 - `Shape`: Copy [`templates/EXP-NNN.md`](./templates/EXP-NNN.md); metadata fields, second-level sections and relation fields must match it. Keep evidence inline as Markdown tables; CSV/TSV files are forbidden. A sibling `EXP-NNN/` directory is allowed only for non-tabular raw evidence that cannot be retained faithfully inline.
 - `Size`: Keep only decision-relevant numbers, identities and limitations. Chronology, repaired probes and superseded diagnostics belong to Git history, not the record.
+
+## Best Verified Results
+
+Maintain the canonical best-result tables in each track's root `tracks/<track>/experiments.md`, under `Best Verified Results`, not in a separate leaderboard, chat, backlog, or a second result ledger. Refresh that table whenever a measured result is verified, superseded or loses applicability. Experiment Records and project-owned raw artifacts retain detailed evidence; the root table is the source of truth for which achieved results currently qualify as best within each comparable profile.
+
+- `Comparable coordinate`: Name workload, Actor/class or equivalent subject, population, interval/aggregation, resource policy and validation tier. A first block, sustained window, native diagnostic and production-Wasm run are different coordinates; no global maximum or scalar rank may merge them. Use the predeclared statistic, not a favourable block selected afterward.
+- `Required cells`: Record the metric and unit, achieved value, validation status, exact evidence/source/artifact identity or compact immutable identity reference, and material scope/qualification limits. Retain the relevant independent cost dimensions (for Actors, `S`, `A`, Control/effect RefTime and ProofSize) rather than publishing throughput without its cost context.
+- `Promotion`: Promote only completed, verified evidence applicable to that coordinate. Keep native-only, incomplete, unsealed or otherwise unqualified observations in a clearly separated diagnostic/pending table; never populate an exact-Wasm or production record from them. Explicitly write `Not verified` when a requested profile has no qualifying result; missing evidence is not zero.
+- `Replacement`: Replace a best row only with a verified like-for-like result that actually improves its declared objective, or explicitly establish a new coordinate. Preserve Pareto alternatives and material tradeoffs. A changed Weight, budget, semantic contract, workload, fixture, method or host requires reassessment, not an unexplained record increase.
+- `Truth classification`: Bind a record to its verified snapshot, not automatically to today's worktree or a release. Preserve historical observations and identify loss of current applicability. A table is a summary of evidence, not authority to install coefficients, relax invariants, certify capacity or bypass project validation; deleting the Skill must leave project build/test/release operation intact.
+- `Boundedness`: Keep only best verified rows and decision-relevant pending counterparts in the root. Link raw evidence and causal records rather than copying sample series or execution diaries. Add or reconcile a track table when that track receives measurement work; do not invent results to fill it.
 
 ## Release-Boundary Consolidation
 
@@ -57,6 +68,10 @@ When the source tree deletes a mechanism a record measured, delete the record; r
 
 These never become records or obligation rows: whether a generated Weight owner bounds a selected geometry (benchmark coverage; witnesses go to the owning `BACKLOG.md` item and then to the benchmark suite), workload and measurement contracts (the performance-assurance specification), fixture defects, diagnostics, regression checks and production Weight generation. A record is justified only by a physical design choice between named candidates whose outcome changes the architecture.
 
+## Supporting Assurance Dossiers
+
+Compile a bounded diagnostic/qualification series into one track-local `assurance.md` containing current conclusions, decision-relevant observations, necessary identities and explicit evidence limits. This is not a new Experiment Record, obligation row or alternate backlog. Do not retain receipt pages, an archive or a companion manifest merely for history; raw material needs a concrete active acceptance/reproducibility consumer. Dropping raw data must narrow replay/audit claims rather than silently preserving their former strength. Project build/test/CI must not depend on this private owner; required fixtures and acceptance machinery stay with project owners.
+
 ## Proof Obligations
 
 Before Prepared, enumerate a finite `Proof Obligations` table (ID, claim, smallest falsifier, evidence class, status, consumer) and freeze it at Measuring. A later question about the same mechanism becomes a new obligation row; do not extend one notebook with diagnostics. Satisfied is an evidence decision with scope, not a passing fixture. An ordinary correctness bug earns nothing unless it exposes a physical choice or invalidates a load-bearing assumption.
@@ -71,7 +86,7 @@ Run `./.agents/skills/architecture-experiments/scripts/validate-record-normaliza
 
 ## Experiment Tracks
 
-A track is a stable physical research domain with its own scope, invariants, baseline and entry/exit rule; it is not a release phase or a second backlog. Each `tracks/<track>/experiments.md` owns only the charter, current baseline, Current Records, Retained Principles, research portfolio and a one-paragraph history. Cross-track hard dependencies stay directional and acyclic.
+A track is a stable physical research domain with its own scope, invariants, baseline and entry/exit rule; it is not a release phase or a second backlog. Each `tracks/<track>/experiments.md` owns the charter, current baseline, canonical Best Verified Results tables, Current Records, Retained Principles, research portfolio and a one-paragraph history. Cross-track hard dependencies stay directional and acyclic.
 
 | Track | Scope | Index |
 | --- | --- | --- |
@@ -123,7 +138,7 @@ Protocol semantics, storage topology, counters, ProofSize and database shapes ma
 5. `Runtime benchmarks`: Read the call path, benchmark, `WeightInfo`, binding and specification first; construct the smallest state reaching the real worst case with setup outside the measured block; assert the branch; use measured ProofSize for storage-sensitive paths. [`scripts/benchmarks.sh`](../../../scripts/benchmarks.sh) owns commands (`--check` first; `--skip-build` only with the same fresh runtime). Production binding rebuilds Wasm through [`scripts/03-build-runtime.sh`](../../../scripts/03-build-runtime.sh) and keeps benchmark and production Wasm identities separate. A host timing or `Weight::MAX` test never establishes ordinary-block capacity.
 6. `Result, Interpretation, Decision`: Keep them separate. Classify candidates as Pareto-improving, dominated, tradeoff or binding-dimension winner; never collapse dimensions into an unjustified scalar. Negative results are first-class; record them once and stop.
 7. `Next gradient`: `target → measured gap → binding dimension → dominant contributor → owning mechanism → next hypothesis → smallest falsifier`.
-8. `Reconcile`: Update the track index with every status change, keep open work in `BACKLOG.md`, and cite accepted IDs from architecture prose only after tests and correction converge.
+8. `Reconcile`: Update the track index with every status change and reconcile its Best Verified Results table against completed evidence (or explicitly retain its pending/non-applicable status). Keep open work in `BACKLOG.md`, and cite accepted IDs from architecture prose only after tests and correction converge.
 
 ## Validity and Stop Rules
 

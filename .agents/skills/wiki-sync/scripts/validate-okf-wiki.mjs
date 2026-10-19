@@ -9,13 +9,13 @@ function usage() {
   console.log(`Usage: validate-okf-wiki.mjs [--wiki-dir PATH]
   [--migration-baseline PATH | --migration-baseline-ref REF]
 
-Validate /wiki as an explicitly declared strict OKF v0.2 bundle while preserving
+Validate the selected Wiki plane as an explicitly declared strict OKF v0.2 bundle while preserving
 DEOS locale, graph, and frontend-manifest contracts. A migration baseline checks
 that every legacy page ID and typed edge remains present without constraining
 later graph evolution.`);
 }
 
-let wikiDir = resolve(process.cwd(), 'wiki');
+let wikiDir = resolve(process.cwd(), 'wiki/deos');
 let migrationBaselinePath = null;
 let migrationBaselineRef = null;
 for (let index = 2; index < process.argv.length; index += 1) {
@@ -204,6 +204,22 @@ try {
       const page = pages.get(`${id}/${locale}`);
       if (!page || !node || !statePage || !localePage) continue;
       const { rel } = page;
+      const manifestSources = statePage.sources?.[locale];
+      if (!Array.isArray(manifestSources) || manifestSources.length === 0) {
+        failures.push(`_meta/state.json: missing sources for ${id}/${locale}`);
+      } else {
+        for (const resource of manifestSources) {
+          if (typeof resource !== 'string' || !resource.trim()) {
+            failures.push(`_meta/state.json: invalid source for ${id}/${locale}`);
+          } else if (!isAbsolute(resource) && !/^[a-z][a-z0-9+.-]*:/i.test(resource)) {
+            try {
+              readFileSync(resolve(wikiDir, resource));
+            } catch {
+              failures.push(`_meta/state.json: missing source resource for ${id}/${locale}: ${resource}`);
+            }
+          }
+        }
+      }
       if (node.path?.[locale] !== rel) failures.push(`_meta/graph.json: path drift for ${id}/${locale}`);
       if (statePage.path?.[locale] !== rel) failures.push(`_meta/state.json: path drift for ${id}/${locale}`);
       if (localePage[locale] !== rel) failures.push(`_meta/locales.json: path drift for ${id}/${locale}`);

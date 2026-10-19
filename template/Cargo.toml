@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.7.27"
+version = "0.7.28"
 license = "MIT-0"
 authors = ["DEOS Contributors"]
 homepage = "https://github.com/atmo-network/deos"
@@ -63,12 +63,12 @@ pallet-session-rotation = { package = "pallet-deos-session-rotation", path = "./
 pallet-staking = { package = "pallet-deos-staking", path = "./pallets/staking", default-features = false }
 pallet-tmc = { package = "pallet-deos-tmc", path = "./pallets/tmc", default-features = false }
 
-# Polkadot SDK polkadot-stable2609 umbrella crate
-polkadot-sdk = { version = "=2609.0.0", default-features = false }
+# Polkadot SDK polkadot-stable2609-2 umbrella crate
+polkadot-sdk = { version = "=2609.3.0", default-features = false }
 
 # Polkadot SDK individual crates
 frame = { package = "polkadot-sdk-frame", version = "0.19.0", default-features = false }
-cumulus-pallet-parachain-system = { version = "=0.31.0", default-features = false }
+cumulus-pallet-parachain-system = { version = "=0.32.0", default-features = false }
 substrate-wasm-builder = "=35.0.0"
 
 # External crates
@@ -86,8 +86,10 @@ sp-api = { version = "44.0.0", default-features = false }
 sp-arithmetic = { version = "29.0.0", default-features = false }
 
 [patch.crates-io]
-# stable2609 still needs generated client transaction-depth restoration after explicit scopes.
+# stable2609-2 still needs generated client transaction-depth restoration after explicit scopes.
 sp-api-proc-macro = { path = "vendor/sp-api-proc-macro" }
+# Source-bound XCMP admission repair; retains the selected stable2609 package version.
+cumulus-pallet-xcmp-queue = { path = "vendor/cumulus-pallet-xcmp-queue" }
 
 [profile.release]
 opt-level = 3

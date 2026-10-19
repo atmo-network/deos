@@ -54,6 +54,9 @@ fn top(ext: &TestExternalities) -> Storage {
 }
 
 fn run(preset: &PresetId, wasm: Option<&[u8]>, pvf_output: Option<&std::path::Path>) {
+  if wasm.is_some() || pvf_output.is_some() {
+    native_api::ensure_artifact_profile().expect("Wasm-bound native preparation profile");
+  }
   println!("native finalization Close preparation begins: preset={preset}");
   let pair = Sr25519Keyring::Alice.pair();
   let owner = Sr25519Keyring::Alice.to_account_id();
@@ -242,7 +245,10 @@ fn run(preset: &PresetId, wasm: Option<&[u8]>, pvf_output: Option<&std::path::Pa
 }
 
 fn main() -> Result<(), String> {
-  let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+  run_with_args(std::env::args().skip(1).collect())
+}
+
+fn run_with_args(arguments: Vec<String>) -> Result<(), String> {
   if arguments == ["--help"] || arguments == ["-h"] {
     println!(
       "Usage: actor_finalization_close [--sdk-wasm PATH | --pvf-fixture PATH NEW_DIR]\n\nRuns both runtime-owned presets through a finite native-prepared finalization Close witness,\nactual SDK BlockBuilder with plain/recording proof-size providers, post-Close\nexecutor/response-decode errors in push and finalization, fresh Core recording/replay\nimports, and late invalid-root rollback.\nBy default the SDK executor uses compiled Rust. --sdk-wasm selects actual Wasm execution\nfor SDK authoring/import and checks the artifact's full runtime version; preparation\nand the independent expected block/state remain native. No native fallback is allowed.\n--pvf-fixture binds the selected code in parent storage and exports proof-bound,\nAura-sealed candidate inputs after an independent native seal/state check.\nPVF worker validation is a separate caller. This does not authenticate relay history,\nrun a live node, replay public setup history or establish a resource maximum."
@@ -252,10 +258,12 @@ fn main() -> Result<(), String> {
   let (wasm, pvf_output) = match arguments.as_slice() {
     [] => (None, None),
     [flag, path] if flag == "--sdk-wasm" => {
+      native_api::ensure_artifact_profile()?;
       let code = std::fs::read(path).map_err(|error| format!("cannot read Wasm: {error}"))?;
       (Some(code), None)
     }
     [flag, path, output] if flag == "--pvf-fixture" => {
+      native_api::ensure_artifact_profile()?;
       let code = std::fs::read(path).map_err(|error| format!("cannot read Wasm: {error}"))?;
       let output = std::path::PathBuf::from(output);
       std::fs::create_dir(&output)
@@ -268,4 +276,35 @@ fn main() -> Result<(), String> {
     run(&preset, wasm.as_deref(), pvf_output.as_deref());
   }
   Ok(())
+}
+
+#[cfg(all(
+  test,
+  feature = "benchmark-authority-scaffolding",
+  not(feature = "runtime-benchmarks")
+))]
+#[test]
+fn native_fixture_requests_refuse_before_io() {
+  let output = std::env::temp_dir().join(format!(
+    "deos-denied-finalization-request-{}",
+    std::process::id()
+  ));
+  assert!(!output.exists());
+  let missing = output.join("missing.wasm").to_string_lossy().into_owned();
+  for args in [
+    vec!["--sdk-wasm".into(), missing.clone()],
+    vec![
+      "--pvf-fixture".into(),
+      missing,
+      output.to_string_lossy().into_owned(),
+    ],
+  ] {
+    let error = run_with_args(args).unwrap_err();
+    assert!(
+      error.contains("native admission fixture cannot"),
+      "wrong refusal: {error}"
+    );
+    assert!(!output.exists(), "denied request must not create output");
+  }
+  assert!(run_with_args(vec!["--help".into()]).is_ok());
 }

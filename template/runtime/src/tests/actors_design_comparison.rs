@@ -28,7 +28,7 @@ impl Drop for IsolatedBlock {
   }
 }
 
-fn with_isolated_block<R>(block: BlockNumber, run: impl FnOnce() -> R) -> R {
+pub(super) fn with_isolated_block<R>(block: BlockNumber, run: impl FnOnce() -> R) -> R {
   assert!(
     ISOLATED_BLOCK.get().is_none(),
     "isolated scopes cannot nest"
@@ -43,6 +43,8 @@ pub(crate) fn prepass_budget(
   now: BlockNumber,
   configured: BlockResourceBudget,
 ) -> Result<BlockResourceBudget, BlockResourceError> {
+  #[cfg(not(feature = "runtime-benchmarks"))]
+  super::production_block_replay::meter_attribution::observe_freeze(now, configured);
   let Some(block) = ISOLATED_BLOCK.get() else {
     return Ok(configured);
   };
@@ -121,6 +123,7 @@ fn isolated_liquidity_borrowing_and_control_refusal_preserve_order() {
   );
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn isolated_drain_refusal_preserves_fees_custody_and_next_block_recovery() {
   fixtures::assert_paired_drain_refusal(
@@ -137,6 +140,7 @@ fn isolated_drain_refusal_preserves_fees_custody_and_next_block_recovery() {
   );
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn isolated_business_failure_is_charged_and_does_not_block_successor() {
   fixtures::assert_paired_business_failure(

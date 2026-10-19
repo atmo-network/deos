@@ -429,7 +429,7 @@ run_audit() {
     check_exact_line "$TEMPLATE_DIR/primitives/Cargo.toml" "name = \"deos-primitives\"" "DEOS primitives Cargo-package identity drift"
     check_exact_line "$TEMPLATE_DIR/pallets/asset-registry/Cargo.toml" "name = \"pallet_asset_registry\"" "Asset Registry Rust-crate identity drift"
     check_exact_line "$TEMPLATE_DIR/primitives/Cargo.toml" "name = \"primitives\"" "Primitives Rust-crate identity drift"
-    if rg -q 'pallet-deus-router' "$TEMPLATE_DIR" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/README.md" "$PROJECT_ROOT/AGENTS.md" "$PROJECT_ROOT/BACKLOG.md" --glob '!target/**'; then
+    if rg -q 'pallet-deus-router' "$TEMPLATE_DIR" "$PROJECT_ROOT/docs/deos" "$PROJECT_ROOT/README.md" "$PROJECT_ROOT/AGENTS.md" "$PROJECT_ROOT/BACKLOG.md" --glob '!target/**'; then
         log_error "DEOS Router Cargo-package identity drift: legacy deus spelling remains"
         exit 1
     fi
@@ -474,11 +474,11 @@ run_audit() {
             log_error "Package embedding drift: uppercase pallets/$package/EMBEDDING.md alias exists"
             exit 1
         fi
-        if [[ ! -f "$PROJECT_ROOT/docs/$integration_doc.integration.en.md" ]]; then
-            log_error "Integration-document drift: missing docs/$integration_doc.integration.en.md"
+        if [[ ! -f "$PROJECT_ROOT/docs/deos/$integration_doc.integration.en.md" ]]; then
+            log_error "Integration-document drift: missing docs/deos/$integration_doc.integration.en.md"
             exit 1
         fi
-        check_fixed_reference "$PROJECT_ROOT/docs/README.md" "[$integration_label](./$integration_doc.integration.en.md)" "$package integration-navigation drift"
+        check_fixed_reference "$PROJECT_ROOT/docs/deos/README.md" "[$integration_label](./$integration_doc.integration.en.md)" "$package integration-navigation drift"
     done
 
     local forbidden
@@ -495,47 +495,47 @@ run_audit() {
         fi
     done
     for forbidden in "System Actors #" "| Role | actor_id |" "Actors #0" "Actors #2"; do
-        if grep -Fq "$forbidden" "$PROJECT_ROOT/docs/core.architecture.en.md"; then
+        if grep -Fq "$forbidden" "$PROJECT_ROOT/docs/deos/core.architecture.en.md"; then
             log_error "Core-architecture ownership drift: concrete System topology remains: $forbidden"
             exit 1
         fi
     done
-    check_fixed_reference "$PROJECT_ROOT/wiki/overview/actor-system.en.md" "../../docs/actors.integration.en.md" "Actors wiki-provenance drift"
-    check_fixed_reference "$PROJECT_ROOT/wiki/overview/actor-system.en.md" "../../docs/oracle.integration.en.md" "Oracle wiki-provenance drift"
-    check_fixed_reference "$PROJECT_ROOT/wiki/overview/router.en.md" "../../docs/oracle.integration.en.md" "Oracle wiki-provenance drift"
-    check_fixed_reference "$PROJECT_ROOT/wiki/overview/router.en.md" "canonical_page_id: router" "DEOS Router canonical-id drift"
-    check_fixed_reference "$PROJECT_ROOT/wiki/overview/router.ru.md" "canonical_page_id: router" "DEOS Router canonical-id drift"
-    check_fixed_reference "$PROJECT_ROOT/wiki/index.en.md" "[DEOS Router](overview/router.en.md)" "DEOS Router wiki-entrypoint drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/deos/overview/actor-system.en.md" "../../../docs/deos/actors.integration.en.md" "Actors wiki-provenance drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/deos/overview/actor-system.en.md" "../../../docs/deos/oracle.integration.en.md" "Oracle wiki-provenance drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/deos/overview/router.en.md" "../../../docs/deos/oracle.integration.en.md" "Oracle wiki-provenance drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/deos/overview/router.en.md" "canonical_page_id: router" "DEOS Router canonical-id drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/deos/overview/router.ru.md" "canonical_page_id: router" "DEOS Router canonical-id drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/deos/index.en.md" "[DEOS Router](overview/router.en.md)" "DEOS Router wiki-entrypoint drift"
     if ! "$SCRIPT_DIR/audit-router-identity.sh"; then
         log_error "DEOS Router identity drift"
         exit 1
     fi
-    if [[ ! -f "$PROJECT_ROOT/wiki/overview/governance.en.md" || ! -f "$PROJECT_ROOT/wiki/overview/governance.ru.md" || -e "$PROJECT_ROOT/wiki/overview/deos-governance.en.md" || -e "$PROJECT_ROOT/wiki/overview/governance-overview.en.md" ]]; then
+    if [[ ! -f "$PROJECT_ROOT/wiki/deos/overview/governance.en.md" || ! -f "$PROJECT_ROOT/wiki/deos/overview/governance.ru.md" || -e "$PROJECT_ROOT/wiki/deos/overview/deos-governance.en.md" || -e "$PROJECT_ROOT/wiki/deos/overview/governance-overview.en.md" ]]; then
         log_error "Governance wiki-owner drift"
         exit 1
     fi
-    check_fixed_reference "$PROJECT_ROOT/wiki/overview/governance.en.md" "canonical_page_id: governance" "Governance canonical-id drift"
-    check_fixed_reference "$PROJECT_ROOT/wiki/_meta/locales.json" '"governance"' "Governance locale-metadata drift"
-    if [[ ! -f "$PROJECT_ROOT/wiki/overview/staking.en.md" || ! -f "$PROJECT_ROOT/wiki/overview/staking.ru.md" || -e "$PROJECT_ROOT/wiki/overview/deos-staking.en.md" || -e "$PROJECT_ROOT/wiki/concepts/staking-pools.en.md" ]]; then
+    check_fixed_reference "$PROJECT_ROOT/wiki/deos/overview/governance.en.md" "canonical_page_id: governance" "Governance canonical-id drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/deos/_meta/locales.json" '"governance"' "Governance locale-metadata drift"
+    if [[ ! -f "$PROJECT_ROOT/wiki/deos/overview/staking.en.md" || ! -f "$PROJECT_ROOT/wiki/deos/overview/staking.ru.md" || -e "$PROJECT_ROOT/wiki/deos/overview/deos-staking.en.md" || -e "$PROJECT_ROOT/wiki/deos/concepts/staking-pools.en.md" ]]; then
         log_error "Staking wiki-owner drift"
         exit 1
     fi
-    check_fixed_reference "$PROJECT_ROOT/wiki/overview/staking.en.md" "canonical_page_id: staking" "Staking canonical-id drift"
-    check_fixed_reference "$PROJECT_ROOT/wiki/_meta/locales.json" '"staking"' "Staking locale-metadata drift"
-    if [[ ! -f "$PROJECT_ROOT/wiki/overview/typed-observations.en.md" || ! -f "$PROJECT_ROOT/wiki/overview/typed-observations.ru.md" || -e "$PROJECT_ROOT/wiki/overview/deos-oracle.en.md" ]]; then
+    check_fixed_reference "$PROJECT_ROOT/wiki/deos/overview/staking.en.md" "canonical_page_id: staking" "Staking canonical-id drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/deos/_meta/locales.json" '"staking"' "Staking locale-metadata drift"
+    if [[ ! -f "$PROJECT_ROOT/wiki/deos/overview/typed-observations.en.md" || ! -f "$PROJECT_ROOT/wiki/deos/overview/typed-observations.ru.md" || -e "$PROJECT_ROOT/wiki/deos/overview/deos-oracle.en.md" ]]; then
         log_error "Typed-observations wiki-owner drift"
         exit 1
     fi
-    check_fixed_reference "$PROJECT_ROOT/wiki/overview/typed-observations.en.md" "canonical_page_id: typed-observations" "Typed-observations canonical-id drift"
-    check_fixed_reference "$PROJECT_ROOT/wiki/_meta/locales.json" '"typed-observations"' "Typed-observations locale-metadata drift"
-    check_fixed_reference "$PROJECT_ROOT/wiki/index.en.md" "[Typed Observations](overview/typed-observations.en.md)" "Typed-observations wiki-entrypoint drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/deos/overview/typed-observations.en.md" "canonical_page_id: typed-observations" "Typed-observations canonical-id drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/deos/_meta/locales.json" '"typed-observations"' "Typed-observations locale-metadata drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/deos/index.en.md" "[Typed Observations](overview/typed-observations.en.md)" "Typed-observations wiki-entrypoint drift"
     for retired_wiki_page in ui-kit-and-domain-dag.en.md ui-kit-and-domain-dag.ru.md what-deos-is-not.en.md what-deos-is-not.ru.md; do
-        if [[ -e "$PROJECT_ROOT/wiki/concepts/$retired_wiki_page" ]]; then
+        if [[ -e "$PROJECT_ROOT/wiki/deos/concepts/$retired_wiki_page" ]]; then
             log_error "Wiki focus drift: retired concept page exists: $retired_wiki_page"
             exit 1
         fi
     done
-    if rg -q '"(ui-kit-and-domain-dag|what-deos-is-not)"' "$PROJECT_ROOT/wiki/_meta" --glob '!aliases.json'; then
+    if rg -q '"(ui-kit-and-domain-dag|what-deos-is-not)"' "$PROJECT_ROOT/wiki/deos/_meta" --glob '!aliases.json'; then
         log_error "Wiki focus drift: retired concept id remains in active metadata"
         exit 1
     fi
@@ -544,14 +544,14 @@ run_audit() {
     check_fixed_reference "$TEMPLATE_DIR/pallets/staking/README.md" "# pallet-deos-staking" "DEOS Staking package-title drift"
     check_fixed_reference "$TEMPLATE_DIR/pallets/staking/docs/specification.en.md" "# DEOS Staking Specification:" "DEOS Staking specification-title drift"
     check_fixed_reference "$PROJECT_ROOT/web-client/src/lib/widgets/StakingWidget.svelte" 'title="DEOS Staking"' "DEOS Staking client-title drift"
-    if rg -q 'Typed Observation Oracle|Oracle Integration in DEOS|\[Staking (Specification|Architecture|README)|title="Staking"|# pallet-oracle|# pallet-staking|# Staking Specification|# Staking:' "$PROJECT_ROOT/README.md" "$PROJECT_ROOT/docs" "$TEMPLATE_DIR" "$PROJECT_ROOT/web-client" --glob '*.md' --glob '*.svelte'; then
+    if rg -q 'Typed Observation Oracle|Oracle Integration in DEOS|\[Staking (Specification|Architecture|README)|title="Staking"|# pallet-oracle|# pallet-staking|# Staking Specification|# Staking:' "$PROJECT_ROOT/README.md" "$PROJECT_ROOT/docs/deos" "$TEMPLATE_DIR" "$PROJECT_ROOT/web-client" --glob '*.md' --glob '*.svelte'; then
         log_error "Generic subsystem public-terminology drift"
         exit 1
     fi
 
-    check_fixed_reference "$PROJECT_ROOT/docs/README.md" "[DEOS Actors Specification](../template/pallets/actors/docs/specification.en.md)" "Actors package-navigation drift"
+    check_fixed_reference "$PROJECT_ROOT/docs/deos/README.md" "[DEOS Actors Specification](../../template/pallets/actors/docs/specification.en.md)" "Actors package-navigation drift"
     check_fixed_reference "$TEMPLATE_DIR/pallets/actors/README.md" "[DEOS Actors Specification](./docs/specification.en.md)" "Actors package-navigation drift"
-    check_fixed_reference "$PROJECT_ROOT/docs/README.md" "[Web Client Architecture](../web-client/docs/architecture.en.md)" "Web-client architecture-navigation drift"
+    check_fixed_reference "$PROJECT_ROOT/docs/deos/README.md" "[Web Client Architecture](../../web-client/docs/architecture.en.md)" "Web-client architecture-navigation drift"
     check_fixed_reference "$PROJECT_ROOT/web-client/README.md" "[\`docs/architecture.en.md\`](./docs/architecture.en.md)" "Web-client architecture-navigation drift"
     if [[ ! -f "$PROJECT_ROOT/web-client/docs/architecture.en.md" || -e "$PROJECT_ROOT/docs/web-client.architecture.en.md" ]]; then
         log_error "Web-client architecture ownership drift"

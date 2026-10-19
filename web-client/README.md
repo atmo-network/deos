@@ -34,7 +34,7 @@ The client follows the repository-wide read-model contract:
 
 Do not make archive/search/dashboard behavior look like canonical chain truth. If a future feature needs an indexer, model that dependency explicitly.
 
-Actor monitoring reads finalized canonical semantic/process owners and shows current residence. Missing canonical metadata is unavailable, never an absent Actor. Eligibility API v8 retains the original unpaid reason/grace, exact debt/current shortfall, authenticated behavior episode generation, referenced caps, capped monitor values and clean-Cycle flags, distinguishing stateless policies from allocated state. Resource API v2 separately exposes creation admission, machine freeze and block-local halt; missing flag metadata leaves resource data usable. The committed schema matches the selected Wasm and local SCALE/consumer checks pass; public policy admission, complete financial/resource qualification and live RPC/rendered conformance remain separate gates.
+Actor monitoring reads finalized canonical semantic/process owners and shows current residence. Missing canonical metadata is unavailable, never an absent Actor. Eligibility API v8 retains the original unpaid reason/grace, exact debt/current shortfall, authenticated behavior episode generation, referenced caps, capped monitor values and clean-Cycle flags, distinguishing stateless policies from allocated state. Resource API v2 separately exposes new-User creation permission, machine freeze and block-local halt; missing flag metadata leaves resource data usable. Permission is not effective admission or sustainable capacity; this API exposes no capacity/admission forecast. The committed schema matches the selected Wasm and local SCALE/consumer checks pass; public policy admission, complete financial/resource qualification and live RPC/rendered conformance remain separate gates.
 
 ## Architecture Boundaries
 
@@ -98,17 +98,19 @@ Surface-pressure warnings are triage signals, not folder-theater mandates.
 
 ## Generated Wiki Boundary
 
-`WikiWidget` renders repo-local generated wiki markdown from `../wiki`.
+The accepted [Wiki Publication and Embedding Contract](../docs/deos/wiki-publication.contract.en.md) assigns all Wiki rendering, navigation, localization, semantic-layer filtering, search and graph traversal to the independently deployable DEOS EN/RU website. The framework selects no downstream brand or hosting origin. If embedding is explicitly prioritized, the web-client's target responsibility is only a configured trusted-origin iframe and its lifecycle in the tiling layout. It must not maintain a second Wiki frontend.
+
+The current `WikiWidget` is still the legacy direct renderer of repo-local generated wiki markdown from `../wiki/deos`; the standalone MVP lives in the optional Wiki Sync Skill and iframe migration is deferred. Follow-up work is tracked in [`../BACKLOG.md`](../BACKLOG.md), without delaying higher-priority framework work. The implementation below describes that existing renderer, not acceptance of the successor site/embed. Do not remove it or its dependencies until the replacement works and all remaining consumers have been checked.
 
 The wiki is trusted reviewed repository content, not arbitrary user input. The independent Wiki Sync Skill validates `/wiki` as a strict OKF v0.2 bundle and rejects raw HTML blocks, dangerous URL schemes, inline DOM event handlers, and malformed frontmatter before generated content is retained. The client consumes that reviewed output without depending on Skill internals.
 
 The widget consumes:
 
-- `../wiki/_meta/navigation.json`
-- `../wiki/_meta/aliases.json`
-- `../wiki/_meta/graph.json`
-- `../wiki/_meta/state.json`
-- `../wiki/_meta/locales.json`
+- `../wiki/deos/_meta/navigation.json`
+- `../wiki/deos/_meta/aliases.json`
+- `../wiki/deos/_meta/graph.json`
+- `../wiki/deos/_meta/state.json`
+- `../wiki/deos/_meta/locales.json`
 
 ## Local Development
 
@@ -122,11 +124,21 @@ npm run dev
 
 `npm run validate` also generates PAPI descriptors once from the committed `.papi/metadata/deos.scale` snapshot before checking client types.
 
-When runtime query/view surfaces change, refresh metadata with:
+When runtime query/view surfaces change, first qualify affected numerical/resource owners, then build and export one current-source cohort:
 
 ```sh
+../scripts/03-build-runtime.sh
 ../scripts/export-papi-metadata.sh
 ```
+
+The candidate metadata/descriptors are a current-source **native-only preparation cohort**, including Actor admission errors and widened Governance power. They are not bound to qualified production Wasm. Until production binding is qualified, a separate diagnostic export can inspect source metadata without overwriting the candidate cohort:
+
+```sh
+SKIP_WASM_BUILD=1 ../scripts/export-papi-metadata.sh --native-only --skip-generate \
+  --output template/target/rc-source-preparation/deos.scale
+```
+
+That native-only output is preparation, not Wasm equality or production acceptance. Historical Wasm/metadata cohorts retain their original applicability in the SDK integration owner; source preparation must not relabel them or promote unqualified numerical owners.
 
 Then regenerate the dependent ABI and ingress projections:
 
@@ -135,9 +147,20 @@ npm run generate:actors-abi
 npm run generate:ingress-evidence
 ```
 
-The package-owned `fee_envelope_vectors` and runtime-owned `actor_cost_vectors` examples also bind the metadata hash; invoke the owning Cargo examples from `../template` with explicit output paths to refresh them. `../scripts/validate-local.sh full` checks their exact freshness. The cost-vector fixture starts with disabled User creation and explicitly enables it through the public setter in isolated externalities; it does not change genesis policy.
+The package-owned `fee_envelope_vectors` and runtime-owned `actor_cost_vectors` examples also bind the metadata hash. The runtime cost producer requires explicit native-only model capacity, not production User admission:
+
+```sh
+cd ../template
+SKIP_WASM_BUILD=1 cargo run --locked -p deos-runtime \
+  --features benchmark-authority-scaffolding --example actor_cost_vectors -- \
+  ../web-client/src/lib/automation/actors-cost-vectors.json
+```
+
+Do not add `runtime-benchmarks`: ordinary/default and combined benchmark profiles refuse generation before artifact writes. Format 2 explicitly records native-model capacity, unqualified production admission and unqualified physical prices. The public permission setter is used only inside isolated fixture state; production configuration is unchanged. `../scripts/validate-local.sh full` checks both vector owners through their matching routes after the qualified production cohort is available.
 
 Default metadata export requires an existing current production-profile Wasm and compares native bytes with its actual Metadata API before writing. Use `--wasm PATH` for explicit code or `--native-only` only for labelled source preparation. Descriptor generation does not by itself qualify runtime admission, resource bounds or live RPC.
+
+PAPI reads the local metadata file configured in `.papi/polkadot-api.json`. When descriptors change, the installed CLI regenerates their local package and invokes the detected package manager's `install`; this may update `node_modules` and the client lockfile. An offline artifact gate must account for that nested install and require cached dependencies, rather than treating code generation as a file-only operation. Review any lockfile delta as part of the artifact binding; it does not authorize unrelated dependency upgrades.
 
 For local native-staking demos, regenerate the chain spec with current runtime presets, start the local network, then run:
 

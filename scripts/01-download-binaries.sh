@@ -3,7 +3,8 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-POLKADOT_SDK_RELEASE="polkadot-stable2609"
+# stable2609-2 is source-only; retain the last published executable bundle.
+POLKADOT_SDK_RELEASE="polkadot-stable2609-1"
 REPOSITORY="paritytech/polkadot-sdk"
 BASE_URL="https://github.com/$REPOSITORY/releases/download/$POLKADOT_SDK_RELEASE"
 BINARY_NAMES=(
@@ -45,8 +46,10 @@ Inputs:
   bundle is absent or checksum-mismatched, plus a supported host platform.
 
 Authority:
-  GitHub release: paritytech/polkadot-sdk polkadot-stable2609
-  Compatibility: DEOS workspace Polkadot SDK 2609 package line
+  GitHub release: paritytech/polkadot-sdk polkadot-stable2609-1
+  Workspace source: polkadot-stable2609-2 (no upstream binaries published)
+  Compatibility: DEOS workspace Polkadot SDK 2609 package line; worker/node
+  qualification is separate from download/checksum verification
   Supported hosts: Linux x86_64 and macOS arm64 (checksum-pinned release assets)
 
 Outputs:
@@ -135,11 +138,11 @@ resolve_platform() {
             require_commands sha256sum
             CHECKSUM_COMMAND=(sha256sum)
             CHECKSUMS=(
-                8f0b466d84206097ff49c4d675d971ef457ba7c41d480f048098a41e7cc304fb
-                441c40b5b3d4769d2fb4e447b5a863a07f7ee1cc5120129ff76d4994c15b32e7
-                385dc434a42611e01db36735fa993c219c96e285ab1d47a9c21ff85aae7af731
-                1e2eaf7984315937a9fcdb91f1ce0bdf04c5c796fa170a9f75369141ca710721
-                4ec0f11dd97a1ad1af266132ebceae5c7993e8cd3eb45bcfb917cf77742534a7
+                82b213417be8b2e241c6d8a940df131bde195835260afe16e69b8bad694eb1c1
+                a30cc63c7794eec8c22d92bbb103c6757b8dcab6c6f550eb480bec0edd5716cb
+                92c253a46b77330c15c119804f40a12da8025b1cc289bceb406f7f3e887134cb
+                d2c86604d6e39a3cd833778985491c72e55c9544bf2e0dc3741b2cfd22585933
+                e60103d0880f973fdb7701b8a2afc9c23423daee1bfab0513b8239671dd3955c
             )
             ;;
         Darwin:arm64)
@@ -147,11 +150,11 @@ resolve_platform() {
             CHECKSUM_COMMAND=(shasum -a 256)
             ASSET_SUFFIX="-aarch64-apple-darwin"
             CHECKSUMS=(
-                dac528b581a41d5f0d87b03add0f2bcaab8db3866eca09dae120c585eb447788
-                3e0ee31dacf3e64a486da74cdb73a45b4ebc106a84b6dc481992d3cdcc420888
-                db18f5b99d9e6951a6eb02178171131decf5b830076bc54e6e4df2c1a433cbdb
-                5e8a499383c467797793d5b0865e5f1a9a9377c7fb890578c9987c09ecbc6f49
-                500dab36c358f99e55fb7824d3b3eb4e7f2754f6e253d0bb2138dd3b67d97d9d
+                2ede75fba3334b09a89160410d381f7f13093da4a1f08c07965dc17d0595228d
+                2cd1ddb414bc6bba46be19052ff8f4b95172761ff8b465d8c5a506e9c9b4f0ce
+                1ca4cfd088aaf05075917d3044cd2390bd62126da0855594566fb1402bdb17f8
+                19887e1d0b4019c408254d1c58027649a3eea42d96e8568e5cc4b974b47489d2
+                82714edd9d2d9731d42fcfb85f161dd3f252383d915d1e8bd54f9b9a16db9c50
             )
             ;;
         *)

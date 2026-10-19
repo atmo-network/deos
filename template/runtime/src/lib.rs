@@ -10,6 +10,17 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![recursion_limit = "256"]
 
+#[cfg(all(
+  feature = "benchmark-authority-scaffolding",
+  not(feature = "runtime-benchmarks"),
+  any(
+    not(feature = "std"),
+    target_family = "wasm",
+    feature = "on-chain-release-build"
+  )
+))]
+compile_error!("native admission fixture cannot be used for Wasm/no-std/release artifacts");
+
 extern crate alloc;
 
 use alloc::vec::Vec;
@@ -259,7 +270,7 @@ pub type Executive = frame_executive::Executive<
   Runtime,
   Block,
   frame_system::ChainContext<Runtime>,
-  Runtime,
+  configs::unsigned::RuntimeUnsignedValidator,
   AllPalletsWithSystem,
 >;
 

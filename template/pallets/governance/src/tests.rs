@@ -117,7 +117,10 @@ fn rejected_outcome(
   }
 }
 
-fn veto_cancelled_outcome(finalized_epoch: u64, veto_weight: u64) -> FinalizedProposalOutcome<u64> {
+fn veto_cancelled_outcome(
+  finalized_epoch: u64,
+  veto_weight: crate::U256,
+) -> FinalizedProposalOutcome<u64> {
   FinalizedProposalOutcome::VetoCancelled {
     finalized_epoch,
     veto_weight,
@@ -140,7 +143,7 @@ fn outcome_algebra_reachability_and_projection_are_exhaustive() {
       crate::ProposalEnactmentOutcome::AdvisoryFinalized { epoch: 2 },
     ),
     rejected_outcome(2, ProposalRejectionReason::NoVotes),
-    veto_cancelled_outcome(2, 7),
+    veto_cancelled_outcome(2, 7u128.into()),
   ];
   let projected = outcomes
     .iter()
@@ -581,42 +584,42 @@ fn reward_counters_fail_closed_and_resolution_ingress_rolls_back_late_overflow()
 }
 
 #[test]
-fn vote_tally_and_derived_invoice_arithmetic_cover_u64_max_without_saturation() {
+fn vote_tally_and_derived_invoice_arithmetic_cover_u128_max_without_saturation() {
   new_test_ext().execute_with(|| {
     let ballots = BoundedVec::try_from(vec![
       ProposalBallot {
         account: 10,
         vote_epoch: 0,
-        weight: u64::MAX,
-        raw_power: u64::MAX,
+        weight: crate::U256::from(u128::MAX),
+        raw_power: crate::U256::from(u128::MAX),
       },
       ProposalBallot {
         account: 11,
         vote_epoch: 0,
-        weight: 1,
-        raw_power: 1,
+        weight: crate::U256::from(1u128),
+        raw_power: crate::U256::from(1u128),
       },
     ])
     .expect("two ballots fit");
     assert_eq!(
       Governance::proposal_vote_weight_sum(7, 100, 0, 0, 1, &ballots),
-      Err(Error::<Test>::ProposalVoteTallyOverflow.into())
+      Ok(crate::U256::from(u128::MAX) + crate::U256::one())
     );
     assert_eq!(
       Governance::proposal_raw_protection_weight_sum(7, &ballots),
-      Err(Error::<Test>::ProposalVoteTallyOverflow.into())
+      Ok(crate::U256::from(u128::MAX) + crate::U256::one())
     );
     assert!(Governance::veto_weight_strictly_exceeds_threshold(
-      u64::MAX,
-      u64::MAX
+      u128::MAX.into(),
+      u128::MAX.into()
     ));
     assert!(Governance::pass_weight_meets_fast_track_threshold(
-      u64::MAX,
-      u64::MAX
+      u128::MAX.into(),
+      u128::MAX.into()
     ));
     assert!(!Governance::veto_weight_strictly_exceeds_threshold(
-      0,
-      u64::MAX
+      crate::U256::zero(),
+      u128::MAX.into()
     ));
 
     let widened_positive_tally = crate::ProposalVoteTally {
@@ -627,15 +630,15 @@ fn vote_tally_and_derived_invoice_arithmetic_cover_u64_max_without_saturation() 
       reduce_voters: 0,
       veto_voters: 0,
       pass_voters: 0,
-      aye_weight: 0,
-      nay_weight: u64::MAX,
-      amplify_weight: u64::MAX,
-      approve_weight: 1,
-      reduce_weight: 0,
-      veto_weight: 0,
-      pass_weight: 0,
-      turnout_weight: u64::MAX,
-      veto_turnout_weight: 0,
+      aye_weight: crate::U256::from(0u128),
+      nay_weight: crate::U256::from(u128::MAX),
+      amplify_weight: crate::U256::from(u128::MAX),
+      approve_weight: crate::U256::from(1u128),
+      reduce_weight: crate::U256::from(0u128),
+      veto_weight: crate::U256::from(0u128),
+      pass_weight: crate::U256::from(0u128),
+      turnout_weight: crate::U256::from(u128::MAX) * 2 + crate::U256::one(),
+      veto_turnout_weight: crate::U256::from(0u128),
     };
     assert_eq!(
       Governance::evaluate_core_resolution_policy(
@@ -645,6 +648,116 @@ fn vote_tally_and_derived_invoice_arithmetic_cover_u64_max_without_saturation() 
         Perbill::from_percent(50),
       ),
       CoreResolutionOutcome::Passing(crate::ProposalPrimaryTrackOption::Amplify)
+    );
+  });
+}
+
+#[test]
+fn governance_boundary_witness_maximum_primary_vectors_preserve_wide_approval_policy() {
+  use crate::{ProposalPrimaryTrackFamily as Family, ProposalPrimaryTrackOption as Option, U256};
+  new_test_ext().execute_with(|| {
+    let limit = <Test as crate::Config>::MaxWinningVoteAccountsPerCall::get();
+    assert_eq!(limit, 256);
+    let individual = U256::from(u128::MAX).checked_mul(U256::from(7)).unwrap();
+    let per_vector = individual.checked_mul(U256::from(limit)).unwrap();
+    let aggregate = per_vector.checked_mul(U256::from(5)).unwrap();
+    // Frozen-snapshot value-domain fixture, not jointly reachable runtime backing/history.
+    // Each ballot is provider-legal; all five vectors exercise the configured storage bound.
+    let ballots = |direction: u64| {
+      BoundedVec::try_from(
+        (0..limit)
+          .map(|index| ProposalBallot {
+            account: direction * u64::from(limit) + u64::from(index) + 1,
+            vote_epoch: 1,
+            weight: individual,
+            raw_power: individual,
+          })
+          .collect::<Vec<_>>(),
+      )
+      .unwrap()
+    };
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    ProposalVotesByItem::<Test>::insert(
+      7,
+      100,
+      crate::ProposalVotes {
+        ayes: ballots(0),
+        nays: ballots(1),
+        amplifies: ballots(2),
+        approves: ballots(3),
+        reduces: ballots(4),
+        vetoes: BoundedVec::default(),
+        passes: BoundedVec::default(),
+      },
+    );
+    let tally = Governance::proposal_vote_tally(7, 100).unwrap();
+    assert_eq!(individual.bits(), 131);
+    assert!(aggregate > U256::from(u128::MAX));
+    assert_eq!(tally.turnout_weight, aggregate);
+    assert_eq!(
+      [
+        tally.aye_voters,
+        tally.nay_voters,
+        tally.amplify_voters,
+        tally.approve_voters,
+        tally.reduce_voters
+      ],
+      [limit; 5]
+    );
+    assert_eq!(
+      [
+        tally.aye_weight,
+        tally.nay_weight,
+        tally.amplify_weight,
+        tally.approve_weight,
+        tally.reduce_weight
+      ],
+      [per_vector; 5]
+    );
+    let positive = per_vector.checked_mul(U256::from(3)).unwrap();
+    let ratio_parts = positive.checked_mul(U256::from(1_000_000_000u64)).unwrap() / aggregate;
+    assert_eq!(ratio_parts, U256::from(600_000_000u64));
+    let evaluate = |family, tally: &ProposalVoteTally, parts| {
+      Governance::evaluate_core_resolution_policy(family, tally, 1, Perbill::from_parts(parts))
+    };
+    assert_eq!(
+      evaluate(Family::Invoice, &tally, 600_000_000),
+      CoreResolutionOutcome::Passing(Option::Reduce)
+    );
+    assert_eq!(
+      evaluate(Family::Invoice, &tally, 600_000_001),
+      CoreResolutionOutcome::Rejected(ProposalRejectionReason::ApprovalThresholdNotMet)
+    );
+    assert_eq!(
+      evaluate(Family::Binary, &tally, 200_000_000),
+      CoreResolutionOutcome::Rejected(ProposalRejectionReason::VoteTie)
+    );
+    let invoice_tie = ProposalVoteTally {
+      nay_weight: positive,
+      turnout_weight: positive.checked_mul(U256::from(2)).unwrap(),
+      ..tally.clone()
+    };
+    assert_eq!(
+      evaluate(Family::Invoice, &invoice_tie, 500_000_000),
+      CoreResolutionOutcome::Rejected(ProposalRejectionReason::VoteTie)
+    );
+    let binary = ProposalVoteTally {
+      aye_weight: per_vector,
+      nay_weight: per_vector - U256::one(),
+      amplify_weight: U256::zero(),
+      approve_weight: U256::zero(),
+      reduce_weight: U256::zero(),
+      turnout_weight: per_vector.checked_mul(U256::from(2)).unwrap() - U256::one(),
+      ..tally
+    };
+    // A one-unit majority still floors to exactly 50% at Perbill resolution.
+    assert_eq!(
+      evaluate(Family::Binary, &binary, 500_000_000),
+      CoreResolutionOutcome::Passing(Option::Aye)
+    );
+    assert_eq!(
+      evaluate(Family::Binary, &binary, 500_000_001),
+      CoreResolutionOutcome::Rejected(ProposalRejectionReason::ApprovalThresholdNotMet)
     );
   });
 }
@@ -718,6 +831,7 @@ fn proposal_submit_resolve_and_reject_follow_active_lifecycle() {
     assert_ok!(submit_test_proposal(7, 101, DEFAULT_PROPOSER));
     assert_eq!(Governance::active_proposal_ids(7).into_inner(), vec![101]);
     assert_ok!(Governance::reject_proposal(RuntimeOrigin::root(), 7, 101));
+    assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 101));
     assert!(!ActiveProposals::<Test>::contains_key(7, 101));
     assert!(Governance::active_proposal_ids(7).is_empty());
     System::assert_last_event(RuntimeEvent::Governance(Event::ProposalRejected {
@@ -1300,6 +1414,37 @@ fn admin_can_requeue_unscheduled_auto_finalization_recovery() {
 }
 
 #[test]
+fn primary_tally_accepts_aggregate_beyond_u128() {
+  new_test_ext().execute_with(|| {
+    set_vote_weight(10, u128::MAX);
+    set_vote_weight(11, 1);
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(10),
+      7,
+      100,
+      ProposalVoteKind::Aye
+    ));
+    assert_eq!(
+      Governance::proposal_vote_tally(7, 100).unwrap().aye_weight,
+      polkadot_sdk::sp_core::U256::from(u128::MAX)
+    );
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(11),
+      7,
+      100,
+      ProposalVoteKind::Nay
+    ));
+    assert_eq!(
+      Governance::proposal_vote_tally(7, 100)
+        .unwrap()
+        .turnout_weight,
+      polkadot_sdk::sp_core::U256::from(u128::MAX) + crate::U256::one()
+    );
+  });
+}
+
+#[test]
 fn proposal_query_helpers_report_weighted_tally_and_resolution_state() {
   new_test_ext().execute_with(|| {
     set_vote_weight(10, 5);
@@ -1328,17 +1473,17 @@ fn proposal_query_helpers_report_weighted_tally_and_resolution_state() {
     assert_eq!(tally.aye_voters, 1);
     assert_eq!(tally.nay_voters, 2);
     assert_eq!(tally.veto_voters, 0);
-    assert_eq!(tally.aye_weight, 5);
-    assert_eq!(tally.nay_weight, 2);
-    assert_eq!(tally.veto_weight, 0);
+    assert_eq!(tally.aye_weight, polkadot_sdk::sp_core::U256::from(5));
+    assert_eq!(tally.nay_weight, polkadot_sdk::sp_core::U256::from(2));
+    assert_eq!(tally.veto_weight, polkadot_sdk::sp_core::U256::from(0));
     assert_eq!(
       Governance::proposal_primary_track_tally(7, 100),
       Some(crate::ProposalPrimaryTrackTally::Binary {
         aye_voters: 1,
         nay_voters: 2,
-        aye_weight: 5,
-        nay_weight: 2,
-        turnout_weight: 7,
+        aye_weight: crate::U256::from(5u128),
+        nay_weight: crate::U256::from(2u128),
+        turnout_weight: crate::U256::from(7u128),
         leading_option: Some(crate::ProposalPrimaryTrackOption::Aye),
       })
     );
@@ -2173,6 +2318,147 @@ fn executor_failure_rolls_back_its_effect_but_commits_failure_and_cleanup() {
 }
 
 #[test]
+fn terminal_results_release_pending_authority_before_history_cleanup() {
+  for delay in [0, 2] {
+    for (kind, preimage, success) in [
+      (ProposalPayloadKind::Intent, false, true),
+      (ProposalPayloadKind::L2SignalToL1, false, true),
+      (ProposalPayloadKind::L1RootAction, false, true),
+      (ProposalPayloadKind::L1RootAction, true, false),
+      (ProposalPayloadKind::L1RootAction, true, true),
+    ] {
+      new_test_ext().execute_with(|| {
+        ProposalEnactmentDelay::set(delay);
+        let hash = H256::repeat_byte(75);
+        set_payload_executor_enabled(true);
+        set_payload_preimage_state(hash, preimage, false);
+        set_payload_execution_result(hash, success);
+        approve_pending_payload(100, kind, hash);
+        let terminal_epoch = 1 + delay;
+        if delay != 0 {
+          assert_eq!(
+            ProposalPendingEnactmentAt::<Test>::get(7, 100),
+            Some(terminal_epoch)
+          );
+          assert_eq!(crate::PendingEnactments::<Test>::get().len(), 1);
+          assert!(Governance::finalized_proposal_outcome_expiry_bucket(4).is_empty());
+          #[cfg(feature = "try-runtime")]
+          assert_ok!(Governance::do_try_state());
+          System::set_block_number(terminal_epoch);
+          Governance::on_initialize(terminal_epoch);
+        }
+        let enactment = match kind {
+          ProposalPayloadKind::Intent | ProposalPayloadKind::L2SignalToL1 => {
+            crate::ProposalEnactmentOutcome::AdvisoryFinalized {
+              epoch: terminal_epoch,
+            }
+          }
+          _ if !preimage || !success => crate::ProposalEnactmentOutcome::ExecutionFailed {
+            epoch: terminal_epoch,
+          },
+          _ => crate::ProposalEnactmentOutcome::Enacted {
+            epoch: terminal_epoch,
+          },
+        };
+        assert_eq!(
+          Governance::finalized_proposal_outcome(7, 100),
+          Some(approved_outcome(1, 1, enactment))
+        );
+        assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
+        assert!(crate::PendingEnactments::<Test>::get().is_empty());
+        assert_eq!(crate::PendingEnactmentCursor::<Test>::get(), 0);
+        assert!(ProposalMetadataByItem::<Test>::contains_key(7, 100));
+        assert_eq!(
+          Governance::finalized_proposal_ids(7).into_inner(),
+          vec![100]
+        );
+        let retention: u32 =
+          <Test as crate::Config>::FinalizedProposalOutcomeRetentionEpochs::get();
+        let expiry = terminal_epoch + u64::from(retention);
+        assert_eq!(
+          Governance::finalized_proposal_outcome_expiry_bucket(expiry).len(),
+          1
+        );
+        #[cfg(feature = "try-runtime")]
+        assert_ok!(Governance::do_try_state());
+        System::set_block_number(expiry);
+        service_governance_through(expiry);
+        assert!(!FinalizedProposals::<Test>::contains_key(7, 100));
+        assert!(!ProposalMetadataByItem::<Test>::contains_key(7, 100));
+        assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
+        assert!(Governance::finalized_proposal_ids(7).is_empty());
+        #[cfg(feature = "try-runtime")]
+        assert_ok!(Governance::do_try_state());
+      });
+    }
+  }
+}
+
+#[test]
+fn late_bookkeeping_refusal_restores_pending_authority_and_all_effects() {
+  new_test_ext().execute_with(|| {
+    ProposalEnactmentDelay::set(2);
+    let hash = H256::repeat_byte(76);
+    set_payload_preimage_state(hash, true, false);
+    set_payload_executor_enabled(true);
+    approve_pending_payload(100, ProposalPayloadKind::L1RootAction, hash);
+    System::set_block_number(3);
+    set_payload_execution_remove_finalization(true);
+    assert_noop!(
+      Governance::maybe_execute_proposal_payload(7, 100, 1, 1, 3),
+      Error::<Test>::FinalizedProposalMissing
+    );
+    assert_eq!(payload_execution_calls(), 1);
+    assert_eq!(ProposalPendingEnactmentAt::<Test>::get(7, 100), Some(3));
+    assert_eq!(crate::PendingEnactments::<Test>::get().len(), 1);
+    assert_eq!(
+      Governance::finalized_proposal_outcome(7, 100),
+      Some(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::NotAttempted
+      ))
+    );
+    assert!(Governance::finalized_proposal_outcome_expiry_bucket(6).is_empty());
+    assert_eq!(
+      polkadot_sdk::frame_support::storage::unhashed::get::<H256>(
+        b"mock-governance-payload-effect"
+      ),
+      None
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
+    set_payload_execution_remove_finalization(false);
+    System::set_block_number(4);
+    Governance::on_initialize(4);
+    assert_eq!(payload_execution_calls(), 2);
+    assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
+    assert!(crate::PendingEnactments::<Test>::get().is_empty());
+    assert_eq!(
+      Governance::finalized_proposal_outcome(7, 100),
+      Some(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::Enacted { epoch: 4 }
+      ))
+    );
+    assert!(Governance::finalized_proposal_outcome_expiry_bucket(6).is_empty());
+    assert_eq!(
+      Governance::finalized_proposal_outcome_expiry_bucket(7).len(),
+      1
+    );
+    assert_eq!(
+      polkadot_sdk::frame_support::storage::unhashed::get::<H256>(
+        b"mock-governance-payload-effect"
+      ),
+      Some(hash)
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
+  });
+}
+
+#[test]
 fn bounded_pending_rotation_visits_other_members_while_executable_hosts_are_unavailable() {
   new_test_ext().execute_with(|| {
     ProposalEnactmentDelay::set(4);
@@ -2406,14 +2692,14 @@ fn invoice_family_accepts_invoice_primary_votes_and_rejects_binary_aye() {
         approve_voters: 1,
         reduce_voters: 1,
         nay_voters: 1,
-        amplify_weight: 5,
-        approve_weight: 5,
-        reduce_weight: 5,
-        nay_weight: 2,
-        positive_weight: 15,
-        turnout_weight: 17,
+        amplify_weight: crate::U256::from(5u128),
+        approve_weight: crate::U256::from(5u128),
+        reduce_weight: crate::U256::from(5u128),
+        nay_weight: crate::U256::from(2u128),
+        positive_weight: crate::U256::from(15u128),
+        turnout_weight: crate::U256::from(17u128),
         leading_positive_option: Some(crate::ProposalPrimaryTrackOption::Reduce),
-        leading_positive_weight: 5,
+        leading_positive_weight: crate::U256::from(5u128),
       })
     );
   });
@@ -3195,8 +3481,8 @@ fn expeditable_pass_threshold_authorizes_urgent_fast_track_exactly_once() {
           domain: 42,
           item_id: 100,
           authorization_epoch: 1,
-          pass_weight: 60,
-          total_protection_supply: 100,
+          pass_weight: crate::U256::from(60u128),
+          total_protection_supply: crate::U256::from(100u128),
         })
     }));
     assert_ok!(Governance::cast_vote(
@@ -3262,8 +3548,8 @@ fn unanimous_pass_executes_root_action_immediately() {
           domain: 42,
           item_id: 150,
           authorization_epoch: 1,
-          pass_weight: 100,
-          total_protection_supply: 100,
+          pass_weight: crate::U256::from(100u128),
+          total_protection_supply: crate::U256::from(100u128),
         })
     }));
     assert!(System::events().iter().any(|record| {
@@ -3506,8 +3792,8 @@ fn proposal_vote_weight_is_frozen_at_cast_time() {
       ProposalVoteKind::Nay,
     ));
     let tally = Governance::proposal_vote_tally(7, 100).expect("active proposal must expose tally");
-    assert_eq!(tally.aye_weight, 5);
-    assert_eq!(tally.nay_weight, 1);
+    assert_eq!(tally.aye_weight, polkadot_sdk::sp_core::U256::from(5));
+    assert_eq!(tally.nay_weight, polkadot_sdk::sp_core::U256::from(1));
     let contexts = take_vote_weight_contexts();
     assert_eq!(contexts.len(), 2);
     for (domain, item_id, current_epoch, submitted_epoch, maturity_epoch, vote_epoch, account) in
@@ -3525,8 +3811,8 @@ fn proposal_vote_weight_is_frozen_at_cast_time() {
     set_vote_weight(11, 5);
     System::set_block_number(3);
     let tally = Governance::proposal_vote_tally(7, 100).expect("active proposal must expose tally");
-    assert_eq!(tally.aye_weight, 5);
-    assert_eq!(tally.nay_weight, 1);
+    assert_eq!(tally.aye_weight, polkadot_sdk::sp_core::U256::from(5));
+    assert_eq!(tally.nay_weight, polkadot_sdk::sp_core::U256::from(1));
     assert!(take_vote_weight_contexts().is_empty());
   });
 }
@@ -4213,9 +4499,9 @@ fn ordinary_and_veto_track_votes_can_coexist_for_same_account() {
     assert_eq!(tally.aye_voters, 1);
     assert_eq!(tally.veto_voters, 0);
     assert_eq!(tally.pass_voters, 1);
-    assert_eq!(tally.aye_weight, 5);
-    assert_eq!(tally.veto_weight, 0);
-    assert_eq!(tally.pass_weight, 40);
+    assert_eq!(tally.aye_weight, polkadot_sdk::sp_core::U256::from(5));
+    assert_eq!(tally.veto_weight, polkadot_sdk::sp_core::U256::from(0));
+    assert_eq!(tally.pass_weight, polkadot_sdk::sp_core::U256::from(40));
     assert_noop!(
       Governance::cast_vote(RuntimeOrigin::signed(10), 7, 100, ProposalVoteKind::Nay),
       Error::<Test>::ProposalVoteAlreadyCast
@@ -4453,12 +4739,15 @@ fn veto_votes_are_tracked_separately_in_tally() {
     assert_eq!(tally.nay_voters, 1);
     assert_eq!(tally.veto_voters, 1);
     assert_eq!(tally.pass_voters, 1);
-    assert_eq!(tally.aye_weight, 5);
-    assert_eq!(tally.nay_weight, 2);
-    assert_eq!(tally.veto_weight, 45);
-    assert_eq!(tally.pass_weight, 30);
-    assert_eq!(tally.turnout_weight, 7);
-    assert_eq!(tally.veto_turnout_weight, 75);
+    assert_eq!(tally.aye_weight, polkadot_sdk::sp_core::U256::from(5));
+    assert_eq!(tally.nay_weight, polkadot_sdk::sp_core::U256::from(2));
+    assert_eq!(tally.veto_weight, polkadot_sdk::sp_core::U256::from(45));
+    assert_eq!(tally.pass_weight, polkadot_sdk::sp_core::U256::from(30));
+    assert_eq!(tally.turnout_weight, polkadot_sdk::sp_core::U256::from(7));
+    assert_eq!(
+      tally.veto_turnout_weight,
+      polkadot_sdk::sp_core::U256::from(75)
+    );
   });
 }
 
@@ -4478,8 +4767,9 @@ fn immediate_veto_cancels_proposal_without_reward_credit() {
     assert!(Governance::active_proposal_ids(7).is_empty());
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(veto_cancelled_outcome(1, 51))
+      Some(veto_cancelled_outcome(1, 51u128.into()))
     );
+    assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
     assert_eq!(
       Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_inner(0)
@@ -4488,8 +4778,8 @@ fn immediate_veto_cancels_proposal_without_reward_credit() {
       domain: 7,
       item_id: 100,
       epoch: 1,
-      veto_weight: 51,
-      pass_weight: 0,
+      veto_weight: crate::U256::from(51u128),
+      pass_weight: crate::U256::from(0u128),
       mode: crate::VetoCancellationMode::ImmediateThreshold,
       active_count: 0,
     }));
@@ -4589,7 +4879,7 @@ fn one_percent_veto_can_activate_final_veto_gate() {
     service_governance_through(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(veto_cancelled_outcome(3, 10))
+      Some(veto_cancelled_outcome(3, 10u128.into()))
     );
   });
 }
@@ -4676,14 +4966,14 @@ fn veto_track_blocks_at_maturity_without_immediate_threshold() {
     service_governance_through(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(veto_cancelled_outcome(3, 50))
+      Some(veto_cancelled_outcome(3, 50u128.into()))
     );
     System::assert_last_event(RuntimeEvent::Governance(Event::ProposalVetoCancelled {
       domain: 7,
       item_id: 100,
       epoch: 3,
-      veto_weight: 50,
-      pass_weight: 0,
+      veto_weight: crate::U256::from(50u128),
+      pass_weight: crate::U256::from(0u128),
       mode: crate::VetoCancellationMode::TrackOutcome,
       active_count: 0,
     }));
@@ -4731,7 +5021,7 @@ fn veto_track_tie_blocks_proposal_at_maturity() {
     service_governance_through(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(veto_cancelled_outcome(3, 20))
+      Some(veto_cancelled_outcome(3, 20u128.into()))
     );
   });
 }
@@ -4789,12 +5079,12 @@ fn pass_outweighing_veto_allows_main_track_resolution() {
 // --- CoreResolutionOutcome unit tests (pure policy, no runtime) ---
 
 fn test_tally(
-  aye_weight: u64,
-  nay_weight: u64,
-  amplify_weight: u64,
-  approve_weight: u64,
-  reduce_weight: u64,
-  turnout_weight: u64,
+  aye_weight: u128,
+  nay_weight: u128,
+  amplify_weight: u128,
+  approve_weight: u128,
+  reduce_weight: u128,
+  turnout_weight: u128,
 ) -> ProposalVoteTally {
   ProposalVoteTally {
     aye_voters: 0,
@@ -4804,15 +5094,15 @@ fn test_tally(
     reduce_voters: 0,
     veto_voters: 0,
     pass_voters: 0,
-    aye_weight,
-    nay_weight,
-    amplify_weight,
-    approve_weight,
-    reduce_weight,
-    veto_weight: 0,
-    pass_weight: 0,
-    turnout_weight,
-    veto_turnout_weight: 0,
+    aye_weight: aye_weight.into(),
+    nay_weight: nay_weight.into(),
+    amplify_weight: amplify_weight.into(),
+    approve_weight: approve_weight.into(),
+    reduce_weight: reduce_weight.into(),
+    veto_weight: crate::U256::from(0u128),
+    pass_weight: crate::U256::from(0u128),
+    turnout_weight: turnout_weight.into(),
+    veto_turnout_weight: crate::U256::from(0u128),
   }
 }
 

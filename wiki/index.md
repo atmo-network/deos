@@ -1,8 +1,5 @@
----
-okf_version: "0.2"
----
+# Wiki Knowledge Planes
 
-# DEOS Wiki
-
-* [English](index.en.md) - English entrypoint to the DEOS knowledge graph.
-* [Русский](index.ru.md) - Русская точка входа в граф знаний DEOS.
+- [DEOS](deos/): Base plane for reusable DEOS framework knowledge.
+- [DEOS — English](deos/index.en.md): English entrypoint to the DEOS knowledge graph.
+- [DEOS — Русский](deos/index.ru.md): Русская точка входа в граф знаний DEOS.

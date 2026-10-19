@@ -239,7 +239,7 @@ test('ActionFeeCharged projects exact coordinates, actual Weight, and zero fee',
   );
 });
 
-test('runtime-generated cost vectors bind metadata, Weight, geometry, and Trigger families', async () => {
+test('model-generated cost vectors bind metadata, Weight, geometry, and Trigger families', async () => {
   const metadataSha256 = createHash('sha256')
     .update(metadataBytes)
     .digest('hex');
@@ -255,6 +255,10 @@ test('runtime-generated cost vectors bind metadata, Weight, geometry, and Trigge
     createHash('sha256').update(weights).digest('hex'),
   );
   assert.equal(ACTORS_COST_VECTORS.runtimeApiVersion, 1);
+  assert.equal(ACTORS_COST_VECTORS.formatVersion, 2);
+  assert.equal(ACTORS_COST_VECTORS.admissionProfile, 'native-model-capacity');
+  assert.equal(ACTORS_COST_VECTORS.productionAdmissionQualified, false);
+  assert.equal(ACTORS_COST_VECTORS.physicalPricesQualified, false);
   assert.equal(ACTORS_COST_VECTORS.vectors.length, 10);
 
   const manual = ACTORS_COST_VECTORS.vectors
@@ -317,9 +321,30 @@ test('generated cost vectors preserve explicit System exemption and dormant abse
   assert.ok(dormant.stateHold.total > 0n);
 });
 
+test('generated cost vector parser refuses missing or inflated provenance', () => {
+  for (const [field, invalidValues] of [
+    [
+      'admissionProfile',
+      [undefined, null, 'ordinary', 'production', 'combined-benchmark'],
+    ],
+    ['productionAdmissionQualified', [undefined, null, true, 'false', 0]],
+    ['physicalPricesQualified', [undefined, null, true, 'false', 0]],
+  ]) {
+    for (const value of invalidValues) {
+      const invalid = structuredClone(costVectorArtifact);
+      if (value === undefined) delete invalid[field];
+      else invalid[field] = value;
+      assert.throws(
+        () => parseActorCostVectors(invalid),
+        /model-only provenance/,
+      );
+    }
+  }
+});
+
 test('generated cost vector parser fails closed on drift and malformed ownership', () => {
   const unsupported = structuredClone(costVectorArtifact);
-  unsupported.formatVersion = 2;
+  unsupported.formatVersion = 1;
   assert.throws(() => parseActorCostVectors(unsupported), /unsupported/);
 
   const malformedTotal = structuredClone(costVectorArtifact);

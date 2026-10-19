@@ -43,6 +43,51 @@ use std::{
   sync::{Arc, Mutex},
 };
 
+/// Shared request/construction boundary; a native model cannot attest an external Wasm image.
+pub(crate) fn ensure_artifact_profile() -> Result<(), &'static str> {
+  if cfg!(all(
+    feature = "benchmark-authority-scaffolding",
+    not(feature = "runtime-benchmarks")
+  )) {
+    Err("native admission fixture cannot prepare/execute Wasm or export PVF artifacts")
+  } else {
+    Ok(())
+  }
+}
+
+#[cfg(test)]
+#[test]
+fn native_fixture_artifact_profile_is_explicit() {
+  assert_eq!(
+    ensure_artifact_profile().is_err(),
+    cfg!(all(
+      feature = "benchmark-authority-scaffolding",
+      not(feature = "runtime-benchmarks")
+    ))
+  );
+}
+
+#[cfg(all(
+  test,
+  feature = "benchmark-authority-scaffolding",
+  not(feature = "runtime-benchmarks")
+))]
+#[test]
+fn native_fixture_wasm_constructor_refuses_before_decode() {
+  let panic = std::panic::catch_unwind(|| RuntimeExecution::wasm(Vec::new()))
+    .err()
+    .expect("model constructor must refuse before decoding empty Wasm");
+  let message = panic
+    .downcast_ref::<String>()
+    .map(String::as_str)
+    .or_else(|| panic.downcast_ref::<&str>().copied())
+    .expect("guard panic has a message");
+  assert!(
+    message.contains("native admission fixture cannot"),
+    "wrong refusal: {message}"
+  );
+}
+
 struct NativeRuntime;
 
 #[cfg(not(feature = "runtime-benchmarks"))]
@@ -70,6 +115,7 @@ enum RuntimeExecution {
 
 impl RuntimeExecution {
   fn wasm(code: Vec<u8>) -> Self {
+    ensure_artifact_profile().expect("Wasm execution profile");
     let executor = sc_executor::WasmExecutor::<WasmHostFunctions>::builder().build();
     let mut ext = polkadot_sdk::sp_io::TestExternalities::default();
     let bytes = executor

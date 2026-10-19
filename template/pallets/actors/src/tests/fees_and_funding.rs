@@ -6,6 +6,147 @@ use crate::{
 };
 
 #[test]
+fn pipeline_collection_preserves_head_exemption_and_capacity_error_order() {
+  let floor = TestMinUserBalance::get();
+  for (actor_type, stored_fee, available, expected) in [
+    (ActorType::User, None, 0, Err(Error::<Test>::ActorInvariant)),
+    (
+      ActorType::System,
+      None,
+      0,
+      Err(Error::<Test>::ActorInvariant),
+    ),
+    (ActorType::System, Some(u128::MAX), 0, Ok(0)),
+    (ActorType::User, Some(0), 0, Ok(0)),
+    (
+      ActorType::User,
+      Some(u128::MAX),
+      0,
+      Err(Error::<Test>::AdmissionBoundOverflow),
+    ),
+    (
+      ActorType::User,
+      Some(7),
+      floor + 6,
+      Err(Error::<Test>::InsufficientFee),
+    ),
+    (ActorType::User, Some(7), floor + 7, Ok(7)),
+  ] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let actor_id = create_user_with(
+        ALICE,
+        Mutability::Mutable,
+        manual_schedule(),
+        None,
+        transfer_contract_steps(BOB, 1),
+      );
+      let actor = sovereign_account(actor_id);
+      if let Some(fee) = stored_fee {
+        crate::ActorContractHeads::<Test>::mutate(actor_id, |head| {
+          let head = head.as_mut().unwrap();
+          head
+            .header
+            .pipeline_machine_envelope
+            .pipeline_machine_fee_upper = fee;
+        });
+      } else {
+        crate::ActorContractHeads::<Test>::remove(actor_id);
+      }
+      let _ = Balances::make_free_balance_be(&actor, available);
+      clear_fee_collections();
+      let head_before = crate::ActorContractHeads::<Test>::get(actor_id);
+      let sink_before = native_balance(&TestFeeSink::get());
+      let root_before =
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      let paid = expected.as_ref().copied().unwrap_or(0);
+      let result = Actors::collect_pipeline_fee(actor_id, actor_type, &actor).map(|breakdown| {
+        assert_eq!(breakdown.pipeline_machine_fee, breakdown.total_fee);
+        breakdown.total_fee
+      });
+      assert_eq!(result, expected.map_err(DispatchError::from));
+      assert_eq!(native_balance(&actor), available - paid);
+      assert_eq!(native_balance(&TestFeeSink::get()), sink_before + paid);
+      assert_eq!(
+        crate::ActorContractHeads::<Test>::get(actor_id),
+        head_before
+      );
+      assert_eq!(
+        fee_collections(),
+        if paid == 0 { vec![] } else { vec![paid] }
+      );
+      if paid == 0 {
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+          root_before,
+        );
+      }
+    });
+  }
+}
+
+#[test]
+fn pipeline_collection_reloads_head_after_each_collector_callback() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    let actor = sovereign_account(actor_id);
+    crate::ActorContractHeads::<Test>::mutate(actor_id, |head| {
+      let head = head.as_mut().unwrap();
+      head
+        .header
+        .pipeline_machine_envelope
+        .pipeline_machine_fee_upper = 7;
+    });
+    let _ = Balances::make_free_balance_be(&actor, 1_000);
+    clear_fee_collections();
+    let sink_before = native_balance(&TestFeeSink::get());
+    // Isolate the private collection boundary; no fee may be cached across its callbacks.
+    set_fee_collection_hook(move || {
+      crate::ActorContractHeads::<Test>::mutate(actor_id, |head| {
+        let head = head.as_mut().unwrap();
+        head
+          .header
+          .pipeline_machine_envelope
+          .pipeline_machine_fee_upper = 11;
+      });
+    });
+    assert_eq!(
+      Actors::collect_pipeline_fee(actor_id, ActorType::User, &actor)
+        .unwrap()
+        .total_fee,
+      7,
+    );
+    set_fee_collection_hook(move || crate::ActorContractHeads::<Test>::remove(actor_id));
+    assert_eq!(
+      Actors::collect_pipeline_fee(actor_id, ActorType::User, &actor)
+        .unwrap()
+        .total_fee,
+      11,
+    );
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert_eq!(
+      Actors::collect_pipeline_fee(actor_id, ActorType::User, &actor),
+      Err(Error::<Test>::ActorInvariant.into()),
+    );
+    assert_eq!(fee_collections(), vec![7, 11]);
+    assert_eq!(native_balance(&actor), 982);
+    assert_eq!(native_balance(&TestFeeSink::get()), sink_before + 18);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+    );
+  });
+}
+
+#[test]
 fn actor_state_hold_prices_exact_contract_geometry_and_releases_on_close() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);

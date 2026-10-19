@@ -8,6 +8,7 @@ Zone: Automation domain; transport adapters lower finalized runtime API values i
 export const ACTORS_RESOURCE_RUNTIME_API_VERSION = 2 as const;
 
 export type ActorMachineControlFlags = {
+  /** Permission switch only, not capacity or an effective admission decision. */
   userCreationEnabled: boolean;
   machineFrozen: boolean;
 };

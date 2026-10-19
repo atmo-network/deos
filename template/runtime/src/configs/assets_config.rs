@@ -362,6 +362,164 @@ impl pallet_asset_conversion::Config for Runtime {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::System;
+  use polkadot_sdk::pallet_balances;
+
+  #[test]
+  fn native_named_reserve_cleanup_has_one_slash_event_and_no_empty_source_row() {
+    use crate::tests::common::{ALICE, BOB, new_test_ext};
+    use polkadot_sdk::frame_support::{
+      assert_ok,
+      traits::{NamedReservableCurrency, tokens::BalanceStatus},
+    };
+    new_test_ext().execute_with(|| {
+      let id = *b"sdkcheck";
+      let amount = crate::EXISTENTIAL_DEPOSIT;
+      assert_ok!(Balances::reserve_named(&id, &ALICE, amount));
+      System::reset_events();
+      let (imbalance, remainder) = Balances::slash_reserved_named(&id, &ALICE, amount);
+      assert_eq!(remainder, 0);
+      drop(imbalance);
+      assert!(!pallet_balances::Reserves::<Runtime>::contains_key(ALICE));
+      assert_eq!(
+        System::events()
+          .iter()
+          .filter(|record| matches!(
+            record.event,
+            RuntimeEvent::Balances(pallet_balances::Event::Slashed { .. })
+          ))
+          .count(),
+        1
+      );
+      assert_ok!(Balances::reserve_named(&id, &ALICE, amount));
+      assert_eq!(
+        Balances::repatriate_reserved_named(&id, &ALICE, &BOB, amount, BalanceStatus::Free),
+        Ok(0)
+      );
+      assert!(!pallet_balances::Reserves::<Runtime>::contains_key(ALICE));
+      assert!(!pallet_balances::Reserves::<Runtime>::contains_key(BOB));
+    });
+  }
+
+  #[test]
+  fn native_held_balance_prevents_total_overflow_and_final_release_removes_hold_row() {
+    use crate::tests::common::{ALICE, new_test_ext};
+    use polkadot_sdk::frame_support::{
+      assert_noop, assert_ok,
+      traits::{
+        fungible::{Inspect, MutateHold, Unbalanced},
+        tokens::Precision,
+      },
+    };
+    new_test_ext().execute_with(|| {
+      let reason = crate::RuntimeHoldReason::Actors(pallet_deos_actors::HoldReason::ActorState);
+      let held = crate::EXISTENTIAL_DEPOSIT;
+      assert_ok!(Balances::hold(&reason, &ALICE, held));
+      let free = <Balances as Inspect<AccountId>>::balance(&ALICE);
+      assert_noop!(
+        <Balances as Unbalanced<AccountId>>::increase_balance(
+          &ALICE,
+          Balance::MAX - free,
+          Precision::Exact
+        ),
+        polkadot_sdk::sp_runtime::ArithmeticError::Overflow
+      );
+      assert_eq!(
+        Balances::release(&reason, &ALICE, held, Precision::Exact),
+        Ok(held)
+      );
+      assert!(!pallet_balances::Holds::<Runtime>::contains_key(ALICE));
+      assert_eq!(
+        <Balances as Inspect<AccountId>>::balance(&ALICE),
+        free + held
+      );
+    });
+  }
+
+  #[test]
+  fn approved_asset_transfer_bounds_the_complete_dust_sweeping_debit() {
+    use crate::{
+      Assets,
+      tests::common::{ALICE, BOB, CHARLIE, new_test_ext},
+    };
+    use polkadot_sdk::frame_support::{assert_noop, assert_ok, traits::fungibles::Inspect};
+    for (amount, approval, debit) in [(90, 90, Some(90)), (95, 95, None), (95, 100, Some(100))] {
+      new_test_ext().execute_with(|| {
+        assert_ok!(Assets::force_create(
+          RuntimeOrigin::root(),
+          12,
+          ALICE.into(),
+          true,
+          10
+        ));
+        assert_ok!(Assets::mint(
+          RuntimeOrigin::signed(ALICE),
+          12,
+          ALICE.into(),
+          100
+        ));
+        assert_ok!(Assets::approve_transfer(
+          RuntimeOrigin::signed(ALICE),
+          12,
+          BOB.into(),
+          approval
+        ));
+        let transfer = || {
+          Assets::transfer_approved(
+            RuntimeOrigin::signed(BOB),
+            12,
+            ALICE.into(),
+            CHARLIE.into(),
+            amount,
+          )
+        };
+        if let Some(debit) = debit {
+          assert_ok!(transfer());
+          assert_eq!(Assets::balance(12, &ALICE), 100 - debit);
+          assert_eq!(Assets::balance(12, &CHARLIE), debit);
+          assert!(!pallet_assets::Approvals::<Runtime>::contains_key((
+            12, ALICE, BOB
+          )));
+        } else {
+          assert_noop!(transfer(), pallet_assets::Error::<Runtime>::Unapproved);
+          assert_eq!(Assets::balance(12, &ALICE), 100);
+          assert_eq!(Assets::balance(12, &CHARLIE), 0);
+        }
+        assert_eq!(Assets::total_issuance(12), 100);
+      });
+    }
+  }
+
+  #[test]
+  fn asset_sufficiency_is_forwarded_through_the_runtime_union() {
+    use crate::{
+      Assets,
+      tests::common::{ALICE, new_test_ext},
+    };
+    use polkadot_sdk::frame_support::{assert_ok, traits::fungibles::Inspect};
+    type RuntimeAssets = <Runtime as pallet_asset_conversion::Config>::Assets;
+    new_test_ext().execute_with(|| {
+      let foreign = primitives::assets::TYPE_FOREIGN | 7;
+      for (id, sufficient) in [(12, true), (foreign, false)] {
+        assert_ok!(Assets::force_create(
+          RuntimeOrigin::root(),
+          id,
+          ALICE.into(),
+          sufficient,
+          10
+        ));
+        assert_eq!(Assets::is_sufficient(id), sufficient);
+        let asset = if id == 12 {
+          AssetKind::Local(id)
+        } else {
+          AssetKind::Foreign(id)
+        };
+        assert_eq!(RuntimeAssets::is_sufficient(asset), sufficient);
+      }
+      assert!(!RuntimeAssets::is_sufficient(AssetKind::Native));
+      assert!(!RuntimeAssets::is_sufficient(AssetKind::Local(13)));
+    });
+  }
 
   #[test]
   fn reference_runtime_xyk_and_withdrawal_fees_are_independent_zero_parameters() {

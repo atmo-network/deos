@@ -5,17 +5,17 @@ use pallet_deos_actors::{
   TriggerFamily,
 };
 use polkadot_sdk::{
-  frame_support::{BoundedVec, traits::Currency},
+  frame_support::{traits::Currency, BoundedVec},
   polkadot_runtime_common::BuildStorage,
-  sp_io::TestExternalities,
   sp_io::hashing::sha2_256,
+  sp_io::TestExternalities,
 };
 use primitives::AssetKind;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{env, fs, path::Path, process};
 
 const FORMAT: &str = "deos.actor.cost-vectors";
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 const RUNTIME_API_VERSION: u32 = 1;
 const FIXTURE_BALANCE: Balance = 1u128 << 100;
 
@@ -218,7 +218,20 @@ fn create_dormant_vector() -> Value {
   })
 }
 
-fn manifest() -> Value {
+fn ensure_profile(scaffolding: bool, benchmarks: bool) -> Result<(), &'static str> {
+  if !scaffolding || benchmarks {
+    return Err(
+      "unsupported Actor cost vector profile: requires native benchmark-authority-scaffolding without runtime-benchmarks and SKIP_WASM_BUILD=1; model capacity validates declaration/codec quote math only, not production admission or physical prices",
+    );
+  }
+  Ok(())
+}
+
+fn manifest() -> Result<Value, &'static str> {
+  ensure_profile(
+    cfg!(feature = "benchmark-authority-scaffolding"),
+    cfg!(feature = "runtime-benchmarks"),
+  )?;
   let destination = AccountId::new([250; 32]);
   let owners = (1u8..=20)
     .map(|byte| (AccountId::new([byte; 32]), FIXTURE_BALANCE))
@@ -311,14 +324,17 @@ fn manifest() -> Value {
     vectors
   });
 
-  json!({
+  Ok(json!({
     "format": FORMAT,
     "formatVersion": FORMAT_VERSION,
+    "admissionProfile": "native-model-capacity",
+    "productionAdmissionQualified": false,
+    "physicalPricesQualified": false,
     "runtimeApiVersion": RUNTIME_API_VERSION,
     "metadataSha256": file_identity(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web-client/.papi/metadata/deos.scale")),
     "weightSha256": file_identity(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src/weights/pallet_deos_actors.rs")),
     "vectors": vectors,
-  })
+  }))
 }
 
 #[cfg(test)]
@@ -326,8 +342,37 @@ mod tests {
   use super::*;
 
   #[test]
-  fn cost_vectors_prepare_public_admission_without_overriding_genesis() {
-    let artifact = manifest();
+  fn cost_vector_profile_matrix_requires_standalone_model_capacity() {
+    for (scaffolding, benchmarks) in [(false, false), (false, true), (true, true)] {
+      assert!(ensure_profile(scaffolding, benchmarks)
+        .unwrap_err()
+        .contains("unsupported"));
+    }
+    assert_eq!(ensure_profile(true, false), Ok(()));
+  }
+
+  #[cfg(not(all(
+    feature = "benchmark-authority-scaffolding",
+    not(feature = "runtime-benchmarks")
+  )))]
+  #[test]
+  fn cost_vectors_refuse_unsupported_profile_before_fixture_preparation() {
+    assert!(manifest()
+      .unwrap_err()
+      .contains("unsupported Actor cost vector profile"));
+  }
+
+  #[cfg(all(
+    feature = "benchmark-authority-scaffolding",
+    not(feature = "runtime-benchmarks")
+  ))]
+  #[test]
+  fn cost_vectors_prepare_model_admission_without_overriding_genesis() {
+    let artifact = manifest().expect("explicit native model profile");
+    assert_eq!(artifact["formatVersion"], 2);
+    assert_eq!(artifact["admissionProfile"], "native-model-capacity");
+    assert_eq!(artifact["productionAdmissionQualified"], false);
+    assert_eq!(artifact["physicalPricesQualified"], false);
     let vectors = artifact["vectors"]
       .as_array()
       .expect("fixed vector artifact");
@@ -340,13 +385,21 @@ mod tests {
 
 fn usage() {
   eprintln!(
-    "Usage: cargo run -p deos-runtime --example actor_cost_vectors -- [PATH | --check PATH]"
+    "Usage: SKIP_WASM_BUILD=1 cargo run --locked -p deos-runtime --features benchmark-authority-scaffolding --example actor_cost_vectors -- [PATH | --check PATH]\nNative model capacity only; runtime-benchmarks is unsupported. Quotes validate declaration/codec math, not production admission or physical prices."
   );
 }
 
 fn main() {
-  let rendered = serde_json::to_string(&manifest()).expect("Actor cost vectors serialize") + "\n";
   let args = env::args().skip(1).collect::<Vec<_>>();
+  if matches!(args.as_slice(), [flag] if flag == "--help" || flag == "-h") {
+    usage();
+    return;
+  }
+  let artifact = manifest().unwrap_or_else(|error| {
+    eprintln!("{error}");
+    process::exit(2);
+  });
+  let rendered = serde_json::to_string(&artifact).expect("Actor cost vectors serialize") + "\n";
   match args.as_slice() {
     [] => print!("{rendered}"),
     [path] => fs::write(Path::new(path), rendered).expect("Actor cost vector artifact is writable"),

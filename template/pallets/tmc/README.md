@@ -4,8 +4,7 @@
 
 ## SDK baseline
 
-This pallet is maintained against the current DEOS `Polkadot SDK 2606 / node 1.24.0` line.
-The 2606 upgrade did not require further pallet-local semantic changes here; the previous 2603 `RuntimeDebug` cleanup remains in place, while the current compatibility fallout landed in runtime/parachain-system/asset-conversion integration surfaces.
+This pallet follows the DEOS workspace's pinned Polkadot SDK line; [`template/Cargo.toml`](../../Cargo.toml) owns the exact dependency selection.
 
 ## Scope
 
@@ -55,3 +54,14 @@ The current kernel does not yet include:
 - Broader treasury policy beyond the configured post-mint distribution split
 
 See [`docs/architecture.en.md`](./docs/architecture.en.md) for the current contract.
+
+## Validation
+
+Validate the package independently so unrelated workspace members cannot supply missing dependency features:
+
+```bash
+cargo test -p pallet-deos-tmc
+cargo test -p pallet-deos-tmc --all-features
+```
+
+`runtime-benchmarks` forwards both `polkadot-sdk/runtime-benchmarks` and `frame/runtime-benchmarks`: the v2 benchmark macro needs the latter bridge's gated re-exports. Workspace-wide feature unification is not a substitute for standalone package validation. Native benchmark tests establish correctness, not production calibration or generated Weight acceptance.

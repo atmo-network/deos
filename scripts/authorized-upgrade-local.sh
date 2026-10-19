@@ -33,7 +33,7 @@ Subcommands:
   check              Read strategic-ingress/authorized-upgrade state and verify local WASM
   prepare-authorization
                      Emit plan-only signed call data for candidate proposal creation
-  apply              Verify and optionally relay System.apply_authorized_upgrade
+  apply              Verify and optionally sign a System.apply_authorized_upgrade relay
   snapshot           Capture finalized baseline Router/Oracle/Actors state
   verify             Verify candidate code/version and exact baseline-state preservation
 
@@ -54,7 +54,7 @@ check options:
   --include-call-data  Emit offline apply_authorized_upgrade call data when hashes match
 
 apply options:
-  --submit            Submit the live apply_authorized_upgrade relay when hashes match
+  --submit            Sign and submit the upgrade relay when hashes match
   --signer-uri URI    Local dev signer URI for --submit (default: //Alice)
 
 Environment:
@@ -600,7 +600,7 @@ try {
     recommendedAction,
     operatorPath: {
       authorizationAuthority: "Governance authorizes the pending code hash through System.authorize_upgrade",
-      applicationAuthority: "Any origin may relay matching code bytes through System.apply_authorized_upgrade after authorization",
+      applicationAuthority: "Any signed relayer account may submit matching code bytes after governance authorization; ordinary phase and resource checks apply",
       browserSubmissionSurface: "Not exposed in the web-client",
       helperSubmissionSurface: mode === "apply"
         ? "Plan-only unless --submit is provided"

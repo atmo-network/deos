@@ -324,6 +324,10 @@ canonical tactical $BLDR governance => Staking::stake_value(NTVE_ASSET_ID, accou
 
 These base-balance surfaces are then transformed by the temporal-weighting policy rather than being exposed as the final vote-power contract directly.
 
+Primary power MUST retain raw base-unit proportionality, including fractional-token backing. A legal `u128` backing value MUST remain eligible across the full temporal curve; implementations MUST NOT saturate primary power, divide backing by seven, normalize it against supply, or impose a lower eligibility ceiling to fit a narrow integer. The ordinary formula is `floor(base × 7 × (period − elapsed) / period)` until `7 × elapsed >= 6 × period`, then exactly `base`; urgent primary power is exactly `base`. Only the final rational division rounds down.
+
+Primary ballots, aggregate turnout, Invoice positive sums, leading weights, and canonical-chain frozen/current power and tally projections MUST represent the complete legal range. `U256` provides that range: one `7 × u128::MAX` ballot needs 131 bits; five primary vectors of 256 ballots have total below `2^142`, and multiplying by the Perbill denominator remains below `2^172`. Approval retains floor-rounded Perbill comparison, configured turnout, binary tie rejection, and lowest-scalar Invoice positive ties. Wide representation does not change custody, time policy, thresholds, or protection normalization.
+
 Recorded ballots use `frozen vote-power settlement`.
 At cast time, the implementation resolves the applicable base backing surface, applies that track's temporal policy, and stores the resulting ballot weight. Protection-track ballots also store the raw protection power needed by raw-threshold guards.
 That means:
@@ -333,7 +337,7 @@ That means:
 - one account may still cast at most one primary-track ballot and one protection-track ballot per item
 - implementations MUST surface this honestly in queries/UI so users understand that recorded ballot weight is a vote-time snapshot, not a live balance view
 
-If canonical protection power is wider than the stored ballot integer, account power and total eligible supply MUST use one common proportional normalization with enough headroom for the maximum temporal multiplier. Independently saturating account power and total supply is forbidden because it can make a minority position appear to own the full protection supply.
+If canonical protection power is wider than the protection provider's integer envelope, account power and total eligible supply MUST use one common proportional normalization with enough headroom for the maximum temporal multiplier. Widening the shared ballot storage MUST NOT silently remove or change that distinct protection-provider policy. Independently saturating account power and total supply is forbidden because it can make a minority position appear to own the full protection supply.
 
 A conforming governance implementation MUST maintain one aggregate account-level governance lock horizon. Each accepted ballot extends that account's `lock_until` to at least the proposal's enactment horizon:
 

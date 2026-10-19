@@ -2488,6 +2488,52 @@ fn prepass_rejects_host_budget_errors_before_scheduler_mutation() {
 }
 
 #[test]
+fn prepass_dependency_refusals_roll_back_public_prefix_without_servicing_ready_actor() {
+  use crate::{DependencyScanSourceList, DependencyScanSourceListState};
+  let maximum = Weight::from_parts(2_000_000_000_000, 10_485_760);
+  let configured =
+    crate::BlockResourceBudget::new_with_control_ratio(maximum, maximum / 4, 1, 3).unwrap();
+  for cursor in [None, Some(18)] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      set_block_resource_budget(configured);
+      let id = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        transfer_contract_steps(BOB, 1),
+      );
+      fund_native(id, 1_000);
+      assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+      System::set_block_number(2);
+      set_prepass_resource_budget(2, Ok(configured));
+      // Diagnostic corruption, not admitted history: either the probe rejects the selector,
+      // or its positive result reaches a worker whose selected source node is missing.
+      DependencyScanSourceListState::<Test>::put(DependencyScanSourceList { cursor, count: 1 });
+      assert_noop!(
+        Actors::actor_prepass(RuntimeOrigin::none()),
+        Error::<Test>::ResourceProtocolFailed
+      );
+      assert_eq!(prepass_resource_budget_reads(), 1);
+      assert!(Actors::block_resource_state().is_none());
+      assert_eq!(Actors::active_actor_view(id).unwrap().cycle_nonce, 0);
+      assert_eq!(
+        DependencyScanSourceListState::<Test>::get(),
+        DependencyScanSourceList { cursor, count: 1 }
+      );
+      // The public storage layer restores the prefix; this does not assert restoration of
+      // a borrowed Rust-local ledger. Removing only the injected fault permits the same B2 call.
+      DependencyScanSourceListState::<Test>::kill();
+      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+      assert_eq!(prepass_resource_budget_reads(), 2);
+      assert_eq!(Actors::active_actor_view(id).unwrap().cycle_nonce, 1);
+      Actors::on_idle(2, Weight::MAX);
+      Actors::on_finalize(2);
+    });
+  }
+}
+
+#[test]
 fn actor_prepass_rejects_signed_origin_before_resource_mutation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -5800,6 +5846,168 @@ fn canonical_fifo_executes_global_ticket_order_across_actor_types() {
       event,
       Event::CycleStarted { actor_id, .. } if *actor_id == system_b
     )));
+  });
+}
+
+#[test]
+fn saturation_same_certificate_and_population_do_not_determine_offered_service() {
+  let traces = [[0u8; 6], [1, 0, 0, 0, 0, 0], [2, 2, 2, 2, 2, 0]];
+  let results: Vec<_> = traces
+    .into_iter()
+    .map(|trace| {
+      new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let id = create_system_with(
+          ALICE,
+          manual_schedule(),
+          None,
+          transfer_contract_steps(BOB, 10),
+        );
+        fund_native(id, 1_000_000_000_000_000);
+        let crate::ActorSemanticState::Active(initial) =
+          crate::ActorSemanticStates::<Test>::get(id).unwrap()
+        else {
+          panic!("Active source authority");
+        };
+        let contract = Actors::active_actor_state(id).unwrap().contract;
+        let resources = Actors::derive_step_resource_envelopes(&contract).unwrap();
+        let service = Actors::contract_service_resources_upper(&contract).unwrap();
+        let recipient = asset_balance(&BOB, TestAsset::Native);
+        let mut offered = 0u32;
+        let mut latched = 0u32;
+        for (offset, occurrences) in trace.into_iter().enumerate() {
+          System::set_block_number((offset + 1).try_into().unwrap());
+          for _ in 0..occurrences {
+            let was_pending = Actors::actor_hot(id).unwrap().pending_signal;
+            assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+            offered += 1;
+            latched += u32::from(!was_pending && Actors::actor_hot(id).unwrap().pending_signal);
+          }
+          Actors::execute_cycle(Weight::MAX);
+        }
+        let crate::ActorSemanticState::Active(final_state) =
+          crate::ActorSemanticStates::<Test>::get(id).unwrap()
+        else {
+          panic!("identity remains Active");
+        };
+        assert_eq!(final_state.admission, initial.admission);
+        assert_eq!(Actors::actor_identity_count(), 1);
+        assert_eq!(Actors::active_actor_count(), 1);
+        assert_passive_manual_idle(id);
+        assert_eq!(Actors::service_header().count, 0);
+        let completed = Actors::active_actor_view(id).unwrap().cycle_nonce;
+        assert_eq!(
+          asset_balance(&BOB, TestAsset::Native),
+          recipient + Balance::from(completed) * 10
+        );
+        (
+          initial.admission,
+          resources,
+          service,
+          offered,
+          latched,
+          completed,
+        )
+      })
+    })
+    .collect();
+  for result in &results[1..] {
+    assert_eq!(result.0, results[0].0);
+    assert_eq!(result.1, results[0].1);
+    assert_eq!(result.2, results[0].2);
+  }
+  // A known finite Manual trace, not a sustainable-rate certificate: the same authenticated
+  // geometry ends with no debt in every arm, but ten offered occurrences yield three latches.
+  assert_eq!(
+    results
+      .iter()
+      .map(|row| (row.3, row.4, row.5))
+      .collect::<Vec<_>>(),
+    vec![(0, 0, 0), (1, 1, 1), (10, 3, 3)]
+  );
+}
+
+#[test]
+fn saturation_count_ceiling_is_per_pass_not_sustainable_block_capacity() {
+  use polkadot_sdk::frame_support::traits::Get;
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let per_pass: u32 = <Test as crate::Config>::MaxExecutionsPerBlock::get();
+    assert_eq!(per_pass, 3);
+    let mut steps = transfer_contract_steps(BOB, 1);
+    steps.try_push(steps[0].clone()).unwrap();
+    let actors: Vec<_> = (0..2 * per_pass)
+      .map(|_| {
+        let id = create_system_with(ALICE, manual_schedule(), None, steps.clone());
+        fund_native(id, 10_000);
+        assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+        id
+      })
+      .collect();
+    System::set_block_number(2);
+    System::reset_events();
+    let recipient_before = asset_balance(&BOB, TestAsset::Native);
+    let source_before: Vec<_> = actors
+      .iter()
+      .map(|id| asset_balance(&sovereign_account(*id), TestAsset::Native))
+      .collect();
+    // Direct native passes isolate the loop bound, not production resource capacity. Both
+    // production passes additionally share frozen meters, FIFO and one Q1 block round.
+    for pass in 1..=2 {
+      Actors::execute_cycle(Weight::MAX);
+      let committed = (pass * per_pass) as usize;
+      let started: Vec<_> = System::events()
+        .into_iter()
+        .filter_map(|record| match record.event {
+          RuntimeEvent::Actors(Event::CycleStarted { actor_id, .. }) => Some(actor_id),
+          _ => None,
+        })
+        .collect();
+      assert_eq!(started, actors[..committed]);
+      for (index, id) in actors.iter().enumerate() {
+        assert_eq!(Actors::active_actor_view(*id).unwrap().cycle_nonce, 0);
+        assert_eq!(
+          asset_balance(&sovereign_account(*id), TestAsset::Native),
+          source_before[index] - Balance::from(index < committed),
+        );
+        assert_eq!(
+          Actors::actor_run_state(*id).map(|run| run.cursor),
+          (index < committed).then_some(1)
+        );
+      }
+      assert_eq!(
+        asset_balance(&BOB, TestAsset::Native),
+        recipient_before + committed as Balance
+      );
+    }
+    Actors::execute_cycle(Weight::MAX);
+    assert_eq!(
+      asset_balance(&BOB, TestAsset::Native),
+      recipient_before + actors.len() as Balance
+    );
+    for id in &actors {
+      assert_eq!(
+        Actors::actor_run_state(*id).unwrap().cursor,
+        1,
+        "Q1 retains the second owed Step"
+      );
+    }
+    System::set_block_number(3);
+    for _ in 0..2 {
+      Actors::execute_cycle(Weight::MAX);
+    }
+    for (index, id) in actors.iter().enumerate() {
+      assert_eq!(Actors::active_actor_view(*id).unwrap().cycle_nonce, 1);
+      assert!(Actors::actor_run_state(*id).is_none());
+      assert_eq!(
+        asset_balance(&sovereign_account(*id), TestAsset::Native),
+        source_before[index] - 2
+      );
+    }
+    assert_eq!(
+      asset_balance(&BOB, TestAsset::Native),
+      recipient_before + 2 * actors.len() as Balance
+    );
   });
 }
 

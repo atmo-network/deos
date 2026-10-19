@@ -33,6 +33,11 @@ use std::{
   panic::AssertUnwindSafe,
 };
 
+#[cfg(not(feature = "runtime-benchmarks"))]
+mod guest_imports;
+#[cfg(not(feature = "runtime-benchmarks"))]
+pub(crate) use guest_imports::{GuestImportSite, GuestImportTrace};
+
 type ReplayHostFunctions = (
   sp_io::SubstrateHostFunctions,
   cumulus_primitives_proof_size_hostfunction::storage_proof_size::HostFunctions,
@@ -95,13 +100,42 @@ pub(crate) fn replay_block(
   encoded_block: &[u8],
   inherent_data: &InherentData,
 ) -> Result<VerifiedWasmReplay, String> {
+  replay_block_using::<ReplayHostFunctions>(pre_state, wasm, encoded_block, inherent_data)
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+pub(crate) fn replay_block_with_guest_imports(
+  pre_state: Storage,
+  wasm: &[u8],
+  encoded_block: &[u8],
+  inherent_data: &InherentData,
+  limit: usize,
+  interrupt_at: Option<u32>,
+) -> (Result<VerifiedWasmReplay, String>, GuestImportTrace) {
+  guest_imports::capture(limit, interrupt_at, || {
+    replay_block_using::<guest_imports::ObservedHostFunctions>(
+      pre_state,
+      wasm,
+      encoded_block,
+      inherent_data,
+    )
+  })
+}
+
+fn replay_block_using<H: sc_executor::HostFunctions>(
+  pre_state: Storage,
+  wasm: &[u8],
+  encoded_block: &[u8],
+  inherent_data: &InherentData,
+) -> Result<VerifiedWasmReplay, String> {
+  super::common::ensure_artifact_profile().map_err(str::to_owned)?;
   std::panic::catch_unwind(AssertUnwindSafe(|| {
-    replay_block_inner(pre_state, wasm, encoded_block, inherent_data)
+    replay_block_inner::<H>(pre_state, wasm, encoded_block, inherent_data)
   }))
   .map_err(|_| "Wasm replay or proof backend panicked".to_owned())?
 }
 
-fn replay_block_inner(
+fn replay_block_inner<H: sc_executor::HostFunctions>(
   pre_state: Storage,
   wasm: &[u8],
   encoded_block: &[u8],
@@ -123,7 +157,7 @@ fn replay_block_inner(
     heap_pages,
     hash: runtime_code_hash.encode(),
   };
-  let executor = ReplayExecutor::builder().build();
+  let executor = WasmExecutor::<H>::builder().build();
   // Version discovery is isolated from the measured execution overlay and recorder.
   let runtime_version = executor
     .runtime_version(
@@ -162,7 +196,9 @@ fn replay_block_inner(
   let mut extensions = Extensions::default();
   extensions.register(ProofSizeExt::new(observations.clone()));
   let mut overlay = OverlayedChanges::<Blake2Hasher>::default();
-  let result = StateMachine::new(
+  #[cfg(not(feature = "runtime-benchmarks"))]
+  guest_imports::begin(wasm, pre_state_root, encoded_block);
+  let execution = StateMachine::new(
     &proving_backend,
     &mut overlay,
     &executor,
@@ -173,8 +209,17 @@ fn replay_block_inner(
     IMPORT_CONTEXT,
   )
   .set_parent_hash(*block.header().parent_hash())
-  .execute()
-  .map_err(|error| format!("Full-state Core_execute_block: {error}"))?;
+  .execute();
+  #[cfg(not(feature = "runtime-benchmarks"))]
+  guest_imports::finish(
+    execution
+      .as_ref()
+      .map(|_| ())
+      .map_err(|error| error.to_string()),
+    *backend.root(),
+    observations.recorded_estimations().len(),
+  );
+  let result = execution.map_err(|error| format!("Full-state Core_execute_block: {error}"))?;
   require_unit(&result)?;
   let execute_proof = recorder.to_storage_proof();
   let storage_changes = overlay
@@ -280,6 +325,174 @@ fn replay_block_inner(
     post_execute_root_node_bytes,
     committed_root_proof,
     proof_size_observations,
+  })
+}
+
+/// Ordinary block-builder APIs on one original root and continuous overlay, with no state repair.
+/// The caller supplies the literal prepared parent; absent :code remains absent, not fabricated.
+#[cfg(feature = "runtime-benchmarks")]
+pub(crate) struct ApiPhaseObservation {
+  pub method: String,
+  pub output: Result<Vec<u8>, String>,
+  pub succeeded: bool,
+  pub root: H256,
+  pub top: BTreeMap<Vec<u8>, Vec<u8>>,
+  pub body_proof: StorageProof,
+  pub proof: StorageProof,
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub(crate) struct ApiFramingObservation {
+  pub phases: Vec<ApiPhaseObservation>,
+  pub proof_verification: Result<(), String>,
+  pub empty_witness_check: Result<(), String>,
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub(crate) fn replay_prepass_framing(
+  pre_state: Storage,
+  wasm: &[u8],
+  parent_hash: H256,
+  calls: &[(String, Vec<u8>)],
+) -> Result<ApiFramingObservation, String> {
+  use polkadot_sdk::sp_externalities::Externalities;
+  if !pre_state.children_default.is_empty() || calls.len() > 5 {
+    return Err("Prepass framing requires a bounded TOP-only source".into());
+  }
+  let state_version = crate::VERSION.state_version();
+  let heap_pages = decode_heap_pages(pre_state.top.get(well_known_keys::HEAP_PAGES))?;
+  let code_fetcher = WrappedRuntimeCode(Cow::Borrowed(wasm));
+  let runtime_code = RuntimeCode {
+    code_fetcher: &code_fetcher,
+    heap_pages,
+    hash: sp_io::hashing::blake2_256(wasm).encode(),
+  };
+  let executor = ReplayExecutor::builder().build();
+  let backend: TrieBackend<PrefixedMemoryDB<Blake2Hasher>, Blake2Hasher> =
+    (pre_state.clone(), state_version).into();
+  let parent_root = *backend.root();
+  let recorder = Recorder::<Blake2Hasher>::default();
+  let proving = TrieBackendBuilder::wrap(&backend)
+    .with_recorder(recorder.clone())
+    .build();
+  let mut extensions = Extensions::default();
+  extensions.register(ProofSizeExt::new(RecordingProofSizeProvider::new(
+    recorder.clone(),
+  )));
+  let mut overlay = OverlayedChanges::default();
+  let mut phases = Vec::new();
+  for (method, input) in calls {
+    let output = StateMachine::new(
+      &proving,
+      &mut overlay,
+      &executor,
+      method,
+      input,
+      &mut extensions,
+      &runtime_code,
+      CallContext::Onchain { import: false },
+    )
+    .set_parent_hash(parent_hash)
+    .execute()
+    .map_err(|error| error.to_string());
+    let succeeded = match &output {
+      Ok(bytes) if method == "BlockBuilder_apply_extrinsic" => {
+        polkadot_sdk::sp_runtime::ApplyExtrinsicResult::decode_all(&mut bytes.as_slice())
+          .map_err(|error| format!("Apply result decode: {error}"))?
+          .is_ok_and(|dispatch| dispatch.is_ok())
+      }
+      Ok(_) => true,
+      Err(_) => false,
+    };
+    let body_proof = recorder.to_storage_proof();
+    let root = H256::decode_all(
+      &mut polkadot_sdk::sp_state_machine::Ext::new(&mut overlay, &proving, None)
+        .storage_root(state_version)
+        .as_slice(),
+    )
+    .map_err(|error| format!("Phase root: {error}"))?;
+    // This full-state map is diagnostic output only. Proof-only execution below receives none.
+    let mut top = pre_state.top.clone();
+    for (key, value) in overlay.changes_mut() {
+      if let Some(value) = value.value() {
+        top.insert(key.clone(), value.clone());
+      } else {
+        top.remove(key);
+      }
+    }
+    phases.push(ApiPhaseObservation {
+      method: method.clone(),
+      output,
+      succeeded,
+      root,
+      top,
+      body_proof,
+      proof: recorder.to_storage_proof(),
+    });
+    if !succeeded {
+      break;
+    }
+  }
+  let proof = recorder.to_storage_proof();
+  let verify = |decoded: StorageProof| -> Result<(), String> {
+    let proof_backend = create_proof_check_backend::<Blake2Hasher>(parent_root, decoded)
+      .map_err(|error| format!("Prefix proof backend: {error}"))?;
+    let verifier_recorder = Recorder::<Blake2Hasher>::default();
+    let checking = TrieBackendBuilder::wrap(&proof_backend)
+      .with_recorder(verifier_recorder.clone())
+      .build();
+    let verifier = ReplayExecutor::builder().build();
+    let mut verifier_extensions = Extensions::default();
+    verifier_extensions.register(ProofSizeExt::new(RecordingProofSizeProvider::new(
+      verifier_recorder,
+    )));
+    let mut verifier_overlay = OverlayedChanges::default();
+    for (index, ((method, input), observed)) in calls.iter().zip(&phases).enumerate() {
+      let output = StateMachine::new(
+        &checking,
+        &mut verifier_overlay,
+        &verifier,
+        method,
+        input,
+        &mut verifier_extensions,
+        &runtime_code,
+        CallContext::Onchain { import: false },
+      )
+      .set_parent_hash(parent_hash)
+      .execute()
+      .map_err(|error| error.to_string());
+      let root = H256::decode_all(
+        &mut polkadot_sdk::sp_state_machine::Ext::new(&mut verifier_overlay, &checking, None)
+          .storage_root(state_version)
+          .as_slice(),
+      )
+      .map_err(|error| format!("Proof phase {index} root: {error}"))?;
+      if output != observed.output || root != observed.root {
+        return Err(format!(
+          "Proof-only prefix differs at phase {index}: {method}"
+        ));
+      }
+    }
+    Ok(())
+  };
+  // Keep full-state observations on verification failure; the caller exports before failing.
+  let proof_verification = (|| {
+    let compact = proof
+      .to_compact_proof::<Blake2Hasher>(parent_root)
+      .map_err(|error| format!("Prefix compact encode: {error:?}"))?;
+    let (decoded, decoded_root) = compact
+      .to_storage_proof::<Blake2Hasher>(&parent_root)
+      .map_err(|error| format!("Prefix compact decode: {error:?}"))?;
+    if decoded_root != parent_root {
+      return Err("Prefix compact root changed".into());
+    }
+    verify(decoded)
+  })();
+  let empty_witness_check = verify(StorageProof::empty());
+  Ok(ApiFramingObservation {
+    phases,
+    proof_verification,
+    empty_witness_check,
   })
 }
 
@@ -398,9 +611,9 @@ pub(super) fn key_proof_overlap(
   })
 }
 
-fn check_inherents<B: Backend<Blake2Hasher>>(
+fn check_inherents<B: Backend<Blake2Hasher>, H: sc_executor::HostFunctions>(
   backend: &B,
-  executor: &ReplayExecutor,
+  executor: &WasmExecutor<H>,
   runtime_code: &RuntimeCode,
   block: &crate::Block,
   inherent_data: &InherentData,

@@ -2920,6 +2920,137 @@ fn runtime_multi_delete_batch_repair_stays_within_the_single_delete_ceiling() {
 }
 
 #[test]
+fn runtime_mixed_delta_keeps_original_paths_and_delete_repair() {
+  use polkadot_sdk::{
+    sp_core::Blake2Hasher,
+    sp_trie::{
+      LayoutV1, MemoryDB, Recorder, StorageProof, Trie, TrieConfiguration, TrieDBBuilder,
+      TrieLayout, delta_trie_root,
+    },
+  };
+  type Layout = LayoutV1<Blake2Hasher>;
+  assert!(!Layout::USE_EXTENSION);
+  assert_eq!(Layout::MAX_INLINE_VALUE, Some(33));
+  // Fixed-width synthetic keys, not a Governance history. The last-byte fork has
+  // an out-of-line surviving leaf; another namespace supplies an independent overwrite.
+  let key = |namespace: u8, tail: u8| [vec![namespace; 32], vec![0; 19], vec![tail]].concat();
+  let deleted = key(0x11, 0x20);
+  let survivor = key(0x11, 0x30);
+  let inserted = key(0x11, 0x40);
+  let updated = key(0x22, 0x60);
+  let entries = std::collections::BTreeMap::from([
+    (deleted.clone(), vec![0x55; 33]),
+    (survivor.clone(), vec![0x77; 33]),
+    (updated.clone(), vec![0x99; 33]),
+  ]);
+  // The SDK sorts this delta: insertion supplied first does not precede deletion
+  // during trie mutation. Caller execution order cannot eliminate repair ownership.
+  let delta = vec![
+    (inserted.clone(), Some(vec![0x44; 33])),
+    (updated.clone(), Some(vec![0x88; 33])),
+    (deleted.clone(), None),
+  ];
+  assert!(deleted < inserted);
+  assert!(
+    entries
+      .keys()
+      .chain(delta.iter().map(|(key, _)| key))
+      .all(|key| key.len() == 52)
+  );
+  let mut database = MemoryDB::<Blake2Hasher>::default();
+  let root = Layout::trie_build(&mut database, entries.clone());
+  assert_eq!(root, Layout::trie_root(entries.clone()));
+  let mut recorder = Recorder::<Layout>::new();
+  {
+    let trie = TrieDBBuilder::<Layout>::new(&database, &root)
+      .with_recorder(&mut recorder)
+      .build();
+    for (key, _) in &delta {
+      assert_eq!(
+        trie.get_hash(key).unwrap().is_some(),
+        entries.contains_key(key)
+      );
+    }
+  }
+  let original_paths = recorder
+    .drain()
+    .into_iter()
+    .map(|record| record.data)
+    .collect::<std::collections::BTreeSet<_>>();
+  let mut paths_only =
+    StorageProof::new(original_paths.iter().cloned()).into_memory_db::<Blake2Hasher>();
+  assert!(
+    delta_trie_root::<Layout, _, _, _, _, _>(&mut paths_only, root, delta.clone(), None, None)
+      .is_err()
+  );
+  let mut mutation_recorder = Recorder::<Layout>::new();
+  let post_root = delta_trie_root::<Layout, _, _, _, _, _>(
+    &mut database,
+    root,
+    delta.clone(),
+    Some(&mut mutation_recorder),
+    None,
+  )
+  .unwrap();
+  let extras = mutation_recorder
+    .drain()
+    .into_iter()
+    .map(|record| record.data)
+    .filter(|node| !original_paths.contains(node))
+    .collect::<std::collections::BTreeSet<_>>();
+  assert_eq!(
+    extras.len(),
+    1,
+    "this mixed shape still needs its surviving sibling node"
+  );
+  let mut after = entries.clone();
+  for (key, value) in &delta {
+    if let Some(value) = value {
+      after.insert(key.clone(), value.clone());
+    } else {
+      after.remove(key);
+    }
+  }
+  assert_eq!(post_root, Layout::trie_root(after));
+  let nodes = original_paths
+    .iter()
+    .cloned()
+    .chain(extras.iter().cloned())
+    .collect::<std::collections::BTreeSet<_>>();
+  assert!(
+    !nodes.contains(&entries[&survivor]),
+    "repair forwards a value hash, not its external blob"
+  );
+  let mut replay = StorageProof::new(nodes).into_memory_db::<Blake2Hasher>();
+  assert!(
+    TrieDBBuilder::<Layout>::new(&replay, &root)
+      .build()
+      .get(&survivor)
+      .is_err()
+  );
+  assert_eq!(
+    delta_trie_root::<Layout, _, _, _, _, _>(&mut replay, root, delta, None, None).unwrap(),
+    post_root
+  );
+  let view = TrieDBBuilder::<Layout>::new(&database, &post_root).build();
+  assert_eq!(view.get(&deleted).unwrap(), None);
+  assert_eq!(view.get(&survivor).unwrap(), Some(vec![0x77; 33]));
+  assert_eq!(view.get(&inserted).unwrap(), Some(vec![0x44; 33]));
+  assert_eq!(view.get(&updated).unwrap(), Some(vec![0x88; 33]));
+  println!(
+    "MIXED_DELTA_REPAIR_INPUT_V1 {}",
+    serde_json::json!({
+      "keyBytes": 52, "deletes": 1, "inserts": 1, "updates": 1,
+      "originalHashPathNodes": original_paths.len(), "extraRepairNodes": extras.len(),
+      "extraNodeBytes": extras.first().unwrap().len(),
+      "inputInsertBeforeDelete": true, "oldSurvivorValueUnavailable": true,
+      "rootReplayMatchesIndependentRebuild": true,
+      "syntheticNotRuntimeHistory": true, "notGeneralMixedDeltaBoundOrPrice": true
+    })
+  );
+}
+
+#[test]
 fn runtime_deadline_index_page_domain_bounds_partial_prefix_proof() {
   use codec::{Encode, MaxEncodedLen};
   use pallet_deos_actors::{DeadlineIndexPageOf, DeadlineIndexPages, WakeupClock, WakeupKey};

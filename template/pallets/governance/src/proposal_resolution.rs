@@ -1,9 +1,15 @@
 use crate::*;
 
+use crate::U256;
 use alloc::{collections::BTreeSet, vec::Vec};
 use frame::prelude::*;
 use polkadot_sdk::frame_support::transactional;
 use polkadot_sdk::sp_runtime::Perbill;
+
+// Preserve Perbill floor rounding without narrowing raw voting power.
+fn primary_approval(numerator: U256, denominator: U256) -> Perbill {
+  Perbill::from_parts(((numerator * U256::from(1_000_000_000u64)) / denominator).low_u32())
+}
 
 /// Core policy outcome for a proposal given its vote weights.
 /// This is the single source of truth for turnout, tie, approval, and winner selection.
@@ -553,9 +559,7 @@ impl<T: Config> Pallet<T> {
       primary_close_epoch,
       current_epoch,
     );
-    let weight = u64::from(T::ProposalVoteWeightProvider::vote_weight(
-      domain, &context, account,
-    ));
+    let weight = T::ProposalVoteWeightProvider::vote_weight(domain, &context, account);
     Ok(ProposalBallot {
       account: account.clone(),
       vote_epoch: current_epoch,
@@ -582,8 +586,10 @@ impl<T: Config> Pallet<T> {
     ProposalBallot {
       account: account.clone(),
       vote_epoch: current_epoch,
-      weight: T::VetoVotePowerProvider::vote_weight(domain, &context, account),
-      raw_power: T::VetoVotePowerProvider::raw_vote_weight(domain, account),
+      weight: U256::from(T::VetoVotePowerProvider::vote_weight(
+        domain, &context, account,
+      )),
+      raw_power: U256::from(T::VetoVotePowerProvider::raw_vote_weight(domain, account)),
     }
   }
 
@@ -624,7 +630,7 @@ impl<T: Config> Pallet<T> {
     submitted_epoch: T::Epoch,
     maturity_epoch: T::Epoch,
     ballots: &BoundedVec<ProposalBallot<T::AccountId, T::Epoch>, T::MaxWinningVoteAccountsPerCall>,
-  ) -> Result<u64, DispatchError> {
+  ) -> Result<U256, DispatchError> {
     let _ = (
       domain,
       item_id,
@@ -632,7 +638,7 @@ impl<T: Config> Pallet<T> {
       submitted_epoch,
       maturity_epoch,
     );
-    ballots.iter().try_fold(0u64, |total, ballot| {
+    ballots.iter().try_fold(U256::zero(), |total, ballot| {
       total
         .checked_add(ballot.weight)
         .ok_or(Error::<T>::ProposalVoteTallyOverflow.into())
@@ -646,7 +652,7 @@ impl<T: Config> Pallet<T> {
     submitted_epoch: T::Epoch,
     maturity_epoch: T::Epoch,
     ballots: &BoundedVec<ProposalBallot<T::AccountId, T::Epoch>, T::MaxWinningVoteAccountsPerCall>,
-  ) -> Result<u64, DispatchError> {
+  ) -> Result<U256, DispatchError> {
     let _ = (
       domain,
       item_id,
@@ -654,7 +660,7 @@ impl<T: Config> Pallet<T> {
       submitted_epoch,
       maturity_epoch,
     );
-    ballots.iter().try_fold(0u64, |total, ballot| {
+    ballots.iter().try_fold(U256::zero(), |total, ballot| {
       total
         .checked_add(ballot.weight)
         .ok_or(Error::<T>::ProposalVoteTallyOverflow.into())
@@ -664,9 +670,9 @@ impl<T: Config> Pallet<T> {
   pub(crate) fn proposal_raw_protection_weight_sum(
     domain: T::DomainId,
     ballots: &BoundedVec<ProposalBallot<T::AccountId, T::Epoch>, T::MaxWinningVoteAccountsPerCall>,
-  ) -> Result<u64, DispatchError> {
+  ) -> Result<U256, DispatchError> {
     let _ = domain;
-    ballots.iter().try_fold(0u64, |total, ballot| {
+    ballots.iter().try_fold(U256::zero(), |total, ballot| {
       total
         .checked_add(ballot.raw_power)
         .ok_or(Error::<T>::ProposalVoteTallyOverflow.into())
@@ -676,7 +682,7 @@ impl<T: Config> Pallet<T> {
   pub(crate) fn proposal_raw_veto_weight_sum(
     domain: T::DomainId,
     ballots: &BoundedVec<ProposalBallot<T::AccountId, T::Epoch>, T::MaxWinningVoteAccountsPerCall>,
-  ) -> Result<u64, DispatchError> {
+  ) -> Result<U256, DispatchError> {
     Self::proposal_raw_protection_weight_sum(domain, ballots)
   }
 
@@ -687,7 +693,7 @@ impl<T: Config> Pallet<T> {
     submitted_epoch: T::Epoch,
     maturity_epoch: T::Epoch,
     votes: &ProposalVotes<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall>,
-  ) -> Result<(u64, u64), DispatchError> {
+  ) -> Result<(U256, U256), DispatchError> {
     Ok((
       Self::proposal_veto_weight_sum(
         domain,
@@ -716,48 +722,48 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn veto_weight_strictly_exceeds_threshold(
-    veto_weight: u64,
-    total_veto_issuance: u64,
+    veto_weight: U256,
+    total_veto_issuance: U256,
   ) -> bool {
-    if veto_weight == 0 || total_veto_issuance == 0 {
+    if veto_weight == U256::zero() || total_veto_issuance == U256::zero() {
       return false;
     }
-    let threshold_parts = u128::from(T::ProposalVetoThreshold::get().deconstruct());
-    let veto_parts = u128::from(veto_weight) * 1_000_000_000u128;
-    let threshold_weight = u128::from(total_veto_issuance) * threshold_parts;
+    let threshold_parts = U256::from(T::ProposalVetoThreshold::get().deconstruct());
+    let veto_parts = veto_weight * U256::from(1_000_000_000u64);
+    let threshold_weight = total_veto_issuance * threshold_parts;
     veto_parts > threshold_weight
   }
 
   pub(crate) fn veto_weight_meets_minimum_turnout(
-    veto_weight: u64,
-    total_veto_issuance: u64,
+    veto_weight: U256,
+    total_veto_issuance: U256,
   ) -> bool {
-    if veto_weight == 0 || total_veto_issuance == 0 {
+    if veto_weight == U256::zero() || total_veto_issuance == U256::zero() {
       return false;
     }
-    let threshold_parts = u128::from(T::ProposalVetoMinimumVetoTurnout::get().deconstruct());
-    if threshold_parts == 0 {
+    let threshold_parts = U256::from(T::ProposalVetoMinimumVetoTurnout::get().deconstruct());
+    if threshold_parts == U256::zero() {
       return true;
     }
-    let veto_parts = u128::from(veto_weight) * 1_000_000_000u128;
-    let threshold_weight = u128::from(total_veto_issuance) * threshold_parts;
+    let veto_parts = veto_weight * U256::from(1_000_000_000u64);
+    let threshold_weight = total_veto_issuance * threshold_parts;
     veto_parts >= threshold_weight
   }
 
   pub(crate) fn pass_weight_meets_fast_track_threshold(
-    pass_weight: u64,
-    total_protection_supply: u64,
+    pass_weight: U256,
+    total_protection_supply: U256,
   ) -> bool {
-    if pass_weight == 0 || total_protection_supply == 0 {
+    if pass_weight == U256::zero() || total_protection_supply == U256::zero() {
       return false;
     }
     let threshold = T::ProposalFastTrackPassThreshold::get();
     if threshold == Perbill::one() {
       return pass_weight == total_protection_supply;
     }
-    let threshold_parts = u128::from(threshold.deconstruct());
-    let pass_parts = u128::from(pass_weight) * 1_000_000_000u128;
-    let threshold_weight = u128::from(total_protection_supply) * threshold_parts;
+    let threshold_parts = U256::from(threshold.deconstruct());
+    let pass_parts = pass_weight * U256::from(1_000_000_000u64);
+    let threshold_weight = total_protection_supply * threshold_parts;
     pass_parts > threshold_weight
   }
 
@@ -768,7 +774,7 @@ impl<T: Config> Pallet<T> {
     allow_track_outcome: bool,
   ) -> Result<Option<VetoCancellation>, DispatchError> {
     let raw_veto_weight = Self::proposal_raw_veto_weight_sum(domain, &votes.vetoes)?;
-    let total_veto_issuance = T::VetoVotePowerProvider::total_issuance(domain);
+    let total_veto_issuance = U256::from(T::VetoVotePowerProvider::total_issuance(domain));
     let Some((current_epoch, protection_open_epoch, protection_close_epoch)) =
       Self::proposal_protection_weighting_window(domain, item_id)
     else {
@@ -824,7 +830,7 @@ impl<T: Config> Pallet<T> {
       return Ok(None);
     }
     let pass_weight = Self::proposal_raw_protection_weight_sum(domain, &votes.passes)?;
-    let total_protection_supply = T::VetoVotePowerProvider::total_issuance(domain);
+    let total_protection_supply = U256::from(T::VetoVotePowerProvider::total_issuance(domain));
     if !Self::pass_weight_meets_fast_track_threshold(pass_weight, total_protection_supply) {
       return Ok(None);
     }
@@ -849,8 +855,8 @@ impl<T: Config> Pallet<T> {
       return Ok(false);
     }
     let pass_weight = Self::proposal_raw_protection_weight_sum(domain, &votes.passes)?;
-    let total_protection_supply = T::VetoVotePowerProvider::total_issuance(domain);
-    Ok(total_protection_supply > 0 && pass_weight == total_protection_supply)
+    let total_protection_supply = U256::from(T::VetoVotePowerProvider::total_issuance(domain));
+    Ok(total_protection_supply > U256::zero() && pass_weight == total_protection_supply)
   }
 
   pub(crate) fn authorize_urgent_fast_track(
@@ -969,10 +975,10 @@ impl<T: Config> Pallet<T> {
     turnout_threshold: u64,
     approval_threshold: Perbill,
   ) -> CoreResolutionOutcome {
-    if tally.turnout_weight == 0 {
+    if tally.turnout_weight == U256::zero() {
       return CoreResolutionOutcome::Rejected(ProposalRejectionReason::NoVotes);
     }
-    if tally.turnout_weight < turnout_threshold {
+    if tally.turnout_weight < U256::from(turnout_threshold) {
       return CoreResolutionOutcome::Rejected(ProposalRejectionReason::TurnoutBelowMinimum);
     }
     match family {
@@ -980,8 +986,8 @@ impl<T: Config> Pallet<T> {
         if tally.aye_weight == tally.nay_weight {
           return CoreResolutionOutcome::Rejected(ProposalRejectionReason::VoteTie);
         }
-        let aye_approval = Perbill::from_rational(tally.aye_weight, tally.turnout_weight);
-        let nay_approval = Perbill::from_rational(tally.nay_weight, tally.turnout_weight);
+        let aye_approval = primary_approval(tally.aye_weight, tally.turnout_weight);
+        let nay_approval = primary_approval(tally.nay_weight, tally.turnout_weight);
         if aye_approval >= approval_threshold {
           CoreResolutionOutcome::Passing(ProposalPrimaryTrackOption::Aye)
         } else if nay_approval >= approval_threshold {
@@ -991,17 +997,20 @@ impl<T: Config> Pallet<T> {
         }
       }
       crate::ProposalPrimaryTrackFamily::Invoice => {
-        let positive_weight = u128::from(tally.amplify_weight)
-          + u128::from(tally.approve_weight)
-          + u128::from(tally.reduce_weight);
-        if positive_weight == u128::from(tally.nay_weight) {
+        let Some(positive_weight) = tally
+          .amplify_weight
+          .checked_add(tally.approve_weight)
+          .and_then(|weight| weight.checked_add(tally.reduce_weight))
+        else {
+          return CoreResolutionOutcome::Rejected(ProposalRejectionReason::ApprovalThresholdNotMet);
+        };
+        if positive_weight == tally.nay_weight {
           return CoreResolutionOutcome::Rejected(ProposalRejectionReason::VoteTie);
         }
-        if positive_weight < u128::from(tally.nay_weight) {
+        if positive_weight < tally.nay_weight {
           return CoreResolutionOutcome::Rejected(ProposalRejectionReason::ApprovalThresholdNotMet);
         }
-        let positive_approval =
-          Perbill::from_rational(positive_weight, u128::from(tally.turnout_weight));
+        let positive_approval = primary_approval(positive_weight, tally.turnout_weight);
         if positive_approval < approval_threshold {
           return CoreResolutionOutcome::Rejected(ProposalRejectionReason::ApprovalThresholdNotMet);
         }
@@ -1336,21 +1345,21 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn invoice_leading_positive_weights(
-    amplify_weight: u64,
-    approve_weight: u64,
-    reduce_weight: u64,
-  ) -> (Option<ProposalPrimaryTrackOption>, u64) {
+    amplify_weight: U256,
+    approve_weight: U256,
+    reduce_weight: U256,
+  ) -> (Option<ProposalPrimaryTrackOption>, U256) {
     let mut leading_option = None;
-    let mut leading_weight = 0u64;
-    if amplify_weight > 0 {
+    let mut leading_weight = U256::zero();
+    if amplify_weight > U256::zero() {
       leading_option = Some(ProposalPrimaryTrackOption::Amplify);
       leading_weight = amplify_weight;
     }
-    if approve_weight > 0 && approve_weight >= leading_weight {
+    if approve_weight > U256::zero() && approve_weight >= leading_weight {
       leading_option = Some(ProposalPrimaryTrackOption::Approve);
       leading_weight = approve_weight;
     }
-    if reduce_weight > 0 && reduce_weight >= leading_weight {
+    if reduce_weight > U256::zero() && reduce_weight >= leading_weight {
       leading_option = Some(ProposalPrimaryTrackOption::Reduce);
       leading_weight = reduce_weight;
     }
@@ -1359,7 +1368,7 @@ impl<T: Config> Pallet<T> {
 
   pub(crate) fn invoice_leading_positive_option(
     tally: &ProposalVoteTally,
-  ) -> (Option<ProposalPrimaryTrackOption>, u64) {
+  ) -> (Option<ProposalPrimaryTrackOption>, U256) {
     Self::invoice_leading_positive_weights(
       tally.amplify_weight,
       tally.approve_weight,
@@ -1605,17 +1614,19 @@ impl<T: Config> Pallet<T> {
         item_id,
         crate::ProposalTrackFamily::Veto,
       ),
-      current_ordinary_weight: u64::from(T::ProposalVoteWeightProvider::vote_weight(
+      current_ordinary_weight: T::ProposalVoteWeightProvider::vote_weight(
         domain,
         &ordinary_context,
         &account,
-      )),
-      current_protection_weight: T::VetoVotePowerProvider::vote_weight(
+      ),
+      current_protection_weight: U256::from(T::VetoVotePowerProvider::vote_weight(
         domain,
         &protection_context,
         &account,
-      ),
-      current_protection_raw_power: T::VetoVotePowerProvider::raw_vote_weight(domain, &account),
+      )),
+      current_protection_raw_power: U256::from(T::VetoVotePowerProvider::raw_vote_weight(
+        domain, &account,
+      )),
       frozen_ordinary_ballot: Self::account_frozen_ordinary_ballot(&votes, &account),
       frozen_protection_ballot: Self::account_frozen_protection_ballot(&votes, &account),
     })

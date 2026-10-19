@@ -61,6 +61,35 @@ hydrate_local_tool_paths() {
     add_path_if_dir "$HOME/.cargo/bin"
 }
 
+worktree_evidence_identity() {
+    (
+        cd "$PROJECT_ROOT" || exit 1
+        git ls-files --cached --others --exclude-standard -z -- \
+            template scripts web-client simulators docs .github .cargo \
+            ':/*.toml' ':/*.json' .gitignore .gitattributes .npmrc \
+            ':(exclude,glob)**/target/**' ':(exclude,glob)**/node_modules/**' \
+            ':(exclude,glob)**/build/**' ':(exclude,glob)**/dist/**' \
+            ':(exclude,glob)**/.svelte-kit/**' ':(exclude)web-client/.papi' \
+            ':(exclude)template/chain_spec.json' \
+            | LC_ALL=C sort -zu \
+            | while IFS= read -r -d '' path; do
+                if [[ -L "$path" ]]; then
+                    log_error "Source identity cannot certify a symlink: $path" >&2
+                    exit 1
+                fi
+                # A tracked deletion has the same source tree before and after staging.
+                [[ -e "$path" ]] || continue
+                if [[ -x "$path" ]]; then
+                    printf 'executable\0'
+                else
+                    printf 'regular\0'
+                fi
+                sha256sum --zero -- "$path" || exit 1
+            done \
+            | sha256sum | awk '{print $1}'
+    )
+}
+
 # Print the SHA-256 of one file with whichever checksum tool the platform provides, so the
 # macOS arm64 path (shasum) does not fail on a shared verifier that assumed GNU coreutils.
 deos_sha256_file() {
@@ -198,40 +227,7 @@ run_shell_step() {
     if [[ "$DEOS_VERBOSE" == "1" ]]; then
         log_info "Command: $command"
     fi
-
-    local start_time
-    local end_time
-    local status
-    local log_path=""
-    start_time=$(date +%s)
-    if [[ "$DEOS_VERBOSE" == "1" ]]; then
-        if [[ -n "$timeout_minutes" ]]; then
-            timeout "${timeout_minutes}m" bash -c "$command" || status=$?
-        else
-            bash -c "$command" || status=$?
-        fi
-    else
-        log_path="$(step_log_path "$label")"
-        if [[ -n "$timeout_minutes" ]]; then
-            timeout "${timeout_minutes}m" bash -c "$command" >"$log_path" 2>&1 || status=$?
-        else
-            bash -c "$command" >"$log_path" 2>&1 || status=$?
-        fi
-    fi
-    status="${status:-0}"
-    end_time=$(date +%s)
-
-    if [[ "$status" -ne 0 ]]; then
-        log_error "$label failed with status $status after $((end_time - start_time))s"
-        if [[ -n "$log_path" ]]; then
-            report_step_failure "$log_path"
-        fi
-        return "$status"
-    fi
-    if [[ -n "$log_path" ]]; then
-        rm -f "$log_path"
-    fi
-    log_success "$label completed in $((end_time - start_time))s"
+    run_step_command "$label" "$timeout_minutes" bash -c "$command"
 }
 
 run_command_step() {
@@ -240,25 +236,27 @@ run_command_step() {
     shift 2
 
     log_info "Running: $label"
+    run_step_command "$label" "$timeout_minutes" "$@"
+}
+
+run_step_command() {
+    local label="$1"
+    local timeout_minutes="$2"
+    shift 2
 
     local start_time
     local end_time
     local status
     local log_path=""
     start_time=$(date +%s)
+    if [[ -n "$timeout_minutes" ]]; then
+        set -- timeout "${timeout_minutes}m" "$@"
+    fi
     if [[ "$DEOS_VERBOSE" == "1" ]]; then
-        if [[ -n "$timeout_minutes" ]]; then
-            timeout "${timeout_minutes}m" "$@" || status=$?
-        else
-            "$@" || status=$?
-        fi
+        "$@" || status=$?
     else
         log_path="$(step_log_path "$label")"
-        if [[ -n "$timeout_minutes" ]]; then
-            timeout "${timeout_minutes}m" "$@" >"$log_path" 2>&1 || status=$?
-        else
-            "$@" >"$log_path" 2>&1 || status=$?
-        fi
+        "$@" >"$log_path" 2>&1 || status=$?
     fi
     status="${status:-0}"
     end_time=$(date +%s)

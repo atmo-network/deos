@@ -207,6 +207,8 @@ use alloc::{
   collections::{BTreeMap, BTreeSet},
 };
 use codec::Encode;
+#[cfg(feature = "benchmark-authority-scaffolding")]
+use pallet_deos_actors::StakingOps;
 use pallet_deos_actors::adapters::SovereignAccountPolicy;
 use pallet_deos_actors::{
   ActorContract, ActorId, ActorType, AdmissionCertificateAuthorityProvider, AmountResolution,
@@ -214,11 +216,11 @@ use pallet_deos_actors::{
   ContextMessageLimits, ContractSteps, CycleResult, DexOps, Error, Event, ExecutionContext,
   FeeCollector, FundingSourcePolicy, IdleStarvationState, InputLimit, LiquidityOps, Mutability,
   OutcomeTotals, ParkedBalanceQualification, ProcessResidence, RetryClass, ScheduleWindow,
-  SimulationMode, SourceFilter, SourceFilterOf, StakingOps, StepControlExecution,
-  StepControlOutcome, StepControlPhase, StepControlPlacement, StepControlWeightContext,
-  StepControlWeightProvider, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, Task,
-  TaskEffectExecution, TaskEffectWeightProvider, TaskOf, Trigger, WakeupKey, WeightInfo,
-  certify_parked_balance_watch, classify_parked_balance_plan,
+  SimulationMode, SourceFilter, SourceFilterOf, StepControlExecution, StepControlOutcome,
+  StepControlPhase, StepControlPlacement, StepControlWeightContext, StepControlWeightProvider,
+  StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, Task, TaskEffectExecution,
+  TaskEffectWeightProvider, TaskOf, Trigger, WakeupKey, WeightInfo, certify_parked_balance_watch,
+  classify_parked_balance_plan,
 };
 use pallet_deos_router::{AssetConversionApi, FeeRoutingAdapter};
 use polkadot_sdk::frame_support::{
@@ -237,9 +239,9 @@ use polkadot_sdk::frame_support::{
   weights::Weight,
 };
 use polkadot_sdk::sp_runtime::traits::{AccountIdConversion, TransactionExtension};
-use polkadot_sdk::sp_runtime::{
-  DispatchError, Perbill, generic, transaction_validity::TransactionSource,
-};
+#[cfg(feature = "benchmark-authority-scaffolding")]
+use polkadot_sdk::sp_runtime::transaction_validity::TransactionSource;
+use polkadot_sdk::sp_runtime::{DispatchError, Perbill, generic};
 use polkadot_sdk::sp_weights::WeightToFee;
 use polkadot_sdk::{
   cumulus_primitives_core::{InboundDownwardMessage, InboundHrmpMessage, ParaId},
@@ -335,11 +337,35 @@ fn admission_authority_binds_behavior_limits_to_certificate_identity() {
     let steps = transfer_contract_steps(BOB, AssetKind::Native, crate::EXISTENTIAL_DEPOSIT);
     prefund_active_user_creation(&ALICE, &steps);
     let actor_id = Actors::next_actor_id();
-    assert_ok!(Actors::create_user_actor(
-      RuntimeOrigin::signed(ALICE),
-      Mutability::Mutable,
-      user_active_contract(manual_schedule(), None, steps),
-    ));
+    let contract = user_active_contract(manual_schedule(), None, steps);
+    type Authority = <Runtime as pallet_deos_actors::Config>::AdmissionCertificateAuthority;
+    if Authority::current()
+      .and_then(Authority::user_identity_capacity)
+      .is_some()
+    {
+      assert_ok!(Actors::create_user_actor(
+        RuntimeOrigin::signed(ALICE),
+        Mutability::Mutable,
+        contract,
+      ));
+    } else {
+      assert_noop!(
+        Actors::create_user_actor(
+          RuntimeOrigin::signed(ALICE),
+          Mutability::Mutable,
+          contract.clone(),
+        ),
+        Error::<Runtime>::UserAdmissionUnavailable
+      );
+      // Certificate identity is class-neutral; ordinary production capacity cannot create a
+      // User fixture. Preserve the certificate assertions through independent System authority.
+      assert_ok!(Actors::create_system_actor(
+        RuntimeOrigin::root(),
+        ALICE,
+        Mutability::Mutable,
+        contract,
+      ));
+    }
     let pallet_deos_actors::ActorSemanticState::Active(semantic) =
       pallet_deos_actors::ActorSemanticStates::<Runtime>::get(actor_id).unwrap()
     else {
@@ -1206,7 +1232,9 @@ fn runtime_step_control_models_bound_current_step_quotes() {
     minimal_opening_actual,
     crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_progress_min(
       maximum_opening_tail_chunks,
-    ),
+    ).max(crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_user_progress_min(
+      maximum_opening_tail_chunks,
+    )),
   );
   assert!(minimal_opening_actual.all_lte(minimal_opening_maximum));
   let minimal_failed_actual = RuntimeStepControlWeight::actual_control_weight(
@@ -1393,8 +1421,14 @@ fn runtime_step_control_models_bound_current_step_quotes() {
   .expect("Suspended progress actual evidence exists");
   assert_eq!(
     suspended_progress,
+    // The shared context has no Actor class axis, so both complete profiles must fit.
     crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_tail_progress(
       4, 0,
+    )
+    .max(
+      crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_user_tail_progress(
+        4, 0,
+      ),
     ),
   );
   assert!(suspended_progress.all_lte(tail_maximum));
@@ -1415,6 +1449,11 @@ fn runtime_step_control_models_bound_current_step_quotes() {
     suspended,
     crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_tail_retry(
       4, 0,
+    )
+    .max(
+      crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_user_tail_retry(
+        4, 0,
+      ),
     ),
   );
   assert!(suspended.all_lte(tail_maximum));
@@ -1647,6 +1686,7 @@ fn host_system_activation_manifest_is_ranked_and_rejects_undeclared_cycle_edges_
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn actor_produced_address_event_waits_one_additional_block() {
   seeded_test_ext().execute_with(|| {
@@ -1726,6 +1766,7 @@ fn actor_produced_address_event_waits_one_additional_block() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn paid_user_two_actor_cycle_is_fifo_bounded_and_cannot_recurse_in_one_block() {
   seeded_test_ext().execute_with(|| {
@@ -1848,6 +1889,7 @@ fn paid_user_two_actor_cycle_is_fifo_bounded_and_cannot_recurse_in_one_block() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn externally_closed_user_self_cycle_remains_paid_and_economically_apoptotic() {
   seeded_test_ext().execute_with(|| {
@@ -1911,6 +1953,7 @@ fn externally_closed_user_self_cycle_remains_paid_and_economically_apoptotic() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn paid_user_long_cycle_preserves_fifo_under_queue_pressure_and_closes_insolvent_member() {
   seeded_test_ext().execute_with(|| {
@@ -2221,12 +2264,22 @@ fn ensure_current_resource_state() {
   }
 }
 
+/// Prepare the Actor test context before signing.
 pub(super) fn signed_extrinsic(
   signer: &sr25519::Pair,
   nonce: crate::Nonce,
   call: RuntimeCall,
 ) -> UncheckedExtrinsic {
   ensure_current_resource_state();
+  signed_extrinsic_in_current_context(signer, nonce, call)
+}
+
+/// Sign against current state without creating or repairing consensus context.
+pub(super) fn signed_extrinsic_in_current_context(
+  signer: &sr25519::Pair,
+  nonce: crate::Nonce,
+  call: RuntimeCall,
+) -> UncheckedExtrinsic {
   let tx_ext = TxExtension::new((
     polkadot_sdk::frame_system::AuthorizeCall::<Runtime>::new(),
     polkadot_sdk::frame_system::CheckNonZeroSender::<Runtime>::new(),
@@ -2272,6 +2325,7 @@ fn all_preconditions(
   })
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 fn any_preconditions(
   predicates: Vec<pallet_deos_actors::Predicate<AssetKind, u128, u32, primitives::OracleFeedId>>,
 ) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
@@ -2428,6 +2482,8 @@ fn system_active_contract(
   })
 }
 
+/// Positive User fixture requiring an explicitly supplied native capacity authority.
+/// Ordinary-profile refusal tests call the public creation entrypoints directly.
 pub(super) fn create_user(
   who: crate::AccountId,
   schedule: RuntimeSchedule,
@@ -2503,6 +2559,7 @@ pub(super) fn fund_native(actor_id: ActorId, amount: u128) {
   let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&actor_acc, amount);
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 fn address_event_trigger_fee() -> Balance {
   let weight =
     <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::address_event_trigger_occurrence();
@@ -2550,13 +2607,14 @@ fn prefund_user_sovereign(owner: &crate::AccountId, slot: u8, plan: &RuntimeCont
 }
 
 /// Pre-funds the next automatically allocated User slot for a direct Active creation fixture.
-fn prefund_active_user_creation(owner: &crate::AccountId, plan: &RuntimeContractSteps) {
+pub(super) fn prefund_active_user_creation(owner: &crate::AccountId, plan: &RuntimeContractSteps) {
   let slot = lowest_free_owner_slot(owner);
   prefund_user_sovereign(owner, slot, plan);
 }
 
 /// Depletes the sovereign fee-native balance after creation, restoring the historical
 /// unfunded post-creation fixture state while keeping creation itself admitted.
+#[cfg(feature = "benchmark-authority-scaffolding")]
 fn deplete_user_sovereign(actor_id: ActorId, amount: u128) {
   let acc = actor_account(actor_id);
   let (_, remainder) = <Balances as Currency<crate::AccountId>>::slash(&acc, amount);
@@ -2610,6 +2668,7 @@ fn zero_step_pipeline_quote_excludes_creation_backed_cleanup_without_reducing_ad
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn pipeline_stop_cycle_quote_preserves_full_geometry_and_excludes_unreachable_visits() {
   seeded_test_ext().execute_with(|| {
@@ -2684,6 +2743,7 @@ fn pipeline_stop_cycle_quote_preserves_full_geometry_and_excludes_unreachable_vi
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn deos_runtime_executes_unconditional_and_dnf_with_fixed_successors() {
   seeded_test_ext().execute_with(|| {
@@ -2782,12 +2842,41 @@ fn user_creation_control_runtime_uses_privileged_calls_and_preserves_freeze() {
           false
         ));
       }
+      type Authority = <Runtime as pallet_deos_actors::Config>::AdmissionCertificateAuthority;
+      let qualified = Authority::current().and_then(Authority::user_identity_capacity);
+      if qualified.is_none() {
+        for contract in [
+          None,
+          user_active_contract(manual_schedule(), None, RuntimeContractSteps::default()),
+        ] {
+          assert_noop!(
+            Actors::create_user_actor(
+              RuntimeOrigin::signed(ALICE),
+              Mutability::Mutable,
+              contract.clone()
+            ),
+            Error::<Runtime>::UserAdmissionUnavailable
+          );
+          assert_noop!(
+            Actors::create_user_actor_at_slot(
+              RuntimeOrigin::signed(ALICE),
+              0,
+              Mutability::Mutable,
+              contract
+            ),
+            Error::<Runtime>::UserAdmissionUnavailable
+          );
+        }
+        assert_eq!(Actors::next_actor_id(), actor_id);
+        return;
+      }
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
         None
       ));
-      let identity = Actors::actor_identity(actor_id).expect("explicit enablement admits identity");
+      let identity =
+        Actors::actor_identity(actor_id).expect("qualified fixture enablement admits identity");
       let hold = Actors::actor_state_hold(actor_id);
       let custody_account = identity.sovereign_account.clone();
       let custody = native_balance(&custody_account);
@@ -2909,6 +2998,48 @@ fn frozen_creation_runtime_preserves_funded_vacant_custody_and_hold_until_thaw()
     seeded_test_ext().execute_with(|| {
       System::set_block_number(1);
       let actor_id = Actors::next_actor_id();
+      type Authority = <Runtime as pallet_deos_actors::Config>::AdmissionCertificateAuthority;
+      if !system
+        && Authority::current()
+          .and_then(Authority::user_identity_capacity)
+          .is_none()
+      {
+        // Ordinary capacity cannot install a new User identity. Its vacant custody remains
+        // usable and intact; admitted-User hold/recreation below uses explicit scaffolding.
+        let custody = Actors::sovereign_account_id(&ALICE, 0);
+        let _ = Balances::deposit_creating(&custody, 10 * crate::EXISTENTIAL_DEPOSIT);
+        let custody_balance = native_balance(&custody);
+        let owner_balance = native_balance(&ALICE);
+        let owner_hold = actors_owner_hold(&ALICE);
+        let sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+        let sink_balance = native_balance(&sink);
+        for frozen in [false, true, false] {
+          assert_ok!(Actors::set_global_circuit_breaker(
+            RuntimeOrigin::root(),
+            frozen
+          ));
+          assert_noop!(
+            Actors::create_user_actor_at_slot(
+              RuntimeOrigin::signed(ALICE),
+              0,
+              Mutability::Mutable,
+              None
+            ),
+            if frozen {
+              Error::<Runtime>::GlobalCircuitBreakerActive
+            } else {
+              Error::<Runtime>::UserAdmissionUnavailable
+            }
+          );
+          assert_eq!(native_balance(&custody), custody_balance);
+          assert_eq!(native_balance(&ALICE), owner_balance);
+          assert_eq!(actors_owner_hold(&ALICE), owner_hold);
+          assert_eq!(native_balance(&sink), sink_balance);
+          assert_eq!(Actors::next_actor_id(), actor_id);
+          assert_eq!(Actors::actor_state_hold(actor_id), None);
+        }
+        return;
+      }
       if system {
         assert_ok!(Actors::create_system_actor(
           RuntimeOrigin::root(),
@@ -3107,6 +3238,7 @@ fn system_only_pause_resume_rejects_active_immutable_runtime_systems() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn system_only_pause_resume_rejects_runtime_users_before_noop_and_expiry() {
   for mutability in [Mutability::Mutable, Mutability::Immutable] {
@@ -3326,6 +3458,7 @@ fn native_balance(who: &crate::AccountId) -> u128 {
   Balances::free_balance(who)
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 fn actor_state_hold_total(actor_id: ActorId) -> Balance {
   let record = Actors::actor_state_hold(actor_id).expect("User Actor state hold exists");
   record
@@ -3555,6 +3688,7 @@ pub fn has_actor_event(predicate: impl Fn(&Event<Runtime>) -> bool) -> bool {
 
 // --- Actors Platform: Lifecycle ---
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn manual_trigger_executes_transfer_contract_steps() {
   seeded_test_ext().execute_with(|| {
@@ -4212,6 +4346,7 @@ fn system_actor_executes_native_staking_lp_donation_task() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn user_direct_tasks_preserve_paid_action_and_asset_floors() {
   use polkadot_sdk::frame_support::traits::{LockableCurrency, WithdrawReasons};
@@ -4347,6 +4482,7 @@ fn user_direct_tasks_preserve_paid_action_and_asset_floors() {
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn user_direct_transfer_ingress_preserves_source_fee_capacity() {
   for is_native in [true, false] {
@@ -4459,6 +4595,7 @@ fn user_direct_transfer_ingress_preserves_source_fee_capacity() {
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn user_donation_transient_receipt_preserves_paid_action_capacity() {
   use polkadot_sdk::pallet_asset_conversion::PoolLocator;
@@ -4679,6 +4816,7 @@ fn user_donation_transient_receipt_preserves_paid_action_capacity() {
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn user_donation_preserves_preexisting_receipts_below_asset_minimum() {
   use polkadot_sdk::pallet_asset_conversion::PoolLocator;
@@ -4817,6 +4955,7 @@ fn user_donation_preserves_preexisting_receipts_below_asset_minimum() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn create_user_charges_creation_fee_to_fee_sink() {
   seeded_test_ext().execute_with(|| {
@@ -4926,6 +5065,7 @@ fn actor_fee_collector_ignores_malformed_actor_and_scheduler_state() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn actor_fee_collector_preserves_admitted_native_floor_at_ledger_boundaries() {
   use polkadot_sdk::frame_support::traits::fungible::Mutate as NativeMutate;
@@ -5046,6 +5186,7 @@ fn actor_fee_collector_preserves_admitted_native_floor_at_ledger_boundaries() {
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn actor_trigger_collection_requires_fee_sink_anchor_after_root_balance_removal() {
   seeded_test_ext().execute_with(|| {
@@ -5124,6 +5265,7 @@ fn actor_trigger_collection_requires_fee_sink_anchor_after_root_balance_removal(
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn actor_service_pipeline_refusal_repeats_after_root_removes_fee_sink_anchor() {
   seeded_test_ext().execute_with(|| {
@@ -5359,6 +5501,7 @@ fn fee_sink_allocation_respects_security_phase_and_epoch_readiness() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn permissionless_sweep_many_does_not_predict_pipeline_affordability() {
   seeded_test_ext().execute_with(|| {
@@ -5495,6 +5638,7 @@ fn paged_queue_limits_are_independent_runtime_controls() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn active_trigger_lifecycle_reconciles_only_the_dedicated_state_hold() {
   seeded_test_ext().execute_with(|| {
@@ -5583,6 +5727,7 @@ fn queue_length_covers_active_actor_capacity() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn close_actor_emits_owner_initiated_reason() {
   seeded_test_ext().execute_with(|| {
@@ -5697,6 +5842,7 @@ fn cycle_summary_reports_zero_current_balance_resolution_skip() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn current_available_percent_executes_and_keeps_user_actor_active() {
   seeded_test_ext().execute_with(|| {
@@ -5736,6 +5882,7 @@ fn current_available_percent_executes_and_keeps_user_actor_active() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn actor_liquidity_pool_deposits_preserve_paid_user_action_capacity() {
   for deposit_backed in [false, true] {
@@ -6095,6 +6242,7 @@ fn first_nonsufficient_swap_task(exact_out: bool) -> (TaskOf<Runtime>, u32, Bala
   (task, asset, amount_in)
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn actor_swaps_first_nonsufficient_output_preserve_paid_user_action_capacity() {
   for exact_out in [false, true] {
@@ -6295,6 +6443,7 @@ fn swap_exact_in_zero_tolerance_matches_caller_aware_router_quote() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn actor_remove_liquidity_first_nonsufficient_outputs_preserve_paid_user_action_capacity() {
   use polkadot_sdk::pallet_asset_conversion::PoolLocator;
@@ -6506,6 +6655,7 @@ fn first_nonsufficient_unstake_actor(
   (actor_id, actor, asset, receipt, amount)
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn actor_unstake_first_nonsufficient_output_preserves_paid_user_action_capacity() {
   for provider_backed in [false, true] {
@@ -6692,6 +6842,7 @@ fn exact_out_execution_is_bounded_by_the_tolerance_cap_not_the_preservable_balan
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn user_exact_out_zero_tolerance_preserves_floor_and_later_step_fees() {
   seeded_test_ext().execute_with(|| {
@@ -6763,6 +6914,7 @@ fn user_exact_out_zero_tolerance_preserves_floor_and_later_step_fees() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn swap_out_rounding_boundary_uses_minimal_input_for_target_output() {
   seeded_test_ext().execute_with(|| {
@@ -6867,6 +7019,7 @@ fn swap_out_rounding_boundary_uses_minimal_input_for_target_output() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn swap_exact_out_liquidity_boundary_fails_without_partial_execution() {
   seeded_test_ext().execute_with(|| {
@@ -7602,13 +7755,14 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
     let first_usage = Actors::block_resource_state()
       .expect("first retry usage exists")
       .usage();
+    // Each attempted Task includes one current invocation receipt; Deadline-only return does not.
     assert_eq!(
       (
         first_usage.actor_control_used(),
         first_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(11_144_991_000, 168_042),
+        Weight::from_parts(11_147_296_000, 168_042),
         Weight::from_parts(3_417_634_000, 19_253)
       )
     );
@@ -7638,7 +7792,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         second_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(8_605_163_000, 119_838),
+        Weight::from_parts(8_607_468_000, 119_838),
         Weight::from_parts(3_417_634_000, 19_253)
       ),
       "the second failure owns long-Deadline placement rather than another Service turn"
@@ -7691,7 +7845,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         resumed_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(12_385_725_000, 142_066),
+        Weight::from_parts(12_388_030_000, 142_066),
         Weight::from_parts(3_417_634_000, 19_253)
       ),
       "returned Service owns the third failed effect separately from Deadline return"
@@ -7703,6 +7857,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn temporary_market_failure_opens_the_single_retry_continuation() {
   seeded_test_ext().execute_with(|| {
@@ -7742,6 +7897,7 @@ fn temporary_market_failure_opens_the_single_retry_continuation() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn permanent_publication_invariant_terminates_without_cross_system_mutation_or_retry() {
   use primitives::ecosystem::params::PRECISION;
@@ -8277,6 +8433,7 @@ fn actor_unstake_percentage_current_fails_before_effect_after_empty_receipt_dest
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn actor_unstake_percentage_current_resolves_live_staking_shares() {
   seeded_test_ext().execute_with(|| {
@@ -8329,6 +8486,7 @@ fn actor_unstake_percentage_current_resolves_live_staking_shares() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn actor_native_stake_task_mints_liquid_stntve_without_binding() {
   seeded_test_ext().execute_with(|| {
@@ -8420,6 +8578,7 @@ fn reclassified_receipt_stake_actor(
   (actor_id, actor, BASE, receipt, AMOUNT)
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn actor_stake_reclassified_receipt_preserves_paid_user_action_capacity() {
   for provider_backed in [false, true] {
@@ -8658,6 +8817,7 @@ fn foreign_asset_preflight_enforces_exact_minimum_boundary() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn cadenced_module_failure_reaches_current_run_encoding_bound() {
   use codec::MaxEncodedLen;
@@ -8797,6 +8957,7 @@ fn typed_ten_julian_year_horizons_match_runtime_clocks() {
   );
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn timer_horizon_validation_accepts_exact_runtime_bound() {
   seeded_test_ext().execute_with(|| {
@@ -8851,6 +9012,7 @@ fn timer_horizon_validation_accepts_exact_runtime_bound() {
 
 // --- Actors Platform: Trigger & Source Filter ---
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn on_address_event_owner_only_respects_source_filter() {
   seeded_test_ext().execute_with(|| {
@@ -8885,6 +9047,7 @@ fn on_address_event_owner_only_respects_source_filter() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn on_address_event_asset_filter_is_enforced() {
   seeded_test_ext().execute_with(|| {
@@ -8920,6 +9083,7 @@ fn on_address_event_asset_filter_is_enforced() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn on_address_event_without_source_is_ignored_for_filtered_trigger() {
   seeded_test_ext().execute_with(|| {
@@ -8943,6 +9107,7 @@ fn on_address_event_without_source_is_ignored_for_filtered_trigger() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn frozen_producer_task_mint_and_router_fee_preserve_custody_and_retry_class() {
   seeded_test_ext().execute_with(|| {
@@ -9011,6 +9176,7 @@ fn frozen_producer_task_mint_and_router_fee_preserve_custody_and_retry_class() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn frozen_producer_signed_ingress_rejects_under_block_atomicity_and_admits_after_thaw() {
   for case in 0..9 {
@@ -9138,6 +9304,7 @@ fn frozen_producer_signed_ingress_rejects_under_block_atomicity_and_admits_after
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn frozen_producer_xcm_deposit_returns_exact_holding_and_admits_after_thaw() {
   for sourced in [false, true] {
@@ -9205,6 +9372,7 @@ fn frozen_producer_xcm_deposit_returns_exact_holding_and_admits_after_thaw() {
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn frozen_ingress_runtime_asset_ops_refuses_temporarily_while_fee_collection_stays_ledger_only() {
   seeded_test_ext().execute_with(|| {
@@ -9255,6 +9423,7 @@ fn frozen_ingress_runtime_asset_ops_refuses_temporarily_while_fee_collection_sta
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter() {
   seeded_test_ext().execute_with(|| {
@@ -9309,6 +9478,7 @@ fn asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn repeated_same_block_transfers_coalesce_to_one_actor_execution() {
   seeded_test_ext().execute_with(|| {
@@ -9419,6 +9589,7 @@ fn system_self_mint_while_running_finishes_one_cycle_without_deferred_signal() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn mint_to_actor_sovereign_notifies_source_less_certified_ingress() {
   seeded_test_ext().execute_with(|| {
@@ -9452,6 +9623,7 @@ fn mint_to_actor_sovereign_notifies_source_less_certified_ingress() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn same_block_funding_signals_coalesce_to_one_actor_execution() {
   seeded_test_ext().execute_with(|| {
@@ -9476,6 +9648,7 @@ fn same_block_funding_signals_coalesce_to_one_actor_execution() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn runtime_rejects_self_transfer_before_contract_replacement() {
   seeded_test_ext().execute_with(|| {
@@ -9508,6 +9681,7 @@ fn runtime_rejects_self_transfer_before_contract_replacement() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn circular_actor_graph_cannot_reexecute_an_actor_in_the_same_block() {
   seeded_test_ext().execute_with(|| {
@@ -9763,6 +9937,7 @@ fn genesis_system_locator_is_recoverable_after_close_through_reattachment() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn user_exact_slot_recovery_reuses_residual_runtime_custody() {
   seeded_test_ext().execute_with(|| {
@@ -9809,6 +9984,7 @@ fn user_exact_slot_recovery_reuses_residual_runtime_custody() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn ingress_adapter_without_source_matches_any_source_filter() {
   seeded_test_ext().execute_with(|| {
@@ -9832,6 +10008,7 @@ fn ingress_adapter_without_source_matches_any_source_filter() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn ingress_adapter_without_source_is_ignored_by_owner_only_filter() {
   seeded_test_ext().execute_with(|| {
@@ -9855,6 +10032,7 @@ fn ingress_adapter_without_source_is_ignored_by_owner_only_filter() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn transfer_ingress_updates_live_system_balance_without_pause_resume() {
   seeded_test_ext().execute_with(|| {
@@ -9921,6 +10099,7 @@ fn transfer_ingress_updates_live_system_balance_without_pause_resume() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn xcm_ingress_with_source_triggers_owner_only_on_address_event() {
   seeded_test_ext().execute_with(|| {
@@ -10012,6 +10191,7 @@ fn system_runtime_policy_defaults_deny_signals_for_signed_internal_and_xcm_prove
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn xcm_source_less_deposit_ignores_legacy_scheduler_exhaustion() {
   seeded_test_ext().execute_with(|| {
@@ -10069,6 +10249,7 @@ fn xcm_source_less_deposit_ignores_legacy_scheduler_exhaustion() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn xcm_native_deposit_sees_arriving_fees_and_rolls_back_late_ingress_refusal() {
   for sourced in [false, true] {
@@ -10158,6 +10339,7 @@ fn xcm_native_deposit_sees_arriving_fees_and_rolls_back_late_ingress_refusal() {
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn xcm_foreign_deposit_refusal_preserves_both_ledgers_and_credit_issuance() {
   for sourced in [false, true] {
@@ -10248,6 +10430,7 @@ fn xcm_foreign_deposit_refusal_preserves_both_ledgers_and_credit_issuance() {
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn xcm_deposit_overflow_preserves_state_and_exact_holding() {
   seeded_test_ext().execute_with(|| {
@@ -10285,6 +10468,7 @@ fn xcm_deposit_overflow_preserves_state_and_exact_holding() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn xcm_ingress_without_source_is_ignored_for_owner_only() {
   seeded_test_ext().execute_with(|| {
@@ -10314,6 +10498,7 @@ fn xcm_ingress_without_source_is_ignored_for_owner_only() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn xcm_mixed_ingress_single_deposit_triggers_single_cycle() {
   seeded_test_ext().execute_with(|| {
@@ -10377,6 +10562,7 @@ fn mandatory_base_pass_executes_independently_of_later_idle_budget() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn underfunded_manual_trigger_preserves_runtime_user_process() {
   seeded_test_ext().execute_with(|| {
@@ -10416,6 +10602,7 @@ fn underfunded_manual_trigger_preserves_runtime_user_process() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn scheduler_fifo_order_is_deterministic_across_actor_types() {
   let cases = [(2u32, 2u32), (3u32, 3u32), (4u32, 2u32)];
@@ -10684,6 +10871,66 @@ fn liquidity_tasks_use_separate_generated_runtime_weights() {
 }
 
 #[test]
+fn mandatory_deadline_authority_profile_selects_explicit_provider() {
+  type Selected = <Runtime as pallet_deos_actors::Config>::AdmissionCertificateAuthority;
+  #[cfg(feature = "benchmark-authority-scaffolding")]
+  type Expected = crate::configs::actor_config::BenchmarkAdmissionCertificateAuthority;
+  #[cfg(not(feature = "benchmark-authority-scaffolding"))]
+  type Expected = RuntimeAdmissionCertificateAuthority;
+  assert_eq!(
+    std::any::TypeId::of::<Selected>(),
+    std::any::TypeId::of::<Expected>()
+  );
+  assert_eq!(
+    Selected::current(),
+    RuntimeAdmissionCertificateAuthority::current()
+  );
+  let authority = Selected::current().expect("configured authority without externalities");
+  assert_eq!(
+    RuntimeAdmissionCertificateAuthority::user_identity_capacity(authority),
+    None
+  );
+  let capacity = cfg!(feature = "benchmark-authority-scaffolding")
+    .then_some(<Runtime as pallet_deos_actors::Config>::MaxActorIdentities::get());
+  assert_eq!(Selected::user_identity_capacity(authority), capacity);
+  let mut stale = authority;
+  stale.runtime_actor_semantics_version += 1;
+  assert_eq!(Selected::user_identity_capacity(stale), None);
+  let supplements = cfg!(all(
+    feature = "benchmark-authority-scaffolding",
+    feature = "runtime-benchmarks"
+  ));
+  let behavior = pallet_deos_actors::BehaviorControlWeightContext {
+    policy_bytes: 17,
+    monitor_bytes: 5,
+    clauses: 1,
+    atoms: 2,
+    metrics: 1,
+    counter_slots: 0,
+    requires_clean_cycle: false,
+  };
+  assert_eq!(
+    Selected::behavior_close_additional_weight(behavior),
+    supplements.then_some(Weight::from_parts(4, 22))
+  );
+  for bytes in [0, 1, u32::MAX] {
+    for (actual, time) in [
+      (Selected::financial_wait_entry_weight(bytes), 100),
+      (Selected::financial_wait_close_additional_weight(bytes), 10),
+      (Selected::financial_wait_due_weight(bytes), 200),
+      (Selected::financial_wait_service_weight(bytes), 300),
+      (Selected::financial_wait_ingress_weight(bytes), 400),
+    ] {
+      assert_eq!(
+        actual,
+        supplements.then_some(Weight::from_parts(time, u64::from(bytes)))
+      );
+    }
+  }
+  assert_eq!(Selected::service_refusal_completion_weight(), None);
+}
+
+#[test]
 fn mandatory_deadline_reservation_composes_both_clock_branch_maxima() {
   type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
   let maximum = |branches: &[Weight]| {
@@ -10705,18 +10952,58 @@ fn mandatory_deadline_reservation_composes_both_clock_branch_maxima() {
     W::return_due_block_deadline_to_service_deep_index(),
     review,
   ]);
-  let tick = maximum(&[
+  let occurrence = maximum(&[
     W::at_time_trigger_occurrence(),
     W::cadenced_trigger_occurrence(),
     W::cadenced_running_rearm(),
     W::cadenced_suspended_service_rearm(),
     W::cadenced_suspended_deadline_rearm(),
   ]);
+  use codec::MaxEncodedLen;
+  type Authority = <Runtime as pallet_deos_actors::Config>::AdmissionCertificateAuthority;
+  let bytes = u32::try_from(pallet_deos_actors::FinancialWaitEpisode::<Balance>::max_encoded_len())
+    .expect("financial episode encoding fits its bound");
+  let lifecycle = Authority::current()
+    .expect("reference lifecycle authority exists")
+    .maximum_lifecycle_weight;
+  let mut tick = occurrence.saturating_add(Actors::close_dispatch_weight_upper());
+  let entry = Authority::financial_wait_entry_weight(bytes);
+  let close = Authority::financial_wait_close_additional_weight(bytes);
+  let due = Authority::financial_wait_due_weight(bytes);
+  assert_eq!(
+    entry.is_some(),
+    cfg!(all(
+      feature = "benchmark-authority-scaffolding",
+      feature = "runtime-benchmarks"
+    ))
+  );
+  assert_eq!(
+    close.is_some(),
+    cfg!(all(
+      feature = "benchmark-authority-scaffolding",
+      feature = "runtime-benchmarks"
+    ))
+  );
+  assert_eq!(
+    due.is_some(),
+    cfg!(all(
+      feature = "benchmark-authority-scaffolding",
+      feature = "runtime-benchmarks"
+    ))
+  );
+  if let (Some(entry), Some(_)) = (entry, close) {
+    // Qualified fixture entry and lifecycle are co-reachable; due expiry is an alternative.
+    tick = occurrence
+      .saturating_add(entry)
+      .saturating_add(lifecycle.max(Actors::close_dispatch_weight_upper()));
+  }
+  if let Some(due) = due {
+    tick = tick.max(due.saturating_add(lifecycle));
+  }
   let required = W::classify_due_block_deadline()
     .saturating_add(block)
     .saturating_add(W::classify_due_tick_deadline())
-    .saturating_add(tick)
-    .saturating_add(Actors::close_dispatch_weight_upper());
+    .saturating_add(tick);
   assert_eq!(
     Actors::deadline_service_weight_upper(),
     required,
@@ -10869,6 +11156,7 @@ fn certified_ingress_inventory_is_closed_and_typed() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn certified_extension_ignores_legacy_scheduler_exhaustion_without_rejecting_value() {
   seeded_test_ext().execute_with(|| {
@@ -10916,6 +11204,7 @@ fn certified_extension_ignores_legacy_scheduler_exhaustion_without_rejecting_val
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn asset_ops_transfer_ignores_legacy_scheduler_exhaustion() {
   seeded_test_ext().execute_with(|| {
@@ -10963,6 +11252,7 @@ fn asset_ops_transfer_ignores_legacy_scheduler_exhaustion() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn asset_ops_source_less_mint_ignores_legacy_scheduler_exhaustion() {
   seeded_test_ext().execute_with(|| {
@@ -10994,6 +11284,7 @@ fn asset_ops_source_less_mint_ignores_legacy_scheduler_exhaustion() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn asset_ops_native_mint_ledger_failure_precedes_notification() {
   seeded_test_ext().execute_with(|| {
@@ -11023,6 +11314,7 @@ fn asset_ops_native_mint_ledger_failure_precedes_notification() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn signed_balance_deposits_accumulate_in_live_available_balance() {
   seeded_test_ext().execute_with(|| {
@@ -11091,6 +11383,7 @@ fn signed_balance_deposits_accumulate_in_live_available_balance() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn signed_asset_deposits_accumulate_in_live_available_balance() {
   seeded_test_ext().execute_with(|| {
@@ -11146,6 +11439,7 @@ fn signed_asset_deposits_accumulate_in_live_available_balance() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn dynamic_asset_producers_notify_directly_with_balance_only_provenance() {
   seeded_test_ext().execute_with(|| {
@@ -11247,6 +11541,7 @@ fn dynamic_asset_producers_notify_directly_with_balance_only_provenance() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn signed_transfer_all_records_actual_post_fee_live_balance() {
   seeded_test_ext().execute_with(|| {
@@ -11292,6 +11587,7 @@ fn signed_transfer_all_records_actual_post_fee_live_balance() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
   seeded_test_ext().execute_with(|| {
@@ -11468,6 +11764,7 @@ fn actor_caller_dispatch_owners_match_reference_bindings() {
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn maximum_user_creation_and_replacement_pass_real_transaction_extensions() {
   seeded_test_ext().execute_with(|| {
@@ -11492,7 +11789,7 @@ fn maximum_user_creation_and_replacement_pass_real_transaction_extensions() {
       System::block_hash(0),
     ));
     ensure_current_resource_state();
-    assert_ok!(Executive::apply_extrinsic(create_extrinsic));
+    assert_ok!(Executive::apply_extrinsic(create_extrinsic).expect("valid creation extrinsic"));
     assert!(Actors::active_actor_state(actor_id).is_some());
 
     age_fixture_control_clock(actor_id);
@@ -11521,7 +11818,9 @@ fn maximum_user_creation_and_replacement_pass_real_transaction_extensions() {
       System::block_hash(0),
     ));
     ensure_current_resource_state();
-    assert_ok!(Executive::apply_extrinsic(replacement_extrinsic));
+    assert_ok!(
+      Executive::apply_extrinsic(replacement_extrinsic).expect("valid replacement extrinsic")
+    );
     assert_eq!(
       Actors::active_actor_state(actor_id)
         .expect("updated actor remains active")
@@ -12133,46 +12432,622 @@ fn session_rotation_benchmark_matches_trusted_production_topology() {
 
 #[test]
 fn session_rotation_hook_uses_the_generated_bounded_owner() {
-  use pallet_staking::WeightInfo as _;
+  use polkadot_sdk::frame_executive::OnInitializeWithWeightRegistration;
 
   seeded_test_ext().execute_with(|| {
     let period = crate::configs::Period::get();
+    // Independent prior charges catch accidental replacement of any FRAME class counter.
+    for (class, weight) in [
+      (DispatchClass::Mandatory, Weight::from_parts(11_000, 37)),
+      (DispatchClass::Normal, Weight::from_parts(23_000, 53)),
+      (DispatchClass::Operational, Weight::from_parts(31_000, 71)),
+    ] {
+      System::register_extra_weight_unchecked(weight, class);
+    }
     let initial_weight = System::block_weight();
     let initial_index = Session::current_index();
     System::set_block_number(period - 1);
-    assert_eq!(SessionRotation::on_initialize(period - 1), Weight::zero());
+    assert_eq!(
+      <(SessionRotation,) as OnInitializeWithWeightRegistration<Runtime>>::on_initialize_with_weight_registration(period - 1),
+      Weight::zero(),
+    );
     assert_eq!(System::block_weight(), initial_weight);
     assert_eq!(Session::current_index(), initial_index);
 
     System::set_block_number(period);
     assert_eq!(Session::on_initialize(period), Weight::zero());
     let generated = <crate::weights::pallet_session_rotation::SubstrateWeight<Runtime> as pallet_session_rotation::WeightInfo>::rotate_session();
-    let callbacks = <Runtime as pallet_staking::Config>::WeightInfo::settle_due_native_security_reward(
-      crate::configs::staking_config::SecurityRewardClaimHorizon::get() + 2,
-    )
-    .saturating_add(
-      <Runtime as pallet_staking::Config>::WeightInfo::contract_native_security_obligations(),
-    );
     let before = System::block_weight();
-    assert_eq!(SessionRotation::on_initialize(period), generated);
+    assert_eq!(
+      <(SessionRotation,) as OnInitializeWithWeightRegistration<Runtime>>::on_initialize_with_weight_registration(period),
+      generated,
+    );
     assert_eq!(Session::current_index(), initial_index + 1);
     let mut expected = before;
-    expected.accrue(callbacks, DispatchClass::Mandatory);
-    assert_eq!(System::block_weight(), expected);
-    assert_ne!(callbacks, Weight::zero());
-    // Executive registers the hook return separately from the callback's internal charges.
-    System::register_extra_weight_unchecked(generated, DispatchClass::Mandatory);
     expected.accrue(generated, DispatchClass::Mandatory);
     assert_eq!(System::block_weight(), expected);
-    println!(
-      "rotation returned={generated:?}; internally registered={callbacks:?}; combined={:?}",
-      generated.saturating_add(callbacks),
-    );
+    assert_ne!(generated, Weight::zero());
   });
 }
 
 #[test]
+fn governance_prefix_charge_is_registered_once_but_freeze_retains_its_maximum() {
+  use pallet_governance::WeightInfo as _;
+  use polkadot_sdk::frame_executive::OnInitializeWithWeightRegistration;
+  use polkadot_sdk::sp_runtime::StateVersion;
+
+  seeded_test_ext().execute_with(|| {
+    type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+    System::set_block_number(1);
+    assert!(pallet_governance::PendingEnactments::<Runtime>::get().is_empty());
+    assert_eq!(pallet_governance::LastProcessedEpoch::<Runtime>::get(), 0);
+    let configured = BlockResourceBudgetValue::get();
+    let maximum = GovernanceFixedWeight::get();
+    let quiet = W::service_pending_enactments(0)
+      .checked_add(&W::service_epoch_catch_up())
+      .expect("quiet Governance declarations fit");
+    let before = System::block_weight();
+    // Invoke the SDK's actual per-pallet Executive registration wrapper, not a copied debit.
+    let charged = <(crate::Governance,) as OnInitializeWithWeightRegistration<Runtime>>::on_initialize_with_weight_registration(1);
+    assert_eq!(charged, quiet);
+    assert_eq!(pallet_governance::LastProcessedEpoch::<Runtime>::get(), 1);
+    let mut expected_registered = before;
+    expected_registered.accrue(charged, DispatchClass::Mandatory);
+    assert_eq!(System::block_weight(), expected_registered);
+    assert!(charged.all_lte(maximum));
+    assert_ne!(charged, maximum);
+
+    let root_before_finalize = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+    crate::Governance::on_finalize(1);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+      root_before_finalize
+    );
+    assert_eq!(System::block_weight(), expected_registered);
+    ensure_actor_prepass_context();
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+    let frozen = Actors::block_resource_state()
+      .expect("ordinary Prepass freezes its resource state")
+      .budget()
+      .expect("Prepass budget is available");
+    assert_eq!(frozen, configured);
+    assert_eq!(frozen.fixed_envelope(), FixedBlockWeight::get());
+    assert_eq!(System::block_weight(), expected_registered);
+
+    let non_governance = configured
+      .fixed_envelope()
+      .checked_sub(&maximum)
+      .expect("configured fixed composition contains Governance once");
+    let declaration_only_replacement = non_governance
+      .checked_add(&charged)
+      .expect("counterfactual declaration sum fits");
+    assert!(declaration_only_replacement.all_lte(frozen.fixed_envelope()));
+    assert_ne!(declaration_only_replacement, frozen.fixed_envelope());
+    let pair = |weight: Weight| [weight.ref_time(), weight.proof_size()];
+    println!(
+      "GOVERNANCE_PREFIX_OWNER_V1 {}",
+      serde_json::json!({
+        "governanceMaximum": pair(maximum),
+        "registeredQuietCharge": pair(charged),
+        "frozenFixed": pair(frozen.fixed_envelope()),
+        "nonGovernanceConfiguredFixed": pair(non_governance),
+        "declarationOnlyGovernanceReplacement": pair(declaration_only_replacement),
+        "systemQuarter": pair(crate::MAXIMUM_BLOCK_WEIGHT / 4),
+        "scope": "isolated real hook/SDK registration plus direct contextual Prepass; not full Executive, physical cost or an installed credit",
+      })
+    );
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn message_queue_backlog_service_exceeds_context_quarter_headroom() {
+  use codec::{Decode, DecodeAll};
+  use polkadot_sdk::{
+    cumulus_pallet_parachain_system::parachain_inherent::{
+      BasicParachainInherentData, InboundDownwardMessages, InboundHrmpMessages, InboundMessagesData,
+    },
+    cumulus_pallet_xcmp_queue::WeightInfoExt as _,
+    cumulus_primitives_core::{
+      AggregateMessageOrigin, InboundDownwardMessage, InboundHrmpMessage, ParaId,
+      XcmpMessageFormat, XcmpMessageHandler,
+    },
+    frame_executive::OnInitializeWithWeightRegistration,
+    frame_support::{
+      BoundedSlice,
+      traits::{BuildGenesisConfig, EnqueueMessage, QueueFootprintQuery},
+    },
+    pallet_message_queue::MaxMessageLenOf,
+    staging_xcm::{
+      VersionedXcm,
+      latest::{Instruction::ClearOrigin, Xcm},
+    },
+  };
+
+  seeded_test_ext().execute_with(|| {
+    polkadot_sdk::staging_parachain_info::GenesisConfig::<Runtime> {
+      parachain_id: 100u32.into(),
+      _config: Default::default(),
+    }
+    .build();
+    System::set_block_number(1);
+    let origin = AggregateMessageOrigin::Parent;
+    let message = VersionedXcm::from(Xcm::<RuntimeCall>(Vec::new())).encode();
+    let bounded: BoundedSlice<'_, u8, MaxMessageLenOf<Runtime>> =
+      message.as_slice().try_into().unwrap();
+    const MESSAGES: u64 = 2048;
+    // Public queue preparation, not a claimed accepted relay/Executive ancestry.
+    <MessageQueue as EnqueueMessage<AggregateMessageOrigin>>::enqueue_messages(
+      core::iter::repeat_n(bounded, MESSAGES as usize),
+      origin.clone(),
+    );
+    assert_eq!(MessageQueue::footprint(origin.clone()).storage.count, MESSAGES);
+    let before = System::block_weight();
+    let charged = <(MessageQueue,) as OnInitializeWithWeightRegistration<Runtime>>::on_initialize_with_weight_registration(1);
+    let mut expected = before;
+    expected.accrue(charged, DispatchClass::Mandatory);
+    assert_eq!(System::block_weight(), expected);
+    assert!(charged.all_lte(MessageQueueServiceWeight::get()));
+    let remaining = MessageQueue::footprint(origin.clone()).storage.count;
+    assert!(remaining > 0 && remaining < MESSAGES);
+    let maximum = crate::configs::RuntimeBlockWeights::get().max_block;
+    let quarter = Weight::from_parts(maximum.ref_time() / 4, maximum.proof_size() / 4);
+    let context = MaximumContextMeasuredWeight::get();
+    let headroom = quarter.checked_sub(&context).unwrap();
+    assert!(charged.ref_time() > headroom.ref_time());
+    let combined = charged.checked_add(&context).unwrap();
+    assert!(combined.ref_time() > quarter.ref_time());
+    assert!(combined.proof_size() <= quarter.proof_size());
+    let pair = |weight: Weight| [weight.ref_time(), weight.proof_size()];
+    println!(
+      "MQ_CONTEXT_HEADROOM_COUNTEREXAMPLE_V1 {}",
+      serde_json::json!({
+        "queued": MESSAGES, "remaining": remaining,
+        "registeredService": pair(charged), "serviceCap": pair(MessageQueueServiceWeight::get()),
+        "contextDeclaration": pair(context), "quarter": pair(quarter),
+        "servicePlusContextDeclaration": pair(combined),
+        "ordinaryProcessor": true, "acceptedAncestryEstablished": false,
+        "jointMaximumContextExecuted": false, "physicalQualification": false,
+        "scope": "MQ prefix snapshot; context continuation reported separately; no complete Executive block",
+      })
+    );
+
+    // Reuse the stored-Basic helper's exact operand, without its benchmark-only processor.
+    let downward = (0..MaxInboundDownwardMessagesPerContext::get())
+      .map(|_| InboundDownwardMessage { sent_at: 1, msg: vec![0; 65_536] })
+      .collect::<Vec<_>>();
+    let channels = MaxInboundHorizontalChannelsPerContext::get();
+    let mut horizontal = BTreeMap::new();
+    for index in 0..MaxInboundHorizontalMessagesPerContext::get() {
+      horizontal.entry(ParaId::from(index % channels + 1))
+        .or_insert_with(Vec::new)
+        .push(InboundHrmpMessage { sent_at: 1, data: vec![0] });
+    }
+    let bytes = include_bytes!("../../fixtures/maximum-context-basic.scale");
+    let data = BasicParachainInherentData::decode(&mut bytes.as_slice()).unwrap();
+    assert_eq!(data.encode(), bytes.as_slice());
+    let collection_limit = (maximum.proof_size() / 6) as usize;
+    let mut limit = collection_limit;
+    let downward = InboundDownwardMessages::new(downward).into_abridged(&mut limit);
+    limit = limit.saturating_add(collection_limit);
+    let horizontal = InboundHrmpMessages::from_map(horizontal).into_abridged(&mut limit);
+    let inbound = InboundMessagesData::new(downward, horizontal);
+    let (full, hashed) = inbound.downward_messages.messages();
+    let full_downward = full.len() as u64;
+    let hashed_downward = hashed.len();
+    assert_eq!(full_downward, (maximum.proof_size() / 6 / 65_536).min(u64::from(MaxInboundDownwardMessagesPerContext::get())));
+    assert_eq!(full.len() + hashed.len(), MaxInboundDownwardMessagesPerContext::get() as usize);
+    assert!(full.iter().all(|message| message.msg.len() == 65_536));
+    let (full, hashed) = inbound.horizontal_messages.messages();
+    assert_eq!(full.len(), MaxInboundHorizontalMessagesPerContext::get() as usize);
+    assert!(full.iter().all(|(_, message)| message.data == [0]));
+    assert!(hashed.is_empty());
+    assert_eq!(full.iter().map(|(sender, _)| *sender).collect::<BTreeSet<_>>().len(), channels as usize);
+    assert_ok!(crate::apis::validate_inbound_messages_geometry(&inbound));
+    let xcmp_bootstrap = <Runtime as polkadot_sdk::cumulus_pallet_xcmp_queue::Config>::WeightInfo::uncached_enqueue_xcmp_messages();
+    let xcmp_limit = ReservedXcmpWeight::get();
+    assert_eq!(xcmp_limit.proof_size(), 0);
+    assert!(xcmp_bootstrap.proof_size() > xcmp_limit.proof_size());
+    let before_context = System::block_weight();
+    let transaction_level_key = polkadot_sdk::frame_support::storage::transactional::TRANSACTION_LEVEL_KEY;
+    assert!(!polkadot_sdk::sp_io::storage::exists(transaction_level_key));
+    polkadot_sdk::sp_io::storage::start_transaction();
+    assert_ok!(crate::ParachainSystem::set_validation_data(RuntimeOrigin::none(), data, inbound));
+    let after_context = System::block_weight();
+    // The DMP prefix runs before the XCMP bootstrap refuses; do not censor incurred work.
+    assert_eq!(MessageQueue::footprint(origin.clone()).storage.count, remaining + full_downward);
+    assert_eq!(
+      u64::from(polkadot_sdk::cumulus_pallet_parachain_system::ProcessedDownwardMessages::<Runtime>::get()),
+      full_downward,
+    );
+    let delta = after_context.get(DispatchClass::Mandatory)
+      .checked_sub(before_context.get(DispatchClass::Mandatory)).unwrap();
+    assert_eq!(after_context.get(DispatchClass::Normal), before_context.get(DispatchClass::Normal));
+    assert_eq!(after_context.get(DispatchClass::Operational), before_context.get(DispatchClass::Operational));
+    polkadot_sdk::sp_io::storage::commit_transaction();
+    assert!(!polkadot_sdk::sp_io::storage::exists(transaction_level_key));
+    let context_registered = Some(delta);
+    let registered_pair = context_registered.map(|weight| charged.checked_add(&weight).unwrap());
+    println!(
+      "MQ_CONTEXT_DIRECT_REGISTRATION_V1 {}",
+      serde_json::json!({
+        "mqRegistered": pair(charged), "contextDirectRegistered": context_registered.map(pair),
+        "combinedRegistered": registered_pair.map(pair), "carriedContextDeclaration": pair(context),
+        "quarter": pair(quarter), "combinedRegisteredFitsQuarter": registered_pair.map(|weight| weight.all_lte(quarter)),
+        "debugAssertions": cfg!(debug_assertions), "contextCompleted": context_registered.is_some(),
+        "xcmpLimit": pair(xcmp_limit), "xcmpUncachedBootstrap": pair(xcmp_bootstrap),
+        "partialDmpEnqueueBeforeRefusalOrReturn": full_downward,
+        "contextRollbackPreservesPriorMq": context_registered.is_none(),
+        "fullDownward": full_downward, "hashedDownward": hashed_downward,
+        "fullHorizontal": MaxInboundHorizontalMessagesPerContext::get(), "channels": channels,
+        "oldParentBacklog": remaining, "provisionalAddedParentMessages": full_downward,
+        "contextDidNotServiceParentBacklog": true,
+        "bareBaseAndEncodedBytesIncluded": false,
+        "completeExecutiveExecuted": false, "acceptedAncestryEstablished": false,
+        "physicalQualification": false,
+        "scope": "patched ordinary context returns controlled refusal in both profiles; retained allowance still does not qualify XCMP enqueue coverage",
+      })
+    );
+    if context_registered.is_some() {
+      let program = VersionedXcm::from(Xcm::<RuntimeCall>(vec![ClearOrigin]));
+      let payload = program.encode();
+      let mut wire = XcmpMessageFormat::ConcatenatedVersionedXcm.encode();
+      wire.extend_from_slice(&payload);
+      let mut cursor = wire.as_slice();
+      assert_eq!(XcmpMessageFormat::decode(&mut cursor).unwrap(), XcmpMessageFormat::ConcatenatedVersionedXcm);
+      let decoded = VersionedXcm::<RuntimeCall>::decode_all(&mut cursor).unwrap();
+      assert_eq!(decoded.encode(), payload);
+      let sender = ParaId::from(1u32);
+      let cold_origin = AggregateMessageOrigin::Sibling(sender);
+      assert_eq!(MessageQueue::footprint(cold_origin.clone()).storage.count, 0);
+      let frame_before_handler = System::block_weight();
+      let handler_weight = <XcmpQueue as XcmpMessageHandler>::handle_xcmp_messages(
+        core::iter::once((sender, 1, wire.as_slice())), xcmp_limit,
+      );
+      assert_eq!(handler_weight, Weight::zero());
+      assert_eq!(MessageQueue::footprint(cold_origin.clone()).storage.count, 0);
+      assert_eq!(System::block_weight(), frame_before_handler);
+      // Independent queue admission control: no replacement handler budget is supplied.
+      let root_before_control = polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version());
+      polkadot_sdk::sp_io::storage::start_transaction();
+      let bounded: BoundedSlice<'_, u8, MaxMessageLenOf<Runtime>> = payload.as_slice().try_into().unwrap();
+      <MessageQueue as EnqueueMessage<AggregateMessageOrigin>>::enqueue_message(bounded, cold_origin.clone());
+      assert_eq!(MessageQueue::footprint(cold_origin.clone()).storage.count, 1);
+      polkadot_sdk::sp_io::storage::rollback_transaction();
+      assert_eq!(polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version()), root_before_control);
+      assert_eq!(MessageQueue::footprint(cold_origin).storage.count, 0);
+      println!(
+        "XCMP_COLD_PAYLOAD_BUDGET_REFUSAL_V1 {}",
+        serde_json::json!({
+          "sender": 1, "wireBytes": wire.len(), "versionedPayloadBytes": payload.len(),
+          "codecValidNonemptyXcm": true, "instruction": "ClearOrigin",
+          "configuredLimit": pair(xcmp_limit), "uncachedBootstrap": pair(xcmp_bootstrap),
+          "handlerReturned": pair(handler_weight), "queuedAfterHandler": 0,
+          "directQueueControlCount": 1, "controlRootRestored": true,
+          "productionLimitUnchanged": ReservedXcmpWeight::get() == xcmp_limit,
+          "budgetOverride": false, "acceptedRelayAncestry": false,
+          "xcmExecutionSuccessClaimed": false, "physicalQualification": false,
+          "scope": "one wire-valid cold sender callback; no full relay/context/Executive ancestry or replacement reserve",
+        })
+      );
+    }
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn xcmp_sdk_candidate_allowance_exposes_internal_and_outer_boundaries() {
+  use codec::DecodeAll;
+  use cumulus_primitives_parachain_inherent::MessageQueueChain;
+  use cumulus_test_relay_sproof_builder::RelayStateSproofBuilder;
+  use polkadot_sdk::{
+    cumulus_pallet_parachain_system::{
+      ReservedXcmpWeightOverride,
+      parachain_inherent::{
+        BasicParachainInherentData, InboundDownwardMessages, InboundHrmpMessages,
+        InboundMessagesData,
+      },
+    },
+    cumulus_pallet_xcmp_queue::{WeightInfo, WeightInfoExt},
+    cumulus_primitives_core::{
+      AggregateMessageOrigin, PersistedValidationData, XcmpMessageFormat, XcmpMessageHandler,
+      relay_chain::HeadData,
+    },
+    frame_executive::OnInitializeWithWeightRegistration,
+    frame_support::{
+      BoundedSlice,
+      traits::{EnqueueMessage, QueueFootprintQuery},
+    },
+    frame_system::pallet_prelude::HeaderFor,
+    pallet_message_queue::MaxMessageLenOf,
+    sp_runtime::traits::Header as _,
+    staging_xcm::{
+      VersionedXcm,
+      latest::{Instruction::ClearOrigin, Xcm},
+    },
+  };
+  type W = <Runtime as polkadot_sdk::cumulus_pallet_xcmp_queue::Config>::WeightInfo;
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let payload = VersionedXcm::from(Xcm::<RuntimeCall>(vec![ClearOrigin])).encode();
+    VersionedXcm::<RuntimeCall>::decode_all(&mut payload.as_slice()).unwrap();
+    let bounded: BoundedSlice<'_, u8, MaxMessageLenOf<Runtime>> = payload.as_slice().try_into().unwrap();
+    let mut wire = XcmpMessageFormat::ConcatenatedVersionedXcm.encode();
+    wire.extend_from_slice(&payload);
+    let sender = ParaId::from(1u32);
+    let sibling = AggregateMessageOrigin::Sibling(sender);
+    let parent = AggregateMessageOrigin::Parent;
+    // Actual registered earlier work, not a synthetic paid-prefix counter.
+    <MessageQueue as EnqueueMessage<AggregateMessageOrigin>>::enqueue_message(bounded, parent.clone());
+    let before_mq = System::block_weight();
+    let prior_mq = <(MessageQueue,) as OnInitializeWithWeightRegistration<Runtime>>::on_initialize_with_weight_registration(1);
+    let mut frame_before_context = before_mq;
+    frame_before_context.accrue(prior_mq, DispatchClass::Mandatory);
+    assert_eq!(System::block_weight(), frame_before_context);
+    assert!(prior_mq.ref_time() > 0);
+    assert_eq!(MessageQueue::footprint(parent.clone()).storage.count, 0);
+    let root = || polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version());
+    let baseline_root = root();
+    let publication = |_first_sender_batch| {
+      // This single-message forecast uses at most one page, below every valid drop threshold.
+      let footprints = MessageQueue::get_batches_footprints(sibling.clone(), core::iter::once(bounded), 1);
+      W::enqueue_xcmp_messages(0, footprints.search_best_by(|_| core::cmp::Ordering::Less), false)
+    };
+    let cold_publication = publication(true);
+    polkadot_sdk::sp_io::storage::start_transaction();
+    <MessageQueue as EnqueueMessage<AggregateMessageOrigin>>::enqueue_message(bounded, sibling.clone());
+    let warm_publication = publication(false);
+    let persisted_publication = publication(true);
+    let legacy_footprints = MessageQueue::get_batches_footprints(sibling.clone(), core::iter::once(bounded), 1);
+    let legacy_publication = W::enqueue_xcmp_messages(legacy_footprints.first_page_pos.try_into().unwrap(), legacy_footprints.search_best_by(|_| core::cmp::Ordering::Less), true);
+    polkadot_sdk::sp_io::storage::rollback_transaction();
+    assert_eq!(root(), baseline_root);
+    let bootstrap = W::uncached_enqueue_xcmp_messages();
+    let decode = W::take_first_concatenated_xcm(payload.len().try_into().unwrap());
+    let page_bound = <Runtime as polkadot_sdk::cumulus_pallet_xcmp_queue::Config>::MaxInboundPageSize::get();
+    let queue_heap: u32 = <Runtime as polkadot_sdk::pallet_message_queue::Config>::HeapSize::get();
+    assert_eq!(page_bound, queue_heap);
+    let warm_access = W::enqueue_xcmp_page_access(page_bound, false);
+    let allowance = bootstrap.checked_add(&decode).and_then(|w| w.checked_add(&decode)).and_then(|w| w.checked_add(&cold_publication)).and_then(|w| w.checked_add(&warm_publication)).and_then(|w| w.checked_add(&warm_access)).unwrap();
+    assert!(allowance.proof_size() > 0);
+    // This finite SDK-meter model is not a legal-domain/physical production bound.
+    polkadot_sdk::sp_io::storage::start_transaction();
+    ReservedXcmpWeightOverride::<Runtime>::put(allowance);
+    let downward = InboundDownwardMessage { sent_at: 1, msg: payload.clone() };
+    let mut builder = RelayStateSproofBuilder::default();
+    builder.para_id = crate::ParachainInfo::parachain_id();
+    builder.dmq_mqc_head = Some(MessageQueueChain::default().extend_downward(&downward).head());
+    builder.included_para_head = Some(HeadData(HeaderFor::<Runtime>::new(0, Default::default(), Default::default(), Default::default(), Default::default()).encode()));
+    let messages = vec![InboundHrmpMessage { sent_at: 1, data: wire.clone() }; 2];
+    let mut head = MessageQueueChain::default();
+    for message in &messages { head.extend_hrmp(message); }
+    let channel = builder.upsert_inbound_channel(sender);
+    channel.max_message_size = 65_536;
+    channel.mqc_head = Some(head.head());
+    let (relay_parent_storage_root, relay_chain_state) = builder.into_state_root_and_proof();
+    let basic = BasicParachainInherentData {
+      validation_data: PersistedValidationData { relay_parent_number: 1, relay_parent_storage_root, max_pov_size: crate::MAXIMUM_BLOCK_WEIGHT.proof_size().try_into().unwrap(), ..Default::default() },
+      relay_chain_state, relay_parent_descendants: Vec::new(), collator_peer_id: None,
+    };
+    let mut size_limit = (crate::MAXIMUM_BLOCK_WEIGHT.proof_size() / 6) as usize;
+    let dmp = InboundDownwardMessages::new(vec![downward]).into_abridged(&mut size_limit);
+    size_limit += (crate::MAXIMUM_BLOCK_WEIGHT.proof_size() / 6) as usize;
+    let hrmp = InboundHrmpMessages::from_map(BTreeMap::from([(sender, messages)])).into_abridged(&mut size_limit);
+    let inbound = InboundMessagesData::new(dmp, hrmp);
+    assert_ok!(crate::apis::validate_inbound_messages_geometry(&inbound));
+    assert_ok!(crate::ParachainSystem::set_validation_data(RuntimeOrigin::none(), basic, inbound));
+    assert_eq!(MessageQueue::footprint(parent.clone()).storage.count, 1);
+    assert_eq!(MessageQueue::footprint(sibling.clone()).storage.count, 2);
+    let dmp_charge = <polkadot_sdk::cumulus_pallet_parachain_system::weights::SubstrateWeight<Runtime> as polkadot_sdk::cumulus_pallet_parachain_system::WeightInfo>::enqueue_inbound_downward_messages(1);
+    // Empty unincluded segment: consensus read + prune(2r/1w) + HRMP(2r/3w).
+    let caller_charge = <Runtime as polkadot_sdk::frame_system::Config>::DbWeight::get().reads_writes(5, 4);
+    let context_charge = dmp_charge.checked_add(&allowance).and_then(|w| w.checked_add(&caller_charge)).unwrap();
+    let mut context_frame = frame_before_context.clone();
+    context_frame.accrue(context_charge, DispatchClass::Mandatory);
+    assert_eq!(System::block_weight(), context_frame);
+    assert_ne!(root(), baseline_root);
+    // Deliberate outer rejection after publication, not an Executive/root-invalid block.
+    polkadot_sdk::sp_io::storage::rollback_transaction();
+    assert_eq!(root(), baseline_root);
+    assert_eq!(System::block_weight(), frame_before_context);
+    assert_eq!(MessageQueue::footprint(parent).storage.count, 0);
+    assert_eq!(MessageQueue::footprint(sibling.clone()).storage.count, 0);
+    assert!(ReservedXcmpWeightOverride::<Runtime>::get().is_none());
+    let mut refusals = Vec::new();
+    // A funded decoder with no publication capacity must not manufacture an empty queue.
+    polkadot_sdk::sp_io::storage::start_transaction();
+    let empty_limit = bootstrap.checked_add(&decode).unwrap();
+    let empty_used = <XcmpQueue as XcmpMessageHandler>::handle_xcmp_messages(core::iter::once((sender, 1, wire.as_slice())), empty_limit);
+    assert_eq!(empty_used, empty_limit);
+    assert_eq!(MessageQueue::footprint(sibling.clone()).storage.count, 0);
+    assert_eq!(root(), baseline_root);
+    polkadot_sdk::sp_io::storage::rollback_transaction();
+    polkadot_sdk::sp_io::storage::start_transaction();
+    <MessageQueue as EnqueueMessage<AggregateMessageOrigin>>::enqueue_message(bounded, sibling.clone());
+    let prefix_root = root();
+    let initialization = bootstrap.checked_add(&W::enqueue_xcmp_page_access(page_bound, true)).unwrap();
+    let decode_edge = initialization.checked_add(&decode).unwrap();
+    let publication_edge = decode_edge.checked_add(&persisted_publication).unwrap();
+    for (label, limit, publishes) in [
+      ("exact", publication_edge, true),
+      ("original-decode-ref-1", bootstrap.checked_add(&decode).unwrap().checked_sub(&Weight::from_parts(1, 0)).unwrap(), false),
+      ("original-tail-proof-1", bootstrap.checked_add(&decode).unwrap().checked_add(&legacy_publication).unwrap().checked_sub(&Weight::from_parts(0, 1)).unwrap(), false),
+      ("decode-ref-1", decode_edge.checked_sub(&Weight::from_parts(1, 0)).unwrap(), false),
+      ("persisted-tail-proof-1", publication_edge.checked_sub(&Weight::from_parts(0, 1)).unwrap(), false),
+      ("publication-ref-1", publication_edge.checked_sub(&Weight::from_parts(1, 0)).unwrap(), false),
+    ] {
+      polkadot_sdk::sp_io::storage::start_transaction();
+      let returned = <XcmpQueue as XcmpMessageHandler>::handle_xcmp_messages(core::iter::once((sender, 1, wire.as_slice())), limit);
+      assert!(returned.all_lte(limit));
+      assert_eq!(MessageQueue::footprint(sibling.clone()).storage.count, 1 + u64::from(publishes));
+      if publishes { assert_eq!(returned, publication_edge); }
+      else { assert_eq!(root(), prefix_root); }
+      polkadot_sdk::sp_io::storage::rollback_transaction();
+      assert_eq!(root(), prefix_root);
+      assert_eq!(System::block_weight(), frame_before_context);
+      refusals.push(serde_json::json!({"boundary": label, "limit": [limit.ref_time(), limit.proof_size()], "returned": [returned.ref_time(), returned.proof_size()], "published": publishes, "admissionInvariantViolated": false}));
+    }
+    // A malformed first packet pays counted decode work but does not destroy funded initialization.
+    polkadot_sdk::sp_io::storage::start_transaction();
+    let truncated = &payload[..payload.len() - 1];
+    let mut invalid_wire = XcmpMessageFormat::ConcatenatedVersionedXcm.encode();
+    invalid_wire.extend_from_slice(truncated);
+    let invalid_decode = W::take_first_concatenated_xcm(truncated.len().try_into().unwrap());
+    let recovery_limit = publication_edge.checked_add(&invalid_decode).unwrap();
+    let recovery_used = <XcmpQueue as XcmpMessageHandler>::handle_xcmp_messages([(sender, 1, invalid_wire.as_slice()), (sender, 1, wire.as_slice())].into_iter(), recovery_limit);
+    assert_eq!(recovery_used, recovery_limit);
+    assert_eq!(MessageQueue::footprint(sibling.clone()).storage.count, 2);
+    polkadot_sdk::sp_io::storage::rollback_transaction();
+    assert_eq!(root(), prefix_root);
+    polkadot_sdk::sp_io::storage::rollback_transaction();
+    assert_eq!(root(), baseline_root);
+    assert_eq!(System::block_weight(), frame_before_context);
+    assert_eq!(ReservedXcmpWeight::get().proof_size(), 0);
+    println!("XCMP_SDK_ADMISSION_BOUNDARY_V1 {}", serde_json::json!({
+      "candidateInternalAllowance": [allowance.ref_time(), allowance.proof_size()],
+      "contextChargedBeforeCallerRollback": [context_charge.ref_time(), context_charge.proof_size()],
+      "priorMqCharge": [prior_mq.ref_time(), prior_mq.proof_size()],
+      "coldAndSameInvocationWarmEnqueued": 2, "dmpEnqueued": 1,
+      "refusals": refusals, "debugAssertions": cfg!(debug_assertions),
+      "malformedThenFundedWarmRecovered": true, "emptyCandidatePreservesRoot": true,
+      "rootAndPriorMqRestored": true, "physicalQualification": false,
+      "productionAllowanceChanged": false, "acceptedExecutiveHistory": false,
+      "scope": "coherent native context and finite SDK-meter allowance; test-local override rolled back; no full-domain bound or production repair",
+    }));
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn xcmp_failed_bootstrap_cache_reuse_exposes_unpaid_sender_initialization() {
+  use polkadot_sdk::{
+    cumulus_pallet_xcmp_queue::{WeightInfo, WeightInfoExt},
+    cumulus_primitives_core::{AggregateMessageOrigin, XcmpMessageFormat, XcmpMessageHandler},
+    frame_support::{BoundedSlice, traits::QueueFootprintQuery},
+    pallet_message_queue::MaxMessageLenOf,
+    staging_xcm::{
+      VersionedXcm,
+      latest::{Instruction::ClearOrigin, Xcm},
+    },
+  };
+  type W = <Runtime as polkadot_sdk::cumulus_pallet_xcmp_queue::Config>::WeightInfo;
+  seeded_test_ext().execute_with(|| {
+    let sender = ParaId::from(1u32);
+    let origin = AggregateMessageOrigin::Sibling(sender);
+    let payload = VersionedXcm::from(Xcm::<RuntimeCall>(vec![ClearOrigin])).encode();
+    let bounded: BoundedSlice<'_, u8, MaxMessageLenOf<Runtime>> = payload.as_slice().try_into().unwrap();
+    let mut wire = XcmpMessageFormat::ConcatenatedVersionedXcm.encode();
+    wire.extend_from_slice(&payload);
+    assert_eq!(MessageQueue::footprint(origin.clone()).storage.count, 0);
+    let footprints = MessageQueue::get_batches_footprints(origin.clone(), core::iter::once(bounded), 1);
+    let publication = W::enqueue_xcmp_messages(footprints.first_page_pos.try_into().unwrap(), footprints.search_best_by(|_| core::cmp::Ordering::Less), false);
+    let without_bootstrap = W::take_first_concatenated_xcm(payload.len().try_into().unwrap()).checked_add(&publication).unwrap();
+    let bootstrap = W::uncached_enqueue_xcmp_messages();
+    let limit = ReservedXcmpWeight::get();
+    assert!(!bootstrap.all_lte(limit));
+    assert!(without_bootstrap.all_lte(limit));
+    let cold_quote = bootstrap.checked_add(&without_bootstrap).unwrap();
+    assert!(cold_quote.any_gt(limit));
+    let frame = System::block_weight();
+    let root = || polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version());
+    let before = root();
+    polkadot_sdk::sp_io::storage::start_transaction();
+    let returned = <XcmpQueue as XcmpMessageHandler>::handle_xcmp_messages(core::iter::repeat_n((sender, 1, wire.as_slice()), 2), limit);
+    assert_eq!(returned, Weight::zero());
+    assert!(returned.all_lte(limit));
+    assert_eq!(MessageQueue::footprint(origin.clone()).storage.count, 0);
+    assert_eq!(root(), before);
+    assert_eq!(System::block_weight(), frame);
+    polkadot_sdk::sp_io::storage::rollback_transaction();
+    assert_eq!(root(), before);
+    assert_eq!(MessageQueue::footprint(origin).storage.count, 0);
+    assert_eq!(System::block_weight(), frame);
+    println!("XCMP_FAILED_BOOTSTRAP_CACHE_V1 {}", serde_json::json!({
+      "suppliedLimit": [limit.ref_time(), limit.proof_size()],
+      "requiredBootstrap": [bootstrap.ref_time(), bootstrap.proof_size()],
+      "coldSdkQuote": [cold_quote.ref_time(), cold_quote.proof_size()],
+      "returned": [returned.ref_time(), returned.proof_size()],
+      "packets": 2, "queuedBeforeRollback": 0,
+      "bootstrapFunded": false, "debugAssertions": cfg!(debug_assertions),
+      "rootRestored": true, "physicalQualification": false, "acceptedRelayHistory": false,
+      "productionAllowanceChanged": false,
+      "scope": "repaired funded-cache admission under unchanged configured allowance; two valid packets refuse without publication; no accepted relay ancestry or physical qualification",
+    }));
+  });
+}
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn xcmp_sdk_packet_geometry_does_not_bound_decoded_message_charge_to_quarter() {
+  use codec::DecodeAll;
+  use polkadot_sdk::{
+    cumulus_pallet_xcmp_queue::{WeightInfo, WeightInfoExt},
+    cumulus_primitives_core::XcmpMessageFormat,
+    staging_xcm::{
+      VersionedXcm,
+      latest::{Instruction::ClearOrigin, Xcm},
+    },
+  };
+  type W = <Runtime as polkadot_sdk::cumulus_pallet_xcmp_queue::Config>::WeightInfo;
+  let payload = VersionedXcm::from(Xcm::<RuntimeCall>(vec![ClearOrigin])).encode();
+  VersionedXcm::<RuntimeCall>::decode_all(&mut payload.as_slice()).unwrap();
+  let packet_limit = 65_536usize;
+  let header = XcmpMessageFormat::ConcatenatedVersionedXcm.encode();
+  let messages_per_packet = (packet_limit - header.len()) / payload.len();
+  let mut packet = header;
+  for _ in 0..messages_per_packet {
+    packet.extend_from_slice(&payload);
+  }
+  assert!(packet.len() <= packet_limit);
+  let packet_count = 4u32;
+  assert_ok!(
+    ContextMessageLimits::new(
+      MaxInboundDownwardMessagesPerContext::get(),
+      MaxInboundHorizontalMessagesPerContext::get(),
+      MaxInboundHorizontalChannelsPerContext::get()
+    )
+    .validate(ContextMessageGeometry::new(
+      0,
+      0,
+      packet_count,
+      0,
+      packet_count
+    ))
+  );
+  assert!(
+    packet.len() * (packet_count as usize)
+      < (crate::MAXIMUM_BLOCK_WEIGHT.proof_size() / 6) as usize
+  );
+  let decoded = messages_per_packet as u64 * packet_count as u64;
+  let charged_decode = W::take_first_concatenated_xcm(payload.len().try_into().unwrap())
+    .checked_mul(decoded)
+    .unwrap();
+  let bootstrap = W::uncached_enqueue_xcmp_messages()
+    .checked_mul(packet_count as u64)
+    .unwrap();
+  let partial_handler = bootstrap.checked_add(&charged_decode).unwrap();
+  let partial_joint = MessageQueueServiceWeight::get()
+    .checked_add(&partial_handler)
+    .unwrap();
+  let quarter = crate::MAXIMUM_BLOCK_WEIGHT / 4;
+  assert!(partial_joint.ref_time() > quarter.ref_time());
+  assert!(partial_joint.proof_size() < quarter.proof_size());
+  println!(
+    "XCMP_SDK_PACKET_DOMAIN_V1 {}",
+    serde_json::json!({
+      "packets": packet_count, "packetBytes": packet.len(), "decodedXcms": decoded,
+      "decodePlusBootstrap": [partial_handler.ref_time(), partial_handler.proof_size()],
+      "mqCapPlusPartialHandler": [partial_joint.ref_time(), partial_joint.proof_size()],
+      "quarter": [quarter.ref_time(), quarter.proof_size()],
+      "scope": "supported packet/count shape and current SDK charge algebra only; publication/DMP/OtherFixed omitted, not a dispatched context, joint ancestry, physical lower bound or qualified complete owner",
+    })
+  );
+}
+#[test]
 fn message_queue_service_is_fixed_initialize_work_not_external_idle_work() {
+  use polkadot_sdk::frame_executive::OnInitializeWithWeightRegistration;
+  use polkadot_sdk::pallet_message_queue::WeightInfo as _;
+  use polkadot_sdk::sp_runtime::StateVersion;
+
   assert!(MessageQueue::index() < Actors::index());
   assert_eq!(
     <<Runtime as polkadot_sdk::pallet_message_queue::Config>::ServiceWeight as Get<
@@ -12188,6 +13063,53 @@ fn message_queue_service_is_fixed_initialize_work_not_external_idle_work() {
   );
   assert!(XcmpQueue::index() < Actors::index());
   assert_ne!(XcmpQueue::on_idle_weight(), Weight::zero());
+
+  seeded_test_ext().execute_with(|| {
+    type W = <Runtime as polkadot_sdk::pallet_message_queue::Config>::WeightInfo;
+    System::set_block_number(1);
+    assert!(polkadot_sdk::pallet_message_queue::ServiceHead::<Runtime>::get().is_none());
+    let configured = BlockResourceBudgetValue::get();
+    let before = System::block_weight();
+    let charged = <(MessageQueue,) as OnInitializeWithWeightRegistration<Runtime>>::on_initialize_with_weight_registration(1);
+    assert_eq!(charged, W::bump_service_head());
+    assert_ne!(charged, Weight::zero());
+    assert!(charged.all_lte(MessageQueueServiceWeight::get()));
+    assert_ne!(charged, MessageQueueServiceWeight::get());
+    let mut expected_registered = before;
+    expected_registered.accrue(charged, DispatchClass::Mandatory);
+    assert_eq!(System::block_weight(), expected_registered);
+    assert!(polkadot_sdk::pallet_message_queue::ServiceHead::<Runtime>::get().is_none());
+
+    ensure_actor_prepass_context();
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+    let frozen = Actors::block_resource_state()
+      .expect("ordinary Prepass freezes the resource state")
+      .budget()
+      .expect("Prepass budget is available");
+    assert_eq!(frozen, configured);
+    assert_eq!(System::block_weight(), expected_registered);
+
+    let root_after_prepass = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+    let idle = MessageQueue::on_idle(1, Weight::MAX);
+    assert_eq!(idle, Weight::zero());
+    MessageQueue::on_finalize(1);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+      root_after_prepass
+    );
+    assert_eq!(System::block_weight(), expected_registered);
+    let pair = |weight: Weight| [weight.ref_time(), weight.proof_size()];
+    println!(
+      "MESSAGE_QUEUE_PREFIX_OWNER_V1 {}",
+      serde_json::json!({
+        "configuredServiceCap": pair(MessageQueueServiceWeight::get()),
+        "registeredEmptyRingCharge": pair(charged),
+        "idleCharge": pair(idle),
+        "frozenFixed": pair(frozen.fixed_envelope()),
+        "scope": "empty ready ring, native hook/SDK registration and direct contextual Prepass; no processor, full Executive, physical cost or installed credit",
+      })
+    );
+  });
 }
 
 #[test]
@@ -13002,6 +13924,7 @@ fn governance_can_update_active_actor_limit() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn owner_slot_reuses_freed_slot_after_close() {
   seeded_test_ext().execute_with(|| {
@@ -13051,6 +13974,7 @@ fn owner_slot_reuses_freed_slot_after_close() {
 
 // --- User DCA Lifecycle ---
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn user_dca_e2e_lifecycle_with_explicit_close() {
   seeded_test_ext().execute_with(|| {
@@ -13175,6 +14099,11 @@ fn inert_manual_window_contract(
 }
 
 fn setup_inert_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u64> {
+  setup_inert_actors_with_id_stride(n, initial_balance, 1)
+}
+
+fn setup_inert_actors_with_id_stride(n: u64, initial_balance: u128, stride: u64) -> Vec<u64> {
+  assert!(stride > 0);
   let mut actor_ids: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
   for _ in 0..n {
     let actor_id = crate::Actors::next_actor_id();
@@ -13187,10 +14116,15 @@ fn setup_inert_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u64> {
     ));
     let sov = Actors::sovereign_account_id_system(actor_id);
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&sov, initial_balance);
+    if stride > 1 {
+      // Synthetic ID gaps are fixture input, not public allocator history.
+      pallet_deos_actors::NextActorId::<Runtime>::put(actor_id.checked_add(stride).unwrap());
+    }
   }
   actor_ids
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 fn setup_mixed_inert_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u64> {
   let mut actor_ids = alloc::vec::Vec::new();
   let inert_plan: RuntimeContractSteps = alloc::vec![pallet_deos_actors::Step {
@@ -13310,10 +14244,10 @@ struct StressDiagnostics {
   max_per_block: u32,
 }
 
-struct QueuePressureDiagnostics {
-  max_queue_occupancy: u32,
-  max_wakeup_backlog: u32,
-  max_wakeup_buckets: u32,
+struct SchedulerPressureDiagnostics {
+  max_service_members: u32,
+  max_deadline_members: u32,
+  max_deadline_buckets: u32,
 }
 
 /// Runs `num_blocks` blocks with on_initialize + on_idle, collecting per-block diagnostics.
@@ -13322,25 +14256,34 @@ fn run_blocks_with_diagnostics(
   num_blocks: u32,
   weight: Weight,
 ) -> StressDiagnostics {
-  let (diag, _) = run_blocks_with_queue_diagnostics(actor_ids, num_blocks, weight);
+  let (diag, _) = run_blocks_with_scheduler_diagnostics(actor_ids, num_blocks, weight);
   diag
 }
 
-fn run_blocks_with_queue_diagnostics(
+fn run_blocks_with_scheduler_diagnostics(
   actor_ids: &[u64],
   num_blocks: u32,
   weight: Weight,
-) -> (StressDiagnostics, QueuePressureDiagnostics) {
+) -> (StressDiagnostics, SchedulerPressureDiagnostics) {
+  observe_scheduler_blocks(actor_ids, num_blocks, weight, |_| {})
+}
+
+fn observe_scheduler_blocks(
+  actor_ids: &[u64],
+  num_blocks: u32,
+  weight: Weight,
+  mut observe: impl FnMut(u32),
+) -> (StressDiagnostics, SchedulerPressureDiagnostics) {
   let mut diag = StressDiagnostics {
     actor_cycle_counts: actor_ids.iter().map(|&id| (id, 0u32)).collect(),
     total_failed_steps: 0,
     min_per_block: u32::MAX,
     max_per_block: 0,
   };
-  let mut queue_diag = QueuePressureDiagnostics {
-    max_queue_occupancy: 0,
-    max_wakeup_backlog: 0,
-    max_wakeup_buckets: 0,
+  let mut pressure = SchedulerPressureDiagnostics {
+    max_service_members: 0,
+    max_deadline_members: 0,
+    max_deadline_buckets: 0,
   };
   for block in 2..=(num_blocks + 1) {
     System::set_block_number(block);
@@ -13368,22 +14311,26 @@ fn run_blocks_with_queue_diagnostics(
         _ => {}
       }
     }
-    let queue_occupancy = Actors::queue_occupancy();
-    let mut wakeup_backlog = 0u32;
-    let mut wakeup_buckets = 0u32;
-    for (_, live_entries) in pallet_deos_actors::ActorWaitingOccupancies::<Runtime>::iter() {
-      wakeup_backlog = wakeup_backlog.saturating_add(live_entries);
-      wakeup_buckets = wakeup_buckets.saturating_add(1);
+    let mut deadline_members = 0u32;
+    let mut deadline_buckets = 0u32;
+    // Count primary and Trigger members under both clocks, including future deadlines;
+    // these post-idle snapshots are neither distinct Actors nor a due-work backlog.
+    for header in pallet_deos_actors::DeadlineHeaders::<Runtime>::iter_values() {
+      deadline_members = deadline_members.saturating_add(header.count);
+      deadline_buckets = deadline_buckets.saturating_add(1);
     }
-    queue_diag.max_queue_occupancy = queue_diag.max_queue_occupancy.max(queue_occupancy);
-    queue_diag.max_wakeup_backlog = queue_diag.max_wakeup_backlog.max(wakeup_backlog);
-    queue_diag.max_wakeup_buckets = queue_diag.max_wakeup_buckets.max(wakeup_buckets);
+    pressure.max_service_members = pressure
+      .max_service_members
+      .max(Actors::service_header().count);
+    pressure.max_deadline_members = pressure.max_deadline_members.max(deadline_members);
+    pressure.max_deadline_buckets = pressure.max_deadline_buckets.max(deadline_buckets);
     if block > 2 {
       diag.min_per_block = diag.min_per_block.min(block_executions);
     }
     diag.max_per_block = diag.max_per_block.max(block_executions);
+    observe(block);
   }
-  (diag, queue_diag)
+  (diag, pressure)
 }
 
 /// Asserts stability invariants that apply regardless of capacity scenario.
@@ -13835,11 +14782,48 @@ fn reference_idle_budget_admits_mixed_tasks_without_starvation() {
     System::set_block_number(1);
     assert_synthetic_actor_genesis();
     let mut actor_ids = setup_inert_actors(32, 10_000u128);
-    let (transfer_ids, _) = setup_circular_chain(32, 10_000u128);
-    actor_ids.extend(transfer_ids);
+    let transfer_prefunding = 1_000 * crate::EXISTENTIAL_DEPOSIT;
+    let (transfer_ids, transfer_accounts) = setup_circular_chain(32, transfer_prefunding);
+    actor_ids.extend(transfer_ids.iter().copied());
+    let mut expected_balances = transfer_accounts.iter().map(Balances::free_balance).collect::<Vec<_>>();
+    let initial_total: u128 = expected_balances.iter().sum();
+    let initial_issuance = Balances::total_issuance();
+    let mut invoked = alloc::collections::BTreeSet::new();
     let budget =
       <<Runtime as pallet_deos_actors::Config>::ActorOnIdleReserve as Get<Weight>>::get();
-    let diag = run_blocks_with_diagnostics(&actor_ids, 40, budget);
+    let (diag, _) = observe_scheduler_blocks(&actor_ids, 40, budget, |block| {
+      let mut transfers_this_block = 0u32;
+      for record in System::events() {
+        match record.event {
+          RuntimeEvent::Actors(Event::TransferExecuted { actor_id, cycle_nonce, step_index, asset, amount, to }) => {
+            let index = transfer_ids.iter().position(|id| *id == actor_id).expect("only authored Transfer Actors execute");
+            let next = (index + 1) % transfer_ids.len();
+            assert_eq!(asset, AssetKind::Native);
+            assert_eq!(to, transfer_accounts[next]);
+            assert_eq!((cycle_nonce, step_index), (1, 0));
+            assert!(amount > 0);
+            assert!(invoked.insert(actor_id), "first-traversal Task executes once");
+            expected_balances[index] = expected_balances[index].checked_sub(amount).unwrap();
+            expected_balances[next] = expected_balances[next].checked_add(amount).unwrap();
+            transfers_this_block += 1;
+          }
+          RuntimeEvent::Actors(Event::CycleSummary { actor_id, outcomes, .. }) if transfer_ids.contains(&actor_id) => {
+            assert_eq!(outcomes, pallet_deos_actors::OutcomeTotals {
+              executed_steps: 1,
+              committed_effectful_tasks: 1,
+              ..Default::default()
+            }, "mixed Transfer must invoke the economic Task, not skip its predicate");
+          }
+          _ => {}
+        }
+      }
+      let snapshot = Actors::finalized_block_resource_telemetry().unwrap();
+      assert_eq!(snapshot.block_number(), block);
+      assert!(!snapshot.optional_actor_work_halted());
+      if transfers_this_block > 0 {
+        assert!(snapshot.usage().actor_effect_used() != Weight::zero(), "real Transfers retain their economic resource owner");
+      }
+    });
     let counts: alloc::vec::Vec<u32> = actor_ids
       .iter()
       .map(|id| diag.actor_cycle_counts[id])
@@ -13860,6 +14844,18 @@ fn reference_idle_budget_admits_mixed_tasks_without_starvation() {
       "FIFO carry-over must keep served mixed-task nonce spread <= 1: {counts:?}"
     );
     assert_eq!(diag.total_failed_steps, 0);
+    assert!(!invoked.is_empty(), "mixed workload must execute economic Tasks");
+    for (&id, &count) in transfer_ids.iter().zip(&counts[32..]) {
+      assert_eq!(invoked.contains(&id), count > 0);
+    }
+    for (&id, &count) in actor_ids.iter().zip(&counts) {
+      assert_cadenced_pressure_actor(id, count);
+    }
+    let actual_balances = transfer_accounts.iter().map(Balances::free_balance).collect::<Vec<_>>();
+    assert_eq!(actual_balances, expected_balances, "committed events reconstruct exact custody");
+    assert_eq!(actual_balances.iter().sum::<u128>(), initial_total);
+    assert_eq!(Balances::total_issuance(), initial_issuance);
+    println!("MIXED_TASK_EFFECTS actors={} blocks=40 served={served} unserved={} actual_transfer_actors={} custody_conserved=true", actor_ids.len(), actor_ids.len() - served, invoked.len());
   });
 }
 
@@ -14208,7 +15204,433 @@ fn scheduler_512_mixed_clocks_survives_delayed_timestamp() {
 }
 
 #[test]
-#[ignore] // Queue/wakeup occupancy diagnostics for over-capacity stress scenario
+fn scheduler_small_cadenced_profile_retains_progress_and_current_residences() {
+  synthetic_actor_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    assert_synthetic_actor_genesis();
+    let actor_ids = setup_inert_actors(8, 10_000u128);
+    let (diag, pressure) = run_blocks_with_scheduler_diagnostics(&actor_ids, 32, Weight::MAX);
+    assert!(pressure.max_service_members > 0, "observer must see Pending Service");
+    assert!(pressure.max_deadline_members > 0, "observer must see temporal detector members");
+    assert!(pressure.max_deadline_buckets > 0);
+    assert_eq!(diag.total_failed_steps, 0);
+    assert_eq!(Actors::service_header().count as usize, pallet_deos_actors::ServiceNodes::<Runtime>::iter_keys().count());
+    assert_eq!(System::block_number(), 33);
+    assert_eq!(crate::Timestamp::get(), 33 * primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS);
+    for &actor_id in &actor_ids {
+      let completed = diag.actor_cycle_counts[&actor_id];
+      assert!(completed > 0, "small Cadenced/StopCycle group must complete for Actor {actor_id}");
+      assert_cadenced_pressure_actor(actor_id, completed);
+    }
+    println!("Small cadence: completed={:?}, max_service_members={}, max_deadline_members={}, max_deadline_buckets={}",
+      diag.actor_cycle_counts, pressure.max_service_members, pressure.max_deadline_members, pressure.max_deadline_buckets);
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::try_state(System::block_number()));
+  });
+}
+
+fn assert_cadenced_pressure_actor(actor_id: ActorId, completed: u32) -> Option<WakeupKey<u32>> {
+  let state = Actors::active_actor_state(actor_id).expect("stress Actor remains active");
+  assert_eq!(state.identity.cycle_nonce, u64::from(completed));
+  assert_eq!(state.hot.cycle_state, pallet_deos_actors::CycleState::Idle);
+  assert!(state.run_state.is_none());
+  assert!(Actors::deadline_handles(actor_id).is_none());
+  let process = Actors::actor_processes(actor_id).unwrap();
+  let Some(pallet_deos_actors::ActorSemanticState::Active(record)) =
+    pallet_deos_actors::ActorSemanticStates::<Runtime>::get(actor_id)
+  else {
+    panic!("stress Actor semantic authority remains active");
+  };
+  assert_eq!(process.generation, record.generation);
+  if let Some(node) = Actors::service_nodes(actor_id) {
+    assert!(state.hot.pending_signal);
+    assert_eq!(node.generation, process.generation);
+    assert_eq!(node.kind, pallet_deos_actors::ServiceResidenceKind::Pending);
+    assert!(node.eligible_from > System::block_number());
+    assert_eq!(process.status, pallet_deos_actors::ProcessStatus::Serving);
+    assert_eq!(
+      process.residence,
+      Some(ProcessResidence::Service(node.kind))
+    );
+    assert!(pallet_deos_actors::TriggerDeadlineHandles::<Runtime>::get(actor_id).is_none());
+    None
+  } else {
+    assert!(!state.hot.pending_signal);
+    assert_eq!(process.residence, None);
+    assert!(
+      matches!(process.status, pallet_deos_actors::ProcessStatus::Disabled(disablement)
+      if disablement.cause == pallet_deos_actors::ProcessDisableCause::Protocol
+        && disablement.revival_authority == pallet_deos_actors::ProcessRevivalAuthority::Protocol
+        && disablement.basis == pallet_deos_actors::SuspendedProcessBasis::Idle)
+    );
+    let handle = pallet_deos_actors::TriggerDeadlineHandles::<Runtime>::get(actor_id)
+      .expect("Idle temporal Actor retains its Trigger deadline");
+    assert_eq!(
+      handle.actor,
+      pallet_deos_actors::ActorRef {
+        actor_id,
+        generation: process.generation
+      }
+    );
+    assert!(matches!(handle.key, WakeupKey::Tick(_)));
+    let page = pallet_deos_actors::DeadlinePages::<Runtime>::get(handle.key, handle.page).unwrap();
+    assert_eq!(
+      page.entries.get(usize::from(handle.slot)),
+      Some(&Some(handle.actor)),
+      "Trigger handle must point to its deadline member"
+    );
+    Some(handle.key)
+  }
+}
+
+// One same-clock first traversal: finite-window shortfall is censored, never discarded.
+fn run_cadenced_pressure_contract(actors: u64, blocks: u32) -> (Vec<u64>, Vec<(u64, u32)>) {
+  run_cadenced_pressure_contract_with_id_stride(actors, blocks, 1)
+}
+
+fn assert_matched_cadenced_setup(actor_ids: &[u64]) {
+  let expected = inert_timer_contract().unwrap();
+  let balance = Balances::free_balance(Actors::sovereign_account_id_system(actor_ids[0]));
+  for &id in actor_ids {
+    let state = Actors::active_actor_state(id).unwrap();
+    assert_eq!(
+      state.identity.last_control_mutation_block,
+      System::block_number(),
+      "matched control mutation clock"
+    );
+    assert_eq!(state.identity.owner, ALICE);
+    assert_eq!(state.identity.mutability, Mutability::Mutable);
+    assert!(matches!(
+      state.identity.actor_class,
+      pallet_deos_actors::ActorClass::System { .. }
+    ));
+    assert_eq!(state.identity.cycle_nonce, 0);
+    assert_eq!(state.contract, expected);
+    assert_eq!(state.hot.cycle_state, pallet_deos_actors::CycleState::Idle);
+    assert!(!state.hot.pending_signal);
+    assert!(state.run_state.is_none());
+    assert_eq!(Actors::actor_processes(id).unwrap().generation, 1);
+    assert_eq!(
+      Balances::free_balance(Actors::sovereign_account_id_system(id)),
+      balance
+    );
+  }
+}
+
+fn run_cadenced_pressure_contract_with_id_stride(
+  actors: u64,
+  blocks: u32,
+  stride: u64,
+) -> (Vec<u64>, Vec<(u64, u32)>) {
+  let full_sweep_blocks = u32::try_from(actors).unwrap().checked_add(1).unwrap();
+  let full_sweep = blocks == full_sweep_blocks;
+  assert!(
+    actors > 1 && blocks > 1 && (u64::from(blocks) < actors || full_sweep),
+    "select a censored window or exactly N+1 blocks, never an adaptive extension"
+  );
+  System::set_block_number(1);
+  assert_synthetic_actor_genesis();
+  let actor_ids = setup_inert_actors_with_id_stride(actors, 10_000u128, stride);
+  assert_matched_cadenced_setup(&actor_ids);
+  println!("CADENCED_PRESSURE_CASE actors={actors} blocks={blocks} stride={stride}");
+  let custody = actor_ids
+    .iter()
+    .map(|id| {
+      let account = Actors::sovereign_account_id_system(*id);
+      Balances::free_balance(account)
+    })
+    .collect::<Vec<_>>();
+  let issuance = Balances::total_issuance();
+  let owner_balance = Balances::free_balance(ALICE);
+  let initial_tick = pallet_deos_actors::TriggerDeadlineHandles::<Runtime>::get(actor_ids[0])
+    .unwrap()
+    .key;
+  for &id in &actor_ids {
+    assert_eq!(
+      pallet_deos_actors::TriggerDeadlineHandles::<Runtime>::get(id)
+        .unwrap()
+        .key,
+      initial_tick
+    );
+  }
+  let mut completions = Vec::<(u64, u32)>::new();
+  let mut publications = alloc::collections::BTreeMap::new();
+  let (diag, pressure) = observe_scheduler_blocks(&actor_ids, blocks, Weight::MAX, |block| {
+    let mut distinct = alloc::collections::BTreeSet::new();
+    let mut steps = 0u32;
+    for record in System::events() {
+      if let RuntimeEvent::Actors(Event::CycleSummary {
+        actor_id,
+        cycle_nonce,
+        outcomes,
+        ..
+      }) = record.event
+      {
+        assert_eq!(
+          outcomes,
+          pallet_deos_actors::OutcomeTotals {
+            executed_steps: 1,
+            ..Default::default()
+          }
+        );
+        assert!(
+          distinct.insert(actor_id),
+          "Q1 forbids a repeated Actor in one block"
+        );
+        assert_eq!(
+          cycle_nonce, 1,
+          "the first Tick sweep must not replay a Cycle"
+        );
+        assert_eq!(
+          Some(&actor_id),
+          actor_ids.get(completions.len()),
+          "strict first-traversal FIFO"
+        );
+        assert!(
+          publications.get(&actor_id).is_some_and(|at| *at < block),
+          "B+1 must follow observed readiness publication"
+        );
+        completions.push((actor_id, block));
+        steps += outcomes.executed_steps;
+      }
+    }
+    for (id, node) in pallet_deos_actors::ServiceNodes::<Runtime>::iter() {
+      assert_eq!(node.kind, pallet_deos_actors::ServiceResidenceKind::Pending);
+      assert_eq!(node.eligible_from, block + 1);
+      publications.entry(id).or_insert(block);
+    }
+    // on_finalize has checked phase/outstanding reservations and consumed the live ledger.
+    let state = Actors::finalized_block_resource_telemetry().expect("finalized resource snapshot");
+    assert_eq!(state.block_number(), block);
+    assert!(Actors::block_resource_state().is_none());
+    assert!(
+      !state.optional_actor_work_halted(),
+      "unresolved resource fault is not censoring"
+    );
+    let budget = state.budget();
+    let usage = state.usage();
+    assert!(
+      usage
+        .actor_control_used()
+        .all_lte(budget.limits().actor_control())
+    );
+    assert_eq!(usage.actor_effect_used(), Weight::zero());
+    assert_eq!(usage.user_dispatch_used(), Weight::zero());
+    assert!(
+      budget
+        .fixed_envelope()
+        .checked_add(&usage.actor_control_used())
+        .unwrap()
+        .all_lte(budget.maximum_block())
+    );
+    println!(
+      "CADENCED_PRESSURE_BLOCK block={block} S={steps} A={}",
+      distinct.len()
+    );
+  });
+  assert_eq!(diag.total_failed_steps, 0);
+  assert!(
+    !completions.is_empty(),
+    "conforming capacity must produce useful progress"
+  );
+  let completed_count = completions.len();
+  let mut pending = 0usize;
+  let mut detectors = 0usize;
+  for (index, &id) in actor_ids.iter().enumerate() {
+    let completed = u32::from(index < completed_count);
+    assert_eq!(diag.actor_cycle_counts[&id], completed);
+    let key = assert_cadenced_pressure_actor(id, completed);
+    assert_eq!(
+      Balances::free_balance(Actors::sovereign_account_id_system(id)),
+      custody[index]
+    );
+    let disposition = match key {
+      None => {
+        if full_sweep {
+          assert_eq!(
+            (index, completed),
+            (0, 1),
+            "only the first Actor has published recurrence at full-sweep end"
+          );
+        } else {
+          assert_eq!(completed, 0);
+        }
+        pending += 1;
+        "pending_service"
+      }
+      Some(key) => {
+        if completed == 0 {
+          assert_eq!(key, initial_tick);
+        } else {
+          assert!(key > initial_tick);
+        }
+        detectors += 1;
+        "temporal_detector"
+      }
+    };
+    println!(
+      "CADENCED_PRESSURE_ACTOR actor={id} first_completion={:?} disposition={disposition} trigger_deadline={key:?}",
+      completions.get(index).map(|(_, block)| *block)
+    );
+  }
+  assert_eq!(Balances::total_issuance(), issuance);
+  assert_eq!(Balances::free_balance(ALICE), owner_balance);
+  assert_eq!(Actors::service_header().count as usize, pending);
+  assert_eq!(
+    pallet_deos_actors::ServiceNodes::<Runtime>::iter_keys().count(),
+    pending
+  );
+  assert_eq!(
+    pallet_deos_actors::TriggerDeadlineHandles::<Runtime>::iter_keys().count(),
+    detectors
+  );
+  let header_members: u64 = pallet_deos_actors::DeadlineHeaders::<Runtime>::iter_values()
+    .map(|header| u64::from(header.count))
+    .sum();
+  let page_members = pallet_deos_actors::DeadlinePages::<Runtime>::iter_values()
+    .map(|page| page.entries.iter().filter(|entry| entry.is_some()).count())
+    .sum::<usize>();
+  assert_eq!(header_members, detectors as u64, "no orphan deadline count");
+  assert_eq!(page_members, detectors, "no orphan deadline membership");
+  if full_sweep {
+    assert_eq!(
+      completed_count,
+      actor_ids.len(),
+      "every Actor completes in the source-derived first sweep"
+    );
+    assert_eq!(
+      pending, 1,
+      "next-round recurrence stays owed, not executed twice"
+    );
+    for (index, (_, block)) in completions.iter().enumerate() {
+      assert_eq!(*block, u32::try_from(index).unwrap() + 3);
+    }
+  }
+  let historical_target_met = actors == 10_000
+    && completions
+      .iter()
+      .filter(|(_, block)| *block <= 2_501)
+      .count()
+      == 10_000;
+  println!(
+    "CADENCED_PRESSURE_SUMMARY actors={actors} blocks={blocks} stride={stride} completed={completed_count} unserved={} pending_service={pending} temporal_detectors={detectors} full_first_coverage={} historical_target_met={historical_target_met} max_service={} max_deadline_members={} max_deadline_buckets={}",
+    actor_ids.len() - completed_count,
+    completed_count == actor_ids.len(),
+    pressure.max_service_members,
+    pressure.max_deadline_members,
+    pressure.max_deadline_buckets
+  );
+  #[cfg(feature = "try-runtime")]
+  assert_ok!(Actors::try_state(System::block_number()));
+  (actor_ids, completions)
+}
+
+#[test]
+fn current_cadenced_pressure_contract_retains_censored_work() {
+  synthetic_actor_test_ext().execute_with(|| {
+    run_cadenced_pressure_contract(8, 4);
+  });
+}
+
+#[test]
+#[should_panic(expected = "Idle temporal Actor retains its Trigger deadline")]
+fn current_cadenced_pressure_contract_rejects_lost_signal() {
+  synthetic_actor_test_ext().execute_with(|| {
+    let (ids, _) = run_cadenced_pressure_contract(8, 4);
+    pallet_deos_actors::TriggerDeadlineHandles::<Runtime>::remove(ids[7]);
+    assert_cadenced_pressure_actor(ids[7], 0);
+  });
+}
+
+#[test]
+#[should_panic(expected = "Trigger handle must point to its deadline member")]
+fn current_cadenced_pressure_contract_rejects_unbacked_handle() {
+  synthetic_actor_test_ext().execute_with(|| {
+    let (ids, _) = run_cadenced_pressure_contract(8, 4);
+    let handle = pallet_deos_actors::TriggerDeadlineHandles::<Runtime>::get(ids[7]).unwrap();
+    pallet_deos_actors::DeadlinePages::<Runtime>::mutate(handle.key, handle.page, |page| {
+      page.as_mut().unwrap().entries[usize::from(handle.slot)] = None;
+    });
+    assert_cadenced_pressure_actor(ids[7], 0);
+  });
+}
+
+#[test]
+fn current_cadenced_pressure_contract_completes_full_sweep() {
+  synthetic_actor_test_ext().execute_with(|| {
+    run_cadenced_pressure_contract(8, 9);
+  });
+}
+
+fn assert_cadenced_topology_equivalence(actors: u64, stride: u64) {
+  assert!(stride > 1);
+  let blocks = u32::try_from(actors).unwrap().checked_add(1).unwrap();
+  let (dense_ids, dense) = synthetic_actor_test_ext()
+    .execute_with(|| run_cadenced_pressure_contract_with_id_stride(actors, blocks, 1));
+  let (sparse_ids, sparse) = synthetic_actor_test_ext()
+    .execute_with(|| run_cadenced_pressure_contract_with_id_stride(actors, blocks, stride));
+  assert_eq!(dense.len(), sparse.len());
+  for (index, ((dense_id, dense_block), (sparse_id, sparse_block))) in
+    dense.iter().zip(&sparse).enumerate()
+  {
+    let offset = u64::try_from(index).unwrap();
+    assert_eq!(*dense_id, dense_ids[0].checked_add(offset).unwrap());
+    assert_eq!(
+      *sparse_id,
+      sparse_ids[0]
+        .checked_add(offset.checked_mul(stride).unwrap())
+        .unwrap()
+    );
+    assert_eq!(
+      dense_block, sparse_block,
+      "ID gaps must not alter normalized first-completion order or block"
+    );
+  }
+  // Every completion is one StopCycle Step, so equal completion rows also determine per-block S/A.
+  println!(
+    "CADENCED_TOPOLOGY_SUMMARY actors={actors} blocks={blocks} sparse_stride={stride} normalized_first_completions_equal=true per_block_S_A_equal=true"
+  );
+}
+
+#[test]
+fn current_cadenced_topology_contract_crosses_page_boundary() {
+  assert_cadenced_topology_equivalence(33, 32);
+}
+
+#[test]
+#[should_panic(expected = "matched control mutation clock")]
+fn current_cadenced_topology_contract_rejects_legacy_clock_asymmetry() {
+  synthetic_actor_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let ids = setup_inert_actors_sparse(33, 10_000u128, 32);
+    assert_matched_cadenced_setup(&ids);
+  });
+}
+
+#[test]
+#[ignore] // Explicit matched native dense/sparse safety, no physical-cost comparison.
+fn current_cadenced_sparse_topology_first_sweep() {
+  assert_cadenced_topology_equivalence(5_000, 32);
+}
+
+#[test]
+#[ignore] // Explicit all-Actor progress question, not a fixed-window safety replay.
+fn current_cadenced_scheduler_first_sweep_10k() {
+  synthetic_actor_test_ext().execute_with(|| {
+    run_cadenced_pressure_contract(10_000, 10_001);
+  });
+}
+
+#[test]
+#[ignore] // Current native safety/censoring; no historical throughput target gate.
+fn current_cadenced_scheduler_occupancy_10k() {
+  synthetic_actor_test_ext().execute_with(|| {
+    run_cadenced_pressure_contract(10_000, 2_500);
+  });
+}
+
+#[test]
+#[ignore] // Historical throughput target: exact-only, not current acceptance.
 fn profile_scheduler_queue_wakeup_occupancy_10k() {
   synthetic_actor_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -14216,20 +15638,20 @@ fn profile_scheduler_queue_wakeup_occupancy_10k() {
     let actors = 10_000u64;
     let blocks = 2_500u32;
     let actor_ids = setup_inert_actors(actors, 10_000u128);
-    let (diag, queue_diag) = run_blocks_with_queue_diagnostics(&actor_ids, blocks, Weight::MAX);
+    let (diag, pressure) = run_blocks_with_scheduler_diagnostics(&actor_ids, blocks, Weight::MAX);
     let min_count = *diag.actor_cycle_counts.values().min().unwrap_or(&0);
     let max_count = *diag.actor_cycle_counts.values().max().unwrap_or(&0);
     let spread = max_count.saturating_sub(min_count);
     println!(
-      "Actors queue profile: actors={}, blocks={}, min_cycle_nonce={}, max_cycle_nonce={}, spread={}, max_queue_occupancy={}, max_wakeup_backlog={}, max_wakeup_buckets={}",
+      "Actors scheduler profile: actors={}, blocks={}, min_completed_cycles={}, max_completed_cycles={}, spread={}, max_service_members={}, max_deadline_members={}, max_deadline_buckets={}",
       actors,
       blocks,
       min_count,
       max_count,
       spread,
-      queue_diag.max_queue_occupancy,
-      queue_diag.max_wakeup_backlog,
-      queue_diag.max_wakeup_buckets,
+      pressure.max_service_members,
+      pressure.max_deadline_members,
+      pressure.max_deadline_buckets,
     );
     assert!(min_count > 0, "10k stress profile must remain starvation-free");
     assert!(
@@ -14631,10 +16053,21 @@ struct ProductionBlockSample {
   user_dispatch_used: Weight,
   user_dispatch_calls: u32,
   next_user_dispatch_weight: Option<Weight>,
-  queue_head: u64,
-  queue_tail: u64,
+  budget: pallet_deos_actors::BlockResourceBudget,
+  service_count: u32,
   optional_actor_work_halted: bool,
   stop_reason: ProductionStopReason,
+}
+
+impl ProductionBlockSample {
+  fn user_remaining(&self) -> Weight {
+    self
+      .budget
+      .limits()
+      .user_base_turn()
+      .checked_sub(&self.user_dispatch_used)
+      .unwrap_or_else(Weight::zero)
+  }
 }
 
 #[derive(Debug, Default)]
@@ -14712,6 +16145,112 @@ fn nearest_rank_percentile(values: &[u32], percentile: usize) -> u32 {
   sorted[rank]
 }
 
+#[test]
+fn one_step_diagnostics_distinguish_pending_service_from_empty() {
+  super::common::synthetic_actor_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let steps = vec![make_step(Task::StopCycle)]
+      .try_into()
+      .expect("one Step fits");
+    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
+    assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
+    let node = Actors::service_nodes(actor_id).expect("Manual signal publishes Service membership");
+    assert_eq!(node.eligible_from, 2);
+    assert_eq!(pallet_deos_actors::ServiceHeader::<Runtime>::get().count, 1);
+    assert_eq!((Actors::queue_head(), Actors::queue_tail()), (0, 0));
+    set_consensus_timestamp(primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS);
+    ensure_current_resource_state();
+    let base_event_end = System::events().len();
+    Actors::on_idle(1, Weight::MAX);
+    let mut diagnostics = ProductionThroughputDiagnostics::default();
+    diagnostics.record_one_step_block(1, base_event_end, Weight::zero(), Weight::zero(), None);
+    assert_eq!(diagnostics.samples[0].completions, 0);
+    assert_eq!(pallet_deos_actors::ServiceHeader::<Runtime>::get().count, 1);
+    assert_eq!(
+      diagnostics.samples[0].stop_reason,
+      ProductionStopReason::CausalCutoff
+    );
+    assert_eq!(diagnostics.samples[0].service_count, 1);
+    let valid_node = Actors::service_nodes(actor_id).unwrap();
+    let mut invalid_node = valid_node;
+    invalid_node.generation += 1;
+    pallet_deos_actors::ServiceNodes::<Runtime>::insert(actor_id, invalid_node);
+    assert!(
+      std::panic::catch_unwind(|| {
+        ProductionThroughputDiagnostics::default().record_one_step_block(
+          1,
+          base_event_end,
+          Weight::zero(),
+          Weight::zero(),
+          None,
+        );
+      })
+      .is_err()
+    );
+    pallet_deos_actors::ServiceNodes::<Runtime>::insert(actor_id, valid_node);
+    Actors::on_finalize(1);
+
+    System::set_block_number(2);
+    System::reset_events();
+    System::set_block_consumed_resources(Weight::zero(), 0);
+    set_consensus_timestamp(2 * primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS);
+    ensure_current_resource_state();
+    let base_event_end = System::events().len();
+    Actors::on_idle(2, Weight::MAX);
+    diagnostics.record_one_step_block(2, base_event_end, Weight::zero(), Weight::zero(), None);
+    assert_eq!(diagnostics.samples[1].completions, 1);
+    assert_eq!(diagnostics.samples[1].service_count, 0);
+    assert_eq!(
+      diagnostics.samples[1].stop_reason,
+      ProductionStopReason::QueueEmpty
+    );
+    Actors::on_finalize(2);
+  });
+}
+
+#[test]
+fn one_step_diagnostics_use_the_frozen_budget_not_host_configuration() {
+  super::common::synthetic_actor_test_ext().execute_with(|| {
+    super::actors_design_comparison::with_isolated_block(1, || {
+      System::set_block_number(1);
+      set_consensus_timestamp(primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS);
+      ensure_current_resource_state();
+      let base_event_end = System::events().len();
+      Actors::on_idle(1, Weight::MAX);
+      let telemetry = Actors::finalized_block_resource_telemetry().unwrap();
+      let mut diagnostics = ProductionThroughputDiagnostics::default();
+      diagnostics.record_one_step_block(1, base_event_end, Weight::zero(), Weight::zero(), None);
+      let sample = &diagnostics.samples[0];
+      let configured = BlockResourceBudgetValue::get();
+      assert_ne!(
+        telemetry.budget(),
+        configured,
+        "existing isolated test policy differs"
+      );
+      assert_eq!(sample.budget, telemetry.budget());
+      assert_eq!(
+        sample.user_remaining(),
+        telemetry
+          .budget()
+          .limits()
+          .user_base_turn()
+          .checked_sub(&telemetry.usage().user_dispatch_used())
+          .unwrap()
+      );
+      assert_ne!(
+        sample.user_remaining(),
+        configured
+          .limits()
+          .user_base_turn()
+          .checked_sub(&telemetry.usage().user_dispatch_used())
+          .unwrap()
+      );
+      diagnostics.print_summary("ONE_STEP_OBSERVER_FROZEN_BUDGET");
+      Actors::on_finalize(1);
+    });
+  });
+}
+
 impl ProductionThroughputDiagnostics {
   fn record_one_step_block(
     &mut self,
@@ -14747,7 +16286,8 @@ impl ProductionThroughputDiagnostics {
       .expect("saturated production block must finalize current resource telemetry");
     let usage = telemetry.usage();
     let optional_actor_work_halted = telemetry.optional_actor_work_halted();
-    let limits = BlockResourceBudgetValue::get().limits();
+    let budget = telemetry.budget();
+    let limits = budget.limits();
     let control_remaining = limits
       .actor_control()
       .checked_sub(&usage.actor_control_used())
@@ -14756,17 +16296,30 @@ impl ProductionThroughputDiagnostics {
       .shared_economic()
       .checked_sub(&usage.shared_used().expect("resource usage addition fits"))
       .unwrap_or_else(Weight::zero);
-    let queue_head = Actors::queue_head();
-    let queue_tail = Actors::queue_tail();
-    let cutoff = Actors::prepass_execution_cutoff()
-      .filter(|(cutoff_block, _)| *cutoff_block == block)
-      .map(|(_, cutoff)| cutoff);
+    let header = pallet_deos_actors::ServiceHeader::<Runtime>::get();
+    assert_eq!(
+      header.cursor.is_none(),
+      header.count == 0,
+      "Service header occupancy/cursor agree"
+    );
+    let frontier = header.cursor.map(|member| {
+      let node =
+        Actors::service_nodes(member.actor_id).expect("Service cursor has backing membership");
+      assert_eq!(
+        node.generation, member.generation,
+        "Service cursor generation agrees"
+      );
+      node
+    });
+    // These are frontier/capacity hints, not scheduler-certified terminal reasons.
     let stop_reason = if optional_actor_work_halted {
       ProductionStopReason::AccountingHalt
-    } else if queue_head >= queue_tail {
+    } else if header.count == 0 {
       ProductionStopReason::QueueEmpty
-    } else if cutoff.is_some_and(|cutoff| queue_head >= cutoff) {
+    } else if frontier.is_some_and(|node| node.eligible_from > block) {
       ProductionStopReason::CausalCutoff
+    } else if frontier.is_some_and(|node| node.last_considered == block) {
+      ProductionStopReason::SameBlockOrTopology
     } else if !next_control_maximum.all_lte(control_remaining) {
       ProductionStopReason::ActorControl
     } else if !next_effect_maximum.all_lte(shared_remaining) {
@@ -14793,8 +16346,8 @@ impl ProductionThroughputDiagnostics {
         .map(|saturation| saturation.calls)
         .unwrap_or(0),
       next_user_dispatch_weight: user_saturation.map(|saturation| saturation.next_weight),
-      queue_head,
-      queue_tail,
+      budget,
+      service_count: header.count,
       optional_actor_work_halted,
       stop_reason,
     });
@@ -14893,7 +16446,6 @@ impl ProductionThroughputDiagnostics {
       .iter()
       .filter(|sample| sample.optional_actor_work_halted)
       .count();
-    let user_base = BlockResourceBudgetValue::get().limits().user_base_turn();
     let user_dispatch_calls = self
       .samples
       .iter()
@@ -14903,12 +16455,9 @@ impl ProductionThroughputDiagnostics {
       .samples
       .iter()
       .filter(|sample| {
-        sample.next_user_dispatch_weight.is_some_and(|next| {
-          let remaining = user_base
-            .checked_sub(&sample.user_dispatch_used)
-            .unwrap_or_else(Weight::zero);
-          !next.all_lte(remaining)
-        })
+        sample
+          .next_user_dispatch_weight
+          .is_some_and(|next| !next.all_lte(sample.user_remaining()))
       })
       .count();
     let stop_counts = self.samples.iter().fold(
@@ -14933,11 +16482,11 @@ impl ProductionThroughputDiagnostics {
     let last_user = last
       .map(|sample| sample.user_dispatch_used)
       .unwrap_or_else(Weight::zero);
-    let last_user_remaining = user_base
-      .checked_sub(&last_user)
+    let last_user_remaining = last
+      .map(ProductionBlockSample::user_remaining)
       .unwrap_or_else(Weight::zero);
     println!(
-      "ACTOR_THROUGHPUT_REPORT_V1 {{\"profile\":\"{label}\",\"blocks\":{},\"totalSteps\":{total_steps},\"baseSteps\":{base_steps},\"drainSteps\":{drain_steps},\"failedSteps\":{failed_steps},\"openings\":{openings},\"completions\":{completions},\"closures\":{closures},\"meanSteps\":{:.4},\"p50Steps\":{p50_steps},\"p95Steps\":{p95_steps},\"p99Steps\":{p99_steps},\"minSteps\":{min_steps},\"maxSteps\":{max_steps},\"stepHistogram\":{{{step_histogram_json}}},\"maximumServiceGapBlocks\":{},\"haltedBlocks\":{halted_blocks},\"userDispatchCalls\":{user_dispatch_calls},\"userSaturatedBlocks\":{user_saturated_blocks},\"stopQueueEmpty\":{},\"stopCausalCutoff\":{},\"stopActorControl\":{},\"stopSharedEconomic\":{},\"stopSameBlockOrTopology\":{},\"stopAccountingHalt\":{},\"lastBlock\":{},\"lastControlRefTime\":{},\"lastControlProofSize\":{},\"lastEffectRefTime\":{},\"lastEffectProofSize\":{},\"lastUserRefTime\":{},\"lastUserProofSize\":{},\"lastUserRemainingRefTime\":{},\"lastUserRemainingProofSize\":{},\"lastQueueHead\":{},\"lastQueueTail\":{}}}",
+      "ACTOR_THROUGHPUT_REPORT_V2 {{\"profile\":\"{label}\",\"blocks\":{},\"totalSteps\":{total_steps},\"baseSteps\":{base_steps},\"drainSteps\":{drain_steps},\"failedSteps\":{failed_steps},\"openings\":{openings},\"completions\":{completions},\"closures\":{closures},\"meanSteps\":{:.4},\"p50Steps\":{p50_steps},\"p95Steps\":{p95_steps},\"p99Steps\":{p99_steps},\"minSteps\":{min_steps},\"maxSteps\":{max_steps},\"stepHistogram\":{{{step_histogram_json}}},\"maximumServiceGapBlocks\":{},\"haltedBlocks\":{halted_blocks},\"userDispatchCalls\":{user_dispatch_calls},\"userSaturatedBlocks\":{user_saturated_blocks},\"stopQueueEmpty\":{},\"stopCausalCutoff\":{},\"stopActorControl\":{},\"stopSharedEconomic\":{},\"stopSameBlockOrTopology\":{},\"stopAccountingHalt\":{},\"lastBlock\":{},\"lastControlRefTime\":{},\"lastControlProofSize\":{},\"lastEffectRefTime\":{},\"lastEffectProofSize\":{},\"lastUserRefTime\":{},\"lastUserProofSize\":{},\"lastUserRemainingRefTime\":{},\"lastUserRemainingProofSize\":{},\"lastServiceCount\":{}}}",
       self.samples.len(),
       total_steps as f64 / self.samples.len().max(1) as f64,
       self.maximum_service_gap_blocks,
@@ -14956,8 +16505,7 @@ impl ProductionThroughputDiagnostics {
       last_user.proof_size(),
       last_user_remaining.ref_time(),
       last_user_remaining.proof_size(),
-      last.map(|sample| sample.queue_head).unwrap_or(0),
-      last.map(|sample| sample.queue_tail).unwrap_or(0),
+      last.map(|sample| sample.service_count).unwrap_or(0),
     );
     println!(
       "ACTOR_FREQUENCY_REPORT_V1 {{\"profile\":\"{label}\",\"committedSteps\":{total_steps},\"openings\":{openings},\"completions\":{completions},\"cadencedOccurrences\":{cadenced_occurrences}}}"
@@ -15363,6 +16911,7 @@ fn measure_manual_control_branch(close_after_productive_cycle: bool) -> (Weight,
   })
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn signed_user_policy_contract_runs_a_committed_cycle() {
   // The public signed admission path for a policy-bearing User Contract: creation through the
@@ -15483,12 +17032,12 @@ fn zero_step_and_productive_cleanup_complete_path_matrix_is_exact() {
     zero_step,
     (Weight::from_parts(3_811_182_000, 50_963), Weight::zero())
   );
-  // Close retains the admitted Step maximum plus lifecycle cleanup. This is a conservative
-  // resource charge, not evidence that a persistent-completion benchmark measured destruction.
+  // Close retains the admitted Step maximum (including one current invocation receipt) plus
+  // lifecycle cleanup. This charge is not physical evidence of measured destruction.
   assert_eq!(
     productive_cleanup,
     (
-      Weight::from_parts(13_399_391_000, 152_988),
+      Weight::from_parts(13_401_696_000, 152_988),
       Weight::from_parts(1_463_533_000, 6_196),
     )
   );
@@ -15677,10 +17226,11 @@ fn running_middle_complete_path_is_exact() {
       Actors::on_finalize(block);
     }
     let measured = middle.expect("middle Running measurement exists");
+    // The exact Control charge includes one current invocation receipt for the transfer.
     assert_eq!(
       measured,
       (
-        Weight::from_parts(4_749_999_832, 56_402),
+        Weight::from_parts(4_752_304_832, 56_402),
         Weight::from_parts(1_463_533_000, 6_196),
       )
     );
@@ -15799,6 +17349,7 @@ fn swapout_success_complete_path_matrix_uses_canonical_service_envelope() {
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 fn measure_swapout_retry_cell(
   predicate_count: u32,
   withdraw_before_retry: bool,
@@ -15997,6 +17548,7 @@ fn measure_swapout_retry_cell(
   (measured, retry_keys, retry_proof_bytes)
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn swapout_temporary_failure_and_retry_matrix_uses_canonical_service_envelope() {
   use polkadot_sdk::pallet_asset_conversion::PoolLocator;
@@ -16365,6 +17917,7 @@ fn funding_unavailable_and_retry_use_canonical_service_envelope() {
   );
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn minimal_pipeline_admission_apoptosis_complete_path_is_exact() {
   super::common::synthetic_actor_test_ext().execute_with(|| {
@@ -16991,9 +18544,26 @@ pub(super) fn assert_paired_base_refusal(
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 fn create_paired_drain_prefix(
   budget: pallet_deos_actors::BlockResourceBudget,
   running: bool,
+) -> (Vec<ActorId>, Weight) {
+  let prefix = prepare_paired_drain_prefix(budget, running, |steps| {
+    create_system(ALICE, manual_schedule(), None, steps)
+  });
+  for id in &prefix.0 {
+    assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), *id));
+  }
+  prefix
+}
+
+/// Return funded, inactive prefix Actors so callers can use a later public activation block.
+#[cfg(feature = "benchmark-authority-scaffolding")]
+pub(super) fn prepare_paired_drain_prefix(
+  budget: pallet_deos_actors::BlockResourceBudget,
+  running: bool,
+  mut create: impl FnMut(RuntimeContractSteps) -> ActorId,
 ) -> (Vec<ActorId>, Weight) {
   assert_ok!(create_pool(
     RuntimeOrigin::signed(ALICE),
@@ -17032,7 +18602,7 @@ fn create_paired_drain_prefix(
   let steps = BoundedVec::try_from(steps).unwrap();
   let ids = (0..=capacity)
     .map(|_| {
-      let id = create_system(ALICE, manual_schedule(), None, steps.clone());
+      let id = create(steps.clone());
       fund_native(id, 10_000 * crate::UNIT);
       assert_ok!(mint_tokens(
         ASSET_A,
@@ -17040,14 +18610,25 @@ fn create_paired_drain_prefix(
         &actor_account(id),
         10 * crate::UNIT
       ));
-      assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), id));
       id
     })
     .collect::<Vec<_>>();
   (ids, effect)
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 fn close_paired_drain_head(ids: &[ActorId], effect: Weight) {
+  close_paired_drain_head_with(ids, effect, |id| {
+    assert_ok!(Actors::close_actor(RuntimeOrigin::root(), id));
+  });
+}
+
+#[cfg(feature = "benchmark-authority-scaffolding")]
+pub(super) fn close_paired_drain_head_with(
+  ids: &[ActorId],
+  effect: Weight,
+  close: impl FnOnce(ActorId),
+) {
   use pallet_deos_actors::BlockResourceDomain;
   let executed = System::events()
     .into_iter()
@@ -17113,7 +18694,7 @@ fn close_paired_drain_head(ids: &[ActorId], effect: Weight) {
     )
     .unwrap();
   pallet_deos_actors::CurrentBlockResourceState::<Runtime>::put(state);
-  assert_ok!(Actors::close_actor(RuntimeOrigin::root(), actor_id));
+  close(actor_id);
   assert_eq!(Actors::service_header().round_block, round);
   assert_eq!(
     (
@@ -17129,6 +18710,7 @@ fn close_paired_drain_head(ids: &[ActorId], effect: Weight) {
   pallet_deos_actors::CurrentBlockResourceState::<Runtime>::put(state);
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn paired_drain_refusal_preserves_runtime_actors_and_recovers_next_prepass() {
   assert_paired_drain_refusal(BlockResourceBudgetValue::get, |_| {
@@ -17136,6 +18718,7 @@ fn paired_drain_refusal_preserves_runtime_actors_and_recovers_next_prepass() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 pub(super) fn assert_paired_drain_refusal(
   budget_input: impl Fn() -> pallet_deos_actors::BlockResourceBudget,
   open_prepass: impl Fn(u32) -> polkadot_sdk::frame_support::dispatch::PostDispatchInfo,
@@ -17370,6 +18953,7 @@ pub(super) fn assert_paired_drain_refusal(
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn paired_runtime_business_failure_commits_attempt_before_successor() {
   assert_paired_business_failure(BlockResourceBudgetValue::get, |_| {
@@ -17377,6 +18961,7 @@ fn paired_runtime_business_failure_commits_attempt_before_successor() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 pub(super) fn assert_paired_business_failure(
   budget_input: impl Fn() -> pallet_deos_actors::BlockResourceBudget,
   open_prepass: impl Fn(u32) -> polkadot_sdk::frame_support::dispatch::PostDispatchInfo,
@@ -17505,6 +19090,242 @@ pub(super) fn assert_paired_business_failure(
       assert!(Actors::block_resource_state().is_none());
     });
   }
+}
+
+fn run_current_manual_predicate_group(
+  actor_count: u32,
+  driver_rows: u32,
+  predicate_counts: &[u32],
+) {
+  assert!(actor_count >= 4 && driver_rows >= 2);
+  for &predicate_count in predicate_counts {
+    synthetic_actor_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      assert_synthetic_actor_genesis();
+      let amount = crate::EXISTENTIAL_DEPOSIT;
+      let mut ids = Vec::new();
+      let mut before = BTreeMap::new();
+      assert!(actor_count <= <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get());
+      for index in 0..actor_count {
+        let mut predicates = transfer_matrix_predicates(predicate_count);
+        if index == 1 {
+          predicates[0] = pallet_deos_actors::Predicate::BalanceAbove {
+            asset: AssetKind::Native,
+            threshold: 10_000 * amount,
+          };
+        }
+        let steps = vec![RuntimeStep {
+          precondition: all_preconditions(predicates),
+          task: Task::Transfer {
+            asset: AssetKind::Native,
+            to: BOB,
+            amount: AmountResolution::Fixed(amount),
+          },
+          on_error: StepErrorPolicy::AbortCycle,
+        }]
+        .try_into()
+        .expect("one predicated Step fits");
+        let id = Actors::next_actor_id();
+        let contract = system_active_contract(manual_schedule(), None, steps).unwrap();
+        assert_ok!(Actors::create_system_actor(
+          RuntimeOrigin::root(),
+          ALICE,
+          Mutability::Mutable,
+          Some(contract),
+        ));
+        assert_eq!(
+          Actors::active_actor_state(id)
+            .unwrap()
+            .identity
+            .last_control_mutation_block,
+          1
+        );
+        fund_native(id, 1_000 * amount);
+        let balance = native_balance(&actor_account(id));
+        assert!(balance >= 1_000 * amount && balance < 10_000 * amount);
+        before.insert(id, balance);
+        ids.push(id);
+      }
+      let skipped_id = ids[1];
+      let expected_transfers = ids.iter().copied().filter(|id| *id != skipped_id).collect::<Vec<_>>();
+      let sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+      let sink_before = native_balance(&sink);
+      let owner_before = native_balance(&ALICE);
+      let recipient_before = native_balance(&BOB);
+      let issuance = Balances::total_issuance();
+      System::set_block_number(2);
+      for &id in &ids {
+        assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), id));
+        let node = Actors::service_nodes(id).unwrap();
+        assert_eq!(node.eligible_from, 3, "real next-block Manual publication");
+        assert!(pallet_deos_actors::TriggerDeadlineHandles::<Runtime>::get(id).is_none());
+        assert!(Actors::deadline_handles(id).is_none());
+      }
+      assert_eq!(pallet_deos_actors::ServiceHeader::<Runtime>::get().count, actor_count);
+      let mut completed = Vec::new();
+      let mut transfers = Vec::new();
+      let mut transferred_ids = BTreeSet::new();
+      let mut receipts = BTreeSet::new();
+      let mut diagnostics = ProductionThroughputDiagnostics::default();
+      let mut first_complete_block = None;
+      for block in 2..=driver_rows.checked_add(1).unwrap() {
+        System::set_block_number(block);
+        System::reset_events();
+        System::set_block_consumed_resources(Weight::zero(), 0);
+        set_consensus_timestamp(
+          u64::from(block) * primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS,
+        );
+        assert_eq!(Actors::on_initialize(block), Weight::zero());
+        ensure_current_resource_state();
+        let base_event_end = System::events().len();
+        Actors::on_idle(block, Weight::MAX);
+        diagnostics.record_one_step_block(
+          block,
+          base_event_end,
+          Weight::zero(),
+          Weight::zero(),
+          None,
+        );
+        let mut distinct = BTreeSet::new();
+        let mut effects = 0;
+        for event in actor_events() {
+          match event {
+            Event::TransferExecuted {
+              actor_id,
+              cycle_nonce,
+              step_index,
+              asset,
+              amount: transferred,
+              to,
+            } => {
+              assert!(block >= 3);
+              assert_eq!(Some(&actor_id), expected_transfers.get(transfers.len()));
+              assert_eq!((cycle_nonce, step_index), (1, 0));
+              assert_eq!((asset, transferred, to), (AssetKind::Native, amount, BOB));
+              assert!(transferred_ids.insert(actor_id));
+              transfers.push(actor_id);
+              effects += 1;
+            }
+            Event::ActionFeeCharged {
+              actor_id,
+              cycle_nonce,
+              step_index,
+              actual_effect_weight,
+              fee,
+            } => {
+              assert!(before.contains_key(&actor_id) && actor_id != skipped_id);
+              assert!(receipts.insert(actor_id));
+              assert_eq!((cycle_nonce, step_index, fee), (1, 0, 0));
+              assert_ne!(actual_effect_weight, Weight::zero());
+            }
+            Event::CycleSummary {
+              actor_id,
+              cycle_nonce,
+              outcomes,
+              ..
+            } => {
+              assert!(block >= 3, "B+1 forbids completion in the signal block");
+              assert_eq!(
+                Some(&actor_id),
+                ids.get(completed.len()),
+                "FIFO includes skipped Steps"
+              );
+              assert!(distinct.insert(actor_id), "Q1");
+              assert_eq!(cycle_nonce, 1);
+              let expected = if actor_id == skipped_id {
+                pallet_deos_actors::OutcomeTotals {
+                  precondition_skips: 1,
+                  ..Default::default()
+                }
+              } else {
+                pallet_deos_actors::OutcomeTotals {
+                  executed_steps: 1,
+                  committed_effectful_tasks: 1,
+                  ..Default::default()
+                }
+              };
+              assert_eq!(outcomes, expected);
+              completed.push(actor_id);
+            }
+            Event::TriggerOccurrenceProcessed { fee, .. }
+            | Event::PipelineFeeCharged { fee, .. } => assert_eq!(fee, 0),
+            Event::StepFailed { .. } | Event::ActorClosed { .. } => {
+              panic!("funded Manual group must not fail or close")
+            }
+            _ => {}
+          }
+        }
+        let snapshot = Actors::finalized_block_resource_telemetry().unwrap();
+        assert_eq!(snapshot.block_number(), block);
+        assert!(!snapshot.optional_actor_work_halted());
+        let usage = snapshot.usage();
+        assert!(
+          usage
+            .actor_control_used()
+            .all_lte(snapshot.budget().limits().actor_control())
+        );
+        assert!(
+          usage
+            .shared_used()
+            .unwrap()
+            .all_lte(snapshot.budget().limits().shared_economic())
+        );
+        assert_eq!(usage.user_dispatch_used(), Weight::zero());
+        assert_eq!(usage.actor_effect_used() == Weight::zero(), effects == 0);
+        for &id in &ids {
+          let debit = if transferred_ids.contains(&id) { amount } else { 0 };
+          assert_eq!(native_balance(&actor_account(id)), before[&id] - debit);
+          assert!(pallet_deos_actors::TriggerDeadlineHandles::<Runtime>::get(id).is_none());
+          assert!(Actors::deadline_handles(id).is_none());
+        }
+        assert_eq!(
+          native_balance(&BOB),
+          recipient_before + transfers.len() as u128 * amount
+        );
+        assert_eq!(
+          native_balance(&sink),
+          sink_before,
+          "System fee exemption is not User fee evidence"
+        );
+        assert_eq!(native_balance(&ALICE), owner_before);
+        assert_eq!(Balances::total_issuance(), issuance);
+        Actors::on_finalize(block);
+        if completed.len() == ids.len() && first_complete_block.is_none() {
+          first_complete_block = Some(block);
+        }
+      }
+      assert_eq!(completed, ids);
+      assert_eq!(transfers, expected_transfers);
+      assert_eq!(receipts, transferred_ids);
+      diagnostics.assert_complete_first_traversal(&ids);
+      assert_eq!(diagnostics.samples.len(), driver_rows as usize);
+      assert_eq!(diagnostics.cadenced_occurrences(), 0);
+      assert_eq!(pallet_deos_actors::ServiceHeader::<Runtime>::get().count, 0);
+      for id in ids {
+        let state = Actors::active_actor_state(id).unwrap();
+        assert_eq!(state.identity.cycle_nonce, 1);
+        assert_eq!(state.hot.cycle_state, pallet_deos_actors::CycleState::Idle);
+        assert!(!state.hot.pending_signal);
+        assert!(Actors::actor_run_state(id).is_none());
+        assert!(Actors::service_nodes(id).is_none());
+      }
+      println!("MANUAL_PREDICATE_GROUP predicates={predicate_count} actors={actor_count} driver_rows={driver_rows} dispositions={} transfers={} first_complete_block={} custody_and_system_fees_reconciled=true",
+        completed.len(), transfers.len(), first_complete_block.expect("complete traversal exists"));
+      #[cfg(feature = "try-runtime")]
+      assert_ok!(Actors::try_state(System::block_number()));
+    });
+  }
+}
+
+#[test]
+fn current_manual_predicate_group_reconciles_real_transfers_and_skips() {
+  run_current_manual_predicate_group(4, 5, &[2, 4]);
+}
+
+#[test]
+#[ignore = "Current Manual-only 10k four-predicate effects; exact native selection only"]
+fn current_manual_predicate_group_10k_four_predicates() {
+  run_current_manual_predicate_group(10_000, 2_500, &[4]);
 }
 
 fn run_transfer_homogeneous_trigger_profile(label: &str, cadenced: bool) {
@@ -18203,8 +20024,146 @@ fn mixed_9500_transfer_400_swapout_100_control_first_traversal() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
-#[ignore] // ~30s wall-clock; run manually: cargo test --release stress_10k_actors_queue_scheduler -- --ignored
+fn mixed_class_paused_scheduler_preserves_fifo_and_real_fees() {
+  run_mixed_class_paused_scheduler_contract(1);
+}
+
+#[cfg(feature = "benchmark-authority-scaffolding")]
+#[test]
+fn mixed_class_recurring_scheduler_preserves_fifo_and_real_fees() {
+  run_mixed_class_paused_scheduler_contract(5);
+}
+
+#[cfg(feature = "benchmark-authority-scaffolding")]
+fn run_mixed_class_paused_scheduler_contract(cycles: u32) {
+  synthetic_actor_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    assert_synthetic_actor_genesis();
+    assert!(pallet_deos_actors::UserCreationEnabled::<Runtime>::get());
+    let paused = setup_inert_actors(3, 1_000 * crate::EXISTENTIAL_DEPOSIT);
+    System::set_block_number(2);
+    set_consensus_timestamp(2 * primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS);
+    for &id in &paused {
+      assert_ok!(Actors::pause_actor(RuntimeOrigin::root(), id));
+    }
+    let paused_before = paused.iter().map(|id| (
+      Actors::active_actor_state(*id), Actors::actor_processes(*id), native_balance(&actor_account(*id)),
+    )).collect::<Vec<_>>();
+    let fee_sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+    let sink_before = native_balance(&fee_sink);
+    let owner_before = native_balance(&ALICE);
+    let creation_fee = <Runtime as pallet_deos_actors::Config>::ActorCreationFee::get();
+    let floor = <Runtime as pallet_deos_actors::Config>::MinUserBalance::get();
+    let steps: RuntimeContractSteps = vec![make_step(Task::StopCycle)].try_into().unwrap();
+    let mut ids = Vec::new();
+    let mut user_fees = alloc::collections::BTreeMap::new();
+    let mut holds = alloc::collections::BTreeMap::new();
+    for index in 0..8 {
+      let id = Actors::next_actor_id();
+      if index % 2 == 0 {
+        assert_ok!(Actors::create_system_actor(RuntimeOrigin::root(), ALICE, Mutability::Mutable, inert_timer_contract()));
+      } else {
+        prefund_active_user_creation(&ALICE, &steps);
+        assert_ok!(Actors::create_user_actor(RuntimeOrigin::signed(ALICE), Mutability::Mutable,
+          user_active_contract(Schedule { trigger: Trigger::cadenced(1), cooldown_blocks: 0 }, None, steps.clone())));
+        let quote = Actors::actor_cost_quote(id).unwrap();
+        assert_eq!(quote.actor_type, ActorType::User);
+        assert_eq!(quote.creation_fee, creation_fee);
+        let trigger = quote.prospective_trigger_fee.unwrap().fee;
+        let pipeline = quote.prospective_pipeline_fee.unwrap().total_fee;
+        assert!(creation_fee > 0 && trigger > 0 && pipeline > 0);
+        assert_eq!(quote.maximum_next_action_fee.maximum_effect_fee, 0);
+        // Fixture setup prefunds one Pipeline; back the remaining cycles and every Trigger.
+        fund_native(id, u128::from(cycles) * trigger + u128::from(cycles - 1) * pipeline);
+        assert!(native_balance(&actor_account(id)) >= floor + u128::from(cycles) * (trigger + pipeline));
+        user_fees.insert(id, (trigger, pipeline));
+        holds.insert(id, actor_state_hold_total(id));
+      }
+      assert_eq!(Actors::active_actor_state(id).unwrap().identity.last_control_mutation_block, 2);
+      ids.push(id);
+    }
+    let count_active = || pallet_deos_actors::ActorSemanticStates::<Runtime>::iter_values()
+      .filter(|state| matches!(state, pallet_deos_actors::ActorSemanticState::Active(_))).count();
+    assert_eq!(count_active(), 11);
+    assert_eq!(pallet_deos_actors::ActorProcesses::<Runtime>::iter_keys().count(), 11);
+    let creation_total = creation_fee * user_fees.len() as u128;
+    assert_eq!(native_balance(&fee_sink), sink_before + creation_total);
+    let owner_after_setup = native_balance(&ALICE);
+    assert_eq!(owner_before - owner_after_setup, creation_total + holds.values().sum::<u128>());
+    let before_balances = ids.iter().map(|id| (*id, native_balance(&actor_account(*id)))).collect::<alloc::collections::BTreeMap<_, _>>();
+    let issuance = Balances::total_issuance();
+    let mut completed = Vec::new();
+    let mut publications = alloc::collections::BTreeMap::new();
+    // One publication per Tick and B+1: five complete eight-Actor rounds end at B43.
+    let last_block = 3 + cycles * ids.len() as u32;
+    for block in 3..=last_block {
+      System::set_block_number(block);
+      System::reset_events();
+      Actors::on_initialize(block);
+      run_current_idle(Weight::MAX);
+      Actors::on_finalize(block);
+      let mut distinct = alloc::collections::BTreeSet::new();
+      for record in System::events() {
+        if let RuntimeEvent::Actors(Event::CycleSummary { actor_id, cycle_nonce, outcomes, .. }) = record.event {
+          assert_eq!(Some(&actor_id), ids.get(completed.len() % ids.len()), "class-neutral canonical FIFO across recurrence");
+          assert_eq!(cycle_nonce, 1 + (completed.len() / ids.len()) as u64);
+          assert!(distinct.insert(actor_id), "Q1 forbids a second Step in one block");
+          assert!(publications.remove(&actor_id).is_some_and(|at| at < block), "each Cycle consumes its own earlier paid-readiness publication (B+1)");
+          assert_eq!(outcomes, pallet_deos_actors::OutcomeTotals { executed_steps: 1, ..Default::default() });
+          completed.push(actor_id);
+        }
+      }
+      let mut cycle_debits = 0u128;
+      for &id in &ids {
+        let state = Actors::active_actor_state(id).expect("funded mixed Actor survives");
+        let done = completed.iter().filter(|&&completed_id| completed_id == id).count() as u32;
+        assert_cadenced_pressure_actor(id, done);
+        if let Some(node) = Actors::service_nodes(id) {
+          assert_eq!(node.eligible_from, block + 1);
+          publications.insert(id, block);
+        }
+        let debit = if let Some(&(trigger, pipeline)) = user_fees.get(&id) {
+          assert_eq!(actor_state_hold_total(id), holds[&id]);
+          u128::from(done) * (trigger + pipeline) + if state.hot.pending_signal { trigger } else { 0 }
+        } else { 0 };
+        assert_eq!(before_balances[&id] - native_balance(&state.identity.sovereign_account), debit,
+          "Trigger latch and Pipeline completion have independent exact fee owners");
+        cycle_debits += debit;
+      }
+      assert_eq!(native_balance(&fee_sink), sink_before + creation_total + cycle_debits);
+      assert_eq!(native_balance(&ALICE), owner_after_setup);
+      assert_eq!(Balances::total_issuance(), issuance);
+      assert_eq!(count_active(), 11);
+      assert_eq!(pallet_deos_actors::ActorProcesses::<Runtime>::iter_keys().count(), 11);
+      for (index, &id) in paused.iter().enumerate() {
+        assert_eq!((Actors::active_actor_state(id), Actors::actor_processes(id), native_balance(&actor_account(id))), paused_before[index]);
+        assert!(Actors::service_nodes(id).is_none());
+        assert!(Actors::deadline_handles(id).is_none());
+        assert!(pallet_deos_actors::TriggerDeadlineHandles::<Runtime>::get(id).is_none());
+      }
+      let snapshot = Actors::finalized_block_resource_telemetry().unwrap();
+      assert_eq!(snapshot.block_number(), block);
+      assert!(!snapshot.optional_actor_work_halted());
+      assert_eq!(snapshot.usage().actor_effect_used(), Weight::zero());
+    }
+    let expected = (0..cycles).flat_map(|_| ids.iter().copied()).collect::<Vec<_>>();
+    assert_eq!(completed, expected);
+    for &id in &ids {
+      assert_cadenced_pressure_actor(id, cycles);
+    }
+    println!("MIXED_CLASS_PAUSED active=8 users=4 systems=4 paused=3 driver_blocks={} completed={} rounds={} creation_fees={} cycle_fees={} custody_and_paused_preserved=true",
+      last_block - 2, completed.len(), cycles, creation_total,
+      u128::from(cycles) * user_fees.values().map(|(trigger, pipeline)| trigger + pipeline).sum::<u128>());
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::try_state(System::block_number()));
+  });
+}
+
+#[cfg(feature = "benchmark-authority-scaffolding")]
+#[test]
+#[ignore] // Opt-in model stress: cargo test --release --features benchmark-authority-scaffolding stress_10k_actors_queue_scheduler -- --ignored
 fn stress_10k_actors_queue_scheduler() {
   synthetic_actor_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -18283,6 +20242,7 @@ fn stress_10k_actors_queue_scheduler() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn dust_attack_min_balance_actors_preserve_scheduler_stability() {
   seeded_test_ext().execute_with(|| {
@@ -18451,6 +20411,7 @@ fn fee_collector_noop_zero_emits_no_ingress() {
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn user_close_preserves_public_preimage_hold_and_producer() {
   use codec::MaxEncodedLen;
@@ -18582,12 +20543,13 @@ fn user_close_preserves_public_preimage_hold_and_producer() {
         ));
         assert_eq!(Balances::balance_on_hold(&preimage_reason, &ALICE), 0);
         assert!(pallet_balances::Holds::<Runtime>::get(ALICE).is_empty());
-        assert!(pallet_balances::Holds::<Runtime>::contains_key(ALICE));
+        assert!(!pallet_balances::Holds::<Runtime>::contains_key(ALICE));
       });
     }
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn user_close_at_minimum_free_balance_preserves_native_account() {
   for dormant in [false, true] {
@@ -18705,6 +20667,7 @@ fn user_close_at_minimum_free_balance_preserves_native_account() {
   }
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn native_currency_release_committed_root_proof_has_two_key_inventory() {
   use polkadot_sdk::{
@@ -18884,7 +20847,10 @@ fn native_currency_release_committed_root_proof_has_two_key_inventory() {
       expected_account.providers += u32::from(zero_free);
       expected_account.consumers = u32::from(preimage);
       assert_eq!(System::account(ALICE), expected_account);
-      assert!(polkadot_sdk::pallet_balances::Holds::<Runtime>::contains_key(ALICE));
+      assert_eq!(
+        polkadot_sdk::pallet_balances::Holds::<Runtime>::contains_key(ALICE),
+        preimage
+      );
       let mut expected_events = Vec::new();
       if zero_free {
         expected_events.push(RuntimeEvent::Balances(
@@ -19615,6 +21581,7 @@ fn public_parked_close_replays_complete_reference_root() {
   );
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn user_actor_state_uses_the_dedicated_runtime_hold_reason_and_releases_exactly() {
   seeded_test_ext().execute_with(|| {
@@ -19643,6 +21610,7 @@ fn user_actor_state_uses_the_dedicated_runtime_hold_reason_and_releases_exactly(
   });
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn actor_cost_runtime_api_exposes_named_deos_fee_and_hold_provenance() {
   seeded_test_ext().execute_with(|| {
