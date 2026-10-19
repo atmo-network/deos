@@ -114,16 +114,16 @@ const flashLoanOverclaims = [
   { re: /eliminates\s+flash/i, label: 'eliminates flash-loan overclaim' },
 ];
 const publicContractFiles = ['AGENTS.md', 'template/pallets/router/README.md'];
-const architectureDocsDir = path.join(projectRoot, 'docs');
+const architectureDocsDir = path.join(projectRoot, 'docs/deos');
 if (fs.existsSync(architectureDocsDir)) {
   for (const name of fs.readdirSync(architectureDocsDir)) {
-    if (/\.architecture\.en\.md$/.test(name)) publicContractFiles.push(path.join('docs', name));
+    if (/\.architecture\.en\.md$/.test(name)) publicContractFiles.push(path.join('docs/deos', name));
   }
 }
 const wikiRouterFiles = [
-  'wiki/overview/deos-router.en.md',
-  'wiki/overview/deos-router.ru.md',
-  'wiki/_meta/navigation.json',
+  'wiki/deos/overview/router.en.md',
+  'wiki/deos/overview/router.ru.md',
+  'wiki/deos/_meta/navigation.json',
 ];
 publicContractFiles.push(...wikiRouterFiles);
 for (const relativePath of publicContractFiles) {

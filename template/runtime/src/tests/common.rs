@@ -291,6 +291,77 @@ pub fn seeded_synthetic_actor_test_ext() -> TestExternalities {
   seed_test_environment(synthetic_actor_test_ext())
 }
 
+/// Convert an explicit native fixture into the real SDK benchmark host's parent state.
+#[cfg(feature = "runtime-benchmarks")]
+pub(crate) fn benchmarking_storage(
+  mut source: TestExternalities,
+) -> polkadot_sdk::sp_core::storage::Storage {
+  source.execute_with(|| System::set_block_number(0));
+  committed_fixture_storage(source)
+}
+
+/// Capture a complete committed TOP fixture without normalizing its live block context.
+#[cfg(feature = "runtime-benchmarks")]
+pub(crate) fn committed_fixture_storage(
+  mut source: TestExternalities,
+) -> polkadot_sdk::sp_core::storage::Storage {
+  use polkadot_sdk::{
+    sp_core::storage::{Storage, well_known_keys},
+    sp_state_machine::Backend,
+  };
+  source.commit_all().unwrap();
+  let top = source
+    .backend
+    .pairs(Default::default())
+    .unwrap()
+    .map(Result::unwrap)
+    .collect::<std::collections::BTreeMap<_, _>>();
+  assert!(
+    !top
+      .keys()
+      .any(|key| well_known_keys::is_child_storage_key(key))
+  );
+  Storage {
+    top,
+    ..Default::default()
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn committed_fixture_snapshot_preserves_live_block_context() {
+  use codec::Encode;
+  let source = || {
+    let mut ext = TestExternalities::default();
+    ext.execute_with(|| System::set_block_number(33));
+    ext
+  };
+  let key = polkadot_sdk::frame_support::storage::storage_prefix(b"System", b"Number");
+  assert_eq!(
+    committed_fixture_storage(source()).top.get(key.as_slice()),
+    Some(&33u32.encode())
+  );
+  assert_eq!(
+    benchmarking_storage(source()).top.get(key.as_slice()),
+    Some(&0u32.encode())
+  );
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub(crate) fn with_benchmarking_host<R>(
+  genesis: polkadot_sdk::sp_core::storage::Storage,
+  run: impl FnOnce(&sc_client_db::BenchmarkingState<polkadot_sdk::sp_runtime::traits::BlakeTwo256>) -> R,
+) -> R {
+  use polkadot_sdk::{
+    sp_externalities::set_and_run_with_externalities,
+    sp_state_machine::{Ext, OverlayedChanges},
+  };
+  let host = sc_client_db::BenchmarkingState::new(genesis, None, true, true).unwrap();
+  let mut overlay = OverlayedChanges::default();
+  let mut ext = Ext::new(&mut overlay, &host, None);
+  set_and_run_with_externalities(&mut ext, || run(&host))
+}
+
 /// Mint test assets to multiple accounts
 pub fn create_test_asset(asset_id: u32, owner: &AccountId) -> DispatchResult {
   Assets::force_create(

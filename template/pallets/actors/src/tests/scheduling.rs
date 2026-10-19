@@ -2488,6 +2488,52 @@ fn prepass_rejects_host_budget_errors_before_scheduler_mutation() {
 }
 
 #[test]
+fn prepass_dependency_refusals_roll_back_public_prefix_without_servicing_ready_actor() {
+  use crate::{DependencyScanSourceList, DependencyScanSourceListState};
+  let maximum = Weight::from_parts(2_000_000_000_000, 10_485_760);
+  let configured =
+    crate::BlockResourceBudget::new_with_control_ratio(maximum, maximum / 4, 1, 3).unwrap();
+  for cursor in [None, Some(18)] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      set_block_resource_budget(configured);
+      let id = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        transfer_contract_steps(BOB, 1),
+      );
+      fund_native(id, 1_000);
+      assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+      System::set_block_number(2);
+      set_prepass_resource_budget(2, Ok(configured));
+      // Diagnostic corruption, not admitted history: either the probe rejects the selector,
+      // or its positive result reaches a worker whose selected source node is missing.
+      DependencyScanSourceListState::<Test>::put(DependencyScanSourceList { cursor, count: 1 });
+      assert_noop!(
+        Actors::actor_prepass(RuntimeOrigin::none()),
+        Error::<Test>::ResourceProtocolFailed
+      );
+      assert_eq!(prepass_resource_budget_reads(), 1);
+      assert!(Actors::block_resource_state().is_none());
+      assert_eq!(Actors::active_actor_view(id).unwrap().cycle_nonce, 0);
+      assert_eq!(
+        DependencyScanSourceListState::<Test>::get(),
+        DependencyScanSourceList { cursor, count: 1 }
+      );
+      // The public storage layer restores the prefix; this does not assert restoration of
+      // a borrowed Rust-local ledger. Removing only the injected fault permits the same B2 call.
+      DependencyScanSourceListState::<Test>::kill();
+      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+      assert_eq!(prepass_resource_budget_reads(), 2);
+      assert_eq!(Actors::active_actor_view(id).unwrap().cycle_nonce, 1);
+      Actors::on_idle(2, Weight::MAX);
+      Actors::on_finalize(2);
+    });
+  }
+}
+
+#[test]
 fn actor_prepass_rejects_signed_origin_before_resource_mutation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);

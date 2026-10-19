@@ -151,6 +151,7 @@ thread_local! {
     RefCell::new(alloc::collections::BTreeMap::new());
 
   static STAKING_SHARE_BALANCE_READS: RefCell<u32> = const { RefCell::new(0) };
+  static WEIGHT_TO_FEE_TRACE: RefCell<Option<Vec<Weight>>> = const { RefCell::new(None) };
 
   static UNSTAKED: RefCell<alloc::collections::BTreeMap<(AccountId, TestAsset), Balance>> =
     RefCell::new(alloc::collections::BTreeMap::new());
@@ -167,12 +168,15 @@ thread_local! {
   static PREPASS_RESOURCE_BUDGET_READS: RefCell<u32> = const { RefCell::new(0) };
   #[cfg(feature = "runtime-benchmarks")]
   static ADMISSION_AUTHORITY_CALLS: RefCell<u32> = const { RefCell::new(0) };
+  #[cfg(feature = "runtime-benchmarks")]
+  static ASSET_BALANCE_READ_TRACE: RefCell<Option<Vec<(AccountId, TestAsset)>>> = const { RefCell::new(None) };
   static STEP_CONTROL_ACTUAL_WEIGHT_OVERRIDE: RefCell<Option<polkadot_sdk::sp_weights::Weight>> =
     RefCell::new(None);
   static LAST_STEP_CONTROL_EXECUTION: RefCell<Option<crate::StepControlExecution>> =
     RefCell::new(None);
   static MISSING_STEP_CONTROL_ACTUAL_WEIGHT: RefCell<bool> = RefCell::new(false);
   static MISSING_BEHAVIOR_CONTROL_WEIGHT: RefCell<bool> = RefCell::new(false);
+  static BEHAVIOR_CONTROL_MAXIMUM_OVERRIDE: RefCell<Option<Weight>> = const { RefCell::new(None) };
   static MISSING_BEHAVIOR_CLOSE_WEIGHT: RefCell<bool> = RefCell::new(false);
   static MISSING_BEHAVIOR_INSPECTION_WEIGHT: RefCell<bool> = RefCell::new(false);
   // The production certificate authority always reports a prepared behavior lifecycle weight, so
@@ -183,14 +187,18 @@ thread_local! {
   static PREPARED_FINANCIAL_WAIT_SERVICE_WEIGHT: RefCell<bool> = RefCell::new(false);
   static PREPARED_FINANCIAL_WAIT_INGRESS_WEIGHT: RefCell<bool> = RefCell::new(false);
   static PREPARED_AT_TIME_BACKING: RefCell<bool> = RefCell::new(false);
+  static SERVICE_REFUSAL_COMPLETION_WEIGHT: RefCell<Option<Weight>> = const { RefCell::new(None) };
   static ADMISSION_AUTHORITY_OVERRIDE: RefCell<Option<crate::AdmissionCertificateAuthority>> =
     const { RefCell::new(None) };
+  static ADMISSION_AUTHORITY_UNAVAILABLE: RefCell<bool> = const { RefCell::new(false) };
   static FINANCIAL_RETURN_BACKING: RefCell<TestFinancialReturnBacking> =
     RefCell::new(TestFinancialReturnBacking::Unavailable);
   static TASK_EFFECT_ACTUAL_WEIGHT_OVERRIDE: RefCell<Option<polkadot_sdk::sp_weights::Weight>> =
     RefCell::new(None);
   static MISSING_TASK_EFFECT_ACTUAL_WEIGHT: RefCell<bool> = RefCell::new(false);
   static FEE_COLLECTIONS: RefCell<alloc::vec::Vec<Balance>> = RefCell::new(alloc::vec::Vec::new());
+  static FEE_COLLECTION_HOOK: RefCell<Option<alloc::boxed::Box<dyn FnOnce()>>> =
+    const { RefCell::new(None) };
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER_FROM: RefCell<Option<AccountId>> = RefCell::new(None);
@@ -267,6 +275,8 @@ pub fn register_lp_pair(lp_asset: TestAsset, asset_a: TestAsset, asset_b: TestAs
 pub fn reset_mock_adapters() {
   CADENCE_TICK_MILLIS.with(|value| *value.borrow_mut() = 500);
   #[cfg(feature = "runtime-benchmarks")]
+  ASSET_BALANCE_READ_TRACE.with(|trace| *trace.borrow_mut() = None);
+  #[cfg(feature = "runtime-benchmarks")]
   BENCHMARK_OBSERVATION_REVISIONS.with(|revisions| revisions.borrow_mut().clear());
   let _ = polkadot_sdk::sp_io::storage::clear_prefix(b"mock-asset-balance", None);
   BURNED.with(|b| b.borrow_mut().clear());
@@ -284,6 +294,7 @@ pub fn reset_mock_adapters() {
   LAST_STEP_CONTROL_EXECUTION.with(|v| *v.borrow_mut() = None);
   MISSING_STEP_CONTROL_ACTUAL_WEIGHT.with(|v| *v.borrow_mut() = false);
   MISSING_BEHAVIOR_CONTROL_WEIGHT.with(|v| *v.borrow_mut() = false);
+  BEHAVIOR_CONTROL_MAXIMUM_OVERRIDE.with(|v| *v.borrow_mut() = None);
   MISSING_BEHAVIOR_CLOSE_WEIGHT.with(|v| *v.borrow_mut() = false);
   MISSING_BEHAVIOR_INSPECTION_WEIGHT.with(|v| *v.borrow_mut() = false);
   PREPARED_BEHAVIOR_LIFECYCLE_WEIGHT.with(|v| *v.borrow_mut() = true);
@@ -292,11 +303,14 @@ pub fn reset_mock_adapters() {
   PREPARED_FINANCIAL_WAIT_SERVICE_WEIGHT.with(|v| *v.borrow_mut() = false);
   PREPARED_FINANCIAL_WAIT_INGRESS_WEIGHT.with(|v| *v.borrow_mut() = false);
   PREPARED_AT_TIME_BACKING.with(|v| *v.borrow_mut() = false);
+  SERVICE_REFUSAL_COMPLETION_WEIGHT.with(|v| *v.borrow_mut() = None);
   ADMISSION_AUTHORITY_OVERRIDE.with(|v| *v.borrow_mut() = None);
+  ADMISSION_AUTHORITY_UNAVAILABLE.with(|v| *v.borrow_mut() = false);
   FINANCIAL_RETURN_BACKING.with(|v| *v.borrow_mut() = TestFinancialReturnBacking::Unavailable);
   TASK_EFFECT_ACTUAL_WEIGHT_OVERRIDE.with(|v| *v.borrow_mut() = None);
   MISSING_TASK_EFFECT_ACTUAL_WEIGHT.with(|v| *v.borrow_mut() = false);
   FEE_COLLECTIONS.with(|v| v.borrow_mut().clear());
+  FEE_COLLECTION_HOOK.with(|v| *v.borrow_mut() = None);
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER_FROM.with(|v| *v.borrow_mut() = None);
@@ -369,7 +383,14 @@ impl FeeCollector<AccountId, TestAsset, Balance> for MockFeeCollector {
     amount: Balance,
   ) -> DispatchResult {
     FEE_COLLECTIONS.with(|collections| collections.borrow_mut().push(amount));
-    MockAssetOps::transfer(payer, fee_sink, native_asset, amount).map_err(|failure| failure.error)
+    MockAssetOps::transfer(payer, fee_sink, native_asset, amount)
+      .map_err(|failure| failure.error)?;
+    // Drop the borrow before a callback that may itself use the collector.
+    let hook = FEE_COLLECTION_HOOK.with(|value| value.borrow_mut().take());
+    if let Some(hook) = hook {
+      hook();
+    }
+    Ok(())
   }
 }
 
@@ -607,6 +628,12 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
   }
 
   fn balance(who: &AccountId, asset: TestAsset) -> Balance {
+    #[cfg(feature = "runtime-benchmarks")]
+    ASSET_BALANCE_READ_TRACE.with(|trace| {
+      if let Some(reads) = trace.borrow_mut().as_mut() {
+        reads.push((*who, asset));
+      }
+    });
     #[cfg(feature = "runtime-benchmarks")]
     if Self::account_is_frozen(who, asset) {
       return 0;
@@ -988,7 +1015,9 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
       return Err(DispatchError::Other("MockRemoveLiquidityAfterFirstCreditFailed").into());
     }
     if half < min_amount_a || half < min_amount_b {
-      return Err(DispatchError::Other("MinimumLiquidityOutputNotMet").into());
+      return Err(TaskFailure::temporary(DispatchError::Other(
+        "MinimumLiquidityOutputNotMet",
+      )));
     }
     if INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow()) {
       return Ok((min_amount_a.saturating_sub(1), half));
@@ -1383,9 +1412,40 @@ fn integer_sqrt(n: u128) -> u128 {
 pub struct TestWeightToFee;
 impl polkadot_sdk::sp_weights::WeightToFee for TestWeightToFee {
   type Balance = Balance;
-  fn weight_to_fee(_weight: &polkadot_sdk::sp_weights::Weight) -> Self::Balance {
+  fn weight_to_fee(weight: &polkadot_sdk::sp_weights::Weight) -> Self::Balance {
+    WEIGHT_TO_FEE_TRACE.with(|trace| {
+      if let Some(calls) = trace.borrow_mut().as_mut() {
+        calls.push(*weight);
+      }
+    });
     100
   }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub fn weight_to_fee_trace_len() -> usize {
+  WEIGHT_TO_FEE_TRACE.with(|trace| trace.borrow().as_ref().map_or(0, Vec::len))
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub fn with_weight_to_fee_trace<R>(run: impl FnOnce() -> R) -> (R, Vec<Weight>) {
+  struct Reset;
+  impl Drop for Reset {
+    fn drop(&mut self) {
+      WEIGHT_TO_FEE_TRACE.with(|trace| *trace.borrow_mut() = None);
+    }
+  }
+  WEIGHT_TO_FEE_TRACE.with(|trace| {
+    assert!(
+      trace.borrow().is_none(),
+      "fee-converter trace must not nest"
+    );
+    *trace.borrow_mut() = Some(Vec::new());
+  });
+  let _reset = Reset;
+  let result = run();
+  let calls = WEIGHT_TO_FEE_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
+  (result, calls)
 }
 
 pub struct TestFeeSink;
@@ -1580,12 +1640,74 @@ pub fn set_admission_authority_override(authority: Option<crate::AdmissionCertif
   ADMISSION_AUTHORITY_OVERRIDE.with(|value| *value.borrow_mut() = authority);
 }
 
+pub fn set_admission_authority_unavailable(unavailable: bool) {
+  ADMISSION_AUTHORITY_UNAVAILABLE.with(|value| *value.borrow_mut() = unavailable);
+}
+
+#[test]
+fn admission_authority_unavailability_is_explicit_and_resets() {
+  let current = || {
+    <MockAdmissionCertificateAuthority as crate::AdmissionCertificateAuthorityProvider>::current()
+  };
+  new_test_ext().execute_with(|| {
+    let configured = current().unwrap();
+    let mut changed = configured;
+    changed.runtime_actor_semantics_version += 1;
+    set_admission_authority_override(Some(changed));
+    assert_eq!(current(), Some(changed));
+    set_admission_authority_unavailable(true);
+    assert_eq!(current(), None);
+    set_admission_authority_override(None);
+    assert_eq!(
+      current(),
+      None,
+      "clearing an override does not restore availability"
+    );
+    set_admission_authority_unavailable(false);
+    assert_eq!(current(), Some(configured));
+    set_admission_authority_override(Some(changed));
+    set_admission_authority_unavailable(true);
+    set_admission_authority_unavailable(false);
+    assert_eq!(
+      current(),
+      Some(changed),
+      "availability does not erase the override"
+    );
+    set_admission_authority_unavailable(true);
+  });
+  new_test_ext().execute_with(|| {
+    assert!(
+      current().is_some(),
+      "new externalities reset the unavailable fault"
+    );
+  });
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub fn begin_asset_balance_read_trace() {
+  ASSET_BALANCE_READ_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub fn take_asset_balance_read_trace() -> Vec<(AccountId, TestAsset)> {
+  ASSET_BALANCE_READ_TRACE.with(|trace| trace.borrow_mut().take().unwrap_or_default())
+}
+
 #[cfg(feature = "runtime-benchmarks")]
 pub fn take_admission_authority_calls() -> u32 {
   ADMISSION_AUTHORITY_CALLS.with(|calls| core::mem::take(&mut *calls.borrow_mut()))
 }
 
+pub fn set_service_refusal_completion_weight(weight: Option<Weight>) {
+  SERVICE_REFUSAL_COMPLETION_WEIGHT.with(|value| *value.borrow_mut() = weight);
+}
+
 impl crate::AdmissionCertificateAuthorityProvider for MockAdmissionCertificateAuthority {
+  fn service_refusal_completion_weight() -> Option<Weight> {
+    // Native declaration arithmetic only, never a qualified production coefficient.
+    SERVICE_REFUSAL_COMPLETION_WEIGHT.with(|value| *value.borrow())
+  }
+
   fn financial_wait_service_weight(bytes: u32) -> Option<Weight> {
     PREPARED_FINANCIAL_WAIT_SERVICE_WEIGHT
       .with(|enabled| (*enabled.borrow()).then_some(Weight::from_parts(300, u64::from(bytes))))
@@ -1630,6 +1752,9 @@ impl crate::AdmissionCertificateAuthorityProvider for MockAdmissionCertificateAu
   fn current() -> Option<crate::AdmissionCertificateAuthority> {
     #[cfg(feature = "runtime-benchmarks")]
     ADMISSION_AUTHORITY_CALLS.with(|calls| *calls.borrow_mut() += 1);
+    if ADMISSION_AUTHORITY_UNAVAILABLE.with(|value| *value.borrow()) {
+      return None;
+    }
     if let Some(authority) = ADMISSION_AUTHORITY_OVERRIDE.with(|value| *value.borrow()) {
       return Some(authority);
     }
@@ -1711,6 +1836,10 @@ pub struct MockStepControlWeight;
 
 pub fn set_missing_behavior_control_weight(missing: bool) {
   MISSING_BEHAVIOR_CONTROL_WEIGHT.with(|value| *value.borrow_mut() = missing);
+}
+
+pub fn set_behavior_control_maximum_override(weight: Option<Weight>) {
+  BEHAVIOR_CONTROL_MAXIMUM_OVERRIDE.with(|value| *value.borrow_mut() = weight);
 }
 
 pub fn set_missing_behavior_close_weight(missing: bool) {
@@ -1808,6 +1937,9 @@ impl crate::StepControlWeightProvider<crate::StepOf<Test>> for MockStepControlWe
     if MISSING_BEHAVIOR_CONTROL_WEIGHT.with(|missing| *missing.borrow()) {
       return None;
     }
+    if let Some(weight) = BEHAVIOR_CONTROL_MAXIMUM_OVERRIDE.with(|value| *value.borrow()) {
+      return Some(weight);
+    }
     // Native model coordinates only; these are not measured RefTime or trie-proof coefficients.
     Self::maximum_control_weight(context, step)?.checked_add(&Weight::from_parts(
       u64::from(behavior.atoms)
@@ -1836,6 +1968,9 @@ impl crate::StepControlWeightProvider<crate::StepOf<Test>> for MockStepControlWe
   ) -> Option<Weight> {
     if MISSING_BEHAVIOR_CONTROL_WEIGHT.with(|missing| *missing.borrow()) {
       return None;
+    }
+    if let Some(weight) = BEHAVIOR_CONTROL_MAXIMUM_OVERRIDE.with(|value| *value.borrow()) {
+      return Some(weight);
     }
     // Native model coordinates; no production RefTime or trie-proof coefficient is supplied.
     <crate::weights::TestWeightInfo as crate::weights::WeightInfo>::scheduler_inner_zero_step_complete().checked_add(&Weight::from_parts(
@@ -2088,6 +2223,10 @@ pub fn fee_collections() -> alloc::vec::Vec<Balance> {
 
 pub fn clear_fee_collections() {
   FEE_COLLECTIONS.with(|collections| collections.borrow_mut().clear());
+}
+
+pub fn set_fee_collection_hook(hook: impl FnOnce() + 'static) {
+  FEE_COLLECTION_HOOK.with(|value| *value.borrow_mut() = Some(alloc::boxed::Box::new(hook)));
 }
 
 pub fn set_fail_fee_sink_transfer(value: bool) {

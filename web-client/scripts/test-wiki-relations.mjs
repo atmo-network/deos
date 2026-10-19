@@ -21,7 +21,7 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '../..');
 const graph = JSON.parse(
-  readFileSync(resolve(repoRoot, 'wiki/_meta/graph.json'), 'utf8'),
+  readFileSync(resolve(repoRoot, 'wiki/deos/_meta/graph.json'), 'utf8'),
 );
 const widget = readFileSync(
   resolve(repoRoot, 'web-client/src/lib/widgets/WikiWidget.svelte'),

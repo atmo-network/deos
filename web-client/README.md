@@ -98,17 +98,19 @@ Surface-pressure warnings are triage signals, not folder-theater mandates.
 
 ## Generated Wiki Boundary
 
-`WikiWidget` renders repo-local generated wiki markdown from `../wiki`.
+The accepted [Wiki Publication and Embedding Contract](../docs/deos/wiki-publication.contract.en.md) assigns all Wiki rendering, navigation, localization, semantic-layer filtering, search and graph traversal to the independently deployable DEOS EN/RU website. The framework selects no downstream brand or hosting origin. If embedding is explicitly prioritized, the web-client's target responsibility is only a configured trusted-origin iframe and its lifecycle in the tiling layout. It must not maintain a second Wiki frontend.
+
+The current `WikiWidget` is still the legacy direct renderer of repo-local generated wiki markdown from `../wiki/deos`; the standalone MVP lives in the optional Wiki Sync Skill and iframe migration is deferred. Follow-up work is tracked in [`../BACKLOG.md`](../BACKLOG.md), without delaying higher-priority framework work. The implementation below describes that existing renderer, not acceptance of the successor site/embed. Do not remove it or its dependencies until the replacement works and all remaining consumers have been checked.
 
 The wiki is trusted reviewed repository content, not arbitrary user input. The independent Wiki Sync Skill validates `/wiki` as a strict OKF v0.2 bundle and rejects raw HTML blocks, dangerous URL schemes, inline DOM event handlers, and malformed frontmatter before generated content is retained. The client consumes that reviewed output without depending on Skill internals.
 
 The widget consumes:
 
-- `../wiki/_meta/navigation.json`
-- `../wiki/_meta/aliases.json`
-- `../wiki/_meta/graph.json`
-- `../wiki/_meta/state.json`
-- `../wiki/_meta/locales.json`
+- `../wiki/deos/_meta/navigation.json`
+- `../wiki/deos/_meta/aliases.json`
+- `../wiki/deos/_meta/graph.json`
+- `../wiki/deos/_meta/state.json`
+- `../wiki/deos/_meta/locales.json`
 
 ## Local Development
 
@@ -138,6 +140,8 @@ npm run generate:ingress-evidence
 The package-owned `fee_envelope_vectors` and runtime-owned `actor_cost_vectors` examples also bind the metadata hash; invoke the owning Cargo examples from `../template` with explicit output paths to refresh them. `../scripts/validate-local.sh full` checks their exact freshness. The cost-vector fixture starts with disabled User creation and explicitly enables it through the public setter in isolated externalities; it does not change genesis policy.
 
 Default metadata export requires an existing current production-profile Wasm and compares native bytes with its actual Metadata API before writing. Use `--wasm PATH` for explicit code or `--native-only` only for labelled source preparation. Descriptor generation does not by itself qualify runtime admission, resource bounds or live RPC.
+
+PAPI reads the local metadata file configured in `.papi/polkadot-api.json`. When descriptors change, the installed CLI regenerates their local package and invokes the detected package manager's `install`; this may update `node_modules` and the client lockfile. An offline artifact gate must account for that nested install and require cached dependencies, rather than treating code generation as a file-only operation. Review any lockfile delta as part of the artifact binding; it does not authorize unrelated dependency upgrades.
 
 For local native-staking demos, regenerate the chain spec with current runtime presets, start the local network, then run:
 

@@ -28,7 +28,7 @@ impl Drop for IsolatedBlock {
   }
 }
 
-fn with_isolated_block<R>(block: BlockNumber, run: impl FnOnce() -> R) -> R {
+pub(super) fn with_isolated_block<R>(block: BlockNumber, run: impl FnOnce() -> R) -> R {
   assert!(
     ISOLATED_BLOCK.get().is_none(),
     "isolated scopes cannot nest"
@@ -43,6 +43,8 @@ pub(crate) fn prepass_budget(
   now: BlockNumber,
   configured: BlockResourceBudget,
 ) -> Result<BlockResourceBudget, BlockResourceError> {
+  #[cfg(not(feature = "runtime-benchmarks"))]
+  super::production_block_replay::meter_attribution::observe_freeze(now, configured);
   let Some(block) = ISOLATED_BLOCK.get() else {
     return Ok(configured);
   };

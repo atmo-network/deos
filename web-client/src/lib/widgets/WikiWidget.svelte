@@ -20,10 +20,10 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
   import { formatRussianRelation } from '$lib/wiki/relation-phrases';
   import { type TrustedWikiPage, loadTrustedWikiPage } from '$lib/wiki/trusted';
 
-  import aliases from '../../../../wiki/_meta/aliases.json';
-  import graph from '../../../../wiki/_meta/graph.json';
-  import navigation from '../../../../wiki/_meta/navigation.json';
-  import wikiStateJson from '../../../../wiki/_meta/state.json';
+  import aliases from '../../../../wiki/deos/_meta/aliases.json';
+  import graph from '../../../../wiki/deos/_meta/graph.json';
+  import navigation from '../../../../wiki/deos/_meta/navigation.json';
+  import wikiStateJson from '../../../../wiki/deos/_meta/state.json';
 
   const wikiAliases: WikiAliasManifest = aliases;
   const wikiGraph: WikiGraphManifest = graph;
@@ -109,7 +109,7 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
   }
 
   function repoWikiPath(path: string) {
-    return `wiki/${path}`;
+    return `wiki/deos/${path}`;
   }
 
   function getDefaultPageId() {

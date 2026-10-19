@@ -8,7 +8,7 @@ The package admits immutable typed feeds, authorizes typed producers, stores one
 
 It does not depend on Actors, DEOS Router, DEOS topology, off-chain workers, external networks, subscriber iteration, or historical storage. See [`docs/specification.en.md`](./docs/specification.en.md) for the normative contract, [`docs/architecture.en.md`](./docs/architecture.en.md) for the reusable package implementation map, and [`docs/embedding.md`](./docs/embedding.md) for host obligations.
 
-Concrete reference-runtime composition belongs to [`docs/oracle.integration.en.md`](../../../docs/oracle.integration.en.md).
+Concrete reference-runtime composition belongs to [`docs/deos/oracle.integration.en.md`](../../../docs/deos/oracle.integration.en.md).
 
 ## Validation
 

@@ -1,0 +1,70 @@
+# DEOS Documentation Hub
+
+This namespace owns the upstream DEOS cross-system documentation. The [documentation container](../README.md) owns neutral placement; downstream namespaces are independent additions, not implicit overrides. Package and workspace documents remain with their code owners.
+
+This hub routes readers to canonical contracts and shipped architecture. `DEOS` names the reusable framework and reference stack; `TMCTOL` names its flagship economic configuration. Start with the root [`README.md`](../../README.md) for orientation and [`framework-instance.contract.en.md`](./framework-instance.contract.en.md) for the mechanism/policy boundary.
+
+## Framework
+
+- [Framework / Instance Contract](./framework-instance.contract.en.md)
+- [Core Architecture](./core.architecture.en.md)
+- [Read-Model Contract](./read-model.contract.en.md)
+- [State Witness and Resource Accounting Contract](./state-witness-accounting.contract.en.md)
+- [Manifesto](./manifesto.en.md)
+
+## Economic Standard and Reference Economy
+
+- [TMCTOL Specification](./tmctol.specification.en.md)
+- [Builder Economy Contract](./builder-economy.contract.en.md)
+- [TMC Architecture](../../template/pallets/tmc/docs/architecture.en.md)
+- [Asset Registry Architecture](../../template/pallets/asset-registry/docs/architecture.en.md)
+
+The TMCTOL specification owns project-independent standard mathematics. The Builder Economy contract composes its second-order reference contour with DEOS Governance, while the simulator remains executable authority for formulas, thresholds, and invariant scenarios.
+
+## DEOS Actors
+
+- [DEOS Actors Specification](../../template/pallets/actors/docs/specification.en.md)
+- [DEOS Actors Resource Policy Specification](./actors-resource-policy.specification.en.md)
+- [DEOS Actors Performance Assurance Specification](./actors-performance-assurance.specification.en.md)
+- [DEOS Actors Local Causal Introspection Specification](./actors-causal-introspection.specification.en.md)
+- [Package Architecture](../../template/pallets/actors/docs/architecture.en.md)
+- [Embedding Guide](../../template/pallets/actors/docs/embedding.md)
+- [DEOS Actors Integration](./actors.integration.en.md)
+- [Control-Plane Contract](./actors-control-plane.contract.en.md)
+
+## DEOS Oracle
+
+- [Specification](../../template/pallets/oracle/docs/specification.en.md)
+- [Package Architecture](../../template/pallets/oracle/docs/architecture.en.md)
+- [Embedding Guide](../../template/pallets/oracle/docs/embedding.md)
+- [DEOS Oracle Integration](./oracle.integration.en.md)
+
+## DEOS Router
+
+- [Specification](../../template/pallets/router/docs/specification.en.md)
+- [Package Architecture](../../template/pallets/router/docs/architecture.en.md)
+- [Embedding Guide](../../template/pallets/router/docs/embedding.md)
+- [Asset Conversion Integration](./asset-conversion.integration.en.md)
+
+## DEOS Staking
+
+- [Specification](../../template/pallets/staking/docs/specification.en.md)
+- [Package Architecture](../../template/pallets/staking/docs/architecture.en.md)
+- [Embedding Guide](../../template/pallets/staking/docs/embedding.md)
+
+## DEOS Governance
+
+- [Specification](../../template/pallets/governance/docs/specification.en.md)
+- [Package Architecture](../../template/pallets/governance/docs/architecture.en.md)
+- [Embedding Guide](../../template/pallets/governance/docs/embedding.md)
+
+## Workspace and Operations
+
+- [Template Workspace](../../template/README.md)
+- [Web Client](../../web-client/README.md)
+- [Web Client Architecture](../../web-client/docs/architecture.en.md)
+- [Wiki Publication and Embedding Contract](./wiki-publication.contract.en.md)
+- [Simulator](../../simulators/tmctol/README.md)
+- [Project Scripts](../../scripts/README.md)
+- [Open Work](../../BACKLOG.md)
+- [Delivery History](../../CHANGELOG.md)

@@ -713,6 +713,7 @@ impl<T: Config> Pallet<T> {
       };
       processed_entries = next_processed_entries;
       for touch in bucket {
+        // Pending authority is released with terminal publication, not history expiry.
         FinalizedProposals::<T>::remove(touch.domain, touch.item_id);
         FinalizedProposalIdsByDomain::<T>::mutate_exists(touch.domain, |maybe_ids| {
           if let Some(ids) = maybe_ids {
@@ -723,7 +724,6 @@ impl<T: Config> Pallet<T> {
           }
         });
         ProposalMetadataByItem::<T>::remove(touch.domain, touch.item_id);
-        ProposalPendingEnactmentAt::<T>::remove(touch.domain, touch.item_id);
         ProposalWinningPrimaryOptionByItem::<T>::remove(touch.domain, touch.item_id);
         ProposalUrgentAuthorizedAt::<T>::remove(touch.domain, touch.item_id);
       }

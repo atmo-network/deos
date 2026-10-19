@@ -362,6 +362,79 @@ impl pallet_asset_conversion::Config for Runtime {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::System;
+  use polkadot_sdk::pallet_balances;
+
+  #[test]
+  fn native_named_reserve_cleanup_has_one_slash_event_and_no_empty_source_row() {
+    use crate::tests::common::{ALICE, BOB, new_test_ext};
+    use polkadot_sdk::frame_support::{
+      assert_ok,
+      traits::{NamedReservableCurrency, tokens::BalanceStatus},
+    };
+    new_test_ext().execute_with(|| {
+      let id = *b"sdkcheck";
+      let amount = crate::EXISTENTIAL_DEPOSIT;
+      assert_ok!(Balances::reserve_named(&id, &ALICE, amount));
+      System::reset_events();
+      let (imbalance, remainder) = Balances::slash_reserved_named(&id, &ALICE, amount);
+      assert_eq!(remainder, 0);
+      drop(imbalance);
+      assert!(!pallet_balances::Reserves::<Runtime>::contains_key(ALICE));
+      assert_eq!(
+        System::events()
+          .iter()
+          .filter(|record| matches!(
+            record.event,
+            RuntimeEvent::Balances(pallet_balances::Event::Slashed { .. })
+          ))
+          .count(),
+        1
+      );
+      assert_ok!(Balances::reserve_named(&id, &ALICE, amount));
+      assert_eq!(
+        Balances::repatriate_reserved_named(&id, &ALICE, &BOB, amount, BalanceStatus::Free),
+        Ok(0)
+      );
+      assert!(!pallet_balances::Reserves::<Runtime>::contains_key(ALICE));
+      assert!(!pallet_balances::Reserves::<Runtime>::contains_key(BOB));
+    });
+  }
+
+  #[test]
+  fn native_held_balance_prevents_total_overflow_and_final_release_removes_hold_row() {
+    use crate::tests::common::{ALICE, new_test_ext};
+    use polkadot_sdk::frame_support::{
+      assert_noop, assert_ok,
+      traits::{
+        fungible::{Inspect, MutateHold, Unbalanced},
+        tokens::Precision,
+      },
+    };
+    new_test_ext().execute_with(|| {
+      let reason = crate::RuntimeHoldReason::Actors(pallet_deos_actors::HoldReason::ActorState);
+      let held = crate::EXISTENTIAL_DEPOSIT;
+      assert_ok!(Balances::hold(&reason, &ALICE, held));
+      let free = <Balances as Inspect<AccountId>>::balance(&ALICE);
+      assert_noop!(
+        <Balances as Unbalanced<AccountId>>::increase_balance(
+          &ALICE,
+          Balance::MAX - free,
+          Precision::Exact
+        ),
+        polkadot_sdk::sp_runtime::ArithmeticError::Overflow
+      );
+      assert_eq!(
+        Balances::release(&reason, &ALICE, held, Precision::Exact),
+        Ok(held)
+      );
+      assert!(!pallet_balances::Holds::<Runtime>::contains_key(ALICE));
+      assert_eq!(
+        <Balances as Inspect<AccountId>>::balance(&ALICE),
+        free + held
+      );
+    });
+  }
 
   #[test]
   fn reference_runtime_xyk_and_withdrawal_fees_are_independent_zero_parameters() {

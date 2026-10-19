@@ -94,7 +94,7 @@ lock:
     embedding: ${embedding}
     body_sha256: ${sha256(body)}
   adoption:
-    bundle: wiki/index.md
+    bundle: wiki/deos/index.md
     okf_version: ${scalar(version)}
     status: adopted
 ---
@@ -160,7 +160,7 @@ export function loadAndVerifyPinned(referencePath = defaultReferencePath) {
     throw new Error("Pinned OKF source version does not match lock metadata");
   if (
     !lock.adoption ||
-    lock.adoption.bundle !== "wiki/index.md" ||
+    lock.adoption.bundle !== "wiki/deos/index.md" ||
     lock.adoption.okf_version !== lock.pinned_version ||
     lock.adoption.status !== "adopted"
   ) {
@@ -336,7 +336,7 @@ export function atomicWrite(path, content, options = {}) {
 }
 
 function adoptedWikiVersion(root) {
-  const text = readFileSync(join(root, "wiki/index.md"), "utf8");
+  const text = readFileSync(join(root, "wiki/deos/index.md"), "utf8");
   const match = text.match(/^okf_version:\s*["']?([0-9]+\.[0-9]+)["']?\s*$/m);
   if (!match)
     throw new Error(

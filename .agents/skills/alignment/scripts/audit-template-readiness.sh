@@ -135,7 +135,7 @@ check_legacy_wallet_helper_aliases() {
 
 check_legacy_actor_liquidity_adapter() {
     local matches
-    matches="$(rg -n 'LiquidityDonationOps' "$TEMPLATE_DIR" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/web-client" || true)"
+    matches="$(rg -n 'LiquidityDonationOps' "$TEMPLATE_DIR" "$PROJECT_ROOT/docs/deos" "$PROJECT_ROOT/web-client" || true)"
     if [[ -n "$matches" ]]; then
         record_finding "legacy Actors LiquidityDonationOps alias detected"
         echo "$matches"
@@ -149,8 +149,8 @@ check_actor_embedding_links() {
         return 0
     fi
     local missing=()
-    if ! rg -q 'template/pallets/actors/docs/embedding\.md' "$PROJECT_ROOT/docs/README.md"; then
-        missing+=("docs/README.md")
+    if ! rg -q 'template/pallets/actors/docs/embedding\.md' "$PROJECT_ROOT/docs/deos/README.md"; then
+        missing+=("docs/deos/README.md")
     fi
     if ! rg -q 'template/pallets/actors/docs/embedding\.md' "$PROJECT_ROOT/README.md"; then
         missing+=("README.md")

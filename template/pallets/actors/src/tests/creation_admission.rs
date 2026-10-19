@@ -1,5 +1,170 @@
 use super::*;
 
+fn policy_admission_contract(zero_step: bool) -> crate::ActorContractOf<Test> {
+  let steps = if zero_step {
+    BoundedVec::default()
+  } else {
+    transfer_contract_steps(BOB, 1)
+  };
+  let mut contract = user_active_contract(manual_schedule(), None, steps).unwrap();
+  contract.close_when = Some(crate::CloseWhen {
+    clauses: vec![
+      vec![crate::BehaviorAtom {
+        metric: crate::BehaviorMetric::CycleCompletedTotal,
+        threshold: 2,
+      }]
+      .try_into()
+      .unwrap(),
+    ]
+    .try_into()
+    .unwrap(),
+  });
+  contract
+}
+
+#[test]
+fn policy_admission_missing_control_or_inspection_is_not_arithmetic_overflow() {
+  for class in [ActorType::User, ActorType::System] {
+    for zero_step in [false, true] {
+      for missing_control in [false, true] {
+        new_test_ext().execute_with(|| {
+          System::set_block_number(1);
+          let contract = policy_admission_contract(zero_step);
+          set_missing_behavior_control_weight(missing_control);
+          set_missing_behavior_inspection_weight(!missing_control);
+          let before = Actors::next_actor_id();
+          let result = || match class {
+            ActorType::User => Actors::create_user_actor(
+              RuntimeOrigin::signed(ALICE),
+              Mutability::Mutable,
+              Some(contract.clone()),
+            ),
+            ActorType::System => Actors::create_system_actor(
+              RuntimeOrigin::root(),
+              ALICE,
+              Mutability::Mutable,
+              Some(contract.clone()),
+            ),
+          };
+          assert_noop!(result(), Error::<Test>::BehaviorPolicyUnavailable);
+          assert_eq!(Actors::next_actor_id(), before);
+          assert!(fee_collections().is_empty());
+        });
+      }
+    }
+  }
+}
+
+#[test]
+fn policy_admission_activation_and_replacement_preserve_the_existing_source() {
+  for zero_step in [false, true] {
+    for missing_control in [false, true] {
+      new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let dormant = Actors::next_actor_id();
+        assert_ok!(Actors::create_user_actor(
+          RuntimeOrigin::signed(ALICE),
+          Mutability::Mutable,
+          None
+        ));
+        let active = create_user_with(
+          ALICE,
+          Mutability::Mutable,
+          manual_schedule(),
+          None,
+          transfer_contract_steps(BOB, 1),
+        );
+        System::set_block_number(2);
+        clear_fee_collections();
+        set_missing_behavior_control_weight(missing_control);
+        set_missing_behavior_inspection_weight(!missing_control);
+        let contract = policy_admission_contract(zero_step);
+        assert_noop!(
+          Actors::activate_actor(RuntimeOrigin::signed(ALICE), dormant, contract.clone()),
+          Error::<Test>::BehaviorPolicyUnavailable
+        );
+        assert_noop!(
+          Actors::update_contract(RuntimeOrigin::signed(ALICE), active, contract),
+          Error::<Test>::BehaviorPolicyUnavailable
+        );
+        assert!(fee_collections().is_empty());
+      });
+    }
+  }
+}
+
+#[test]
+fn policy_admission_keeps_checked_composition_overflow_distinct() {
+  for zero_step in [false, true] {
+    for maximum in [
+      Weight::from_parts(u64::MAX, 0),
+      Weight::from_parts(0, u64::MAX),
+    ] {
+      new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        set_behavior_control_maximum_override(Some(maximum));
+        assert_noop!(
+          Actors::create_user_actor(
+            RuntimeOrigin::signed(ALICE),
+            Mutability::Mutable,
+            Some(policy_admission_contract(zero_step))
+          ),
+          Error::<Test>::AdmissionBoundOverflow
+        );
+        assert!(fee_collections().is_empty());
+      });
+    }
+  }
+}
+
+#[test]
+fn policy_admission_preserves_existing_complete_native_host_declarations() {
+  for zero_step in [false, true] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let contract = policy_admission_contract(zero_step);
+      prefund_active_user_creation(ALICE, &contract.steps);
+      let id = Actors::next_actor_id();
+      assert_ok!(Actors::create_user_actor(
+        RuntimeOrigin::signed(ALICE),
+        Mutability::Mutable,
+        Some(contract.clone())
+      ));
+      assert_eq!(Actors::load_actor_contract(id), Some(contract));
+      #[cfg(feature = "try-runtime")]
+      Actors::do_try_state().unwrap();
+    });
+  }
+}
+
+#[test]
+fn policy_admission_preserves_invalid_expression_and_absent_policy_semantics() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    set_missing_behavior_control_weight(true);
+    set_missing_behavior_inspection_weight(true);
+    let mut invalid = policy_admission_contract(false);
+    invalid.close_when.as_mut().unwrap().clauses[0][0].threshold = 0;
+    assert_noop!(
+      Actors::create_user_actor(
+        RuntimeOrigin::signed(ALICE),
+        Mutability::Mutable,
+        Some(invalid)
+      ),
+      Error::<Test>::InvalidCloseWhen
+    );
+    assert!(fee_collections().is_empty());
+    let mut ordinary = policy_admission_contract(false);
+    ordinary.close_when = None;
+    prefund_active_user_creation(ALICE, &ordinary.steps);
+    assert_ok!(Actors::create_user_actor(
+      RuntimeOrigin::signed(ALICE),
+      Mutability::Mutable,
+      Some(ordinary)
+    ));
+  });
+}
+
 #[test]
 fn user_creation_normalizes_raw_dnf_before_canonical_predicate_cap() {
   use polkadot_sdk::frame_support::traits::Get;

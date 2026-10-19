@@ -46,6 +46,7 @@ thread_local! {
   static PAYLOAD_EXECUTOR_ENABLED: RefCell<bool> = const { RefCell::new(false) };
   static PAYLOAD_EXECUTION_CALLS: RefCell<u32> = const { RefCell::new(0) };
   static PAYLOAD_EXECUTION_RESULTS: RefCell<BTreeMap<H256, bool>> = RefCell::new(BTreeMap::new());
+  static PAYLOAD_EXECUTION_REMOVE_FINALIZATION: RefCell<bool> = const { RefCell::new(false) };
 }
 
 pub struct MockEpochProvider;
@@ -460,8 +461,8 @@ impl
   }
 
   fn execute(
-    _domain: DomainId,
-    _item_id: u32,
+    domain: DomainId,
+    item_id: u32,
     _payload_kind: pallet_governance::ProposalPayloadKind,
     payload_hash: H256,
   ) -> Result<
@@ -476,6 +477,9 @@ impl
     let success = PAYLOAD_EXECUTION_RESULTS
       .with(|results| results.borrow().get(&payload_hash).copied().unwrap_or(true));
     if success {
+      if PAYLOAD_EXECUTION_REMOVE_FINALIZATION.with(|fault| *fault.borrow()) {
+        crate::FinalizedProposals::<Test>::remove(domain, item_id);
+      }
       Ok(pallet_governance::ProposalExecutionReceipt::Generic)
     } else {
       Err(pallet_governance::ProposalExecutionFailureReason::DispatchFailed)
@@ -644,6 +648,10 @@ pub fn payload_execution_calls() -> u32 {
   PAYLOAD_EXECUTION_CALLS.with(|calls| *calls.borrow())
 }
 
+pub fn set_payload_execution_remove_finalization(enabled: bool) {
+  PAYLOAD_EXECUTION_REMOVE_FINALIZATION.with(|fault| *fault.borrow_mut() = enabled);
+}
+
 pub fn set_payload_execution_result(hash: H256, success: bool) {
   PAYLOAD_EXECUTION_RESULTS.with(|results| {
     results.borrow_mut().insert(hash, success);
@@ -677,6 +685,7 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
     PAYLOAD_EXECUTOR_ENABLED.with(|enabled| *enabled.borrow_mut() = false);
     PAYLOAD_EXECUTION_CALLS.with(|calls| *calls.borrow_mut() = 0);
     PAYLOAD_EXECUTION_RESULTS.with(|results| results.borrow_mut().clear());
+    PAYLOAD_EXECUTION_REMOVE_FINALIZATION.with(|fault| *fault.borrow_mut() = false);
     MaxEpochCatchUpPerBlock::set(1);
     ProposalLeadInPeriod::set(0);
     ProposalProtectionPeriod::set(2);

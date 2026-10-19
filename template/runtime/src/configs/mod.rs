@@ -8,6 +8,7 @@ pub mod preimage_config;
 pub mod resource_meter;
 pub mod staking_config;
 pub(crate) mod tmc_config;
+pub mod unsigned;
 mod xcm_config;
 
 use cumulus_pallet_parachain_system::RelayNumberMonotonicallyIncreases;
@@ -27,7 +28,6 @@ use frame_system::{
   EnsureRoot,
   limits::{BlockLength, BlockWeights},
 };
-use pallet_staking::WeightInfo as _;
 use pallet_xcm::{EnsureXcm, IsVoiceOfBody};
 use parachains_common::message_queue::{NarrowOriginToSibling, ParaIdToSibling};
 use polkadot_runtime_common::{
@@ -672,6 +672,7 @@ impl DelegationWeightedCollatorSessionManager {
   }
 }
 
+// SessionRotation owns the complete callback cost; genesis performs no block admission.
 impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSessionManager {
   fn new_session(index: SessionIndex) -> Option<Vec<AccountId>> {
     let mut collators =
@@ -704,13 +705,6 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
         .filter(|candidate| !crate::Staking::operator_native_lp_locked(&candidate.who).is_zero())
         .map(|candidate| candidate.who.clone())
         .collect::<Vec<_>>();
-    frame_system::Pallet::<Runtime>::register_extra_weight_unchecked(
-      <Runtime as pallet_staking::Config>::WeightInfo::open_native_security_epoch(
-        crate::Staking::native_security_participants().len() as u32,
-        crate::configs::staking_config::SecurityRewardClaimHorizon::get().saturating_add(2),
-      ),
-      DispatchClass::Mandatory,
-    );
     if crate::Staking::open_native_security_epoch(index, &eligible_operators).is_err() {
       crate::Staking::note_native_security_boundary(
         index,
@@ -726,18 +720,11 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
       index,
       pallet_staking::NativeSecurityBoundaryOutcome::SnapshotOpened,
     );
-    let candidates_len_before = u32::try_from(
-      polkadot_sdk::pallet_collator_selection::CandidateList::<Runtime>::decode_len()
-        .unwrap_or_default(),
-    )
-    .unwrap_or(u32::MAX);
-    let active_candidates_count =
-      polkadot_sdk::pallet_collator_selection::Pallet::<Runtime>::kick_stale_candidates(
-        polkadot_sdk::pallet_collator_selection::CandidateList::<Runtime>::get()
-          .iter()
-          .map(|candidate_info| candidate_info.who.clone()),
-      );
-    let removed = candidates_len_before.saturating_sub(active_candidates_count);
+    polkadot_sdk::pallet_collator_selection::Pallet::<Runtime>::kick_stale_candidates(
+      polkadot_sdk::pallet_collator_selection::CandidateList::<Runtime>::get()
+        .iter()
+        .map(|candidate_info| candidate_info.who.clone()),
+    );
     let desired_candidates =
       polkadot_sdk::pallet_collator_selection::DesiredCandidates::<Runtime>::get() as usize;
     let ranked_candidates = Self::rank_candidates(
@@ -749,13 +736,6 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
         .take(desired_candidates)
         .map(|candidate_info| candidate_info.who),
     );
-    frame_system::Pallet::<Runtime>::register_extra_weight_unchecked(
-      <<Runtime as polkadot_sdk::pallet_collator_selection::Config>::WeightInfo as polkadot_sdk::pallet_collator_selection::weights::WeightInfo>::new_session(
-        removed,
-        candidates_len_before,
-      ),
-      DispatchClass::Mandatory,
-    );
     log::info!(
       "assembling delegation-weighted collators for new session {} at #{:?}",
       index,
@@ -765,17 +745,7 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
   }
 
   fn start_session(index: SessionIndex) {
-    frame_system::Pallet::<Runtime>::register_extra_weight_unchecked(
-      <Runtime as pallet_staking::Config>::WeightInfo::settle_due_native_security_reward(
-        crate::configs::staking_config::SecurityRewardClaimHorizon::get().saturating_add(2),
-      ),
-      DispatchClass::Mandatory,
-    );
     if let Err(error) = crate::Staking::settle_due_native_security_reward() {
-      frame_system::Pallet::<Runtime>::register_extra_weight_unchecked(
-        <Runtime as pallet_staking::Config>::WeightInfo::cancel_native_security_epoch_plan(),
-        DispatchClass::Mandatory,
-      );
       if let Err(cancel_error) = crate::Staking::cancel_native_security_epoch_plan(index) {
         log::error!(
           target: "runtime::collator-selection",
@@ -791,10 +761,6 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
     if crate::Staking::native_security_mode()
       != pallet_staking::NativeSecurityMode::LpBackedSelection
     {
-      frame_system::Pallet::<Runtime>::register_extra_weight_unchecked(
-        <Runtime as pallet_staking::Config>::WeightInfo::contract_native_security_obligations(),
-        DispatchClass::Mandatory,
-      );
       if let Err(error) = crate::Staking::contract_native_security_obligations_for_trusted_mode() {
         log::error!(
           target: "runtime::collator-selection",

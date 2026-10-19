@@ -4,7 +4,7 @@
 
 `pallet-oracle` owns bounded current scalar observation truth for deterministic runtime consumers. It admits typed feeds, authorizes typed producers, applies one immutable aggregation rule, stores the current published value and revision, and emits one transactional change notification.
 
-The pallet does not own sample generation, market interpretation, strategy execution, subscriber lists, fanout, historical series, archive search, external networks, off-chain workers, quorum consensus, fair-price claims, or MEV protection. Producers own sample generation. Actors owns subscriptions and reactions. Indexed providers own history.
+The pallet does not own sample generation, market interpretation, strategy execution, subscriber lists, fanout, historical series, archive search, external networks, off-chain workers, quorum consensus, fair-price claims, or MEV protection. Producers own sample generation. Consumers own interpretation and reactions; this package owns no subscription or activation topology. Indexed providers own history.
 
 The package MUST remain independently reusable and MUST NOT depend on Actors, DEOS Router, DEOS asset topology, TMCTOL policy, an off-chain worker, or an external service.
 

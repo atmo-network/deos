@@ -3,7 +3,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-WIKI_DIR="$PROJECT_ROOT/wiki"
+WIKI_DIR="$PROJECT_ROOT/wiki/deos"
 
 usage() {
     cat <<'EOF'
@@ -13,8 +13,8 @@ Validate strict OKF v0.2 structure and the trusted wiki-markdown contract used
 by the browser-side renderer.
 
 Options:
-  --wiki-dir <path>   Override the wiki directory (default: ./wiki)
-  --wiki-dir=<path>   Override the wiki directory (default: ./wiki)
+  --wiki-dir <path>   Override the wiki directory (default: ./wiki/deos)
+  --wiki-dir=<path>   Override the wiki directory (default: ./wiki/deos)
   -h, --help          Show this help message
 EOF
 }
@@ -49,29 +49,14 @@ check_prerequisites() {
 
 run_okf_validation() {
     phase_banner "Step 2: Strict OKF v0.2 bundle"
-    node "$SCRIPT_DIR/validate-okf-wiki.mjs" --wiki-dir "$WIKI_DIR" --migration-baseline-ref HEAD
+    node "$SCRIPT_DIR/validate-okf-wiki.mjs" --wiki-dir "$WIKI_DIR"
     node "$SCRIPT_DIR/migrate-okf-wiki.mjs" --wiki-dir "$WIKI_DIR"
     npm test --prefix "$SKILL_DIR"
 }
 
 check_markdown_trust() {
     phase_banner "Step 3: Markdown trust contract"
-    if rg -n '^\s*<([A-Za-z][A-Za-z0-9-]*)(\s|>|/)' "$WIKI_DIR" --glob '*.md'; then
-        log_error "Raw HTML tag blocks are not allowed in trusted wiki markdown"
-        exit 1
-    fi
-    if rg -n '<(script|iframe|object|embed|link|style)\b' "$WIKI_DIR" --glob '*.md'; then
-        log_error "Executable or embedded HTML tags are not allowed in trusted wiki markdown"
-        exit 1
-    fi
-    if rg -ni 'javascript:|vbscript:|data:text/html' "$WIKI_DIR" --glob '*.md'; then
-        log_error "Dangerous URL schemes are not allowed in trusted wiki markdown"
-        exit 1
-    fi
-    if rg -ni '\bon[a-z]+\s*=' "$WIKI_DIR" --glob '*.md'; then
-        log_error "Inline DOM event handler attributes are not allowed in trusted wiki markdown"
-        exit 1
-    fi
+    node "$SKILL_DIR/site/scripts/check-trust.mjs" --wiki-dir "$WIKI_DIR"
 }
 
 main() {

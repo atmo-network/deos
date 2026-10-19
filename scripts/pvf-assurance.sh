@@ -7,6 +7,8 @@ PARA_ID=""
 WASM="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
 INSECURE_LOCAL=0
 CPU_TRACE=""
+POSITIVE_ONLY=0
+SELF_TEST=0
 
 usage() {
     cat <<'EOF'
@@ -15,11 +17,13 @@ Usage: pvf-assurance.sh --fixtures DIR --para-id ID [OPTIONS]
 Validate exported PVF candidates with the current SDK ValidationHost and pinned workers.
 
 Options:
-  --fixtures DIR       Existing actor_finalization_close/actor_retention_close export
+  --fixtures DIR       Existing proof-bound params/PVD/block/expected-result export
   --para-id ID         Declared local candidate parachain identity (required)
   --wasm PATH          Explicit Wasm (default: canonical production-profile output)
   --insecure-local     Explicitly permit best-effort hardening for trusted local code
   --cpu-trace FILE     Create a new diagnostic JSONL file of SDK events and child CPU
+  --positive-only      Require exactly one fixture; validate only its positive case
+  --self-test          Check argument/argv contracts offline, without Cargo or workers
   -h, --help           Show this help
 
 Inputs:
@@ -30,8 +34,11 @@ Inputs:
   Standard PERL5LIB/PROTOC/LD_LIBRARY_PATH overrides may select an isolated toolchain.
 
 Outputs:
-  Typed pass/fail for each valid, corrupt-seal, parent-root and compact-proof case;
-  code identity, worker version and available security features.
+  Default: typed pass/fail for each valid, corrupt-seal, parent-root and compact-proof
+  case of every fixture; code identity, worker version and available security features.
+  --positive-only: one complete positive check, no corrupt cases or negative-suite claim.
+  Rust owns fixture-count admission before its worker probes, trace/cache and host startup;
+  wrapper prerequisites/build still run. This flag is not a dry run.
   Optional trace: whole-job child user+system CPU only after exact positive acceptance;
   missing/ambiguous events fail closed. No complete record means incomplete assurance.
   This is not wall time, isolated root cost, a calibrated bound or a production tariff.
@@ -41,12 +48,14 @@ Side effects:
   an owned short-lived worker/cache directory and starts/stops local workers.
   No executable-bundle download, account, runtime source, Wasm, deployment or
   generated Weight mutation. Candidate execution has no network connection.
-  --fixtures must already exist; candidate generation is a separate public example.
+  --fixtures must already exist; generation is a separate public example or native export test.
   --cpu-trace never overwrites files; failed runs retain partial diagnostics.
+  --self-test must be used alone; only its owned temporary fixtures and argv stubs run.
 EOF
 }
 
 parse_args() {
+    local argument_count=$#
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --fixtures|--para-id|--wasm|--cpu-trace)
@@ -64,10 +73,17 @@ parse_args() {
                 esac
                 shift 2 ;;
             --insecure-local) INSECURE_LOCAL=1; shift ;;
+            --positive-only)
+                (( POSITIVE_ONLY == 0 )) || { log_error "Duplicate --positive-only"; exit 1; }
+                POSITIVE_ONLY=1; shift ;;
+            --self-test)
+                (( argument_count == 1 )) || { log_error "--self-test must be used alone"; exit 1; }
+                SELF_TEST=1; shift ;;
             -h|--help) usage; exit 0 ;;
             *) log_error "Unknown argument: $1"; usage; exit 1 ;;
         esac
     done
+    (( SELF_TEST == 0 )) || return 0
     [[ -n "$FIXTURES" && "$PARA_ID" =~ ^[0-9]+$ ]] || {
         log_error "--fixtures and a decimal --para-id are required"
         exit 1
@@ -94,18 +110,98 @@ check_prerequisites() {
 
 main() {
     parse_args "$@"
+    if (( SELF_TEST == 1 )); then
+        self_test
+        return 0
+    fi
     phase_banner "DEOS offline PVF assurance"
     check_prerequisites
     local before after
     before="$(sha256sum "$WASM" | cut -d ' ' -f 1)"
     run_shell_step "Build offline SDK PVF host" ""         "cd '$TEMPLATE_DIR' && SKIP_WASM_BUILD=1 cargo build --locked -p deos-pvf-validation"
-    local command=(timeout 450s "$TEMPLATE_DIR/target/debug/deos-pvf-validation" "$WASM" "$FIXTURES" "$BIN_DIR" "$PARA_ID")
-    (( INSECURE_LOCAL == 0 )) || command+=(--insecure-local)
-    [[ -z "$CPU_TRACE" ]] || command+=(--cpu-trace "$CPU_TRACE")
-    run_command_step "Validate candidates with real pinned workers" "" "${command[@]}"
+    run_validation
     after="$(sha256sum "$WASM" | cut -d ' ' -f 1)"
     [[ "$before" == "$after" ]] || { log_error "PVF assurance changed selected Wasm"; exit 1; }
     log_success "PVF candidate assurance retained Wasm identity: $after"
 }
+
+run_validation() {
+    local command=(timeout 450s "$TEMPLATE_DIR/target/debug/deos-pvf-validation" "$WASM" "$FIXTURES" "$BIN_DIR" "$PARA_ID")
+    (( INSECURE_LOCAL == 0 )) || command+=(--insecure-local)
+    [[ -z "$CPU_TRACE" ]] || command+=(--cpu-trace "$CPU_TRACE")
+    (( POSITIVE_ONLY == 0 )) || command+=(--positive-only)
+    run_command_step "Validate candidates with real pinned workers" "" "${command[@]}"
+}
+
+self_test() (
+    local fixture
+    fixture="$(mktemp -d)"
+    trap 'rm -rf "$fixture"' EXIT
+    local -a captured_command=()
+    check_prerequisites() { log_error "Self-test reached real prerequisites"; exit 1; }
+    run_shell_step() { log_error "Self-test reached a build command"; exit 1; }
+    run_command_step() {
+        [[ "$1" == "Validate candidates with real pinned workers" && -z "$2" ]] || exit 1
+        shift 2
+        captured_command=("$@")
+    }
+    reset_args() {
+        FIXTURES=""
+        PARA_ID=""
+        WASM="$fixture/selected code.wasm"
+        INSECURE_LOCAL=0
+        CPU_TRACE=""
+        POSITIVE_ONLY=0
+        SELF_TEST=0
+        captured_command=()
+    }
+    expect_command() {
+        local positive="$1" insecure="$2" trace="$3"
+        shift 3
+        reset_args
+        parse_args --fixtures "$fixture/candidates with spaces" --para-id 2000 \
+            --wasm "$fixture/selected code.wasm" "$@"
+        run_validation
+        local -a expected=(timeout 450s "$TEMPLATE_DIR/target/debug/deos-pvf-validation" \
+            "$fixture/selected code.wasm" "$fixture/candidates with spaces" "$BIN_DIR" 2000)
+        (( insecure == 0 )) || expected+=(--insecure-local)
+        [[ -z "$trace" ]] || expected+=(--cpu-trace "$trace")
+        (( positive == 0 )) || expected+=(--positive-only)
+        [[ "${#captured_command[@]}" == "${#expected[@]}" ]] || exit 1
+        local index
+        for index in "${!expected[@]}"; do
+            [[ "${captured_command[$index]}" == "${expected[$index]}" ]] || {
+                log_error "Unexpected argv token $index"
+                exit 1
+            }
+        done
+    }
+    expect_refusal() {
+        reset_args
+        if (parse_args "$@") >/dev/null 2>&1; then
+            log_error "Expected argument refusal: $*"
+            exit 1
+        fi
+    }
+    expect_command 0 0 ""
+    expect_command 1 0 "" --positive-only
+    expect_command 0 1 "$fixture/trace path" --insecure-local --cpu-trace "$fixture/trace path"
+    expect_command 1 1 "$fixture/trace path" --cpu-trace "$fixture/trace path" --positive-only --insecure-local
+    expect_command 1 0 "$fixture/trace path" --positive-only --cpu-trace "$fixture/trace path"
+    expect_refusal --fixtures f --para-id 1 --positive-only --positive-only
+    expect_refusal --fixtures f --para-id 1 --positive-only=true
+    expect_refusal --fixtures f --para-id 1 --positive-only true
+    expect_refusal --self-test --positive-only
+    expect_refusal --positive-only --self-test
+    expect_refusal --self-test --self-test
+    expect_refusal --self-test --help
+    expect_refusal --fixtures f --para-id 1 --cpu-trace
+    expect_refusal --fixtures f --para-id 1 --cpu-trace a --cpu-trace b
+    expect_refusal --fixtures f --para-id 1 --unknown
+    reset_args
+    parse_args --self-test
+    (( SELF_TEST == 1 )) || exit 1
+    log_success "PVF argv self-test passed (5 routes, 10 refusals; no Cargo or workers)"
+)
 
 main "$@"

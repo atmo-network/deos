@@ -26,3 +26,4 @@ backup-*.tar.gz
 
 # Temporary directories
 delme/
+temp/

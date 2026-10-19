@@ -21,7 +21,7 @@ import { loadAndVerifyPinned } from "./okf-reference.mjs";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const skillDir = resolve(scriptDir, "..");
 const projectRoot = resolve(skillDir, "../../..");
-const sourceWiki = join(projectRoot, "wiki");
+const sourceWiki = join(projectRoot, "wiki/deos");
 const validator = join(scriptDir, "validate-okf-wiki.mjs");
 const migrator = join(scriptDir, "migrate-okf-wiki.mjs");
 const baselineGraph = join(sourceWiki, "_meta/graph.json");
@@ -31,7 +31,7 @@ const sandboxes = [];
 function sandbox() {
   const root = mkdtempSync(join(tmpdir(), "deos-okf-wiki-"));
   sandboxes.push(root);
-  cpSync(sourceWiki, join(root, "wiki"), { recursive: true });
+  cpSync(sourceWiki, join(root, "wiki/deos"), { recursive: true });
   for (const entry of readdirSync(projectRoot, { withFileTypes: true })) {
     if (
       entry.name === "wiki" ||
@@ -45,7 +45,7 @@ function sandbox() {
       entry.isDirectory() ? "dir" : "file",
     );
   }
-  return { root, wiki: join(root, "wiki") };
+  return { root, wiki: join(root, "wiki/deos") };
 }
 
 test.after(() => {
@@ -92,10 +92,22 @@ test("bundled OKF reference retains its embedded body/source identity and adopti
 test("current bundle and migration preservation baseline pass", () => {
   const { wiki } = sandbox();
   const output = validate(wiki, 0, true);
-  assert.match(
-    output,
-    /92 concepts, 46 page IDs, 46 graph nodes, 206 typed edges/,
+  const locales = JSON.parse(readFileSync(join(sourceWiki, "_meta/locales.json"), "utf8"));
+  const graph = JSON.parse(readFileSync(baselineGraph, "utf8"));
+  const ids = Object.keys(locales.pages);
+  assert.ok(output.includes(`${ids.length * locales.supported_locales.length} concepts, ${ids.length} page IDs, ${graph.nodes.length} graph nodes, ${graph.edges.length} typed edges`));
+});
+
+test("default validator resolves the DEOS plane rather than the layer container", () => {
+  assert.match(run(validator, []), /Strict OKF v0.2 wiki bundle passed/);
+});
+
+test("relocated page provenance rejects the obsolete shallower source path", () => {
+  const { wiki } = sandbox();
+  mutatePage(wiki, "concepts/generated-wiki.en.md", (text) =>
+    text.replace("resource: ../../../docs/deos/README.md", "resource: ../../docs/deos/README.md"),
   );
+  assert.match(validate(wiki, 1), /missing source resource \.\.\/\.\.\/docs\/deos\/README\.md/);
 });
 
 test("migration baseline fails closed when one prior typed edge is lost", () => {
@@ -188,8 +200,8 @@ test("scalar provenance and locale mirror drift fail", async (t) => {
     const { wiki } = sandbox();
     mutatePage(wiki, "concepts/generated-wiki.en.md", (text) =>
       text.replace(
-        "  - resource: ../../docs/README.md",
-        "  - ../../docs/README.md",
+        "  - resource: ../../../docs/deos/README.md",
+        "  - ../../../docs/deos/README.md",
       ),
     );
     assert.match(validate(wiki, 1), /sources\[0\] must be a mapping/);
@@ -199,6 +211,14 @@ test("scalar provenance and locale mirror drift fail", async (t) => {
     unlinkSync(join(wiki, "concepts/generated-wiki.ru.md"));
     assert.match(validate(wiki, 1), /generated-wiki: missing ru mirror/);
   });
+});
+
+test("relocated manifest provenance is resolved from the selected plane", () => {
+  const { wiki } = sandbox();
+  mutateJson(join(wiki, "_meta/state.json"), (state) => {
+    state.pages.index.sources.en[0] = "../docs/deos/README.md";
+  });
+  assert.match(validate(wiki, 1), /_meta\/state\.json: missing source resource for index\/en/);
 });
 
 test("frontend manifest path drift fails", () => {
@@ -212,7 +232,7 @@ test("frontend manifest path drift fails", () => {
 test("migration is idempotent and preserves body bytes", () => {
   const root = mkdtempSync(join(tmpdir(), "deos-okf-migration-"));
   sandboxes.push(root);
-  const wiki = join(root, "wiki");
+  const wiki = join(root, "wiki/deos");
   cpSync(sourceWiki, wiki, { recursive: true });
   const path = join(wiki, "concepts/generated-wiki.en.md");
   const original = readFileSync(path, "utf8");

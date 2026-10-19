@@ -61,6 +61,35 @@ hydrate_local_tool_paths() {
     add_path_if_dir "$HOME/.cargo/bin"
 }
 
+worktree_evidence_identity() {
+    (
+        cd "$PROJECT_ROOT" || exit 1
+        git ls-files --cached --others --exclude-standard -z -- \
+            template scripts web-client simulators docs .github .cargo \
+            ':/*.toml' ':/*.json' .gitignore .gitattributes .npmrc \
+            ':(exclude,glob)**/target/**' ':(exclude,glob)**/node_modules/**' \
+            ':(exclude,glob)**/build/**' ':(exclude,glob)**/dist/**' \
+            ':(exclude,glob)**/.svelte-kit/**' ':(exclude)web-client/.papi' \
+            ':(exclude)template/chain_spec.json' \
+            | LC_ALL=C sort -zu \
+            | while IFS= read -r -d '' path; do
+                if [[ -L "$path" ]]; then
+                    log_error "Source identity cannot certify a symlink: $path" >&2
+                    exit 1
+                fi
+                # A tracked deletion has the same source tree before and after staging.
+                [[ -e "$path" ]] || continue
+                if [[ -x "$path" ]]; then
+                    printf 'executable\0'
+                else
+                    printf 'regular\0'
+                fi
+                sha256sum --zero -- "$path" || exit 1
+            done \
+            | sha256sum | awk '{print $1}'
+    )
+}
+
 # Print the SHA-256 of one file with whichever checksum tool the platform provides, so the
 # macOS arm64 path (shasum) does not fail on a shared verifier that assumed GNU coreutils.
 deos_sha256_file() {
