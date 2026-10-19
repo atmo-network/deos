@@ -1,13 +1,25 @@
 //! Runtime integration tests for the parachain.
 
+#[cfg(all(test, feature = "runtime-benchmarks"))]
+mod actor_control_benchmark;
+#[cfg(all(test, not(feature = "runtime-benchmarks")))]
+mod actor_pipeline_capacity;
+#[cfg(test)]
+mod actor_weight_registry;
 #[cfg(test)]
 pub(crate) mod actors_design_comparison;
+#[cfg(all(test, not(feature = "runtime-benchmarks")))]
+mod actors_h1_diagnostic;
 #[cfg(test)]
 pub mod actors_integration_tests;
 #[cfg(test)]
 pub mod asset_conversion_integration_tests;
 #[cfg(test)]
 pub mod asset_registry_integration_tests;
+#[cfg(all(test, not(feature = "runtime-benchmarks")))]
+mod authorship;
+#[cfg(all(test, feature = "runtime-benchmarks"))]
+mod authorship_benchmark;
 #[cfg(test)]
 pub mod common;
 #[cfg(test)]
@@ -20,6 +32,10 @@ pub mod economic_metrics;
 pub mod fee_integration_tests;
 #[cfg(test)]
 pub mod governance_integration_tests;
+#[cfg(all(test, not(feature = "runtime-benchmarks")))]
+mod h1_geometry;
+#[cfg(test)]
+mod h1_storage_trace;
 #[cfg(test)]
 pub mod integrity_tests;
 #[cfg(test)]
@@ -27,7 +43,7 @@ pub mod load_testing;
 #[cfg(test)]
 pub mod oracle_integration_tests;
 #[cfg(test)]
-mod production_block_replay;
+pub(crate) mod production_block_replay;
 #[cfg(test)]
 pub mod staking_integration_tests;
 #[cfg(test)]

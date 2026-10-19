@@ -1,6 +1,6 @@
 //! TMCTOL Economic Invariants — Runtime Integration Tests
 //!
-//! Mirrors simulator/tests.md systemic invariants in the Rust runtime.
+//! Mirrors simulators/tmctol/tests.md systemic invariants in the Rust runtime.
 //! Each test runs a mixed operation sequence, then asserts properties that
 //! must hold regardless of operation ordering or interleaving.
 //!
@@ -43,7 +43,7 @@ fn tol_bucket_lp_balances(lp_id: u32) -> [u128; 4] {
 // --- Invariant Tests ---
 
 /// G-01 (partial): TMC mint must exactly conserve the minted token.
-/// Mirrors simulator/tests.md 6.2 — distribution sums to total.
+/// Mirrors simulators/tmctol/tests.md 6.2 — distribution sums to total.
 #[test]
 fn tmc_mint_conservation_exact() {
   seeded_test_ext().execute_with(|| {
@@ -84,7 +84,7 @@ fn tmc_mint_conservation_exact() {
 }
 
 /// G-01 / G-03 proxy: TOL bucket balances must never decrease during pure user operations.
-/// Mirrors simulator/tests.md 6.3 — participant sales don't touch TOL.
+/// Mirrors simulators/tmctol/tests.md 6.3 — participant sales don't touch TOL.
 #[test]
 fn tol_balances_monotonic_under_user_operations() {
   use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;
@@ -147,7 +147,7 @@ fn tol_balances_monotonic_under_user_operations() {
 
 /// G-02 proxy: After TOL accumulation, a large dump must not crash the effective price.
 /// This is a runtime behavioural proxy for the Floor Formula.
-/// Mirrors simulator/tests.md 8.3 — floor guarantee persists under stress.
+/// Mirrors simulators/tmctol/tests.md 8.3 — floor guarantee persists under stress.
 #[test]
 fn floor_price_proxy_after_tol_accumulation() {
   use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;
@@ -223,7 +223,7 @@ fn floor_price_proxy_after_tol_accumulation() {
 }
 
 /// G-07 / 12.1 proxy: Native burning must reduce total issuance.
-/// Mirrors simulator/tests.md 12.1 — bidirectional compression.
+/// Mirrors simulators/tmctol/tests.md 12.1 — bidirectional compression.
 #[test]
 fn native_issuance_deflation_after_burn_cycle() {
   seeded_test_ext().execute_with(|| {
@@ -250,7 +250,7 @@ fn native_issuance_deflation_after_burn_cycle() {
 }
 
 /// 7.1 / 11.1 proxy: Router round-trip through XYK must never create free value.
-/// Mirrors simulator/tests.md 7.1 — anti-arbitrage cycle.
+/// Mirrors simulators/tmctol/tests.md 7.1 — anti-arbitrage cycle.
 #[test]
 fn router_round_trip_never_creates_value() {
   seeded_test_ext().execute_with(|| {
@@ -302,7 +302,7 @@ fn router_round_trip_never_creates_value() {
 }
 
 /// G-06 / 8.1 / 9.1: Heavy mixed-use stress with post-hoc invariant audit.
-/// Mirrors simulator/tests.md 8.1 and 9.1 — system invariants after chaos.
+/// Mirrors simulators/tmctol/tests.md 8.1 and 9.1 — system invariants after chaos.
 #[test]
 fn heavy_use_invariants_preserved() {
   use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;

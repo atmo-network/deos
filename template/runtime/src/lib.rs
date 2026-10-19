@@ -259,7 +259,7 @@ pub type Executive = frame_executive::Executive<
   Runtime,
   Block,
   frame_system::ChainContext<Runtime>,
-  Runtime,
+  configs::unsigned::RuntimeUnsignedValidator,
   AllPalletsWithSystem,
 >;
 

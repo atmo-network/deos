@@ -30,7 +30,7 @@ type Header = generic::Header<u32, BlakeTwo256>;
 type Block = generic::Block<Header, OpaqueExtrinsic>;
 type Result<T> = std::result::Result<T, String>;
 
-const USAGE: &str = "Usage: deos-pvf-validation WASM FIXTURES WORKERS PARA_ID [--insecure-local] [--cpu-trace FILE]\n\nValidates every exported *.params.scale fixture with the actual SDK ValidationHost,\npinned-version prepare/execute workers and default SDK execution parameters. Checks\nall expected ValidationResult fields, corrupt Aura seals, parent roots and compact proofs.\nSecure validator mode is required unless --insecure-local is explicitly supplied for\ntrusted local code. Checksums belong to scripts/01-download-binaries.sh --check.\nReceipts are locally constructed V2 inputs, not relay-authenticated provenance.\n--cpu-trace creates a new JSONL file with source-bound SDK events and accepted whole-job\nchild CPU, not wall time, root-only cost or a calibrated tariff. Missing or ambiguous\ntrace data fails closed; partial files without a complete record are not assurance.\nNo runtime, network, account, production weight or resource maximum is selected.\n";
+const USAGE: &str = "Usage: deos-pvf-validation WASM FIXTURES WORKERS PARA_ID [--insecure-local] [--cpu-trace FILE] [--positive-only]\n\nValidates every exported *.params.scale fixture with the actual SDK ValidationHost,\npinned-version prepare/execute workers and default SDK execution parameters. Checks\nall expected ValidationResult fields, corrupt Aura seals, parent roots and compact proofs.\n--positive-only requires exactly one fixture and runs only its complete positive check;\nit constructs no corrupt cases and does not establish negative-suite acceptance.\nSecure validator mode is required unless --insecure-local is explicitly supplied for\ntrusted local code. Checksums belong to scripts/01-download-binaries.sh --check.\nReceipts are locally constructed V2 inputs, not relay-authenticated provenance.\n--cpu-trace creates a new JSONL file with source-bound SDK events and accepted whole-job\nchild CPU, not wall time, root-only cost or a calibrated tariff. Missing or ambiguous\ntrace data fails closed; partial files without a complete record are not assurance.\nNo runtime, network, account, production weight or resource maximum is selected.\n";
 
 #[derive(Clone)]
 struct Fixture {
@@ -238,13 +238,7 @@ async fn execute(
   Ok(())
 }
 
-async fn run_cases(
-  host: &mut ValidationHost,
-  code: &[u8],
-  root: &Path,
-  para_id: u32,
-  trace: Option<&CpuTrace>,
-) -> Result<()> {
+fn discover_fixtures(root: &Path) -> Result<Vec<String>> {
   let mut presets = Vec::new();
   for entry in fs::read_dir(root).map_err(|e| format!("fixture directory: {e}"))? {
     let entry = entry.map_err(|e| e.to_string())?;
@@ -260,14 +254,68 @@ async fn run_cases(
   if presets.is_empty() {
     return Err("no exported fixtures; zero cases cannot qualify acceptance".into());
   }
-  for preset in presets {
-    let fixture = Fixture::read(root, &preset)?;
-    for (case, input, negative) in [
+  Ok(presets)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CaseSelection {
+  Full,
+  PositiveOnly(String),
+}
+
+impl CaseSelection {
+  fn new(root: &Path, positive_only: bool) -> Result<Self> {
+    if !positive_only {
+      return Ok(Self::Full);
+    }
+    let mut presets = discover_fixtures(root)?;
+    if presets.len() != 1 {
+      return Err(format!(
+        "--positive-only requires exactly one fixture; found {}",
+        presets.len()
+      ));
+    }
+    Ok(Self::PositiveOnly(presets.remove(0)))
+  }
+
+  fn presets(&self, root: &Path) -> Result<Vec<String>> {
+    match self {
+      Self::Full => discover_fixtures(root),
+      Self::PositiveOnly(preset) => Ok(vec![preset.clone()]),
+    }
+  }
+
+  fn cases(&self, fixture: Fixture) -> Result<Vec<(&'static str, Fixture, bool)>> {
+    if matches!(self, Self::PositiveOnly(_)) {
+      return Ok(vec![("valid", fixture, false)]);
+    }
+    Ok(vec![
       ("valid", fixture.clone(), false),
       ("corrupt_seal", fixture.corrupt_seal()?, true),
       ("parent_root", fixture.corrupt_parent()?, true),
       ("compact_proof", fixture.corrupt_proof()?, true),
-    ] {
+    ])
+  }
+
+  fn annotate_scope(&self, mut record: serde_json::Value) -> serde_json::Value {
+    if matches!(self, Self::PositiveOnly(_)) {
+      record["case_selection"] = json!("positive_only_single_fixture");
+    }
+    record
+  }
+}
+
+async fn run_cases(
+  host: &mut ValidationHost,
+  code: &[u8],
+  root: &Path,
+  para_id: u32,
+  trace: Option<&CpuTrace>,
+  selection: &CaseSelection,
+) -> Result<()> {
+  for preset in selection.presets(root)? {
+    let fixture = Fixture::read(root, &preset)?;
+    for (case, input, negative) in selection.cases(fixture)? {
       execute(
         host,
         code,
@@ -295,31 +343,41 @@ fn sha256(bytes: &[u8]) -> String {
   )
 }
 
-fn options(args: &[String]) -> Result<(bool, Option<&str>)> {
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Options<'a> {
+  insecure: bool,
+  trace_path: Option<&'a str>,
+  positive_only: bool,
+}
+
+fn options(args: &[String]) -> Result<Options<'_>> {
   if args.len() < 4 {
     return Err(USAGE.into());
   }
-  let mut insecure = false;
-  let mut trace = None;
+  let mut options = Options::default();
   let mut remaining = &args[4..];
   while let Some((flag, rest)) = remaining.split_first() {
     match flag.as_str() {
-      "--insecure-local" if !insecure => {
-        insecure = true;
+      "--insecure-local" if !options.insecure => {
+        options.insecure = true;
         remaining = rest;
       }
-      "--cpu-trace" if trace.is_none() => {
+      "--positive-only" if !options.positive_only => {
+        options.positive_only = true;
+        remaining = rest;
+      }
+      "--cpu-trace" if options.trace_path.is_none() => {
         let (path, rest) = rest.split_first().ok_or(USAGE)?;
         if path.is_empty() || path.starts_with("--") {
           return Err(USAGE.into());
         }
-        trace = Some(path.as_str());
+        options.trace_path = Some(path.as_str());
         remaining = rest;
       }
       _ => return Err(USAGE.into()),
     }
   }
-  Ok((insecure, trace))
+  Ok(options)
 }
 
 #[tokio::main]
@@ -329,7 +387,17 @@ async fn main() -> Result<()> {
     print!("{USAGE}");
     return Ok(());
   }
-  let (insecure, trace_path) = options(&args)?;
+  let Options {
+    insecure,
+    trace_path,
+    positive_only,
+  } = options(&args)?;
+  // Positive-only admission precedes every worker probe, trace and host side effect.
+  // Full mode retains discovery at its original run_cases boundary.
+  let selection = CaseSelection::new(Path::new(&args[1]), positive_only)?;
+  if positive_only {
+    println!("PVF_SELECTION_V1 mode=positive_only fixtures=1 cases=1 full_suite=false");
+  }
   let code = fs::read(&args[0]).map_err(|e| format!("Wasm: {e}"))?;
   let root = Path::new(&args[1]);
   let workers = Path::new(&args[2]);
@@ -356,13 +424,13 @@ async fn main() -> Result<()> {
         .map(|bytes| sha256(&bytes))
         .map_err(|e| format!("executable identity {}: {e}", path.display()))
     };
-    trace.record(json!({"kind":"session", "format":"DEOS_PVF_CPU_TRACE_V1", "node_version":NODE_VERSION,
+    trace.record(selection.annotate_scope(json!({"kind":"session", "format":"DEOS_PVF_CPU_TRACE_V1", "node_version":NODE_VERSION,
       "timing_contract_sdk_commit":"7a8daa68e18718c18823c1109513fdc1c8aa71fe", "code_sha256":sha256(&code),
       "prepare_sha256":worker_sha(&prepare)?, "execute_sha256":worker_sha(&execute)?,
       "host_sha256":worker_sha(&std::env::current_exe().map_err(|e| format!("host identity: {e}"))?)?,
       "os":std::env::consts::OS, "arch":std::env::consts::ARCH,
       "para_id":para_id, "secure_required":!insecure, "executor_params_scale":format!("{:?}", ExecutorParams::default().encode()),
-      "cache":"new temporary artifact directory; OS caches uncontrolled", "scope":"whole-job child user+system CPU; not root-only or calibrated tariff"}))?;
+      "cache":"new temporary artifact directory; OS caches uncontrolled", "scope":"whole-job child user+system CPU; not root-only or calibrated tariff"})))?;
   }
   // Keep Unix socket paths short; SDK worker socket setup has a platform length limit.
   let cache = tempfile::Builder::new()
@@ -395,7 +463,7 @@ async fn main() -> Result<()> {
     if let Some(trace) = &trace {
       trace.record(json!({"kind":"security", "status":format!("{:?}", host.security_status)}))?;
     }
-    run_cases(&mut host, &code, root, para_id, trace.as_ref()).await
+    run_cases(&mut host, &code, root, para_id, trace.as_ref(), &selection).await
   }
   .await;
   drop(host);
@@ -410,7 +478,7 @@ async fn main() -> Result<()> {
   }
   result?;
   if let Some(trace) = &trace {
-    trace.record(json!({"kind":"complete", "acceptance":true}))?;
+    trace.record(selection.annotate_scope(json!({"kind":"complete", "acceptance":true})))?;
   }
   Ok(())
 }

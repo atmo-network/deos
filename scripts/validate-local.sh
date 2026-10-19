@@ -80,7 +80,7 @@ run_fast_checks() {
     run_script_step "Local CI argument/command self-test" "ci-local.sh" --self-test
     run_script_step "Runtime output self-test" "03-build-runtime.sh" --self-test
     run_script_step "Network assurance mode self-test" "network-assurance-local.sh" --self-test
-    run_shell_step "Simulator tests" "" "node '$PROJECT_ROOT/simulator/tests.js'"
+    run_shell_step "Simulator tests" "" "node '$PROJECT_ROOT/simulators/tmctol/tests.js'"
     SKIP_WASM_BUILD=1 run_script_step "Rust workspace CI" "ci-local.sh"
 }
 

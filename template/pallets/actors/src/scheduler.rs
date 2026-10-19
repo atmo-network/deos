@@ -459,6 +459,12 @@ impl<T: Config> Pallet<T> {
           scanned = scanned.saturating_add(1);
           executed = executed.saturating_add(1);
           starvation_observed = true;
+          starved = false;
+        }
+        Ok(ServiceRoundEncounter::ConsumedRefusal(_)) => {
+          scanned = scanned.saturating_add(1);
+          starvation_observed = true;
+          starved = executed == 0;
         }
         Ok(ServiceRoundEncounter::NoWork(_)) => {
           scanned = scanned.saturating_add(1);
@@ -528,6 +534,18 @@ impl<T: Config> Pallet<T> {
       actor_id,
       fee: breakdown.total_fee,
     });
+    Ok(())
+  }
+
+  fn ensure_opening_admission_current(
+    instance: &ActiveActorViewOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+  ) -> Result<(), AttemptTransactionError> {
+    if instance.cycle_state == CycleState::Idle
+      && !Self::admission_matches_current_authority(admission)
+    {
+      return Err(AttemptTransactionError::Invariant);
+    }
     Ok(())
   }
 
@@ -840,6 +858,7 @@ impl<T: Config> Pallet<T> {
     );
     state.hot = Self::prepare_opening_rearm_hot(actor_id, &opening, admission, state.hot)?;
     Self::charge_pipeline_opening(actor_id, &opening)?;
+    Self::ensure_opening_admission_current(&opening, admission)?;
     let cycle_nonce = state
       .identity
       .cycle_nonce
@@ -1035,6 +1054,10 @@ impl<T: Config> Pallet<T> {
         if let Some(receipt) = recovery {
           Self::deposit_event(Event::FinancialWaitRecovered { receipt });
         }
+        // Publication, cleanup and host settlement may cross further callbacks after Opening.
+        if !Self::admission_matches_current_authority(admission) {
+          return Err(AttemptTransactionError::Invariant);
+        }
         Ok(StepCommitEvidence {
           actual_control_weight,
           actual_effect_weight: Weight::zero(),
@@ -1199,6 +1222,10 @@ impl<T: Config> Pallet<T> {
         Self::prepare_opening_rearm_hot(actor_id, &execution_instance, admission, plan.hot)?;
     }
     Self::charge_pipeline_opening(actor_id, &execution_instance)?;
+    if let Err(error) = Self::ensure_opening_admission_current(&execution_instance, admission) {
+      *retained_effect_weight = Some(Weight::zero());
+      return Err(error);
+    }
     let (mut plan, effect_execution, disposition, outcomes, eligible_at) =
       Self::execute_loaded_single_step_core(actor_id, &execution_instance, plan, now, step_count)?;
     let actual_effect_weight =
@@ -2311,6 +2338,9 @@ impl<T: Config> Pallet<T> {
         if let Some(receipt) = financial_recovery {
           Self::deposit_event(Event::FinancialWaitRecovered { receipt });
         }
+        // The Action collector runs after the effect and publication. A new Cycle must still
+        // authenticate at commit; rollback retains performed effect Weight, not its mutations.
+        Self::ensure_opening_admission_current(&execution_instance, admission)?;
         Ok(StepCommitEvidence {
           actual_control_weight,
           actual_effect_weight,
@@ -2988,6 +3018,7 @@ impl<T: Config> Pallet<T> {
       ServiceRoundEncounter::Eligible(_) => attempt
         .map(Self::simulation_attempt_result)
         .ok_or(SimulationError::NotReady),
+      ServiceRoundEncounter::ConsumedRefusal(_) => Err(SimulationError::FeeCollectionFailed),
       ServiceRoundEncounter::TerminallyClosed(reason) => Ok(Self::simulation_attempt_result(
         Self::step_simulation_evidence(
           semantic.identity.cycle_nonce,

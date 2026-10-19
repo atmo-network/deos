@@ -14,6 +14,7 @@ workspace = true
 
 [dev-dependencies]
 tracing-core = "0.1"
+polkadot-sdk = { workspace = true, features = ["std", "sp-trie", "sp-state-machine"] }
 
 [dependencies]
 codec = { workspace = true, features = ["std"] }

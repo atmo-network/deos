@@ -15,7 +15,7 @@ Deterministically project legacy DEOS wiki frontmatter onto the canonical OKF
 v0.2 fields. Without --write, fail when any page is not normalized.`);
 }
 
-let wikiDir = resolve(process.cwd(), "wiki");
+let wikiDir = resolve(process.cwd(), "wiki/deos");
 let write = false;
 for (let index = 2; index < process.argv.length; index += 1) {
   const argument = process.argv[index];

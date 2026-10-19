@@ -150,17 +150,17 @@ run_audit() {
     phase_banner "Step 3: Active Actors funding terminology"
     check_paths \
         "$TEMPLATE_DIR/pallets/actors/docs" \
-        "$PROJECT_ROOT/docs/actors.integration.en.md" \
-        "$PROJECT_ROOT/docs/core.architecture.en.md"
+        "$PROJECT_ROOT/docs/deos/actors.integration.en.md" \
+        "$PROJECT_ROOT/docs/deos/core.architecture.en.md"
     check_paths_with_pattern "$removed_surface_pattern" \
         "$TEMPLATE_DIR/pallets/actors/src" \
         "$TEMPLATE_DIR/pallets/actors/README.md" \
         "$TEMPLATE_DIR/pallets/actors/docs/architecture.en.md" \
         "$TEMPLATE_DIR/pallets/actors/docs/embedding.md" \
-        "$PROJECT_ROOT/docs/actors.integration.en.md" \
-        "$PROJECT_ROOT/docs/actors-control-plane.contract.en.md" \
-        "$PROJECT_ROOT/docs/core.architecture.en.md" \
-        "$PROJECT_ROOT/docs/read-model.contract.en.md" \
+        "$PROJECT_ROOT/docs/deos/actors.integration.en.md" \
+        "$PROJECT_ROOT/docs/deos/actors-control-plane.contract.en.md" \
+        "$PROJECT_ROOT/docs/deos/core.architecture.en.md" \
+        "$PROJECT_ROOT/docs/deos/read-model.contract.en.md" \
         "$PROJECT_ROOT/web-client/src" \
         "$PROJECT_ROOT/web-client/scripts" \
         "$PROJECT_ROOT/web-client/docs" \

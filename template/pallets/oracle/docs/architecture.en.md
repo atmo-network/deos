@@ -6,7 +6,7 @@
 
 The package has no Actors, Router, DEOS topology, network, off-chain worker, history, subscription, or strategy dependency. A host supplies feed identity and meaning types, authority origins, bounds, hook behavior, and production weights. The independent embedding fixture uses unrelated sensor semantics to falsify accidental DEOS coupling.
 
-Concrete DEOS composition belongs to [`docs/oracle.integration.en.md`](../../../../docs/oracle.integration.en.md).
+Concrete DEOS composition belongs to [`docs/deos/oracle.integration.en.md`](../../../../docs/deos/oracle.integration.en.md).
 
 ## Code Map
 

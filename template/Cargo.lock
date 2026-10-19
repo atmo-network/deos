@@ -4232,6 +4232,7 @@ name = "deos-runtime"
 version = "0.7.27"
 dependencies = [
  "cid",
+ "cpu-time",
  "cumulus-pallet-parachain-system",
  "cumulus-primitives-parachain-inherent",
  "cumulus-primitives-proof-size-hostfunction",
@@ -4251,6 +4252,7 @@ dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
  "sc-block-builder",
+ "sc-client-db",
  "sc-executor",
  "scale-info",
  "serde_json",

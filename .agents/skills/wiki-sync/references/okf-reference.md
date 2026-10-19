@@ -23,7 +23,7 @@ lock:
     embedding: deos-reference-v2-trim-final-newlines
     body_sha256: 02c7651ef5726b4a1b1e29877948592793a63e839fcea146df2bfc1b0e9a70d3
   adoption:
-    bundle: wiki/index.md
+    bundle: wiki/deos/index.md
     okf_version: "0.2"
     status: adopted
 ---

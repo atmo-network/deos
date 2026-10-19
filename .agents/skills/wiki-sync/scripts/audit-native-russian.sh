@@ -3,7 +3,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-WIKI_DIR="$PROJECT_ROOT/wiki"
+WIKI_DIR="$PROJECT_ROOT/wiki/deos"
 
 usage() {
     cat <<'EOF'
@@ -15,8 +15,8 @@ This deterministic audit does not claim to prove native fluency; completion stil
 requires independent bilingual review.
 
 Options:
-  --wiki-dir <path>   Override the wiki directory (default: ./wiki)
-  --wiki-dir=<path>   Override the wiki directory (default: ./wiki)
+  --wiki-dir <path>   Override the wiki directory (default: ./wiki/deos)
+  --wiki-dir=<path>   Override the wiki directory (default: ./wiki/deos)
   -h, --help          Show this help message
 EOF
 }

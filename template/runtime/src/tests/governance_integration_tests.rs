@@ -80,19 +80,97 @@ fn submit_root_action_proposal(item_id: u32, payload_hash: crate::Hash) {
   ));
 }
 
-fn note_advisory_preimage(signer: crate::AccountId, summary: &[u8]) -> crate::Hash {
-  let payload = (
+fn advisory_preimage_bytes(summary: &[u8]) -> Vec<u8> {
+  (
     Option::<crate::Hash>::None,
     summary.to_vec(),
     Option::<Vec<u8>>::None,
   )
-    .encode();
+    .encode()
+}
+
+fn note_advisory_preimage(signer: crate::AccountId, summary: &[u8]) -> crate::Hash {
+  let payload = advisory_preimage_bytes(summary);
   let hash = <Runtime as frame_system::Config>::Hashing::hash(&payload);
   assert_ok!(Preimage::note_preimage(
     RuntimeOrigin::signed(signer),
     payload
   ));
   hash
+}
+
+/// Data-only packet for the two-domain Intent cleanup chronology. No signing or dispatch.
+pub(super) fn same_expiry_signed_intent_packet() -> [RuntimeCall; 5] {
+  use pallet_governance::{ProposalCadenceMode, ProposalPayloadKind};
+  let preimage = advisory_preimage_bytes(b"same expiry domains");
+  let payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&preimage);
+  let payload: pallet_governance::ProposalPayloadBytesOf<Runtime> = preimage
+    .clone()
+    .try_into()
+    .expect("fixed advisory payload fits the runtime bound");
+  let witness = |domain| {
+    RuntimeCall::Governance(pallet_governance::Call::prepare_payload_admission_witness {
+      domain,
+      payload_kind: ProposalPayloadKind::Intent,
+      payload_hash,
+      payload: payload.clone(),
+    })
+  };
+  let submit = |domain| {
+    RuntimeCall::Governance(pallet_governance::Call::submit_signed_proposal {
+      domain,
+      item_id: 110,
+      cadence_mode: ProposalCadenceMode::Ordinary,
+      payload_kind: ProposalPayloadKind::Intent,
+      payload_hash,
+    })
+  };
+  [
+    RuntimeCall::Preimage(polkadot_sdk::pallet_preimage::Call::note_preimage { bytes: preimage }),
+    witness(101),
+    submit(101),
+    witness(102),
+    submit(102),
+  ]
+}
+
+#[test]
+fn same_expiry_signed_intent_packet_has_exact_codec_without_state() {
+  // Intentionally no Externalities: packet construction must not repair or read runtime state.
+  let payload = advisory_preimage_bytes(b"same expiry domains");
+  let mut expected_payload = vec![0, 19 << 2];
+  expected_payload.extend_from_slice(b"same expiry domains");
+  expected_payload.push(0);
+  assert_eq!(payload, expected_payload);
+  assert_eq!(payload.len(), 22);
+  let hash = <Runtime as frame_system::Config>::Hashing::hash(&payload);
+  assert_eq!(
+    format!("{hash:x}"),
+    "9d987885cf7efc3014333ef6cc9d88bd36c0e3c2d2e177464f1c5085a8ef0a52"
+  );
+  let packet = same_expiry_signed_intent_packet();
+  let mut expected_note = vec![45, 0, 22 << 2];
+  expected_note.extend_from_slice(&payload);
+  assert_eq!(packet[0].encode(), expected_note);
+  for (index, domain) in [(1usize, 101u32), (3, 102)] {
+    let mut witness = vec![44, 11];
+    witness.extend_from_slice(&domain.to_le_bytes());
+    witness.push(3);
+    witness.extend_from_slice(hash.as_bytes());
+    witness.push(22 << 2);
+    witness.extend_from_slice(&payload);
+    assert_eq!(packet[index].encode(), witness);
+    let mut submit = vec![44, 3];
+    submit.extend_from_slice(&domain.to_le_bytes());
+    submit.extend_from_slice(&110u32.to_le_bytes());
+    submit.extend_from_slice(&[0, 3]);
+    submit.extend_from_slice(hash.as_bytes());
+    assert_eq!(packet[index + 1].encode(), submit);
+  }
+  assert_eq!(
+    packet.each_ref().map(Encode::encoded_size),
+    [25, 62, 44, 62, 44]
+  );
 }
 
 fn invoice_cid() -> pallet_governance::CidBytesOf<Runtime> {
@@ -1992,38 +2070,2370 @@ fn pending_benchmark_fixtures_preserve_ordinary_delay_on_reference_host() {
 
 #[cfg(feature = "runtime-benchmarks")]
 #[test]
-fn finalized_cleanup_benchmark_verifies_reference_maximum() {
+fn pending_full_topology_prepares_a_lifted_epoch_for_the_actual_hook() {
+  type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+  let delay = <Runtime as pallet_governance::Config>::ProposalEnactmentDelay::get();
+  assert!(delay > 0);
+  for invalid in [delay - 1, delay] {
+    new_test_ext().execute_with(|| {
+      let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      assert!(matches!(
+        Governance::prepare_full_pending_enactment_hook(invalid, false, None),
+        Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Skip)
+      ));
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        before
+      );
+    });
+  }
   new_test_ext().execute_with(|| {
+    let retention =
+      <Runtime as pallet_governance::Config>::FinalizedProposalOutcomeRetentionEpochs::get();
+    assert!(retention > 0);
+    let overflow_epoch = u32::MAX - retention + 1;
+    let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert!(Governance::prepare_full_pending_enactment_hook(overflow_epoch, false, None).is_err());
     assert_eq!(
-      <Runtime as pallet_governance::Config>::MaxRecentFinalizedProposalsPerDomain::get(),
-      16_384
-    );
-    assert_eq!(
-      <Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerBlock::get(),
-      1_024
-    );
-    assert_eq!(
-      <Runtime as pallet_governance::Config>::MaxCidBytes::get(),
-      96
-    );
-    pallet_governance::Pallet::<Runtime>::verify_maximum_finalized_cleanup_benchmark().unwrap();
-    let domain = TACTICAL_GOVERNANCE_DOMAIN;
-    assert_eq!(
-      pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain).len(),
-      15_360
-    );
-    let record = pallet_governance::FinalizedProposals::<Runtime>::get(domain, 3_024).unwrap();
-    assert_eq!(
-      record.encoded_size(),
-      pallet_governance::FinalizedProposalRecord::<
-        crate::AccountId,
-        u32,
-        crate::Hash,
-        u32,
-        pallet_governance::CidBytesOf<Runtime>,
-      >::max_encoded_len()
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      before
     );
   });
+  for refused in [false, true] {
+    new_test_ext().execute_with(|| {
+      let now = 1 + delay + 17;
+      // Prepared pending-only history context, not a public history or maximal joint phase.
+      pallet_governance::LastProcessedEpoch::<Runtime>::put(now);
+      let verify_pending_topology = Governance::prepare_full_pending_enactment_hook(now, refused, None).unwrap();
+      let capacity = <Runtime as pallet_governance::Config>::MaxPendingEnactments::get();
+      let visits = <Runtime as pallet_governance::Config>::MaxPendingEnactmentsPerBlock::get();
+      let members = pallet_governance::PendingEnactments::<Runtime>::get();
+      assert_eq!(members.len(), capacity as usize);
+      assert_eq!(System::block_number(), now);
+      assert_eq!(pallet_governance::PendingEnactmentCursor::<Runtime>::get(), capacity - visits);
+      assert!(!pallet_deos_actors::UserCreationEnabled::<Runtime>::get(), "preparation must not dispatch the pending effect");
+      for (index, member) in members.iter().enumerate() {
+        let due = if index >= (capacity - visits) as usize { now } else { now + 1 };
+        let expected_approval = due - delay;
+        let record = pallet_governance::FinalizedProposals::<Runtime>::get(member.domain, member.item_id).unwrap();
+        assert!(matches!(record.outcome, pallet_governance::FinalizedProposalOutcome::Approved { approval, enactment: pallet_governance::ProposalEnactmentOutcome::NotAttempted } if approval.approved_epoch == expected_approval));
+        assert!(expected_approval <= now);
+        assert_eq!(Governance::proposal_pending_enactment_at(member.domain, member.item_id), Some(due));
+      }
+      let charged = Governance::on_initialize(now);
+      assert_eq!(charged, <W as pallet_governance::WeightInfo>::service_pending_enactments(visits));
+      assert_eq!(pallet_governance::LastProcessedEpoch::<Runtime>::get(), now);
+      assert_eq!(pallet_deos_actors::UserCreationEnabled::<Runtime>::get(), !refused);
+      verify_pending_topology(&[]).unwrap();
+      println!("GOVERNANCE_FULL_PENDING_HOOK_SOURCE_V1 {}", serde_json::json!({
+        "refused": refused, "epoch": now, "dueApprovalEpoch": now - delay,
+        "capacity": capacity, "visits": visits, "preparedWithoutService": true,
+        "actualHook": true, "historyAlreadyCompletedAtCurrentEpoch": true,
+        "syntheticNotPublicHistoryOrJointMaximum": true,
+        "notPhysicalTimingProofOrProductionPrice": true
+      }));
+    });
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn pending_and_maximum_cleanup_share_one_hook_without_fixture_collision() {
+  new_test_ext().execute_with(|| {
+    type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+    let (cleanup_domain, expiry) = Governance::prepare_maximum_finalized_cleanup_hook().unwrap();
+    let now = expiry + 1;
+    let before = pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(cleanup_domain);
+    let due = pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry);
+    let future = pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::iter()
+      .filter(|(epoch, _)| *epoch > expiry)
+      .collect::<Vec<_>>();
+    assert_eq!(before.len(), 16_384);
+    assert_eq!(due.len(), 1_024);
+    pallet_governance::LastProcessedEpoch::<Runtime>::put(expiry - 1);
+    let verify_pending_topology =
+      Governance::prepare_full_pending_enactment_hook(now, false, None).unwrap();
+    let members = pallet_governance::PendingEnactments::<Runtime>::get();
+    assert_eq!(members.len(), 128);
+    assert!(members.iter().all(|touch| touch.domain != cleanup_domain));
+    let retention =
+      <Runtime as pallet_governance::Config>::FinalizedProposalOutcomeRetentionEpochs::get();
+    assert!(future.iter().all(|(epoch, _)| *epoch != now + retention));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(<Governance as polkadot_sdk::frame_support::traits::Hooks<
+      crate::BlockNumber,
+    >>::try_state(now));
+    let charged = Governance::on_initialize(now);
+    let visits = <Runtime as pallet_governance::Config>::MaxPendingEnactmentsPerBlock::get();
+    let n = <Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerBlock::get();
+    let expected = <W as pallet_governance::WeightInfo>::service_pending_enactments(visits)
+      .saturating_add(<W as pallet_governance::WeightInfo>::service_epoch_catch_up())
+      .saturating_add(<W as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(n));
+    assert_eq!(charged, expected);
+    verify_pending_topology(&[]).unwrap();
+    assert_eq!(
+      pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(cleanup_domain).as_slice(),
+      &before[n as usize..]
+    );
+    for touch in due {
+      assert!(
+        !pallet_governance::FinalizedProposals::<Runtime>::contains_key(
+          touch.domain,
+          touch.item_id
+        )
+      );
+      assert!(
+        !pallet_governance::ProposalMetadataByItem::<Runtime>::contains_key(
+          touch.domain,
+          touch.item_id
+        )
+      );
+    }
+    for (epoch, bucket) in future {
+      assert_eq!(
+        pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(epoch),
+        bucket
+      );
+    }
+    assert!(
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry).is_empty()
+    );
+    assert_eq!(
+      pallet_governance::LastProcessedEpoch::<Runtime>::get(),
+      expiry - 1
+    );
+    assert_eq!(
+      pallet_governance::CurrentEpochServicePhase::<Runtime>::get(),
+      pallet_governance::EpochServicePhase::RewardExpiry
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(<Governance as polkadot_sdk::frame_support::traits::Hooks<
+      crate::BlockNumber,
+    >>::try_state(now));
+    println!(
+      "GOVERNANCE_JOINT_PENDING_CLEANUP_HOOK_SOURCE_V1 {}",
+      serde_json::json!({
+        "epoch": now, "oldExpiry": expiry, "newTerminalExpiry": now + retention,
+        "pendingBefore": members.len(), "pendingVisits": visits,
+        "oldIndexBefore": before.len(), "oldCleanup": n,
+        "distinctPendingAndCleanupDomains": true,
+        "syntheticNotPublicHistoryOrJointMaximum": true,
+        "notPhysicalTimingProofOrProductionPrice": true
+      })
+    );
+  });
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn finalized_cleanup_benchmark_verifies_reference_maximum() {
+  use polkadot_sdk::frame_benchmarking::{Recording, benchmarking};
+  use polkadot_sdk::frame_support::storage::StoragePrefixedMap;
+  #[derive(Default)]
+  struct CleanupRecording {
+    starts: u32,
+    counts: Option<(u32, u32, u32, u32)>,
+    prefix_rows: Vec<(Vec<u8>, u32, u32, bool)>,
+  }
+  impl Recording for CleanupRecording {
+    fn start(&mut self) {
+      assert_eq!(self.starts, 0);
+      self.starts += 1;
+      benchmarking::set_whitelist(Vec::new());
+      benchmarking::commit_db();
+      benchmarking::reset_read_write_count();
+    }
+    fn stop(&mut self) {
+      assert!(self.counts.is_none());
+      // Flush actual SDK bookkeeping before verification can add diagnostic reads.
+      benchmarking::commit_db();
+      self.counts = Some(benchmarking::read_write_count());
+      self.prefix_rows = benchmarking::get_read_and_written_keys();
+    }
+  }
+  super::common::with_benchmarking_host(
+    super::common::benchmarking_storage(new_test_ext()),
+    |_| {
+      assert_eq!(
+        <Runtime as pallet_governance::Config>::MaxRecentFinalizedProposalsPerDomain::get(),
+        16_384
+      );
+      assert_eq!(
+        <Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerBlock::get(),
+        1_024
+      );
+      assert_eq!(
+        <Runtime as pallet_governance::Config>::MaxCidBytes::get(),
+        96
+      );
+      let mut recording = CleanupRecording::default();
+      Governance::verify_maximum_finalized_cleanup_benchmark(&mut recording).unwrap();
+      assert_eq!(recording.starts, 1);
+      let n = <Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerBlock::get();
+      let (reads, _, writes, _) = recording.counts.unwrap();
+      assert_eq!(reads, 2);
+      assert_eq!(writes, 4 * n + 2);
+      assert!(
+        recording
+          .prefix_rows
+          .iter()
+          .all(|(_, _, _, whitelisted)| !whitelisted)
+      );
+      // The SDK aggregates unique full-key accesses into storage-prefix rows.
+      for prefix in [
+        pallet_governance::FinalizedProposals::<Runtime>::final_prefix(),
+        pallet_governance::ProposalMetadataByItem::<Runtime>::final_prefix(),
+        pallet_governance::ProposalWinningPrimaryOptionByItem::<Runtime>::final_prefix(),
+        pallet_governance::ProposalUrgentAuthorizedAt::<Runtime>::final_prefix(),
+      ] {
+        let family = recording
+          .prefix_rows
+          .iter()
+          .filter(|(key, _, _, _)| key == &prefix)
+          .collect::<Vec<_>>();
+        assert_eq!(family.len(), 1);
+        assert_eq!((family[0].1, family[0].2), (0, n));
+      }
+      let pending_prefix = pallet_governance::ProposalPendingEnactmentAt::<Runtime>::final_prefix();
+      assert!(
+        recording
+          .prefix_rows
+          .iter()
+          .all(|(key, _, _, _)| key != &pending_prefix)
+      );
+      assert_eq!(recording.prefix_rows.len(), 6);
+      for prefix in [
+        pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::final_prefix(),
+        pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::final_prefix(),
+      ] {
+        let row = recording
+          .prefix_rows
+          .iter()
+          .find(|(key, _, _, _)| key == &prefix)
+          .unwrap();
+        assert_eq!((row.1, row.2), (1, 1));
+      }
+      let db = <Runtime as frame_system::Config>::DbWeight::get();
+      let write_model = db.writes(u64::from(writes));
+      let quarter = crate::MAXIMUM_BLOCK_WEIGHT / 4;
+      assert!(write_model.ref_time() < quarter.ref_time());
+      assert_eq!(write_model.proof_size(), 0);
+      println!(
+        "GOVERNANCE_CLEANUP_SDK_FOOTPRINT n={n} reads={reads} unique_writes={writes} write_model_ps={} quarter_ps={} physical_bound=false",
+        write_model.ref_time(),
+        quarter.ref_time()
+      );
+      let domain = TACTICAL_GOVERNANCE_DOMAIN;
+      assert_eq!(
+        pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain).len(),
+        15_360
+      );
+      let record = pallet_governance::FinalizedProposals::<Runtime>::get(domain, 3_024).unwrap();
+      assert_eq!(
+        record.encoded_size(),
+        pallet_governance::FinalizedProposalRecord::<
+          crate::AccountId,
+          u32,
+          crate::Hash,
+          u32,
+          pallet_governance::CidBytesOf<Runtime>,
+        >::max_encoded_len()
+      );
+    },
+  );
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn finalized_cleanup_diverse_benchmark_preserves_shared_population() {
+  for n in [2, 1_024] {
+    new_test_ext().execute_with(|| {
+      Governance::verify_diverse_finalized_cleanup_benchmark(n).unwrap();
+      let mut remaining = 0;
+      for offset in 0..n {
+        let domain = 101 + offset;
+        let ids = pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain);
+        let before = 16_384 / n + u32::from(offset < 16_384 % n);
+        assert_eq!(ids.len(), (before - 1) as usize);
+        remaining += ids.len();
+        assert!(!pallet_governance::FinalizedProposals::<Runtime>::contains_key(domain, offset));
+      }
+      assert_eq!(remaining, (16_384 - n) as usize);
+      assert!(!pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::contains_key(101 + n));
+      println!(
+        "GOVERNANCE_DIVERSE_BENCHMARK_SOURCE_V2 n={n} total=16384 domains={n} remaining={remaining}"
+      );
+    });
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn complete_cleanup_benchmark_verifies_reference_hook_phases() {
+  for phase in 0..=1 {
+    for n in [1, 1024] {
+      new_test_ext().execute_with(|| {
+        Governance::verify_complete_finalized_cleanup_benchmark(n, phase).unwrap();
+      });
+    }
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+#[ignore = "opt-in reference maximum cleanup fixture; native source conformance only"]
+fn complete_diverse_cleanup_benchmark_verifies_reference_hook_phases() {
+  for n in [3, 1024] {
+    for phase in 0..=1 {
+      new_test_ext().execute_with(|| {
+        Governance::verify_complete_diverse_finalized_cleanup_benchmark(n, phase).unwrap();
+        let remaining = (0..n)
+          .map(|offset| {
+            let ids = pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(101 + offset);
+            assert!(!ids.contains(&offset));
+            ids.len()
+          })
+          .sum::<usize>();
+        assert_eq!(remaining, 16384 - n as usize);
+        assert!(!pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::contains_key(101 + n));
+      });
+    }
+  }
+}
+
+#[cfg(all(feature = "runtime-benchmarks", feature = "try-runtime"))]
+#[test]
+#[ignore = "opt-in joint pending/full-index prepared source; not physical pricing or history"]
+fn independent_full_indices_and_pending_share_old_epoch_hook() {
+  new_test_ext().execute_with(|| {
+    type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+    let (prepared_clock, expiry, check_cleanup) = Governance::prepare_independent_full_indices_cleanup_component().unwrap();
+    let delay = <Runtime as pallet_governance::Config>::ProposalEnactmentDelay::get();
+    let now = delay.checked_add(18).unwrap();
+    assert!(prepared_clock < now);
+    let check_pending = Governance::prepare_full_pending_enactment_hook(now, false, None).unwrap();
+    let pending = pallet_governance::PendingEnactments::<Runtime>::get();
+    let capacity = <Runtime as pallet_governance::Config>::MaxPendingEnactments::get();
+    let visits = <Runtime as pallet_governance::Config>::MaxPendingEnactmentsPerBlock::get();
+    let terminal_expiry = now + <Runtime as pallet_governance::Config>::FinalizedProposalOutcomeRetentionEpochs::get();
+    assert_eq!((now, expiry), (43218, 17));
+    assert_eq!((capacity, visits), (128, 4));
+    assert_eq!(pending.len(), capacity as usize);
+    assert!(pending.iter().all(|touch| ![101, 102].contains(&touch.domain)));
+    assert_eq!(pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(7).len(), 1020);
+    assert_eq!(pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(terminal_expiry).len(), 1020);
+    assert_eq!(System::block_number(), now);
+    assert_eq!(pallet_governance::LastProcessedEpoch::<Runtime>::get(), expiry - 1);
+    assert_eq!(pallet_governance::CurrentEpochServicePhase::<Runtime>::get(), pallet_governance::EpochServicePhase::FinalizedOutcome);
+    assert!(!pallet_deos_actors::UserCreationEnabled::<Runtime>::get());
+    assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(now));
+    let charged = Governance::on_initialize(now);
+    check_cleanup().unwrap();
+    check_pending(&[]).unwrap();
+    assert_eq!(charged, <W as pallet_governance::WeightInfo>::service_pending_enactments(visits)
+      .saturating_add(<W as pallet_governance::WeightInfo>::service_epoch_catch_up())
+      .saturating_add(<W as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(2)));
+    assert_eq!(pallet_governance::PendingEnactments::<Runtime>::get().len(), 124);
+    assert_eq!(pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(terminal_expiry).len(), 1024);
+    assert!(pallet_deos_actors::UserCreationEnabled::<Runtime>::get());
+    assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(now));
+    println!("GOVERNANCE_FULL_INDICES_PENDING_SOURCE_V1 {}", serde_json::json!({
+      "clock": now, "oldExpiry": expiry, "completedCursor": expiry - 1, "debt": now - (expiry - 1),
+      "cleanupDomains": 2, "cleanupDue": 2, "cleanupPopulation": 32768,
+      "pendingBefore": capacity, "pendingVisits": visits, "pendingAfter": 124,
+      "dueApprovalEpoch": now - delay, "futureApprovalEpoch": now + 1 - delay,
+      "newTerminalExpiry": terminal_expiry, "destinationBeforeAfter": [1020,1024],
+      "cleanupAndPendingComponentVerifiers": true, "tryStateBeforeAfter": true,
+      "actualUserCreationEffect": true,
+      "preparedNotPublicHistoryJointMaximumPhysicalPriceOrPoV": true
+    }));
+  });
+}
+
+#[cfg(all(feature = "runtime-benchmarks", feature = "try-runtime"))]
+#[test]
+#[ignore = "opt-in joint refusal exact-state model; not invoked-effect rollback or physical pricing"]
+fn independent_full_indices_refusal_preserves_pending_and_commits_cleanup() {
+  use super::common::committed_fixture_storage;
+  use polkadot_sdk::{
+    sp_core::{Blake2Hasher, H256},
+    sp_trie::{LayoutV1, TrieConfiguration},
+  };
+  let mut source = new_test_ext();
+  let (now, expiry, due, check_cleanup) = source.execute_with(|| {
+    let (_, expiry, check_cleanup) =
+      Governance::prepare_independent_full_indices_cleanup_component().unwrap();
+    let now = <Runtime as pallet_governance::Config>::ProposalEnactmentDelay::get()
+      .checked_add(18)
+      .unwrap();
+    // This verifier's standalone full-root domain excludes committed cleanup. The joint
+    // complete-state model below replaces it only here, without weakening that API.
+    let _pending_only_check =
+      Governance::prepare_full_pending_enactment_hook(now, true, None).unwrap();
+    let destination =
+      now + <Runtime as pallet_governance::Config>::FinalizedProposalOutcomeRetentionEpochs::get();
+    assert_eq!(
+      pallet_governance::PendingEnactments::<Runtime>::get().len(),
+      128
+    );
+    assert_eq!(
+      pallet_governance::PendingEnactmentCursor::<Runtime>::get(),
+      124
+    );
+    assert_eq!(
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(destination).len(),
+      1024
+    );
+    assert!(!pallet_deos_actors::UserCreationEnabled::<Runtime>::get());
+    assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(now));
+    (
+      now,
+      expiry,
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry),
+      check_cleanup,
+    )
+  });
+  let before = committed_fixture_storage(source);
+  let mut expected = before.clone();
+  assert_eq!(due.len(), 2);
+  for touch in due {
+    assert!([101, 102].contains(&touch.domain));
+    let index_key =
+      pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::hashed_key_for(touch.domain);
+    let mut ids = Vec::<u32>::decode(&mut &expected.top[&index_key][..]).unwrap();
+    assert_eq!(ids.len(), 16384);
+    assert_eq!(ids.remove(0), touch.item_id);
+    expected.top.insert(index_key, ids.encode());
+    assert!(
+      expected
+        .top
+        .remove(
+          &pallet_governance::FinalizedProposals::<Runtime>::hashed_key_for(
+            touch.domain,
+            touch.item_id
+          )
+        )
+        .is_some()
+    );
+    // This selected NoVotes source has no retained metadata/winning/urgency values.
+    for key in [
+      pallet_governance::ProposalMetadataByItem::<Runtime>::hashed_key_for(
+        touch.domain,
+        touch.item_id,
+      ),
+      pallet_governance::ProposalWinningPrimaryOptionByItem::<Runtime>::hashed_key_for(
+        touch.domain,
+        touch.item_id,
+      ),
+      pallet_governance::ProposalUrgentAuthorizedAt::<Runtime>::hashed_key_for(
+        touch.domain,
+        touch.item_id,
+      ),
+    ] {
+      assert!(!expected.top.contains_key(&key));
+    }
+  }
+  assert!(
+    expected
+      .top
+      .remove(&pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<
+        Runtime,
+      >::hashed_key_for(expiry))
+      .is_some()
+  );
+  expected.top.insert(
+    pallet_governance::CurrentEpochServicePhase::<Runtime>::hashed_key().to_vec(),
+    pallet_governance::EpochServicePhase::RewardExpiry.encode(),
+  );
+  expected.top.insert(
+    pallet_governance::PendingEnactmentCursor::<Runtime>::hashed_key().to_vec(),
+    0u32.encode(),
+  );
+  let changed = before
+    .top
+    .keys()
+    .chain(expected.top.keys())
+    .collect::<std::collections::BTreeSet<_>>()
+    .into_iter()
+    .filter(|key| before.top.get(*key) != expected.top.get(*key))
+    .count();
+  assert_eq!(changed, 7);
+  type Layout = LayoutV1<Blake2Hasher>;
+  let expected_root = Layout::trie_root(expected.top.clone());
+  assert_ne!(
+    expected_root,
+    Layout::trie_root(before.top.clone()),
+    "committed cleanup must not be rolled back"
+  );
+  let mut actual = polkadot_sdk::sp_io::TestExternalities::new(before);
+  let actual_root = actual.execute_with(|| {
+    let charged = Governance::on_initialize(now);
+    check_cleanup().unwrap();
+    assert_eq!(
+      pallet_governance::PendingEnactments::<Runtime>::get().len(),
+      128
+    );
+    assert_eq!(
+      pallet_governance::PendingEnactmentCursor::<Runtime>::get(),
+      0
+    );
+    assert_eq!(
+      pallet_governance::LastProcessedEpoch::<Runtime>::get(),
+      expiry - 1
+    );
+    assert!(!pallet_deos_actors::UserCreationEnabled::<Runtime>::get());
+    assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(now));
+    type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+    assert_eq!(
+      charged,
+      <W as pallet_governance::WeightInfo>::service_pending_enactments(4)
+        .saturating_add(<W as pallet_governance::WeightInfo>::service_epoch_catch_up())
+        .saturating_add(
+          <W as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(2)
+        )
+    );
+    H256::from_slice(&polkadot_sdk::sp_io::storage::root(
+      crate::VERSION.state_version(),
+    ))
+  });
+  assert_eq!(actual_root, expected_root);
+  let actual = committed_fixture_storage(actual);
+  assert!(
+    actual.top == expected.top,
+    "exact combined-state expectation, with no masked namespace"
+  );
+  println!(
+    "GOVERNANCE_FULL_INDICES_PENDING_REFUSAL_V1 {}",
+    serde_json::json!({
+      "clock": now, "oldExpiry": expiry, "completedCursor": expiry - 1,
+      "pendingBeforeAfter": [128,128], "pendingCursorBeforeAfter": [124,0],
+      "destinationBeforeAfter": [1024,1024], "cleanupDue": 2, "cleanupPopulation": 32768,
+      "exactModeledDeltaKeys": changed, "completeTopAndRootMatch": true,
+      "preEffectCapacityRefusalNotInvokedEffectRollback": true,
+      "preparedNotPublicHistoryMaximumPoVCpuPriceOrHostAcceptance": true
+    })
+  );
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn full_index_value_classes_metadata_is_extra_only() {
+  use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, Benchmarking};
+  let name = b"on_initialize_full_index_value_classes";
+  assert!(
+    !<Governance as Benchmarking>::benchmarks(false)
+      .iter()
+      .any(|b| b.name == name)
+  );
+  let metadata = <Governance as Benchmarking>::benchmarks(true);
+  let entries = metadata
+    .iter()
+    .filter(|b| b.name == name)
+    .collect::<Vec<_>>();
+  assert_eq!(entries.len(), 1);
+  assert_eq!(entries[0].components, vec![(BenchmarkParameter::q, 0, 1)]);
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+#[ignore = "opt-in ordinary SDK returned counters; incidental timings ignored, no Wasm or price"]
+fn full_index_value_classes_sdk_return_separates_optional_verification() {
+  use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, Benchmarking};
+  let mut returned = Vec::new();
+  for verify in [false, true] {
+    let observed = super::common::with_benchmarking_host(
+      super::common::benchmarking_storage(new_test_ext()),
+      |_| {
+        // Use the real generated dispatcher/BenchmarkRecording, including final commit/wipe.
+        let mut rows = <Governance as Benchmarking>::run_benchmark(
+          b"on_initialize_full_index_value_classes",
+          &[(BenchmarkParameter::q, 1)],
+          &[vec![7; 32].into()],
+          verify,
+          1,
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = rows.remove(0);
+        assert_eq!(row.components, vec![(BenchmarkParameter::q, 1)]);
+        assert!(row.proof_size >= 131080);
+        let counts = (row.reads, row.repeat_reads, row.writes, row.repeat_writes);
+        // Do not read, record or compare either incidental SDK timing field.
+        (row.proof_size, counts)
+      },
+    );
+    assert_eq!(
+      observed.1,
+      if verify {
+        (32806, 4, 12, 0)
+      } else {
+        (7, 2, 12, 0)
+      }
+    );
+    println!(
+      "GOVERNANCE_VALUE_CLASS_SDK_RETURN_V1 {}",
+      serde_json::json!({
+        "verify": verify, "selectorQ": 1, "sdkInternalRepeats": 1,
+        "returnedProofBytes": observed.0, "returnedCounters": observed.1,
+        "ordinaryNativeDispatcherNotStopCallback": true,
+        "incidentalTimingsIgnoredNotPhysicalWasmOrPrice": true
+      })
+    );
+    returned.push(observed);
+  }
+  // Optional post-body verification changes returned counters, not the saved end proof.
+  assert_eq!(returned[0].0, returned[1].0);
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+#[ignore = "opt-in v2 value-class boundary; no clock, Wasm or pricing"]
+fn full_index_value_classes_v2_records_absolute_body_before_verification() {
+  use polkadot_sdk::{
+    frame_benchmarking::{Recording, benchmarking},
+    sp_runtime::traits::BlakeTwo256,
+    sp_state_machine::Backend,
+    sp_trie::{StorageProof, recorder::Recorder},
+  };
+  struct Boundary {
+    recorder: Recorder<BlakeTwo256>,
+    starts: u32,
+    values: Vec<Vec<u8>>,
+    proof: Option<StorageProof>,
+    absolute: Option<u32>,
+    counts: Option<(u32, u32, u32, u32)>,
+  }
+  impl Recording for Boundary {
+    fn start(&mut self) {
+      assert_eq!(self.starts, 0);
+      self.starts += 1;
+      assert!(benchmarking::get_whitelist().is_empty());
+      assert_eq!(System::block_number(), 33);
+      self.values = [101, 102]
+        .map(|d| pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(d).encode())
+        .into();
+      self.values.sort();
+      self.values.dedup();
+      benchmarking::commit_db();
+      benchmarking::reset_read_write_count();
+      assert!(self.recorder.to_storage_proof().is_empty());
+      assert_eq!(benchmarking::proof_size(), Some(0));
+    }
+    fn stop(&mut self) {
+      assert!(self.proof.is_none());
+      self.proof = Some(self.recorder.to_storage_proof());
+      self.absolute = benchmarking::proof_size();
+      // Commit bookkeeping only after the end-of-body proof snapshot.
+      benchmarking::commit_db();
+      self.counts = Some(benchmarking::read_write_count());
+    }
+  }
+  for q in [0, 1] {
+    super::common::with_benchmarking_host(
+      super::common::benchmarking_storage(new_test_ext()),
+      |host| {
+        // The selector, not the test recorder, must remove caller-supplied discounts.
+        benchmarking::set_whitelist(vec![vec![7; 32].into()]);
+        let mut boundary = Boundary {
+          recorder: host.recorder().unwrap(),
+          starts: 0,
+          values: Vec::new(),
+          proof: None,
+          absolute: None,
+          counts: None,
+        };
+        Governance::verify_full_index_value_classes_benchmark(q, &mut boundary).unwrap();
+        assert_eq!(boundary.starts, 1);
+        assert_eq!(boundary.values.len(), q as usize + 1);
+        let proof = boundary.proof.unwrap();
+        for value in &boundary.values {
+          assert_eq!(value.len(), 65540);
+          assert_eq!(proof.iter_nodes().filter(|node| *node == value).count(), 1);
+        }
+        let mass = (q + 1) * 65540;
+        assert!(boundary.absolute.unwrap() >= mass);
+        assert_eq!(boundary.counts, Some((7, 2, 12, 0)));
+        assert!(host.get_whitelist().is_empty());
+        println!(
+          "GOVERNANCE_VALUE_CLASS_V2_BOUNDARY_V1 {}",
+          serde_json::json!({
+            "q": q, "starts": boundary.starts, "baseline": 0,
+            "absoluteCompactBodyProofBytes": boundary.absolute, "rawBodyProofBytes": proof.encoded_size(),
+            "requiredPayloadBytes": mass, "postCommitCounts": boundary.counts,
+            "snapshotBeforeCommitAndVerification": true, "timerCalled": false,
+            "nativeV2NotWasmOrPrice": true
+          })
+        );
+      },
+    );
+  }
+}
+
+#[cfg(all(feature = "runtime-benchmarks", feature = "try-runtime"))]
+#[test]
+#[ignore = "opt-in matched native SDK value-class source; no timing or physical pricing"]
+fn full_index_value_classes_reach_native_sdk_body_recorder() {
+  use super::common::{committed_fixture_storage, with_benchmarking_host};
+  use polkadot_sdk::{
+    frame_benchmarking::benchmarking,
+    sp_core::{Blake2Hasher, Hasher},
+    sp_state_machine::Backend,
+    sp_trie::{LayoutV1, StorageProof, Trie, TrieConfiguration, TrieDBBuilder},
+  };
+  use std::collections::BTreeSet;
+  let keys =
+    [101, 102].map(pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::hashed_key_for);
+  for distinct in [false, true] {
+    let mut source = new_test_ext();
+    let (now, expiry, check_hook) = source.execute_with(|| {
+      let prepared = Governance::prepare_independent_full_indices_value_contrast(distinct).unwrap();
+      assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(
+        prepared.0
+      ));
+      prepared
+    });
+    let parent = committed_fixture_storage(source);
+    let root = LayoutV1::<Blake2Hasher>::trie_root(parent.top.clone());
+    let values = keys
+      .each_ref()
+      .map(|key| parent.top.get(key).unwrap().clone());
+    assert!(values.iter().all(|value| value.len() == 65540));
+    assert_eq!(values[0] == values[1], !distinct);
+    let hashes = values
+      .iter()
+      .map(|value| Blake2Hasher::hash(value))
+      .collect::<BTreeSet<_>>();
+    assert_eq!(hashes.len(), if distinct { 2 } else { 1 });
+    with_benchmarking_host(parent, |host| {
+      let recorder = host.recorder().unwrap();
+      assert!(host.get_whitelist().is_empty());
+      assert!(recorder.to_storage_proof().is_empty());
+      assert_eq!(host.proof_size(), Some(0));
+      assert_eq!((System::block_number(), expiry), (33, 17));
+      // Discard the context-check read so capture begins from the declared original root.
+      benchmarking::commit_db();
+      benchmarking::reset_read_write_count();
+      assert!(recorder.to_storage_proof().is_empty());
+      assert_eq!(host.proof_size(), Some(0));
+      let charged = Governance::on_initialize(now);
+      let proof = recorder.to_storage_proof();
+      let absolute = host.proof_size().unwrap();
+      let compact = proof.to_compact_proof::<Blake2Hasher>(root).unwrap();
+      assert_eq!(absolute as usize, compact.encoded_size());
+      for value in &values {
+        assert_eq!(proof.iter_nodes().filter(|node| *node == value).count(), 1);
+      }
+      let (replay, replay_root) = compact.to_memory_db::<Blake2Hasher>(&root).unwrap();
+      assert_eq!(replay_root, root);
+      let trie = TrieDBBuilder::<LayoutV1<Blake2Hasher>>::new(&replay, &root).build();
+      for (key, value) in keys.iter().zip(&values) {
+        assert_eq!(trie.get(key).unwrap().as_ref(), Some(value));
+      }
+      let missing = StorageProof::new(
+        proof
+          .iter_nodes()
+          .filter(|node| *node != &values[0])
+          .cloned(),
+      )
+      .into_memory_db::<Blake2Hasher>();
+      let trie = TrieDBBuilder::<LayoutV1<Blake2Hasher>>::new(&missing, &root).build();
+      assert!(trie.get(&keys[0]).is_err());
+      if distinct {
+        assert_eq!(trie.get(&keys[1]).unwrap().as_ref(), Some(&values[1]));
+      } else {
+        assert!(trie.get(&keys[1]).is_err());
+      }
+      // Post-body commit/counters and verification are outside the captured proof scope.
+      benchmarking::commit_db();
+      let counters = host.read_write_count();
+      check_hook().unwrap();
+      assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(now));
+      type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+      assert_eq!(
+        charged,
+        <W as pallet_governance::WeightInfo>::service_pending_enactments(0)
+          .saturating_add(<W as pallet_governance::WeightInfo>::service_epoch_catch_up())
+          .saturating_add(
+            <W as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(2)
+          )
+      );
+      println!(
+        "GOVERNANCE_MATCHED_VALUE_CLASS_SOURCE_V1 {}",
+        serde_json::json!({
+          "distinct": distinct, "domains": 2, "due": 2, "population": 32768, "retainVisits": 32768,
+          "clock": now, "oldExpiry": expiry, "requiredOriginalValueHashes": hashes.len(),
+          "payloadMassBytes": hashes.len() * values[0].len(), "proofBaseline": 0,
+          "bodyRawProofBytes": proof.encoded_size(), "bodyAbsoluteCompactProofBytes": absolute,
+          "postCommitCounters": [counters.0,counters.1,counters.2,counters.3],
+          "proofBeforeCommitVerificationOrRootDiagnostics": true,
+          "nativePreparedNotWasmTimingDominationHistoryRootMaximumOrPrice": true
+        })
+      );
+    });
+  }
+}
+
+#[cfg(all(feature = "runtime-benchmarks", feature = "try-runtime"))]
+#[test]
+#[ignore = "opt-in independent full-index source; no physical timing or admitted history"]
+fn independent_full_indices_cleanup_hook_has_consistent_debt() {
+  new_test_ext().execute_with(|| {
+    let (now, expiry, check_cleanup) = Governance::prepare_independent_full_indices_cleanup_hook().unwrap();
+    assert_eq!((now, expiry), (33, 17));
+    assert_eq!(System::block_number(), now);
+    assert_eq!(pallet_governance::LastProcessedEpoch::<Runtime>::get(), 16);
+    for domain in [101, 102] {
+      assert_eq!(pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain).len(), 16384);
+      assert!(matches!(pallet_governance::FinalizedProposals::<Runtime>::get(domain, 2000 + 16383).unwrap().outcome,
+        pallet_governance::FinalizedProposalOutcome::Rejected { finalized_epoch, .. } if finalized_epoch <= now));
+    }
+    assert!(pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::iter().all(|(epoch, _)| epoch > 16));
+    assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(now));
+    let charged = Governance::on_initialize(now);
+    check_cleanup().unwrap();
+    assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(now));
+    assert_eq!([101, 102].iter().map(|domain| pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain).len()).sum::<usize>(), 32766);
+    println!("GOVERNANCE_INDEPENDENT_FULL_INDICES_SOURCE_V1 {}", serde_json::json!({
+      "domains": 2, "due": 2, "indexIdsPerDomain": 16384, "initialPopulation": 32768,
+      "clock": now, "selectedExpiry": expiry, "completedCursor": 16, "debt": now - 16,
+      "equalIndexValues": true, "tryStateBeforeAfter": true,
+      "declaredWeightNotPhysicalCost": [charged.ref_time(), charged.proof_size()],
+      "preparedNotPublicHistoryExecutiveAdmissionOrPhysicalPrice": true
+    }));
+  });
+}
+
+#[cfg(all(feature = "runtime-benchmarks", feature = "try-runtime"))]
+#[test]
+#[ignore = "opt-in full-index original-input/delta transfer; not physical pricing"]
+fn independent_full_indices_original_input_replays_whole_delta() {
+  use super::{common::committed_fixture_storage, h1_storage_trace};
+  use polkadot_sdk::{
+    sp_core::{Blake2Hasher, H256, Hasher},
+    sp_trie::{
+      EMPTY_PREFIX, HashDBT, LayoutV1, MemoryDB, Recorder, StorageProof, Trie, TrieConfiguration,
+      TrieDBBuilder, delta_trie_root,
+    },
+  };
+  use std::collections::BTreeSet;
+  type Layout = LayoutV1<Blake2Hasher>;
+  let mut source = new_test_ext();
+  let (now, _, check_cleanup) = source.execute_with(|| {
+    let prepared = Governance::prepare_independent_full_indices_cleanup_hook().unwrap();
+    assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(
+      prepared.0
+    ));
+    prepared
+  });
+  let before_root =
+    source.execute_with(|| polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version()));
+  let before = committed_fixture_storage(source);
+  let mut plain = polkadot_sdk::sp_io::TestExternalities::new(before.clone());
+  let plain_weight = plain.execute_with(|| Governance::on_initialize(now));
+  let plain = committed_fixture_storage(plain);
+  let mut observed = polkadot_sdk::sp_io::TestExternalities::new(before.clone());
+  let ((observed_weight, access), runtime_root) = h1_storage_trace::recorded(|| {
+    observed.execute_with(|| {
+      let result = h1_storage_trace::point_access_keys("governance-cleanup", || {
+        Governance::on_initialize(now)
+      });
+      check_cleanup().unwrap();
+      assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(now));
+      (
+        result,
+        polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version()),
+      )
+    })
+  });
+  let after = committed_fixture_storage(observed);
+  let (keys, written) = (access.all, access.written);
+  assert_eq!(plain_weight, observed_weight);
+  assert_eq!(plain.top, after.top, "observer preserves complete TOP");
+  let all_keys = before
+    .top
+    .keys()
+    .chain(after.top.keys())
+    .collect::<BTreeSet<_>>();
+  let delta = all_keys
+    .into_iter()
+    .filter(|key| before.top.get(*key) != after.top.get(*key))
+    .map(|key| (key.clone(), after.top.get(key).cloned()))
+    .collect::<Vec<_>>();
+  assert!(
+    delta.iter().all(|(key, _)| written.contains(key)),
+    "every net mutation has an observed write owner"
+  );
+  assert!(keys.contains(
+    polkadot_sdk::frame_support::storage::storage_prefix(b"System", b"Number").as_slice()
+  ));
+  let mut original = MemoryDB::<Blake2Hasher>::default();
+  let root = Layout::trie_build(&mut original, before.top.clone());
+  assert_eq!(root, H256::from_slice(&before_root));
+  assert_eq!(root, Layout::trie_root(before.top.clone()));
+  let mut recorder = Recorder::<Layout>::new();
+  {
+    let trie = TrieDBBuilder::<Layout>::new(&original, &root)
+      .with_recorder(&mut recorder)
+      .build();
+    for key in &keys {
+      assert_eq!(trie.get(key).unwrap(), before.top.get(key).cloned());
+    }
+  }
+  let input_nodes = recorder
+    .drain()
+    .into_iter()
+    .map(|node| node.data)
+    .collect::<BTreeSet<_>>();
+  let input = StorageProof::new(input_nodes.iter().cloned());
+  let mut lookup_only = input.to_memory_db::<Blake2Hasher>();
+  let lookup_only_sufficient =
+    delta_trie_root::<Layout, _, _, _, _, _>(&mut lookup_only, root, delta.clone(), None, None)
+      .is_ok();
+  let mut working = original.clone();
+  let mut mutation_recorder = Recorder::<Layout>::new();
+  let post_root = delta_trie_root::<Layout, _, _, _, _, _>(
+    &mut working,
+    root,
+    delta.clone(),
+    Some(&mut mutation_recorder),
+    None,
+  )
+  .unwrap();
+  assert_eq!(post_root, H256::from_slice(&runtime_root));
+  assert_eq!(post_root, Layout::trie_root(after.top.clone()));
+  let mut repair_inputs = BTreeSet::new();
+  let mut computed_nodes = 0usize;
+  for node in mutation_recorder
+    .drain()
+    .into_iter()
+    .map(|record| record.data)
+  {
+    if input_nodes.contains(&node) {
+      continue;
+    }
+    if HashDBT::get(&original, &Blake2Hasher::hash(&node), EMPTY_PREFIX).as_ref() == Some(&node) {
+      repair_inputs.insert(node);
+    } else {
+      computed_nodes += 1;
+    }
+  }
+  let witness = StorageProof::new(
+    input_nodes
+      .iter()
+      .cloned()
+      .chain(repair_inputs.iter().cloned()),
+  );
+  assert!(
+    witness.iter_nodes().all(|node| HashDBT::get(
+      &original,
+      &Blake2Hasher::hash(node),
+      EMPTY_PREFIX
+    )
+    .as_ref()
+      == Some(node)),
+    "no computed/new node is supplied as original input"
+  );
+  let compact = witness.to_compact_proof::<Blake2Hasher>(root).unwrap();
+  let (mut replay, replay_root) = compact.to_memory_db::<Blake2Hasher>(&root).unwrap();
+  assert_eq!(replay_root, root);
+  {
+    let trie = TrieDBBuilder::<Layout>::new(&replay, &root).build();
+    for key in &keys {
+      assert_eq!(trie.get(key).unwrap(), before.top.get(key).cloned());
+    }
+  }
+  assert_eq!(
+    delta_trie_root::<Layout, _, _, _, _, _>(&mut replay, root, delta.clone(), None, None).unwrap(),
+    post_root
+  );
+  let index_keys =
+    [101, 102].map(pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::hashed_key_for);
+  let shared_value = before.top.get(&index_keys[0]).unwrap();
+  assert_eq!(Some(shared_value), before.top.get(&index_keys[1]));
+  assert_eq!(
+    witness
+      .iter_nodes()
+      .filter(|node| *node == shared_value)
+      .count(),
+    1
+  );
+  let missing = StorageProof::new(
+    witness
+      .iter_nodes()
+      .filter(|node| *node != shared_value)
+      .cloned(),
+  )
+  .into_memory_db::<Blake2Hasher>();
+  let trie = TrieDBBuilder::<Layout>::new(&missing, &root).build();
+  for key in &index_keys {
+    assert!(trie.get(key).is_err());
+  }
+  println!(
+    "GOVERNANCE_FULL_INDEX_DELTA_TRANSFER_V1 {}",
+    serde_json::json!({
+      "domains": 2, "initialPopulation": 32768, "clock": now,
+      "pointKeys": keys.len(), "netDeltaKeys": delta.len(),
+      "originalInputNodes": input_nodes.len(), "extraOriginalRepairNodes": repair_inputs.len(),
+      "excludedComputedNodes": computed_nodes, "lookupOnlyDeltaSucceeded": lookup_only_sufficient,
+      "rawWitnessBytes": witness.encoded_size(), "compactWitnessBytes": compact.encoded_size(),
+      "plainTopAndWeightPreserved": true, "independentPostRootMatches": true,
+      "explicitSharedValueAbsenceFailsReads": true,
+      "inputSupersetNotMinimalProofCpuPVFPoVOrHistory": true
+    })
+  );
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn finalized_cleanup_hook_sdk_footprint_keeps_wrapper_owners() {
+  use polkadot_sdk::frame_benchmarking::benchmarking;
+  let mut source = new_test_ext();
+  let (domain, expiry) =
+    source.execute_with(|| Governance::prepare_maximum_finalized_cleanup_hook().unwrap());
+  let parent = super::common::benchmarking_storage(source);
+  for phase in [
+    pallet_governance::EpochServicePhase::Maturing,
+    pallet_governance::EpochServicePhase::FinalizedOutcome,
+  ] {
+    super::common::with_benchmarking_host(parent.clone(), |_| {
+      System::set_block_number(expiry);
+      pallet_governance::LastProcessedEpoch::<Runtime>::put(expiry - 1);
+      pallet_governance::CurrentEpochServicePhase::<Runtime>::put(phase);
+      assert!(pallet_governance::PendingEnactments::<Runtime>::get().is_empty());
+      benchmarking::set_whitelist(Vec::new());
+      benchmarking::commit_db();
+      benchmarking::reset_read_write_count();
+      let charged = Governance::on_initialize(expiry);
+      // Commit the actual SDK bookkeeping before any verification read; no timer/PoV query.
+      benchmarking::commit_db();
+      let counts = benchmarking::read_write_count();
+      let rows = benchmarking::get_read_and_written_keys();
+      let prefix = |pallet: &[u8], item: &[u8]| {
+        polkadot_sdk::frame_support::storage::storage_prefix(pallet, item).to_vec()
+      };
+      let maturity = prefix(b"Governance", b"ProposalMaturityBuckets");
+      let initial_maturing = phase == pallet_governance::EpochServicePhase::Maturing;
+      let expected_reads = if initial_maturing { 7 } else { 6 };
+      assert_eq!((counts.0, counts.2), (expected_reads, 4099));
+      assert_eq!(rows.len(), if initial_maturing { 11 } else { 10 });
+      assert!(rows.iter().all(|(_, _, _, whitelisted)| !whitelisted));
+      for (pallet, item, writes) in [
+        (b"System".as_slice(), b"Number".as_slice(), 0),
+        (b"Governance".as_slice(), b"PendingEnactments".as_slice(), 0),
+        (
+          b"Governance".as_slice(),
+          b"LastProcessedEpoch".as_slice(),
+          0,
+        ),
+        (
+          b"Governance".as_slice(),
+          b"CurrentEpochServicePhase".as_slice(),
+          1,
+        ),
+      ] {
+        let key = prefix(pallet, item);
+        let row = rows.iter().find(|row| row.0 == key).unwrap();
+        assert_eq!((row.1, row.2), (1, writes));
+      }
+      let maturity_row = rows.iter().find(|row| row.0 == maturity);
+      if initial_maturing {
+        let row = maturity_row.unwrap();
+        assert_eq!((row.1, row.2), (1, 0));
+      } else {
+        assert!(maturity_row.is_none());
+      }
+      assert_eq!(
+        pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain).len(),
+        15360
+      );
+      assert!(
+        pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry).is_empty()
+      );
+      assert_eq!(
+        pallet_governance::CurrentEpochServicePhase::<Runtime>::get(),
+        pallet_governance::EpochServicePhase::RewardExpiry
+      );
+      assert_eq!(
+        pallet_governance::LastProcessedEpoch::<Runtime>::get(),
+        expiry - 1
+      );
+      println!(
+        "GOVERNANCE_CLEANUP_HOOK_SDK_FOOTPRINT_V1 {}",
+        serde_json::json!({
+          "initialPhase": format!("{phase:?}"), "readWriteCount": counts,
+          "prefixRows": rows.len(), "charged": [charged.ref_time(), charged.proof_size()],
+          "emptyPendingOnly": true, "actualHookNotHelper": true,
+          "nativeSdkCountersNotIOOrPhysicalPrice": true,
+          "noTimingOrProofSizeQuery": true, "notExecutiveOrPVFAcceptance": true
+        })
+      );
+    });
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+#[ignore = "opt-in large-index logical trace; not physical timing"]
+fn finalized_cleanup_index_logical_volume_preserves_plain_hook() {
+  use super::h1_storage_trace;
+  let mut source = new_test_ext();
+  let (domain, expiry) =
+    source.execute_with(|| Governance::prepare_maximum_finalized_cleanup_hook().unwrap());
+  let parent = super::common::benchmarking_storage(source);
+  let n = 1024usize;
+  let m = 16384usize;
+  let encoded_len = |len: usize| codec::Compact(len as u32).encoded_size() + 4 * len;
+  let execute = |observe| {
+    polkadot_sdk::sp_io::TestExternalities::new(parent.clone()).execute_with(|| {
+      System::set_block_number(expiry);
+      pallet_governance::LastProcessedEpoch::<Runtime>::put(expiry - 1);
+      pallet_governance::CurrentEpochServicePhase::<Runtime>::put(
+        pallet_governance::EpochServicePhase::FinalizedOutcome,
+      );
+      assert!(pallet_governance::PendingEnactments::<Runtime>::get().is_empty());
+      assert!(pallet_governance::ProposalMaturityBuckets::<Runtime>::get(expiry).is_empty());
+      let before = pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain);
+      let due = pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry);
+      assert_eq!(before.len(), m);
+      assert_eq!(before.encoded_size(), encoded_len(m));
+      assert_eq!(due.len(), n);
+      assert_eq!(
+        due.iter().map(|touch| touch.item_id).collect::<Vec<_>>(),
+        before[..n]
+      );
+      let pre_root = polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version());
+      let key = pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::hashed_key_for(domain);
+      let (charged, operations) = if observe {
+        h1_storage_trace::key_operations("governance-cleanup", &key, || {
+          Governance::on_initialize(expiry)
+        })
+      } else {
+        (Governance::on_initialize(expiry), Vec::new())
+      };
+      let post_root = polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version());
+      assert_eq!(
+        pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain).as_slice(),
+        &before[n..]
+      );
+      assert!(
+        pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry).is_empty()
+      );
+      assert_eq!(
+        pallet_governance::CurrentEpochServicePhase::<Runtime>::get(),
+        pallet_governance::EpochServicePhase::RewardExpiry
+      );
+      assert_eq!(
+        pallet_governance::LastProcessedEpoch::<Runtime>::get(),
+        expiry - 1
+      );
+      (pre_root, post_root, charged, operations)
+    })
+  };
+  let plain = execute(false);
+  let observed = h1_storage_trace::recorded(|| execute(true));
+  assert_eq!(
+    (&plain.0, &plain.1, plain.2),
+    (&observed.0, &observed.1, observed.2)
+  );
+  assert!(plain.3.is_empty());
+  assert_eq!(observed.3.len(), 2 * n);
+  let mut returned = 0usize;
+  let mut submitted = 0usize;
+  for (j, pair) in observed.3.chunks_exact(2).enumerate() {
+    assert_eq!(pair[0], ("Get".into(), encoded_len(m - j), false));
+    assert_eq!(pair[1], ("Put".into(), encoded_len(m - j - 1), false));
+    returned += pair[0].1;
+    submitted += pair[1].1;
+  }
+  let predicate_visits = (0..n).map(|j| m - j).sum::<usize>();
+  assert_eq!(
+    (returned, submitted, predicate_visits),
+    (65_015_810, 65_011_712, 16_253_440)
+  );
+  println!(
+    "GOVERNANCE_INDEX_LOGICAL_WORK_V1 {}",
+    serde_json::json!({
+      "due": n, "initialIndexIds": m, "keys": 1,
+      "logicalGets": n, "logicalPuts": n,
+      "returnedValueBytes": returned, "submittedValueBytes": submitted,
+      "sourceRetainPredicateVisits": predicate_visits,
+      "originalValueBytes": encoded_len(m), "finalValueBytes": encoded_len(m - n),
+      "plainRootAndWeightPreserved": true, "setupAndVerificationExcluded": true,
+      "notCpuBackendIOProofPriceOrAdmittedHistory": true
+    })
+  );
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn finalized_cleanup_initialization_exposes_system_quarter_mismatch() {
+  new_test_ext().execute_with(|| {
+    type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+    let (domain, expiry) = Governance::prepare_maximum_finalized_cleanup_hook().unwrap();
+    let n = <Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerBlock::get();
+    let before = pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain);
+    let future = pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::iter()
+      .filter(|(epoch, _)| *epoch > expiry)
+      .collect::<Vec<_>>();
+    assert_eq!(before.len(), 16_384);
+    assert_eq!(n, 1_024);
+    assert!(pallet_governance::PendingEnactments::<Runtime>::get().is_empty());
+    let issuance = Balances::total_issuance();
+    let alice = System::account(ALICE);
+    let bob = System::account(BOB);
+    System::set_block_number(expiry);
+    pallet_governance::LastProcessedEpoch::<Runtime>::put(expiry - 1);
+    let charged = Governance::on_initialize(expiry);
+    let expected = <W as pallet_governance::WeightInfo>::service_pending_enactments(0)
+      .saturating_add(<W as pallet_governance::WeightInfo>::service_epoch_catch_up())
+      .saturating_add(<W as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(n));
+    assert_eq!(charged, expected);
+    let quarter = crate::MAXIMUM_BLOCK_WEIGHT / 4;
+    let index_bytes = before.encoded_size();
+    assert_eq!(index_bytes, 65_540);
+    assert!(
+      charged.proof_size() < index_bytes as u64,
+      "known owner coverage gap: full retained index is read by cleanup"
+    );
+    assert!(
+      charged.ref_time() > quarter.ref_time(),
+      "known configured policy violation"
+    );
+    assert!(charged.proof_size() <= quarter.proof_size());
+    assert!(charged.all_lte(crate::configs::governance_config::GovernanceFixedWeight::get()));
+    assert_eq!(
+      pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain).as_slice(),
+      &before[n as usize..]
+    );
+    for item in before.iter().take(n as usize) {
+      assert!(!pallet_governance::FinalizedProposals::<Runtime>::contains_key(domain, item));
+      assert!(!pallet_governance::ProposalMetadataByItem::<Runtime>::contains_key(domain, item));
+    }
+    for (epoch, bucket) in future {
+      assert_eq!(
+        pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(epoch),
+        bucket
+      );
+    }
+    assert!(
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry).is_empty()
+    );
+    assert_eq!(
+      pallet_governance::CurrentEpochServicePhase::<Runtime>::get(),
+      pallet_governance::EpochServicePhase::RewardExpiry
+    );
+    assert_eq!(Balances::total_issuance(), issuance);
+    assert_eq!(System::account(ALICE), alice);
+    assert_eq!(System::account(BOB), bob);
+    println!(
+      "GOVERNANCE_FIXED_CLEANUP_CALLER_V1 {}",
+      serde_json::json!({
+        "syntheticBenchmarkState": true, "notPhysicalTiming": true, "due": n,
+        "remaining": before.len() - n as usize, "expiry": expiry,
+        "retainedIndexEncodedBytes": index_bytes, "codecBytesAreNotMeasuredProof": true,
+        "charged": [charged.ref_time(), charged.proof_size()],
+        "quarter": [quarter.ref_time(), quarter.proof_size()]
+      })
+    );
+  });
+}
+
+#[test]
+fn finalized_cleanup_due_bucket_admits_distinct_domain_indices() {
+  new_test_ext().execute_with(|| {
+    let domains = [101, 102];
+    let item = 7;
+    let hash = note_advisory_preimage(ALICE, b"domain-diverse cleanup source");
+    for (birth, item) in [(1, 7), (2, 8)] {
+      System::set_block_number(birth);
+      for domain in domains {
+        assert_ok!(Governance::submit_proposal(
+          RuntimeOrigin::root(),
+          domain,
+          item,
+          ALICE,
+          pallet_governance::ProposalCadenceMode::Ordinary,
+          pallet_governance::ProposalPayloadKind::Intent,
+          hash,
+        ));
+        assert_ok!(Governance::resolve_proposal(
+          RuntimeOrigin::root(),
+          domain,
+          item,
+          vec![ALICE].try_into().unwrap(),
+        ));
+        assert_eq!(
+          pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain).as_slice(),
+          if birth == 1 { &[7][..] } else { &[7, 8][..] }
+        );
+        assert!(pallet_governance::FinalizedProposals::<Runtime>::contains_key(domain, item));
+      }
+    }
+    let due = Governance::proposal_pending_enactment_at(domains[0], item).unwrap();
+    assert_eq!(
+      Governance::proposal_pending_enactment_at(domains[0], 8),
+      Some(due + 1)
+    );
+    assert_eq!(
+      Governance::proposal_pending_enactment_at(domains[1], item),
+      Some(due)
+    );
+    System::set_block_number(due);
+    Governance::on_initialize(due);
+    for domain in domains {
+      assert!(Governance::proposal_pending_enactment_at(domain, item).is_none());
+    }
+    System::set_block_number(due + 1);
+    Governance::on_initialize(due + 1);
+    let buckets = pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::iter()
+      .filter(|(_, entries)| entries.iter().any(|e| domains.contains(&e.domain)))
+      .collect::<Vec<_>>();
+    assert_eq!(buckets.len(), 2, "adjacent public finalized expiry cohorts");
+    let expiry = buckets.iter().map(|(epoch, _)| *epoch).min().unwrap();
+    let due_bucket =
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry);
+    let future_bucket =
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry + 1);
+    for domain in domains {
+      assert!(
+        due_bucket
+          .iter()
+          .any(|e| e.domain == domain && e.item_id == item)
+      );
+    }
+    assert_ne!(
+      pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::hashed_key_for(domains[0]),
+      pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::hashed_key_for(domains[1])
+    );
+    let future = domains.map(|domain| {
+      (
+        pallet_governance::FinalizedProposals::<Runtime>::get(domain, 8),
+        pallet_governance::ProposalMetadataByItem::<Runtime>::get(domain, 8),
+      )
+    });
+    let balances = (
+      Balances::total_issuance(),
+      System::account(ALICE),
+      System::account(BOB),
+    );
+    // Explicit maintenance-cursor fixture, not a claim of full public block history.
+    pallet_governance::LastProcessedEpoch::<Runtime>::put(expiry - 1);
+    System::set_block_number(expiry);
+    let charged = Governance::on_initialize(expiry);
+    type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+    assert_eq!(
+      charged,
+      <W as pallet_governance::WeightInfo>::service_pending_enactments(0)
+        .saturating_add(<W as pallet_governance::WeightInfo>::service_epoch_catch_up())
+        .saturating_add(
+          <W as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(2)
+        )
+    );
+    for (index, domain) in domains.into_iter().enumerate() {
+      assert_eq!(
+        pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(domain).as_slice(),
+        &[8]
+      );
+      assert!(!pallet_governance::FinalizedProposals::<Runtime>::contains_key(domain, item));
+      assert!(!pallet_governance::ProposalMetadataByItem::<Runtime>::contains_key(domain, item));
+      assert_eq!(
+        pallet_governance::FinalizedProposals::<Runtime>::get(domain, 8),
+        future[index].0
+      );
+      assert_eq!(
+        pallet_governance::ProposalMetadataByItem::<Runtime>::get(domain, 8),
+        future[index].1
+      );
+    }
+    assert!(
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry).is_empty()
+    );
+    assert_eq!(
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(expiry + 1),
+      future_bucket
+    );
+    assert_eq!(
+      (
+        Balances::total_issuance(),
+        System::account(ALICE),
+        System::account(BOB)
+      ),
+      balances
+    );
+    type Index = polkadot_sdk::frame_support::BoundedVec<
+      u32,
+      <Runtime as pallet_governance::Config>::MaxRecentFinalizedProposalsPerDomain,
+    >;
+    type Bucket = polkadot_sdk::frame_support::BoundedVec<
+      pallet_governance::FinalizedProposalTouch<u32, u32>,
+      <Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerEpoch,
+    >;
+    let index_value_upper = Index::max_encoded_len();
+    let bucket_value_upper = Bucket::max_encoded_len();
+    let two_domain_value_upper = bucket_value_upper
+      .checked_add(index_value_upper.checked_mul(2).unwrap())
+      .unwrap();
+    println!(
+      "GOVERNANCE_CLEANUP_DOMAIN_SOURCE_V1 {}",
+      serde_json::json!({
+        "publicRootProposalAndResolution": true, "domains": domains, "item": item,
+        "expiry": expiry, "retainedIndexKeys": 2,
+        "syntheticCleanupCursor": true, "removed": 2, "futureRetained": 2,
+        "maximumIndexValueBytes": index_value_upper, "maximumBucketValueBytes": bucket_value_upper,
+        "twoDomainValueUpperNotProofOrReachableLower": two_domain_value_upper,
+        "charged": [charged.ref_time(), charged.proof_size()],
+        "notMaximumJointGeometryOrMeasuredProof": true
+      })
+    );
+  });
+}
+
+#[test]
+fn cleanup_co_read_estimate_does_not_collapse_distinct_keys() {
+  use polkadot_sdk::frame_support::traits::StorageInfoTrait;
+  let information = <Governance as StorageInfoTrait>::storage_info();
+  let metadata = |name: &[u8]| {
+    information
+      .iter()
+      .find(|entry| entry.storage_name == name)
+      .unwrap()
+  };
+  let bucket = metadata(b"FinalizedProposalOutcomeExpiryBuckets");
+  let index = metadata(b"FinalizedProposalIdsByDomain");
+  assert_eq!(bucket.max_size, Some(8_214));
+  assert_eq!(index.max_size, Some(65_560));
+  assert_eq!(bucket.max_values, None);
+  assert_eq!(index.max_values, None);
+  for (name, size) in [
+    (b"FinalizedProposals".as_slice(), 274),
+    (b"ProposalMetadataByItem".as_slice(), 74),
+    (b"ProposalWinningPrimaryOptionByItem".as_slice(), 41),
+    (b"ProposalUrgentAuthorizedAt".as_slice(), 44),
+  ] {
+    assert_eq!(metadata(name).max_size, Some(size));
+  }
+  assert_eq!(
+    pallet_governance::FinalizedProposals::<Runtime>::hashed_key_for(101, 110).len(),
+    72
+  );
+  assert_eq!(
+    pallet_governance::ProposalMetadataByItem::<Runtime>::hashed_key_for(101, 110).len(),
+    72
+  );
+  assert_eq!(
+    pallet_governance::ProposalWinningPrimaryOptionByItem::<Runtime>::hashed_key_for(101, 110)
+      .len(),
+    72
+  );
+  assert_eq!(
+    pallet_governance::ProposalUrgentAuthorizedAt::<Runtime>::hashed_key_for(101, 110).len(),
+    72
+  );
+  // Conditional SDK model only: five map layers at default1M entries plus two prefix layers.
+  // Neither default cardinality nor balanced trie depth is certified by these metadata rows.
+  let path_estimate = 7u64 * 15 * 33;
+  let bucket_estimate = u64::from(bucket.max_size.unwrap()) + path_estimate;
+  let index_estimate = u64::from(index.max_size.unwrap()) + path_estimate;
+  let composed = |distinct_domains: u64| {
+    bucket_estimate
+      .checked_add(index_estimate.checked_mul(distinct_domains).unwrap())
+      .unwrap()
+  };
+  assert_eq!((bucket_estimate, index_estimate), (11_679, 69_025));
+  assert_eq!(composed(1), 80_704);
+  assert_eq!(composed(2), 149_729);
+  assert!(
+    bucket_estimate.max(index_estimate) < 74_428,
+    "rejected generated max-prefix estimate misses retained recorded read proof"
+  );
+  assert!(
+    composed(1) >= 74_428,
+    "finite observed coverage is not a production upper"
+  );
+  println!(
+    "GOVERNANCE_CLEANUP_CONDITIONAL_PROOF_V1 {}",
+    serde_json::json!({
+      "assumedMapEntries": 1_000_000, "assumedMapDepth": 5, "prefixLayers": 2,
+      "mapCardinalityMetadataBounded": false,
+      "perBucket": bucket_estimate, "perIndex": index_estimate,
+      "oneDomain": composed(1), "twoDomains": composed(2),
+      "notProductionBound": true
+    })
+  );
+}
+
+#[test]
+fn cleanup_equal_domain_indices_share_proof_value_not_logical_work() {
+  use polkadot_sdk::{
+    frame_support::BoundedVec,
+    sp_core::Blake2Hasher,
+    sp_trie::{
+      LayoutV1, MemoryDB, Recorder, StorageProof, Trie, TrieConfiguration, TrieDBBuilder,
+      TrieLayout,
+    },
+  };
+  type Layout = LayoutV1<Blake2Hasher>;
+  type Index =
+    BoundedVec<u32, <Runtime as pallet_governance::Config>::MaxRecentFinalizedProposalsPerDomain>;
+  assert_eq!(Layout::MAX_INLINE_VALUE, Some(33));
+  let maximum = <Runtime as pallet_governance::Config>::MaxRecentFinalizedProposalsPerDomain::get();
+  assert_eq!(maximum, 16384);
+  let index: Index = (2000..2000 + maximum)
+    .collect::<Vec<_>>()
+    .try_into()
+    .unwrap();
+  let keys =
+    [101u32, 102].map(pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::hashed_key_for);
+  assert_ne!(keys[0], keys[1]);
+  assert!(keys.iter().all(|key| key.len() == 52));
+  let population = 2 * u64::from(maximum);
+  let mut sizes = Vec::new();
+  for shared in [true, false] {
+    let mut other = index.clone();
+    if !shared {
+      other[maximum as usize - 1] += 1;
+    }
+    let values = [index.encode(), other.encode()];
+    assert_eq!(values[0].len(), 65540);
+    assert_eq!(values[0].len(), values[1].len());
+    let entries = keys
+      .iter()
+      .cloned()
+      .zip(values.iter().cloned())
+      .collect::<Vec<_>>();
+    let mut database = MemoryDB::<Blake2Hasher>::default();
+    let root = Layout::trie_build(&mut database, entries.clone());
+    assert_eq!(root, Layout::trie_root(entries));
+    let mut recorder = Recorder::<Layout>::new();
+    {
+      let trie = TrieDBBuilder::<Layout>::new(&database, &root)
+        .with_recorder(&mut recorder)
+        .build();
+      for (key, value) in keys.iter().zip(&values) {
+        assert_eq!(trie.get(key).unwrap().as_ref(), Some(value));
+      }
+    }
+    let proof = StorageProof::new(recorder.drain().into_iter().map(|node| node.data));
+    let payloads = proof
+      .iter_nodes()
+      .filter(|node| values.contains(node))
+      .count();
+    assert_eq!(payloads, if shared { 1 } else { 2 });
+    let compact = proof.to_compact_proof::<Blake2Hasher>(root).unwrap();
+    assert_eq!(
+      compact
+        .encoded_nodes
+        .iter()
+        .filter(|node| values.contains(node))
+        .count(),
+      payloads
+    );
+    let (replay, replay_root) = compact.to_memory_db::<Blake2Hasher>(&root).unwrap();
+    assert_eq!(replay_root, root);
+    let trie = TrieDBBuilder::<Layout>::new(&replay, &replay_root).build();
+    let mut visits = 0u64;
+    for (key, value) in keys.iter().zip(&values) {
+      let bytes = trie.get(key).unwrap().unwrap();
+      assert_eq!(&bytes, value);
+      let mut ids = Index::decode(&mut &bytes[..]).unwrap().into_inner();
+      ids.retain(|id| {
+        visits += 1;
+        *id != 2000
+      });
+      assert_eq!(ids.len(), maximum as usize - 1);
+    }
+    assert_eq!(visits, population, "source filtering is still per domain");
+    let without_value = StorageProof::new(
+      proof
+        .iter_nodes()
+        .filter(|node| **node != values[0])
+        .cloned(),
+    )
+    .into_memory_db::<Blake2Hasher>();
+    let incomplete = TrieDBBuilder::<Layout>::new(&without_value, &root).build();
+    assert!(incomplete.get(&keys[0]).is_err());
+    if shared {
+      assert!(incomplete.get(&keys[1]).is_err());
+      assert!(
+        (compact.encoded_size() as u64) < 4 * population,
+        "per-domain 4S is not a proof-size floor"
+      );
+    } else {
+      assert_eq!(incomplete.get(&keys[1]).unwrap().as_ref(), Some(&values[1]));
+    }
+    sizes.push((proof.encoded_size(), compact.encoded_size()));
+    println!(
+      "GOVERNANCE_INDEX_VALUE_ALIAS_V1 {}",
+      serde_json::json!({
+        "shared": shared, "domains": 2, "population": population,
+        "uniqueValueBlobs": payloads, "valueBytes": values[0].len(),
+        "rawProofBytes": proof.encoded_size(), "compactProofBytes": compact.encoded_size(),
+        "sourceRetainVisits": visits, "requiredValueAbsenceChecked": true,
+        "inputProjectionNotGovernanceStatePoVHistoryCpuOrPrice": true
+      })
+    );
+  }
+  assert!(sizes[0].0 < sizes[1].0 && sizes[0].1 < sizes[1].1);
+}
+
+#[test]
+fn cleanup_required_external_value_mass_counts_hash_classes_not_domains() {
+  use polkadot_sdk::{
+    frame_support::BoundedVec,
+    sp_core::{Blake2Hasher, Hasher},
+    sp_trie::{
+      LayoutV1, MemoryDB, Recorder, StorageProof, Trie, TrieConfiguration, TrieDBBuilder,
+      TrieLayout,
+    },
+  };
+  use std::collections::BTreeMap;
+  type Layout = LayoutV1<Blake2Hasher>;
+  type Index =
+    BoundedVec<u32, <Runtime as pallet_governance::Config>::MaxRecentFinalizedProposalsPerDomain>;
+  assert_eq!(Layout::MAX_INLINE_VALUE, Some(33));
+  let maximum = <Runtime as pallet_governance::Config>::MaxRecentFinalizedProposalsPerDomain::get();
+  assert_eq!(maximum, 16384);
+  let mut entries = Vec::new();
+  let mut by_hash = BTreeMap::new();
+  for ordinal in 0u32..41 {
+    let class = if ordinal == 40 { 0 } else { ordinal };
+    let start = 2000 + class * maximum;
+    let ids: Index = (start..start + maximum)
+      .collect::<Vec<_>>()
+      .try_into()
+      .unwrap();
+    let value = ids.encode();
+    assert_eq!(value.len(), 65540);
+    let hash = Blake2Hasher::hash(&value);
+    if let Some(previous) = by_hash.insert(hash, value.clone()) {
+      assert_eq!(previous, value);
+    }
+    let key =
+      pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::hashed_key_for(101 + ordinal);
+    assert_eq!(key.len(), 52);
+    entries.push((key, value));
+  }
+  assert_eq!(entries.len(), 41);
+  assert_eq!(by_hash.len(), 40);
+  assert_eq!(entries[0].1, entries[40].1);
+  let absence_values = [entries[0].1.clone(), entries[39].1.clone()];
+  // trie_build requires full storage-key order, not numeric domain order.
+  entries.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+  let mass = by_hash
+    .values()
+    .map(|value| value.len() as u64)
+    .sum::<u64>();
+  assert_eq!(mass, 2621600);
+  assert!(
+    mass
+      < entries
+        .iter()
+        .map(|(_, value)| value.len() as u64)
+        .sum::<u64>()
+  );
+  let quarter = (crate::MAXIMUM_BLOCK_WEIGHT / 4).proof_size();
+  assert_eq!(mass.checked_sub(quarter), Some(160));
+  let mut database = MemoryDB::<Blake2Hasher>::default();
+  let root = Layout::trie_build(&mut database, entries.clone());
+  assert_eq!(root, Layout::trie_root(entries.clone()));
+  let mut recorder = Recorder::<Layout>::new();
+  {
+    let trie = TrieDBBuilder::<Layout>::new(&database, &root)
+      .with_recorder(&mut recorder)
+      .build();
+    for (key, value) in &entries {
+      assert_eq!(trie.get(key).unwrap().as_ref(), Some(value));
+    }
+  }
+  let proof = StorageProof::new(recorder.drain().into_iter().map(|node| node.data));
+  let compact = proof.to_compact_proof::<Blake2Hasher>(root).unwrap();
+  for value in by_hash.values() {
+    assert_eq!(proof.iter_nodes().filter(|node| *node == value).count(), 1);
+    assert_eq!(
+      compact
+        .encoded_nodes
+        .iter()
+        .filter(|node| *node == value)
+        .count(),
+      1
+    );
+  }
+  assert!(proof.encoded_size() as u64 >= mass);
+  assert!(compact.encoded_size() as u64 >= mass);
+  let (replay, replay_root) = compact.to_memory_db::<Blake2Hasher>(&root).unwrap();
+  assert_eq!(replay_root, root);
+  let trie = TrieDBBuilder::<Layout>::new(&replay, &root).build();
+  for (key, value) in &entries {
+    let actual = trie.get(key).unwrap().unwrap();
+    assert_eq!(&actual, value);
+    let mut input = &actual[..];
+    assert_eq!(Index::decode(&mut input).unwrap().len(), maximum as usize);
+    assert!(input.is_empty());
+  }
+  // One representative per multiplicity class: shared blob and private blob.
+  for absent in absence_values {
+    let missing = StorageProof::new(proof.iter_nodes().filter(|node| *node != &absent).cloned())
+      .into_memory_db::<Blake2Hasher>();
+    let trie = TrieDBBuilder::<Layout>::new(&missing, &root).build();
+    for (key, value) in &entries {
+      if value == &absent {
+        assert!(trie.get(key).is_err());
+      } else {
+        assert_eq!(trie.get(key).unwrap().as_ref(), Some(value));
+      }
+    }
+  }
+  println!(
+    "GOVERNANCE_REQUIRED_EXTERNAL_MASS_V1 {}",
+    serde_json::json!({
+      "domains": entries.len(), "logicalPopulation": u64::from(maximum) * entries.len() as u64,
+      "distinctRequiredValueHashes": by_hash.len(), "valueBytes": 65540,
+      "distinctPayloadMassBytes": mass, "rawProofBytes": proof.encoded_size(), "compactProofBytes": compact.encoded_size(),
+      "numericQuarterProofBytes": quarter, "payloadExcessOverNumericQuarter": mass - quarter,
+      "rawCompactRoundTripAndRequiredAbsence": true,
+      "projectionNotGovernanceStateHistoryRecorderDeltaNetworkPoVCpuPriceOrImpossibility": true
+    })
+  );
+}
+
+#[test]
+fn cleanup_index_logical_work_bound_covers_domain_and_population_partitions() {
+  // Source/logical operands only: never a production Weight or physical-cost estimator.
+  fn upper(n: u32, d: u32, population: u64, maximum: u32) -> Option<(u128, u128, u128)> {
+    let (n, d, s, m) = (
+      u128::from(n),
+      u128::from(d),
+      u128::from(population),
+      u128::from(maximum),
+    );
+    if d == 0 || m == 0 || d > n || n > s || s > d * m {
+      return None;
+    }
+    let (q, r) = (n / d, n % d);
+    let balanced_shrink = d * q * (q - 1) / 2 + r * q;
+    let k = n - d + 1;
+    let visits = (n * m - balanced_shrink).min(k * (k + 1) / 2 + d - 1 + k * (s - n));
+    let first_prefix = codec::Compact(maximum).encoded_size() as u128;
+    let later_prefix = codec::Compact(maximum - 1).encoded_size() as u128;
+    Some((
+      visits,
+      4 * visits + d * first_prefix + (n - d) * later_prefix,
+      4 * (visits - n) + n * later_prefix,
+    ))
+  }
+
+  fn check_partitions(
+    maximum: u32,
+    left: u32,
+    parts: &mut Vec<(u32, u32)>,
+    checked: &mut usize,
+    corner_maximum: &mut u128,
+  ) {
+    if left != 0 {
+      for m in 1..=maximum {
+        for n in 1..=m {
+          parts.push((n, m));
+          check_partitions(maximum, left - 1, parts, checked, corner_maximum);
+          parts.pop();
+        }
+      }
+      return;
+    }
+    let n = parts.iter().map(|(n, _)| n).sum::<u32>();
+    let d = parts.len() as u32;
+    let population = parts.iter().map(|(_, m)| u64::from(*m)).sum::<u64>();
+    let mut actual = (0u128, 0u128, 0u128);
+    for &(due, members) in parts.iter() {
+      let mut ids = (0..members).collect::<Vec<_>>();
+      for expired in 0..due {
+        actual.1 += ids.encoded_size() as u128;
+        ids.retain(|id| {
+          actual.0 += 1;
+          *id != expired
+        });
+        if !ids.is_empty() {
+          actual.2 += ids.encoded_size() as u128;
+        }
+      }
+    }
+    let mut previous = (0, 0, 0);
+    for s in population..=u64::from(d) * u64::from(maximum) {
+      let bound = upper(n, d, s, maximum).unwrap();
+      assert!(actual.0 <= bound.0 && actual.1 <= bound.1 && actual.2 <= bound.2);
+      assert!(previous.0 <= bound.0 && previous.1 <= bound.1 && previous.2 <= bound.2);
+      previous = bound;
+    }
+    if maximum == 4 && n == 4 && d == 2 && population == 7 {
+      *corner_maximum = (*corner_maximum).max(actual.0);
+    }
+    *checked += 1;
+  }
+
+  let (mut checked, mut corner_maximum) = (0, 0);
+  for maximum in 1..=5 {
+    for domains in 1..=3 {
+      check_partitions(
+        maximum,
+        domains,
+        &mut Vec::new(),
+        &mut checked,
+        &mut corner_maximum,
+      );
+    }
+  }
+  assert_eq!(checked, 5025);
+  assert_eq!(corner_maximum, 12);
+  assert_eq!(
+    upper(4, 2, 7, 4).unwrap().0,
+    14,
+    "upper is not a tight/attained maximum"
+  );
+  for (n, d, s, m) in [
+    (0, 0, 0, 1),
+    (1, 0, 1, 1),
+    (1, 2, 2, 1),
+    (2, 1, 1, 2),
+    (1, 1, 2, 1),
+    (1, 1, 1, 0),
+  ] {
+    assert!(upper(n, d, s, m).is_none());
+  }
+
+  // Compact-prefix transitions, including deletion instead of encoding an empty Vec.
+  for (members, due) in [(1u32, 1), (63, 2), (64, 2), (16383, 2), (16384, 2)] {
+    let mut ids = (0..members).collect::<Vec<_>>();
+    let (mut returned, mut submitted) = (0u128, 0u128);
+    for expired in 0..due {
+      returned += ids.encoded_size() as u128;
+      ids.retain(|id| *id != expired);
+      if !ids.is_empty() {
+        submitted += ids.encoded_size() as u128;
+      }
+    }
+    let bound = upper(due, 1, u64::from(members), members).unwrap();
+    assert!(returned <= bound.1 && submitted <= bound.2);
+  }
+
+  assert_eq!(
+    <Runtime as pallet_governance::Config>::MaxRecentFinalizedProposalsPerDomain::get(),
+    16384
+  );
+  assert_eq!(
+    <Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerBlock::get(),
+    1024
+  );
+  assert_eq!(
+    <Runtime as pallet_governance::Config>::WinningVoteItemId::max_encoded_len(),
+    4
+  );
+  // Consume closed large-profile facts without replaying any hook, observer or timer.
+  assert_eq!(
+    upper(1024, 1, 16384, 16384),
+    Some((16_253_440, 65_015_810, 65_011_712))
+  );
+  assert_eq!(
+    upper(1024, 1024, 16384, 16384),
+    Some((16_384, 69_632, 63_488))
+  );
+  assert_eq!(
+    upper(1024, 1024, 17536, 16384),
+    Some((17_536, 74_240, 68_096))
+  );
+  assert_eq!(
+    upper(1024, 1024, 16_777_216, 16384),
+    Some((16_777_216, 67_112_960, 67_106_816))
+  );
+  let largest = u32::MAX;
+  let full = u64::from(largest) * u64::from(largest);
+  assert_eq!(
+    upper(largest, largest, full, largest),
+    Some((
+      u128::from(full),
+      4 * u128::from(full) + 5 * u128::from(largest),
+      4 * u128::from(full) + u128::from(largest)
+    ))
+  );
+}
+
+#[test]
+fn cleanup_ordinary_input_union_keeps_delete_paths_and_distinct_index_values() {
+  use polkadot_sdk::frame_support::traits::StorageInfoTrait;
+  assert_eq!(
+    <Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerEpoch::get(),
+    1024
+  );
+  assert_eq!(
+    <Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerBlock::get(),
+    1024
+  );
+  let information = <Governance as StorageInfoTrait>::storage_info();
+  let families = [
+    (b"FinalizedProposalOutcomeExpiryBuckets".as_slice(), 52u64),
+    (b"FinalizedProposalIdsByDomain".as_slice(), 52),
+    (b"FinalizedProposals".as_slice(), 72),
+    (b"ProposalMetadataByItem".as_slice(), 72),
+    (b"ProposalWinningPrimaryOptionByItem".as_slice(), 72),
+    (b"ProposalUrgentAuthorizedAt".as_slice(), 72),
+  ];
+  let value_bytes = families.map(|(name, key_bytes)| {
+    let info = information
+      .iter()
+      .find(|info| info.storage_name == name)
+      .unwrap();
+    u64::from(info.max_size.unwrap())
+      .checked_sub(key_bytes - 32)
+      .unwrap()
+  });
+  assert_eq!(value_bytes, [8194, 65540, 234, 34, 1, 4]);
+  let blobs = value_bytes.map(|bytes| {
+    if bytes > 32 {
+      bytes + codec::Compact(bytes as u32).encoded_size() as u64
+    } else {
+      0
+    }
+  });
+  assert_eq!(blobs, [8196, 65544, 236, 35, 0, 0]);
+  // Two original external values in this maximum fixture, not an incremental recorder delta.
+  let co_read_value_entries = blobs[0] + blobs[1];
+  assert_eq!(co_read_value_entries, 73_740);
+  assert!(69_025 < co_read_value_entries);
+  let system_information = <System as StorageInfoTrait>::storage_info();
+  let number = system_information
+    .iter()
+    .find(|info| info.storage_name == b"Number")
+    .unwrap();
+  assert_eq!((number.prefix.len(), number.max_size), (32, Some(4)));
+  for (name, size) in [
+    (b"LastProcessedEpoch".as_slice(), 4),
+    (b"CurrentEpochServicePhase".as_slice(), 1),
+    (b"PendingEnactments".as_slice(), 1026),
+  ] {
+    let info = information
+      .iter()
+      .find(|info| info.storage_name == name)
+      .unwrap();
+    assert_eq!((info.prefix.len(), info.max_size), (32, Some(size)));
+  }
+  assert_eq!(
+    pallet_governance::ProposalMaturityBuckets::<Runtime>::hashed_key_for(1).len(),
+    52
+  );
+  // Empty pending/maturity values are one byte even though their generic maxima are larger.
+  assert_eq!(codec::Compact(0u32).encoded_size(), 1);
+  let wrapper_delta = |initial_maturing: bool| {
+    let keys = if initial_maturing {
+      &[32u64, 32, 32, 32, 52][..]
+    } else {
+      &[32u64; 4][..]
+    };
+    let count = keys.len() as u64;
+    let suffix = keys.iter().map(|bytes| 2 * (bytes - 32)).sum::<u64>();
+    // The existing ordinary-key/foreign/repair premises apply at the same backend base.
+    let read = (65 * count + suffix) * 650 + count * 1284;
+    (count, read, read + count * 1284)
+  };
+  assert_eq!(wrapper_delta(false), (4, 174_136, 179_272));
+  assert_eq!(wrapper_delta(true), (5, 243_670, 250_090));
+  let project = |n: u64, d: u64| {
+    assert!((1..=1024).contains(&n) && (1..=n).contains(&d));
+    let counts = [1u64, d, n, n, n, n];
+    // Reuse the ordinary H256/V1 owner: generic namespace paths and one foreign terminal.
+    let paths = counts.iter().sum::<u64>();
+    let suffix_positions = families
+      .iter()
+      .zip(counts)
+      .map(|((_, key_bytes), count)| 2 * (key_bytes - 32) * count)
+      .sum::<u64>();
+    let payload = blobs
+      .iter()
+      .zip(counts)
+      .map(|(bytes, count)| bytes * count)
+      .sum::<u64>();
+    let read_superset = (6 * 65 + suffix_positions) * 650 + paths * 1284 + payload + 5;
+    // Every path is conservatively allowed deletion, including optional absences/updates.
+    let repair = paths * 1284;
+    assert_eq!(paths, 1 + d + 4 * n);
+    assert_eq!(payload, 8196 + 65544 * d + 271 * n);
+    assert_eq!(read_superset, 288985 + 92828 * d + 213407 * n);
+    assert_eq!(read_superset + repair, 290269 + 94112 * d + 218543 * n);
+    (paths, payload, read_superset, read_superset + repair)
+  };
+  assert_eq!(project(1, 1), (6, 74011, 595220, 602924));
+  let one_domain = project(1024, 1);
+  let distinct_domains = project(1024, 1024);
+  assert_eq!((one_domain.2, one_domain.3), (218910581, 224172413));
+  for (phase, expected) in [
+    (false, (219_084_717, 224_351_685)),
+    (true, (219_154_251, 224_422_503)),
+  ] {
+    let wrapper = wrapper_delta(phase);
+    assert_eq!(
+      (one_domain.2 + wrapper.1, one_domain.3 + wrapper.2),
+      expected
+    );
+  }
+  assert_eq!(
+    (distinct_domains.2, distinct_domains.3),
+    (313873625, 320448989)
+  );
+  let next_domain = project(2, 2);
+  let same_domain = project(2, 1);
+  assert_eq!(next_domain.2 - same_domain.2, 92828);
+  assert_eq!(next_domain.3 - same_domain.3, 94112);
+  let pending = u64::from(<Runtime as pallet_governance::Config>::MaxPendingEnactments::get());
+  let per_epoch =
+    u64::from(<Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerEpoch::get());
+  let per_domain =
+    u64::from(<Runtime as pallet_governance::Config>::MaxRecentFinalizedProposalsPerDomain::get());
+  let retention = u64::from(
+    <Runtime as pallet_governance::Config>::FinalizedProposalOutcomeRetentionEpochs::get(),
+  );
+  assert_eq!(
+    (pending, per_epoch, per_domain, retention),
+    (128, 1024, 16384, 16)
+  );
+  assert_eq!(4 * per_domain + 8, blobs[1]);
+  // Parameters describe one canonical backend base, never a newer cursor over older values.
+  let joint_members = |domains: u64, debt: u64| {
+    assert!((1..=1024).contains(&domains) && debt <= u64::from(u32::MAX));
+    (domains * per_domain).min(pending + per_epoch * (retention + debt))
+  };
+  assert_eq!(joint_members(2, 0), 16512);
+  assert!(
+    joint_members(2, 0) > per_epoch * retention,
+    "pending discovery slots are independent of terminal retention"
+  );
+  let joint_index_blob = |domains, debt| 4 * joint_members(domains, debt) + 8 * domains;
+  assert_eq!(joint_index_blob(1, 1), blobs[1]);
+  assert_eq!(joint_index_blob(1024, 1), 78336);
+  let replace_index_only = |n, domains, debt| {
+    let original = project(n, domains);
+    let replacement = joint_index_blob(domains, debt);
+    assert!(replacement <= blobs[1] * domains);
+    (
+      original.2 - blobs[1] * domains + replacement,
+      original.3 - blobs[1] * domains + replacement,
+    )
+  };
+  let joint_at_one = replace_index_only(1024, 1024, 1);
+  assert_eq!(joint_at_one, (246834905, 253410269));
+  let full_product_debt = (per_domain * 1024 - pending).div_ceil(per_epoch) - retention;
+  assert_eq!(full_product_debt, 16368);
+  assert!(joint_members(1024, full_product_debt - 1) < per_domain * 1024);
+  assert_eq!(joint_members(1024, full_product_debt), per_domain * 1024);
+  assert_eq!(
+    replace_index_only(1024, 1024, full_product_debt),
+    (distinct_domains.2, distinct_domains.3)
+  );
+  assert_eq!(joint_members(1024, u64::from(u32::MAX)), per_domain * 1024);
+  assert_eq!(
+    core::any::TypeId::of::<<Runtime as pallet_governance::Config>::DomainId>(),
+    core::any::TypeId::of::<u32>()
+  );
+  let active_per_domain =
+    u64::from(<Runtime as pallet_governance::Config>::MaxActiveProposalsPerDomain::get());
+  assert_eq!(active_per_domain, 128);
+  let active_global = active_per_domain * (u64::from(u32::MAX) + 1);
+  assert_eq!(active_global, 549755813888);
+  assert_eq!(
+    core::any::TypeId::of::<<Runtime as pallet_governance::Config>::WinningVoteItemId>(),
+    core::any::TypeId::of::<u32>()
+  );
+  let item_keys = [
+    [
+      pallet_governance::FinalizedProposals::<Runtime>::hashed_key_for(101, 110),
+      pallet_governance::FinalizedProposals::<Runtime>::hashed_key_for(101, 111),
+      pallet_governance::FinalizedProposals::<Runtime>::hashed_key_for(102, 110),
+    ],
+    [
+      pallet_governance::ProposalMetadataByItem::<Runtime>::hashed_key_for(101, 110),
+      pallet_governance::ProposalMetadataByItem::<Runtime>::hashed_key_for(101, 111),
+      pallet_governance::ProposalMetadataByItem::<Runtime>::hashed_key_for(102, 110),
+    ],
+    [
+      pallet_governance::ProposalWinningPrimaryOptionByItem::<Runtime>::hashed_key_for(101, 110),
+      pallet_governance::ProposalWinningPrimaryOptionByItem::<Runtime>::hashed_key_for(101, 111),
+      pallet_governance::ProposalWinningPrimaryOptionByItem::<Runtime>::hashed_key_for(102, 110),
+    ],
+    [
+      pallet_governance::ProposalUrgentAuthorizedAt::<Runtime>::hashed_key_for(101, 110),
+      pallet_governance::ProposalUrgentAuthorizedAt::<Runtime>::hashed_key_for(101, 111),
+      pallet_governance::ProposalUrgentAuthorizedAt::<Runtime>::hashed_key_for(102, 110),
+    ],
+  ];
+  for [first, same_domain, other_domain] in item_keys {
+    assert_eq!(
+      (first.len(), same_domain.len(), other_domain.len()),
+      (72, 72, 72)
+    );
+    assert_eq!(&first[..52], &same_domain[..52]);
+    assert_ne!(&first[..52], &other_domain[..52]);
+    assert_ne!(&first[52..], &same_domain[52..]);
+  }
+  let forest = |n: u64, domains: u64, debt: u64, active: u64, group_domains: bool| {
+    let previous = replace_index_only(n, domains, debt);
+    assert!(active <= active_global);
+    let finalized = pending + per_epoch * (retention + debt);
+    // Whole-namespace populations, not only selected domains or expiring records.
+    let populations = [
+      retention + debt,
+      finalized,
+      finalized,
+      active + finalized,
+      finalized,
+      active,
+    ];
+    let counts = [1u64, domains, n, n, n, n];
+    let mut nodes = 0u64;
+    for (((_, key_bytes), queries), population) in families.iter().zip(counts).zip(populations) {
+      let separate_branches = 2 * queries * (key_bytes - 32);
+      // Share only each complete hashed-domain prefix, never across storage namespaces.
+      let branches = if group_domains && *key_bytes == 72 {
+        2 * domains * (52 - 32) + 2 * queries * (key_bytes - 52)
+      } else {
+        separate_branches
+      };
+      assert!(branches <= separate_branches);
+      let references = (16 * branches).min(population + branches + queries);
+      // Reuse the nonprefix fixed-key forest owner; no hashed-key distribution assumption.
+      let shared =
+        7 * branches + queries * key_bytes + 33 * references + queries * (key_bytes + 37);
+      assert!(shared <= 650 * branches);
+      nodes += 65 * 650 + shared + 1284 * queries;
+    }
+    let payload = 8196 + 271 * n + joint_index_blob(domains, debt);
+    let read = nodes + payload + 5;
+    let net_delete = read + 1284 * (1 + domains + 4 * n);
+    assert!(read <= previous.0 && net_delete <= previous.1);
+    (read, net_delete, populations)
+  };
+  let no_active_forest = forest(1024, 1024, 1, 0, false);
+  let broad_active_forest = forest(1024, 1024, 1, active_global, false);
+  assert_eq!(
+    (no_active_forest.0, no_active_forest.1),
+    (25310312, 31885676)
+  );
+  assert_eq!(
+    (broad_active_forest.0, broad_active_forest.1),
+    (105764840, 112340204)
+  );
+  assert_eq!(
+    broad_active_forest.2[3] - broad_active_forest.2[2],
+    active_global
+  );
+  assert_eq!(broad_active_forest.2[5], active_global);
+  assert!(
+    broad_active_forest.0 > no_active_forest.0,
+    "active metadata/urgency cannot inherit the finalized-only population"
+  );
+  let broad_debt_forest = forest(1024, 1024, u64::from(u32::MAX), active_global, false);
+  assert_eq!(
+    (broad_debt_forest.0, broad_debt_forest.1),
+    (272361326, 278936690)
+  );
+  let grouped_single = forest(1024, 1, 1, active_global, true);
+  let separate_single = forest(1024, 1, 1, active_global, false);
+  assert_eq!((grouped_single.0, grouped_single.1), (55006793, 60268625));
+  assert!(grouped_single.0 < separate_single.0);
+  assert_eq!(
+    grouped_single.1 - grouped_single.0,
+    separate_single.1 - separate_single.0
+  );
+  let grouped_distinct = forest(1024, 1024, 1, active_global, true);
+  assert_eq!(
+    grouped_distinct, broad_active_forest,
+    "one identity per domain shares no additional path"
+  );
+  assert_eq!(
+    forest(1024, 1024, u64::from(u32::MAX), active_global, true),
+    broad_debt_forest
+  );
+  println!(
+    "GOVERNANCE_CLEANUP_ORDINARY_INPUT_UNION_V1 {}",
+    serde_json::json!({
+      "valueBytes": value_bytes, "externalBlobBytes": blobs,
+      "maximumBucketAndIndexOriginalValueEntries": co_read_value_entries,
+      "wrapperDeltaFinalizedOutcome": wrapper_delta(false),
+      "wrapperDeltaMaturing": wrapper_delta(true),
+      "valueEntryMassIsNotAnIncrementalRecorderDeltaFloor": true,
+      "oneEntryOneDomain": project(1, 1), "maximumEntriesOneDomain": one_domain,
+      "coarseDistinctDomainCorner": distinct_domains,
+      "jointIndexBlobAtDebtOne": joint_index_blob(1024, 1),
+      "jointReadAndDeleteInputAtDebtOne": joint_at_one,
+      "fullTypedProductRestoredAtDebt": full_product_debt,
+      "forestNoActiveAtDebtOne": no_active_forest,
+      "forestBroadActiveAtDebtOne": broad_active_forest,
+      "forestBroadDebtAndActive": broad_debt_forest,
+      "groupedSingleDomainAtDebtOne": grouped_single,
+      "groupedDistinctDomainsAtDebtOne": grouped_distinct,
+      "domainPrefixBytes": 52,
+      "groupingRetainsForeignValuesAndDeletionOwners": true,
+      "populationOrder": ["expiryBuckets", "domainIndices", "finalized", "metadata", "winningOption", "urgency"],
+      "activeGlobalTypedUpperNotAttainment": active_global,
+      "debtIsDescriptiveParameterNotQualifiedCapOrGetter": true,
+      "selectedPathsIncludeDeleteOnlyFamilies": true,
+      "ordinarySourceAndHostConditionsRequired": true,
+      "notFullHookHostCostPoVOrPhysicalPrice": true,
+      "upperExcessDoesNotProveAttainmentOrImpossibility": true
+    })
+  );
+}
+
+#[test]
+fn cleanup_present_key_path_bound_excludes_absence() {
+  use polkadot_sdk::{
+    sp_core::{Blake2Hasher, H256},
+    sp_trie::{
+      LayoutV1, MemoryDB, Trie, TrieDBBuilder, TrieDBMutBuilder, TrieLayout, TrieMut,
+      recorder::Recorder,
+    },
+  };
+  type Layout = LayoutV1<Blake2Hasher>;
+  fn observe(
+    db: &MemoryDB<Blake2Hasher>,
+    root: H256,
+    key: &[u8],
+    value: &[u8],
+  ) -> (bool, usize, usize) {
+    let recorder = Recorder::<Blake2Hasher>::default();
+    let present = {
+      let mut sink = recorder.as_trie_recorder(root);
+      TrieDBBuilder::<Layout>::new(db, &root)
+        .with_recorder(&mut sink)
+        .build()
+        .get(key)
+        .unwrap()
+        .is_some()
+    };
+    let bytes = recorder.estimate_encoded_size();
+    let proof = recorder.drain_storage_proof();
+    (
+      present,
+      bytes,
+      proof
+        .iter_nodes()
+        .filter(|node| node.as_slice() != value)
+        .map(|node| node.len())
+        .max()
+        .unwrap(),
+    )
+  }
+  assert_eq!(
+    crate::VERSION.state_version(),
+    polkadot_sdk::sp_core::storage::StateVersion::V1
+  );
+  assert!(!Layout::USE_EXTENSION);
+  assert_eq!(Layout::MAX_INLINE_VALUE, Some(33));
+  let key = pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::hashed_key_for(17);
+  assert_eq!(key.len(), 52);
+  assert_eq!(
+    pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::hashed_key_for(101).len(),
+    52
+  );
+  let nibbles = key.len() * 2;
+  // Present-key path: <=104 consumed nibbles + terminal; every partial is within that key.
+  // V1 node upper: header2 + partial52 + bitmap2 + value33 + sixteen child references33.
+  let node_upper = 2 + key.len() + 2 + 33 + 16 * 33;
+  let node_record_upper = vec![0u8; node_upper].encoded_size();
+  let value = vec![7u8; 8_194];
+  let present_only_upper = (nibbles + 1) * node_record_upper + value.encoded_size();
+  let mut results = Vec::new();
+  for absent in [false, true] {
+    let mut db = MemoryDB::<Blake2Hasher>::default();
+    let mut root = H256::default();
+    {
+      let mut trie = TrieDBMutBuilder::<Layout>::new(&mut db, &mut root).build();
+      for position in 0..nibbles {
+        let shift = if position % 2 == 0 { 4 } else { 0 };
+        let old = (key[position / 2] >> shift) & 15;
+        for nibble in 0u8..16 {
+          if nibble == old {
+            continue;
+          }
+          let mut sibling = key.clone();
+          sibling[position / 2] = (sibling[position / 2] & !(15 << shift)) | (nibble << shift);
+          trie.insert(&sibling, &[9u8; 32]).unwrap();
+        }
+      }
+      if absent {
+        let mut longer = key.clone();
+        longer.resize(20_000, 3);
+        trie.insert(&longer, &[9u8; 32]).unwrap();
+      } else {
+        trie.insert(&key, &value).unwrap();
+      }
+    }
+    let (present, recorded, largest_node) = observe(&db, root, &key, &value);
+    assert_eq!(present, !absent);
+    if present {
+      assert!(largest_node <= node_upper);
+      assert!(recorded <= present_only_upper);
+    } else {
+      assert!(
+        largest_node > node_upper,
+        "absence does not bound terminal partial by queried key length"
+      );
+      assert!(
+        recorded > present_only_upper,
+        "counterexample to applying the present-key envelope to absence"
+      );
+    }
+    if present {
+      let mut descendant = key.clone();
+      descendant.resize(20_000, 3);
+      {
+        let mut trie = TrieDBMutBuilder::<Layout>::from_existing(&mut db, &mut root).build();
+        trie.insert(&descendant, &[9u8; 32]).unwrap();
+      }
+      let (still_present, before_delete, _) = observe(&db, root, &key, &value);
+      assert!(still_present);
+      assert!(before_delete <= present_only_upper);
+      let parent_root = root;
+      let recorder = Recorder::<Blake2Hasher>::default();
+      {
+        let mut sink = recorder.as_trie_recorder(parent_root);
+        let mut trie = TrieDBMutBuilder::<Layout>::from_existing(&mut db, &mut root)
+          .with_recorder(&mut sink)
+          .build();
+        assert!(trie.remove(&key).unwrap().is_some());
+        trie.commit();
+      }
+      let deletion_bytes = recorder.estimate_encoded_size();
+      let proof = recorder.drain_storage_proof();
+      let largest = proof.iter_nodes().map(|node| node.len()).max().unwrap();
+      assert_ne!(root, parent_root);
+      assert!(
+        largest > node_upper,
+        "deletion may fetch an off-path descendant to compress the branch"
+      );
+      assert!(
+        deletion_bytes > present_only_upper,
+        "present-read bound is not a deletion/commit bound"
+      );
+      let trie = TrieDBBuilder::<Layout>::new(&db, &root).build();
+      assert!(trie.get(&key).unwrap().is_none());
+      assert_eq!(trie.get(&descendant).unwrap(), Some(vec![9u8; 32]));
+      println!(
+        "GOVERNANCE_TRIE_PRESENT_DELETE_SCOPE_V1 {}",
+        serde_json::json!({
+          "syntheticTrieNotRuntimeHistory": true, "presentReadBytes": before_delete,
+          "presentReadUpper": present_only_upper, "deleteCommitBytes": deletion_bytes,
+          "largestDeleteNode": largest, "globalKeyLengthBoundNotEstablished": true,
+          "notProductionProofBound": true
+        })
+      );
+    }
+    results.push(serde_json::json!({"present": present, "recordedBytes": recorded, "largestStructuralNode": largest_node}));
+  }
+  println!(
+    "GOVERNANCE_TRIE_PATH_SCOPE_V1 {}",
+    serde_json::json!({
+      "syntheticTrieNotRuntimeHistory": true, "keyBytes": key.len(), "siblingKeys": 15 * nibbles,
+      "nodeUpper": node_upper, "nodeRecordUpper": node_record_upper,
+      "presentOnlyReadUpper": present_only_upper,
+      "excludes": "absence, deletion/commit witnesses, child tries, full storage-proof/container/network PoV", "results": results
+    })
+  );
 }
 
 #[test]
@@ -2126,6 +4536,341 @@ fn maximum_cid_invoice_pending_batch_preserves_capacity_prefix_and_future_member
     assert_eq!(System::account(&actor_fee_sink_account()), fee_sink);
     assert_eq!(Actors::actor_identity(actor), identity);
   });
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn full_pending_protocol_hook_matches_prefreeze_context_and_receipts() {
+  use pallet_governance::{
+    ProposalExecutionDetail as Detail, ProposalExecutionSuccessDetail as Success,
+    ProposalParameterChangeSurface as Surface, ProposalPayloadKind as Kind,
+  };
+  new_test_ext().execute_with(|| {
+    type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+    let domain = PROTOCOL_GOVERNANCE_DOMAIN;
+    let code_hash = crate::Hash::repeat_byte(23);
+    let new_fee = polkadot_sdk::sp_runtime::Perbill::from_percent(1);
+    let capacity = <Runtime as pallet_governance::Config>::MaxPendingEnactments::get();
+    let visits = <Runtime as pallet_governance::Config>::MaxPendingEnactmentsPerBlock::get();
+    assert_eq!((capacity, visits), (128, 4));
+    assert!(System::authorized_upgrade().is_none());
+    assert_ne!(DeosRouter::router_fee(), new_fee);
+    assert!(!Actors::global_circuit_breaker());
+    assert!(Actors::block_resource_state().is_none());
+    Actors::apply_user_creation_enabled(false);
+    let sources = [
+      (
+        Kind::L1RootAction,
+        StrategicRuntimeUpgradePayload { code_hash }.encode(),
+        Success::RuntimeUpgradeAuthorized { code_hash },
+      ),
+      (
+        Kind::L2ParameterChange,
+        RuntimeCall::DeosRouter(pallet_deos_router::Call::update_router_fee { new_fee }).encode(),
+        Success::ParameterChangeExecuted {
+          surface: Surface::RouterFee,
+        },
+      ),
+      (
+        Kind::L2ParameterChange,
+        RuntimeCall::Actors(pallet_deos_actors::Call::set_user_creation_enabled { enabled: true })
+          .encode(),
+        Success::ParameterChangeExecuted {
+          surface: Surface::ActorUserCreationEnabled,
+        },
+      ),
+      (
+        Kind::L2ParameterChange,
+        RuntimeCall::Actors(pallet_deos_actors::Call::set_global_circuit_breaker { paused: true })
+          .encode(),
+        Success::ParameterChangeExecuted {
+          surface: Surface::ActorGlobalCircuitBreaker,
+        },
+      ),
+    ];
+    let mut rows = Vec::new();
+    for (kind, bytes, expected) in sources {
+      let hash = <Runtime as frame_system::Config>::Hashing::hash(&bytes);
+      assert!(rows.iter().all(|(_, prior, _)| prior != &hash));
+      assert!(
+        RuntimeProposalPayloadPreimageProvider::validate_for_witness(domain, kind, &hash, &bytes)
+          .is_ok()
+      );
+      assert_ok!(Preimage::note_preimage(RuntimeOrigin::signed(ALICE), bytes));
+      rows.push((kind, hash, expected));
+    }
+    let (cleanup_domain, old_expiry) =
+      Governance::prepare_maximum_finalized_cleanup_hook().unwrap();
+    assert_ne!(cleanup_domain, domain);
+    let old_ids = pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(cleanup_domain);
+    assert_eq!(old_ids.len(), 16_384);
+    let now = old_expiry + 1;
+    pallet_governance::LastProcessedEpoch::<Runtime>::put(old_expiry - 1);
+    let verify_pending_topology = Governance::prepare_full_pending_enactment_hook(
+      now,
+      false,
+      Some((domain, rows[0].0, rows[0].1, None)),
+    )
+    .unwrap();
+    let members = pallet_governance::PendingEnactments::<Runtime>::get();
+    assert_eq!(members.len(), capacity as usize);
+    let first_due = (capacity - visits) as usize;
+    for (member, (kind, hash, _)) in members[first_due..].iter().zip(&rows) {
+      assert_eq!(member.domain, domain);
+      pallet_governance::ProposalMetadataByItem::<Runtime>::mutate(
+        domain,
+        member.item_id,
+        |metadata| {
+          let metadata = metadata.as_mut().unwrap();
+          metadata.payload_kind = *kind;
+          metadata.payload_hash = *hash;
+        },
+      );
+      assert_eq!(
+        Governance::proposal_pending_enactment_at(domain, member.item_id),
+        Some(now)
+      );
+      assert_eq!(
+        Governance::proposal_execution_detail(domain, member.item_id),
+        None
+      );
+    }
+    assert!(
+      Actors::block_resource_state().is_none(),
+      "no synthetic post-freeze state in this initialization source"
+    );
+    let next_actor = Actors::next_actor_id();
+    let actor_count = Actors::active_actor_count();
+    let fee_sink = System::account(&actor_fee_sink_account());
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(now));
+    let charged = Governance::on_initialize(now);
+    let n = <Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerBlock::get();
+    let expected_charge = <W as pallet_governance::WeightInfo>::service_pending_enactments(visits)
+      .saturating_add(<W as pallet_governance::WeightInfo>::service_epoch_catch_up())
+      .saturating_add(<W as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(n));
+    assert_eq!(charged, expected_charge);
+    verify_pending_topology(&[]).unwrap();
+    for (member, (_, _, expected)) in members[first_due..].iter().zip(&rows) {
+      assert_eq!(
+        Governance::proposal_execution_detail(domain, member.item_id),
+        Some(Detail::Succeeded(expected.clone()))
+      );
+    }
+    assert_eq!(
+      System::authorized_upgrade().unwrap().code_hash(),
+      &code_hash
+    );
+    assert_eq!(
+      Governance::authorized_runtime_upgrade(),
+      Some(pallet_governance::AuthorizedRuntimeUpgrade {
+        code_hash,
+        check_version: true
+      })
+    );
+    assert_eq!(DeosRouter::router_fee(), new_fee);
+    assert!(Actors::user_creation_enabled());
+    assert!(Actors::global_circuit_breaker());
+    assert!(Actors::block_resource_state().is_none());
+    assert_eq!(Actors::next_actor_id(), next_actor);
+    assert_eq!(Actors::active_actor_count(), actor_count);
+    assert_eq!(System::account(&actor_fee_sink_account()), fee_sink);
+    assert_eq!(
+      pallet_governance::PendingEnactments::<Runtime>::get().as_slice(),
+      &members[..first_due]
+    );
+    assert_eq!(
+      pallet_governance::LastProcessedEpoch::<Runtime>::get(),
+      old_expiry - 1
+    );
+    assert_eq!(
+      pallet_governance::CurrentEpochServicePhase::<Runtime>::get(),
+      pallet_governance::EpochServicePhase::RewardExpiry
+    );
+    assert_eq!(
+      pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::get(cleanup_domain).as_slice(),
+      &old_ids[n as usize..]
+    );
+    assert!(
+      pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(old_expiry)
+        .is_empty()
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(now));
+    println!(
+      "GOVERNANCE_FULL_PENDING_PROTOCOL_HOOK_SOURCE_V1 {}",
+      serde_json::json!({
+        "pendingBefore": capacity, "visited": visits, "distinctDuePreimages": rows.len(),
+        "effects": ["upgradeAuthorization", "routerFee", "userCreation", "globalCircuitBreaker"],
+        "currentResourceStateAbsentBeforeAndAfter": true, "actualHook": true,
+        "oldCleanup": n, "oldIndexBefore": old_ids.len(), "oldExpiry": old_expiry,
+        "distinctPendingAndCleanupDomains": true, "futurePending": first_due,
+        "syntheticNotPublicHistoryOrJointMaximum": true,
+        "notPostfreezeHaltFailureRollbackOrPhysicalPrice": true
+      })
+    );
+  });
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+fn verify_full_pending_invoice_hook(missing_and_capacity_failure: bool, predecessor_source: bool) {
+  use pallet_governance::{
+    BenchmarkHelper as _, ProposalExecutionDetail as Detail,
+    ProposalExecutionFailureReason as Failure, ProposalExecutionSuccessDetail as Success,
+  };
+  use polkadot_sdk::sp_runtime::Either;
+  new_test_ext().execute_with(|| {
+    type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+    let visits = <Runtime as pallet_governance::Config>::MaxPendingEnactmentsPerBlock::get();
+    let capacity = <Runtime as pallet_governance::Config>::MaxPendingEnactments::get();
+    assert_eq!((capacity, visits), (128, 4));
+    let domain = TACTICAL_GOVERNANCE_DOMAIN;
+    let kind = pallet_governance::ProposalPayloadKind::L2TreasurySpend;
+    let mut rows = Vec::new();
+    for index in 0..visits {
+      let beneficiary = crate::AccountId::new([60 + index as u8; 32]);
+      let (prepared_domain, prepared_kind, hash, receipt) = <Runtime as pallet_governance::Config>::BenchmarkHelper::prepare_maximum_finalized_execution(&beneficiary).unwrap();
+      assert_eq!((prepared_domain, prepared_kind), (domain, kind));
+      let Success::TreasurySpendExecuted { invoice_cid, treasury_account, payout_asset, base_amount, .. } = &receipt else {
+        panic!("maximum reference receipt must be an Invoice")
+      };
+      assert_eq!(invoice_cid.len(), 96);
+      let bytes = TacticalTreasuryInvoicePayload { invoice_cid: invoice_cid.clone(), treasury_account: treasury_account.clone(), beneficiary, payout_asset: *payout_asset, base_amount: *base_amount }.encode();
+      assert_eq!(bytes.len(), TacticalTreasuryInvoicePayload::max_encoded_len());
+      assert_eq!(<Runtime as frame_system::Config>::Hashing::hash(&bytes), hash);
+      assert!(rows.iter().all(|(previous, _)| previous != &hash));
+      assert_ok!(Preimage::note_preimage(RuntimeOrigin::signed(ALICE), bytes));
+      rows.push((hash, receipt));
+    }
+    let now = 1 + <Runtime as pallet_governance::Config>::ProposalEnactmentDelay::get() + 17;
+    let preparation_epoch = if predecessor_source { now - 1 } else { now };
+    pallet_governance::LastProcessedEpoch::<Runtime>::put(preparation_epoch);
+    if !missing_and_capacity_failure {
+      let missing = crate::Hash::repeat_byte(0xaf);
+      assert!(!RuntimeProposalPayloadPreimageProvider::have_preimage(&missing));
+      for (payload_kind, hash) in [(pallet_governance::ProposalPayloadKind::Intent, rows[0].0), (kind, missing)] {
+        let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+        assert!(matches!(Governance::prepare_full_pending_enactment_hook(now, false, Some((domain, payload_kind, hash, None))), Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Skip)));
+        assert_eq!(polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1), before);
+      }
+    }
+    let user_creation = pallet_deos_actors::UserCreationEnabled::<Runtime>::get();
+    let payload_source = Some((domain, kind, rows[0].0, Some(pallet_governance::ProposalPrimaryTrackOption::Amplify)));
+    let verify_pending_topology = if predecessor_source {
+      Either::Left(Governance::prepare_full_pending_enactment_parent(now, payload_source).unwrap())
+    } else {
+      Either::Right(Governance::prepare_full_pending_enactment_hook(now, false, payload_source).unwrap())
+    };
+    assert_eq!(System::block_number(), preparation_epoch);
+    if predecessor_source {
+      let retention = <Runtime as pallet_governance::Config>::FinalizedProposalOutcomeRetentionEpochs::get();
+      assert!(pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(now + retention).is_empty());
+      let peers = pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(preparation_epoch + retention);
+      assert_eq!(peers.len(), 1020);
+      for touch in peers {
+        assert!(matches!(pallet_governance::FinalizedProposals::<Runtime>::get(touch.domain, touch.item_id).unwrap().outcome, pallet_governance::FinalizedProposalOutcome::Rejected { finalized_epoch, .. } if finalized_epoch == preparation_epoch));
+      }
+    }
+    assert_eq!(pallet_deos_actors::UserCreationEnabled::<Runtime>::get(), user_creation, "supplied payload must not invoke the default User-admission setup");
+    let members = pallet_governance::PendingEnactments::<Runtime>::get();
+    assert_eq!(members.len(), capacity as usize);
+    let first_due = (capacity - visits) as usize;
+    for member in &members {
+      assert_eq!(member.domain, domain);
+      let record = pallet_governance::FinalizedProposals::<Runtime>::get(domain, member.item_id).unwrap();
+      assert!(matches!(record.outcome, pallet_governance::FinalizedProposalOutcome::Approved { approval, .. } if approval.approved_epoch <= preparation_epoch));
+      assert_eq!(Governance::proposal_winning_primary_option(domain, member.item_id), Some(pallet_governance::ProposalPrimaryTrackOption::Amplify));
+    }
+    for (member, (hash, _)) in members[first_due..].iter().zip(&rows) {
+      pallet_governance::ProposalMetadataByItem::<Runtime>::mutate(domain, member.item_id, |metadata| metadata.as_mut().unwrap().payload_hash = *hash);
+      assert_eq!(Governance::proposal_pending_enactment_at(domain, member.item_id), Some(now));
+      assert_eq!(Governance::proposal_execution_detail(domain, member.item_id), None);
+    }
+    if missing_and_capacity_failure {
+      assert!(!RuntimeProposalPayloadPreimageProvider::preimage_requested(&rows[0].0));
+      assert_ok!(Preimage::unnote_preimage(RuntimeOrigin::signed(ALICE), rows[0].0));
+      assert!(!RuntimeProposalPayloadPreimageProvider::have_preimage(&rows[0].0));
+    }
+    let expected_failures = if missing_and_capacity_failure {
+      vec![(members[first_due].item_id, Failure::MissingPreimage), (members[first_due + 3].item_id, Failure::InsufficientTreasuryCapacity)]
+    } else { Vec::new() };
+    let payouts = if missing_and_capacity_failure { [0, 200, 200, 0] } else { [200, 200, 200, 150] };
+    let treasury = invoice_treasury();
+    assert_eq!(Assets::balance(domain, &treasury), 0);
+    assert_ok!(<Assets as FungiblesMutate<crate::AccountId>>::mint_into(domain, &treasury, if missing_and_capacity_failure { 400 } else { 750 }));
+    let issuance = Assets::total_issuance(domain);
+    let fee_sink = System::account(&actor_fee_sink_account());
+    let actor = pallet_deos_actors::SovereignIndex::<Runtime>::get(&treasury).unwrap();
+    let identity = Actors::actor_identity(actor);
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(preparation_epoch));
+    if predecessor_source {
+      System::set_block_number(now);
+    }
+    let charged = Governance::on_initialize(now);
+    let expected_charge = <W as pallet_governance::WeightInfo>::service_pending_enactments(visits)
+      .saturating_add(if predecessor_source { <W as pallet_governance::WeightInfo>::service_epoch_catch_up() } else { polkadot_sdk::frame_support::weights::Weight::zero() });
+    assert_eq!(charged, expected_charge);
+    match verify_pending_topology {
+      Either::Left(verify) => verify(&expected_failures),
+      Either::Right(verify) => verify(&expected_failures),
+    }.unwrap();
+    for (index, (member, (_, expected))) in members[first_due..].iter().zip(&rows).enumerate() {
+      let actual = payouts[index];
+      let failure = expected_failures.iter().find_map(|(item_id, reason)| (*item_id == member.item_id).then_some(*reason));
+      if let Some(reason) = failure {
+        assert_eq!(Governance::proposal_execution_detail(domain, member.item_id), Some(Detail::Failed(reason)));
+        let Success::TreasurySpendExecuted { beneficiary, .. } = expected else { panic!("source receipt must remain an Invoice") };
+        assert_eq!(Assets::balance(domain, beneficiary), 0);
+        continue;
+      }
+      let mut expected = expected.clone();
+      let Success::TreasurySpendExecuted { actual_amount, capacity_limited, beneficiary, .. } = &mut expected else { panic!("source receipt must remain an Invoice") };
+      *actual_amount = actual;
+      *capacity_limited = actual < 200;
+      assert_eq!(Assets::balance(domain, beneficiary), actual);
+      let record = pallet_governance::FinalizedProposals::<Runtime>::get(domain, member.item_id).unwrap();
+      assert_eq!(record.execution_detail, Some(Detail::Succeeded(expected)));
+      assert_eq!(record.encoded_size(), pallet_governance::FinalizedProposalRecord::<crate::AccountId, u32, crate::Hash, u32, pallet_governance::CidBytesOf<Runtime>>::max_encoded_len());
+    }
+    assert_eq!(Assets::balance(domain, &treasury), 0);
+    assert_eq!(Assets::total_issuance(domain), issuance);
+    assert_eq!(System::account(&actor_fee_sink_account()), fee_sink);
+    assert_eq!(Actors::actor_identity(actor), identity);
+    assert_eq!(pallet_governance::PendingEnactments::<Runtime>::get().as_slice(), &members[..first_due]);
+    assert_eq!(pallet_governance::LastProcessedEpoch::<Runtime>::get(), now);
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(now));
+    let marker = if missing_and_capacity_failure { "GOVERNANCE_FULL_PENDING_INVOICE_FAILURE_HOOK_SOURCE_V1" } else { "GOVERNANCE_FULL_PENDING_INVOICE_HOOK_SOURCE_V1" };
+    println!("{marker} {}", serde_json::json!({
+      "pendingBefore": capacity, "visited": visits, "distinctDuePreimages": rows.len(),
+      "cidBytes": 96, "payloadBytes": TacticalTreasuryInvoicePayload::max_encoded_len(),
+      "actualPayouts": payouts, "futurePending": first_due, "expectedFailures": expected_failures.len(),
+      "actualHook": true, "historyAlreadyCompletedAtCurrentEpoch": !predecessor_source,
+      "predecessorClockSource": predecessor_source, "preparationEpoch": preparation_epoch,
+      "syntheticNotPublicHistoryOrJointMaximum": true,
+      "notMutationBeforeErrorOrLateBookkeepingRollbackEvidence": true,
+      "notPhysicalTimingProofOrProductionPrice": true
+    }));
+  });
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn full_pending_invoice_hook_binds_distinct_maximum_payloads_and_receipts() {
+  verify_full_pending_invoice_hook(false, false);
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn full_pending_invoice_hook_commits_missing_and_capacity_failures() {
+  verify_full_pending_invoice_hook(true, false);
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn full_pending_invoice_parent_source_preserves_predecessor_chronology() {
+  verify_full_pending_invoice_hook(true, true);
 }
 
 #[cfg(feature = "runtime-benchmarks")]
@@ -3677,6 +6422,302 @@ fn signed_intent_submission_collects_opening_fee_and_records_signer_as_proposer(
       Balances::free_balance(&fee_sink),
       fee_sink_before.saturating_add(10 * crate::EXISTENTIAL_DEPOSIT)
     );
+  });
+}
+
+#[test]
+fn governance_admin_terminal_ingress_rejects_signed_origin_without_state_change() {
+  use polkadot_sdk::frame_support::traits::{Authorize, UnfilteredDispatchable};
+  new_test_ext().execute_with(|| {
+    let calls = [
+      pallet_governance::Call::resolve_proposal {
+        domain: 101,
+        item_id: 110,
+        winners: Default::default(),
+      },
+      pallet_governance::Call::reject_proposal {
+        domain: 101,
+        item_id: 110,
+      },
+      pallet_governance::Call::resolve_proposal_from_votes {
+        domain: 101,
+        item_id: 110,
+      },
+      pallet_governance::Call::force_resolve_proposal_from_votes {
+        domain: 101,
+        item_id: 110,
+      },
+    ];
+    for call in calls {
+      let call = RuntimeCall::Governance(call);
+      assert!(call.authorize(TransactionSource::External).is_none());
+      for origin in [
+        RuntimeOrigin::signed(ALICE),
+        RuntimeOrigin::none(),
+        frame_system::RawOrigin::Authorized.into(),
+      ] {
+        let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+        let error = call.clone().dispatch_bypass_filter(origin).unwrap_err();
+        assert_eq!(
+          error.error,
+          polkadot_sdk::sp_runtime::DispatchError::BadOrigin
+        );
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+          before
+        );
+      }
+    }
+  });
+}
+
+#[test]
+fn signed_governance_vote_retains_declared_weight_through_transaction_extensions() {
+  let storage = super::production_block_replay::preset_genesis_storage(
+    &[],
+    &polkadot_sdk::sp_genesis_builder::DEV_RUNTIME_PRESET.into(),
+  );
+  // Native per-extrinsic execution with inherent placeholders, not complete block acceptance.
+  polkadot_sdk::sp_io::TestExternalities::new(storage).execute_with(|| {
+    let signer = polkadot_sdk::sp_keyring::Sr25519Keyring::Alice.pair();
+    System::set_block_number(1);
+    polkadot_sdk::pallet_timestamp::Now::<Runtime>::put(1);
+    polkadot_sdk::cumulus_pallet_parachain_system::ValidationData::<Runtime>::put(
+      polkadot_sdk::cumulus_primitives_core::PersistedValidationData::default(),
+    );
+    let _ = Actors::on_initialize(1);
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+    for nonce in 0..2 {
+      let call = RuntimeCall::Governance(pallet_governance::Call::cast_vote {
+        domain: 101,
+        item_id: 110,
+        vote: pallet_governance::ProposalVoteKind::Approve,
+      });
+      let call_info = call.get_dispatch_info();
+      let extrinsic = signed_extrinsic(&signer, nonce, call);
+      let info = extrinsic.get_dispatch_info();
+      let charged = frame_system::calculate_consumed_extrinsic_weight::<RuntimeCall>(
+        &crate::configs::RuntimeBlockWeights::get(),
+        &info,
+        extrinsic.encoded_size(),
+      );
+      let frame_before = *System::block_weight().get(info.class);
+      let resource_before = Actors::block_resource_state()
+        .unwrap()
+        .usage()
+        .user_dispatch_used();
+      assert_eq!(
+        Executive::apply_extrinsic(extrinsic),
+        Ok(Err(
+          pallet_governance::Error::<Runtime>::ProposalNotActive.into()
+        ))
+      );
+      let resource_after = Actors::block_resource_state().unwrap();
+      assert_eq!(
+        System::block_weight()
+          .get(info.class)
+          .saturating_sub(frame_before),
+        charged
+      );
+      assert_eq!(
+        resource_after
+          .usage()
+          .user_dispatch_used()
+          .saturating_sub(resource_before),
+        charged
+      );
+      assert_eq!(resource_after.outstanding_reservations(), 0);
+      assert!(charged.ref_time() >= call_info.call_weight.ref_time());
+      assert!(Governance::finalized_proposal_outcome(101, 110).is_none());
+    }
+  });
+}
+
+#[test]
+fn declared_governance_vote_count_ceiling_uses_sdk_admission() {
+  use polkadot_sdk::frame_support::{dispatch::DispatchClass, weights::Weight};
+  use polkadot_sdk::sp_runtime::transaction_validity::InvalidTransaction;
+  let call = RuntimeCall::Governance(pallet_governance::Call::cast_vote {
+    domain: 101,
+    item_id: 110,
+    vote: pallet_governance::ProposalVoteKind::Approve,
+  });
+  let info = call.get_dispatch_info();
+  let weights = crate::configs::RuntimeBlockWeights::get();
+  assert_eq!(info.class, DispatchClass::Normal);
+  assert_eq!(weights.get(info.class).max_total, Some(weights.max_block));
+  assert_eq!(weights.get(info.class).reserved, Some(Weight::zero()));
+  assert_eq!(info.call_weight.ref_time(), 35_111_357_000);
+  assert_eq!(weights.max_block.ref_time(), 2_000_000_000_000);
+  let ceiling = weights.max_block.ref_time() / info.call_weight.ref_time();
+  assert_eq!(ceiling, 56);
+  // Admission projection: omit every earlier base, extension, byte and proof charge.
+  polkadot_sdk::sp_io::TestExternalities::default().execute_with(|| {
+    for prior_calls in [ceiling - 1, ceiling] {
+      let prior_ref_time = info.call_weight.ref_time() * prior_calls;
+      let mut used = frame_system::ConsumedWeight::default();
+      used.accrue(Weight::from_parts(prior_ref_time, 0), info.class);
+      frame_system::BlockWeight::<Runtime>::put(&used);
+      let admitted = frame_system::CheckWeight::<Runtime>::do_prepare(
+        &info,
+        call.encoded_size(),
+        call.encoded_size() as u32,
+      );
+      if prior_calls == ceiling - 1 {
+        assert!(admitted.is_ok());
+      } else {
+        assert_eq!(admitted, Err(InvalidTransaction::ExhaustsResources.into()));
+        assert_eq!(System::block_weight(), used);
+        assert!(prior_ref_time + info.call_weight.ref_time() > weights.max_block.ref_time());
+        assert!(
+          info.call_weight.proof_size() + call.encoded_size() as u64
+            <= weights.max_block.proof_size()
+        );
+      }
+    }
+  });
+}
+
+#[test]
+fn signed_intent_admission_is_not_limited_to_named_asset_domains() {
+  new_test_ext().execute_with(|| {
+    let kind = pallet_governance::ProposalPayloadKind::Intent;
+    let hash = note_advisory_preimage(ALICE, b"non-protocol intent");
+    let fee_sink = actor_fee_sink_account();
+    for domain in [101, 102, u32::MAX] {
+      assert_ne!(domain, PROTOCOL_GOVERNANCE_DOMAIN);
+      assert_ne!(domain, TACTICAL_GOVERNANCE_DOMAIN);
+      assert!(!Assets::asset_exists(domain));
+      assert!(Staking::pool(domain).is_none());
+      let policy = Governance::proposal_admission_policy_view(domain, kind);
+      assert_eq!(
+        policy.authority,
+        pallet_governance::ProposalSubmissionAuthority::Signed
+      );
+      prepare_payload_witness(ALICE, domain, kind, hash);
+      let fee_before = Balances::free_balance(&fee_sink);
+      assert_ok!(Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(ALICE),
+        domain,
+        110,
+        pallet_governance::ProposalCadenceMode::Ordinary,
+        kind,
+        hash,
+      ));
+      assert_eq!(Governance::proposal_author(domain, 110), Some(ALICE));
+      assert_eq!(
+        Governance::active_proposal_ids(domain).into_inner(),
+        vec![110]
+      );
+      assert!(Governance::payload_admission_witness(hash, (domain, kind)).is_none());
+      assert_eq!(
+        Balances::free_balance(&fee_sink),
+        fee_before + policy.opening_fee.unwrap()
+      );
+      assert!(!pallet_governance::FinalizedProposals::<Runtime>::contains_key(domain, 110));
+    }
+  });
+}
+
+#[test]
+fn same_expiry_domain_indices_follow_signed_intent_on_development_preset() {
+  use pallet_governance::{FinalizedProposalOutcome as Outcome, ProposalRejectionReason as Reason};
+  let storage = super::production_block_replay::preset_genesis_storage(
+    &[],
+    &polkadot_sdk::sp_genesis_builder::DEV_RUNTIME_PRESET.into(),
+  );
+  // Empty CODE is a native placeholder; this drives Governance hooks, not Executive blocks.
+  polkadot_sdk::sp_io::TestExternalities::new(storage).execute_with(|| {
+    let signer = polkadot_sdk::sp_keyring::Sr25519Keyring::Alice.to_account_id();
+    let veto = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
+    assert!(Assets::asset_exists(veto));
+    assert_eq!(Assets::total_issuance(veto), 0);
+    assert!(<Runtime as pallet_governance::Config>::MaxMaturingProposalsPerBlock::get() >= 2);
+    assert!(<Runtime as pallet_governance::Config>::MaxFinalizedProposalOutcomesPerBlock::get() >= 2);
+    System::set_block_number(1);
+    let _ = Governance::on_initialize(1);
+    assert_eq!(pallet_governance::LastProcessedEpoch::<Runtime>::get(), 1);
+    let kind = pallet_governance::ProposalPayloadKind::Intent;
+    let hash = note_advisory_preimage(signer.clone(), b"same expiry domains");
+    let domains = [101, 102];
+    let fee_sink = actor_fee_sink_account();
+    let fees_before = Balances::free_balance(&fee_sink);
+    for domain in domains {
+      assert_ne!(domain, PROTOCOL_GOVERNANCE_DOMAIN);
+      assert_ne!(domain, TACTICAL_GOVERNANCE_DOMAIN);
+      assert!(!Assets::asset_exists(domain));
+      prepare_payload_witness(signer.clone(), domain, kind, hash);
+      assert_ok!(Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(signer.clone()), domain, 110,
+        pallet_governance::ProposalCadenceMode::Ordinary, kind, hash,
+      ));
+      assert_eq!(Governance::proposal_author(domain, 110), Some(signer.clone()));
+      assert_eq!(Governance::active_proposal_ids(domain).into_inner(), vec![110]);
+    }
+    let opening_fee = <Runtime as pallet_governance::Config>::ProposalOpeningFee::get();
+    assert_eq!(Balances::free_balance(&fee_sink), fees_before + 2 * opening_fee);
+    let maturity = 1u32
+      .checked_add(<Runtime as pallet_governance::Config>::ProposalLeadInPeriod::get()).unwrap()
+      .checked_add(<Runtime as pallet_governance::Config>::ProposalVotingPeriod::get()).unwrap();
+    let retention: u32 = <Runtime as pallet_governance::Config>::FinalizedProposalOutcomeRetentionEpochs::get();
+    let expiry = maturity.checked_add(retention).unwrap();
+    // Allow the control turns following the two nonempty phases, not a cursor reposition.
+    let end = expiry.checked_add(3).unwrap();
+    let ledger = (System::account(&signer), System::account(&fee_sink), Balances::total_issuance());
+    let mut cleaned_at = None;
+    for block in 2..=end {
+      System::set_block_number(block);
+      let _ = Governance::on_initialize(block);
+      if block == maturity - 1 {
+        assert_eq!(pallet_governance::LastProcessedEpoch::<Runtime>::get(), block);
+        for domain in domains {
+          assert_eq!(Governance::active_proposal_ids(domain).into_inner(), vec![110]);
+          assert!(Governance::finalized_proposal_outcome(domain, 110).is_none());
+        }
+      }
+      if block == maturity {
+        let bucket = Governance::finalized_proposal_outcome_expiry_bucket(expiry);
+        assert_eq!(bucket.len(), 2);
+        for domain in domains {
+          assert_eq!(Governance::finalized_proposal_outcome(domain, 110), Some(Outcome::Rejected {
+            finalized_epoch: maturity, reason: Reason::NoVotes,
+          }));
+          assert!(bucket.iter().any(|touch| touch.domain == domain && touch.item_id == 110));
+          assert_eq!(Governance::finalized_proposal_ids(domain).into_inner(), vec![110]);
+          assert!(Governance::proposal_pending_enactment_at(domain, 110).is_none());
+        }
+        assert!(pallet_governance::PendingEnactments::<Runtime>::get().is_empty());
+      }
+      if block >= maturity {
+        let retained = domains.iter().filter(|domain| pallet_governance::FinalizedProposals::<Runtime>::contains_key(**domain, 110)).count();
+        assert!(retained == 0 || retained == domains.len());
+        if block < expiry {
+          assert_eq!(retained, domains.len());
+          assert!(pallet_governance::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::contains_key(expiry));
+          for domain in domains {
+            assert!(pallet_governance::FinalizedProposalIdsByDomain::<Runtime>::contains_key(domain));
+            assert!(pallet_governance::ProposalMetadataByItem::<Runtime>::contains_key(domain, 110));
+            assert!(!pallet_governance::ProposalWinningPrimaryOptionByItem::<Runtime>::contains_key(domain, 110));
+            assert!(!pallet_governance::ProposalUrgentAuthorizedAt::<Runtime>::contains_key(domain, 110));
+          }
+        }
+        if retained == 0 {
+          assert!(block >= expiry);
+          cleaned_at.get_or_insert(block);
+        }
+      }
+    }
+    let cleaned_at = cleaned_at.expect("ordinary hook progression must service both expired indices");
+    for domain in domains {
+      assert!(Governance::active_proposal_ids(domain).is_empty());
+      assert!(Governance::finalized_proposal_ids(domain).is_empty());
+      assert!(!pallet_governance::ProposalMetadataByItem::<Runtime>::contains_key(domain, 110));
+      assert!(Governance::proposal_pending_enactment_at(domain, 110).is_none());
+    }
+    assert!(Governance::finalized_proposal_outcome_expiry_bucket(expiry).is_empty());
+    assert_eq!((System::account(&signer), System::account(&fee_sink), Balances::total_issuance()), ledger);
+    assert_eq!(Assets::total_issuance(veto), 0);
+    println!("GOVERNANCE_SIGNED_DOMAIN_HISTORY domains=2 maturity={maturity} expiry={expiry} cleaned_at={cleaned_at} root_resolution=false cursor_reset=false executive_replay=false");
   });
 }
 

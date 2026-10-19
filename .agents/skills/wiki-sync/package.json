@@ -1,15 +1,23 @@
 {
   "name": "@deos/wiki-sync-tooling",
-  "description": "Private strict OKF Wiki validation and single-atom reference lifecycle tooling.",
+  "description": "Private layered Wiki compilation, mdBook website and strict OKF review tooling.",
   "private": true,
   "type": "module",
   "scripts": {
     "okf:check": "node scripts/okf-reference.mjs --check",
     "okf:sync": "node scripts/okf-reference.mjs --sync",
-    "test": "node --test scripts/test-okf-wiki.mjs scripts/test-okf-reference.mjs scripts/test-native-russian.mjs && node --test ../../../web-client/scripts/test-wiki-relations.mjs",
-    "locale:ru": "bash scripts/audit-native-russian.sh"
+    "test": "node --test scripts/test-okf-wiki.mjs scripts/test-okf-reference.mjs scripts/test-native-russian.mjs site/test/projection.test.mjs site/test/search-url.test.mjs site/test/context.test.mjs site/test/locale.test.mjs && node --test ../../../web-client/scripts/test-wiki-relations.mjs",
+    "locale:ru": "bash scripts/audit-native-russian.sh",
+    "site:prepare": "bash scripts/build-site.sh --prepare",
+    "site:build": "bash scripts/build-site.sh --build",
+    "site:test": "node --test site/test/projection.test.mjs site/test/search-url.test.mjs site/test/context.test.mjs site/test/locale.test.mjs",
+    "site:validate": "bash scripts/build-site.sh --validate",
+    "site:browser": "bash scripts/build-site.sh --browser-test"
   },
   "dependencies": {
     "yaml": "2.9.0"
+  },
+  "engines": {
+    "node": ">=22.22.0"
   }
 }

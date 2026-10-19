@@ -11,7 +11,7 @@ use codec::Encode;
 use primitives::{AssetKind, ecosystem};
 
 use polkadot_sdk::frame_support::traits::{
-  Currency, Get,
+  Currency, Get, StorageInfoTrait,
   fungible::{Inspect as NativeInspect, Mutate as NativeMutate},
   fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
   tokens::{DepositConsequence, Fortitude, Precision, Preservation, Provenance},
@@ -260,8 +260,39 @@ impl RuntimeStepControlWeight {
     }
   }
 
-  // Bind the same finite User header profiles consumed by maximum and actual Control selection.
-  fn production_weight_identity_from_user_opening(user_opening: &[Weight]) -> Option<[u8; 32]> {
+  fn opening_progress_control_weight(tail_chunks: u32) -> Weight {
+    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    // The shared context has no Actor class axis; cover both complete measured owners.
+    Self::component_max(
+      ControlWeights::scheduler_inner_opening_progress_min(tail_chunks),
+      ControlWeights::scheduler_inner_opening_user_progress_min(tail_chunks),
+    )
+  }
+
+  fn suspended_tail_retry_control_weight(steps: u32, predicates: u32) -> Weight {
+    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    Self::component_max(
+      ControlWeights::scheduler_inner_suspended_tail_retry(steps, predicates),
+      ControlWeights::scheduler_inner_suspended_user_tail_retry(steps, predicates),
+    )
+  }
+
+  fn suspended_tail_progress_control_weight(steps: u32, predicates: u32) -> Weight {
+    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    // Retain the legacy System inclusive upper; the User profile has a pure Control boundary.
+    Self::component_max(
+      ControlWeights::scheduler_inner_suspended_tail_progress(steps, predicates),
+      ControlWeights::scheduler_inner_suspended_user_tail_progress(steps, predicates),
+    )
+  }
+
+  // Bind each finite User profile, including components hidden by the shared maximum.
+  fn production_weight_identity_from_user_profiles(
+    user_opening: &[Weight],
+    user_progress: &[Weight],
+    user_tail_retry: &[Weight],
+    user_tail_progress: &[Weight],
+  ) -> Option<[u8; 32]> {
     type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
     let tail_plan = (1..=4)
       .map(ControlWeights::current_step_plan_running_tail)
@@ -396,7 +427,7 @@ impl RuntimeStepControlWeight {
     Some(
       (
         *b"DEOS_ACTOR_STEP_CONTROL_WEIGHT",
-        *b"DEOS_ACTOR_CONTROL_ACTUAL_V15",
+        *b"DEOS_ACTOR_CONTROL_ACTUAL_V17",
         (
           ControlWeights::service_round_begin_populated(),
           ControlWeights::service_round_probe_eligible(),
@@ -414,6 +445,7 @@ impl RuntimeStepControlWeight {
           opening_complete,
           opening_progress,
           user_opening,
+          user_progress,
         ),
         ControlWeights::current_step_plan_opening_head(),
         ControlWeights::current_step_plan_suspended_head(),
@@ -424,6 +456,7 @@ impl RuntimeStepControlWeight {
           suspended_tail_retry,
           suspended_tail_complete,
           suspended_tail_progress,
+          (user_tail_retry, user_tail_progress),
           suspended_head_retry,
           suspended_head_complete,
           suspended_head_progress,
@@ -526,7 +559,30 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
     let user_opening = (0..=maximum_tail_chunks)
       .map(Self::user_opening_control_weight)
       .collect::<alloc::vec::Vec<_>>();
-    Self::production_weight_identity_from_user_opening(&user_opening)
+    let user_progress = (1..=maximum_tail_chunks)
+      .map(crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_user_progress_min)
+      .collect::<alloc::vec::Vec<_>>();
+    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    let user_tail_retry = (1..=pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK)
+      .flat_map(|steps| {
+        (0..=ActorMaxPredicatesPerStep::get()).map(move |predicates| {
+          ControlWeights::scheduler_inner_suspended_user_tail_retry(steps, predicates)
+        })
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let user_tail_progress = (2..=pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK)
+      .flat_map(|steps| {
+        (0..=ActorMaxPredicatesPerStep::get()).map(move |predicates| {
+          ControlWeights::scheduler_inner_suspended_user_tail_progress(steps, predicates)
+        })
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    Self::production_weight_identity_from_user_profiles(
+      &user_opening,
+      &user_progress,
+      &user_tail_retry,
+      &user_tail_progress,
+    )
   }
 
   fn maximum_control_weight(
@@ -668,7 +724,7 @@ impl RuntimeStepControlWeight {
       } else {
         Self::component_max(
           non_progress_min,
-          ControlWeights::scheduler_inner_opening_progress_min(context.opening_tail_chunks),
+          Self::opening_progress_control_weight(context.opening_tail_chunks),
         )
       };
       Self::component_max(composed, direct)
@@ -712,7 +768,7 @@ impl RuntimeStepControlWeight {
     };
     let atomic = Self::component_max(
       atomic,
-      ControlWeights::scheduler_inner_suspended_tail_retry(
+      Self::suspended_tail_retry_control_weight(
         context.steps_in_fragment,
         context.predicate_evaluation_units,
       ),
@@ -727,7 +783,7 @@ impl RuntimeStepControlWeight {
     let atomic = if context.steps_in_fragment >= 2 {
       Self::component_max(
         atomic,
-        ControlWeights::scheduler_inner_suspended_tail_progress(
+        Self::suspended_tail_progress_control_weight(
           context.steps_in_fragment,
           context.predicate_evaluation_units,
         ),
@@ -785,7 +841,7 @@ impl RuntimeStepControlWeight {
       && context.opening_tail_chunks > 0
       && context.predicate_evaluation_units == 0
     {
-      return separate(ControlWeights::scheduler_inner_opening_progress_min(
+      return separate(Self::opening_progress_control_weight(
         context.opening_tail_chunks,
       ));
     }
@@ -830,7 +886,7 @@ impl RuntimeStepControlWeight {
       && context.cursor > 0
       && context.steps_in_fragment >= 2
     {
-      return separate(ControlWeights::scheduler_inner_suspended_tail_progress(
+      return separate(Self::suspended_tail_progress_control_weight(
         context.steps_in_fragment,
         context.predicate_evaluation_units,
       ));
@@ -840,7 +896,7 @@ impl RuntimeStepControlWeight {
       && execution.placement == StepControlPlacement::Wakeup
       && context.cursor > 0
     {
-      return separate(ControlWeights::scheduler_inner_suspended_tail_retry(
+      return separate(Self::suspended_tail_retry_control_weight(
         context.steps_in_fragment,
         context.predicate_evaluation_units,
       ));
@@ -1034,15 +1090,15 @@ impl AdmissionCertificateAuthorityProvider for RuntimeAdmissionCertificateAuthor
   }
 }
 
-/// Benchmark-only admission authority. A benchmark must stage a policy-bearing live Actor and
-/// close it in order to measure the complete policy-bearing Close, but the production authority
-/// refuses that transition until the policy Close owner exists. These values only satisfy the
-/// admission check so the real work can be measured; they are never a production coefficient and
-/// never reach a production build, and the identity stays the production identity.
-#[cfg(feature = "runtime-benchmarks")]
+/// Benchmark-only scaffolding for optional authority supplements. Ordinary policy-bearing Close
+/// selects the compiled plain/policy Close owners, not `behavior_close_additional_weight`.
+/// Financial waiting still requires independently qualified supplements; these fixture allowances
+/// are not production coefficients. Only the explicit scaffolding feature selects this provider;
+/// ordinary builds, including plain runtime-benchmarks, retain the ordinary authority.
+#[cfg(feature = "benchmark-authority-scaffolding")]
 pub struct BenchmarkAdmissionCertificateAuthority;
 
-#[cfg(feature = "runtime-benchmarks")]
+#[cfg(feature = "benchmark-authority-scaffolding")]
 impl AdmissionCertificateAuthorityProvider for BenchmarkAdmissionCertificateAuthority {
   fn current() -> Option<AdmissionCertificateAuthority> {
     RuntimeAdmissionCertificateAuthority::current()
@@ -3259,7 +3315,20 @@ pub struct DeosActorPrepassContext;
 
 impl ActorPrepassContext for DeosActorPrepassContext {
   fn context_ready() -> bool {
-    Timestamp::get() != 0
+    // SDK-bound adapter: Timestamp49 sets this private bool on update and takes it at finalize.
+    // Derive its key from public metadata; never duplicate a private hashed storage layout.
+    let updated = Timestamp::storage_info()
+      .into_iter()
+      .find(|item| item.storage_name == b"DidUpdate");
+    let Some(updated) = updated.filter(|item| {
+      item.max_values == Some(1) && item.max_size == Some(1) && item.prefix.len() == 32
+    }) else {
+      return false;
+    };
+    let mut value = [0u8; 1];
+    let current_timestamp =
+      polkadot_sdk::sp_io::storage::read(&updated.prefix, &mut value, 0) == Some(1) && value == [1];
+    current_timestamp
       && polkadot_sdk::cumulus_pallet_parachain_system::ValidationData::<Runtime>::exists()
   }
 }
@@ -3271,9 +3340,9 @@ impl pallet_deos_actors::Config for Runtime {
   type FeeNativeAssetId = ActorFeeNativeAssetId;
   type Balance = Balance;
   type AssetOps = TmctolAssetOps;
-  #[cfg(not(feature = "runtime-benchmarks"))]
+  #[cfg(not(feature = "benchmark-authority-scaffolding"))]
   type AdmissionCertificateAuthority = RuntimeAdmissionCertificateAuthority;
-  #[cfg(feature = "runtime-benchmarks")]
+  #[cfg(feature = "benchmark-authority-scaffolding")]
   type AdmissionCertificateAuthority = BenchmarkAdmissionCertificateAuthority;
   type StepControlWeight = RuntimeStepControlWeight;
   type PipelineControlWeight = ();
@@ -4706,9 +4775,14 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
   }
 
   fn verify_maximum_context_inherent() {
+    let collection_size_limit = RuntimeBlockWeights::get().max_block.proof_size() / 6;
+    let expected =
+      (collection_size_limit / 65_536).min(u64::from(MaxInboundDownwardMessagesPerContext::get()));
     assert_eq!(
-      polkadot_sdk::cumulus_pallet_parachain_system::ProcessedDownwardMessages::<Runtime>::get(),
-      6
+      u64::from(
+        polkadot_sdk::cumulus_pallet_parachain_system::ProcessedDownwardMessages::<Runtime>::get()
+      ),
+      expected
     );
   }
 

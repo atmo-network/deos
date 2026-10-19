@@ -77,6 +77,8 @@ fn native_staking_custody_accounts_preserve_tagged_hash_identities() {
 #[cfg(feature = "runtime-benchmarks")]
 #[test]
 fn lp_backed_security_path_composes_sessions_funding_claim_and_atomic_expiry() {
+  use crate::configs::staking_config::RuntimeNativeSecurityModeProvider;
+  use pallet_staking::{NativeSecurityMode, NativeSecurityModeProvider};
   use polkadot_sdk::frame_support::traits::Currency;
   use polkadot_sdk::pallet_collator_selection::CandidateInfo;
   use polkadot_sdk::pallet_session::SessionManager;
@@ -85,6 +87,15 @@ fn lp_backed_security_path_composes_sessions_funding_claim_and_atomic_expiry() {
     assert_ok!(create_test_asset(0, &ALICE));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
     setup_native_staking_lp_nomination(BOB, ALICE, 20);
+    assert_eq!(
+      Staking::native_security_mode(),
+      NativeSecurityMode::TrustedSet
+    );
+    RuntimeNativeSecurityModeProvider::benchmark_prepare_lp_backed_selection();
+    assert_eq!(
+      Staking::native_security_mode(),
+      NativeSecurityMode::LpBackedSelection
+    );
     assert_ok!(Governance::record_winning_vote(
       RuntimeOrigin::root(),
       0,
@@ -190,6 +201,8 @@ fn lp_backed_security_path_composes_sessions_funding_claim_and_atomic_expiry() {
 #[cfg(feature = "runtime-benchmarks")]
 #[test]
 fn compound_path_proves_exact_reward_reserve_issuance_custody_and_backing_deltas() {
+  use crate::configs::staking_config::RuntimeNativeSecurityModeProvider;
+  use pallet_staking::{NativeSecurityMode, NativeSecurityModeProvider};
   use polkadot_sdk::frame_support::traits::{Currency, fungibles::Inspect};
 
   new_test_ext().execute_with(|| {
@@ -247,6 +260,24 @@ fn compound_path_proves_exact_reward_reserve_issuance_custody_and_backing_deltas
       .expect("registered native staking pool exists");
     let operator_backing_before =
       crate::configs::DelegationWeightedCollatorSessionManager::collator_backing_value(&ALICE);
+    assert_eq!(
+      Staking::native_security_mode(),
+      NativeSecurityMode::TrustedSet
+    );
+    assert_noop!(
+      Staking::claim_and_compound_native_security_reward(
+        RuntimeOrigin::signed(BOB),
+        epoch,
+        ALICE,
+        1
+      ),
+      pallet_staking::Error::<crate::Runtime>::NativeSecurityModeInactive
+    );
+    RuntimeNativeSecurityModeProvider::benchmark_prepare_lp_backed_selection();
+    assert_eq!(
+      Staking::native_security_mode(),
+      NativeSecurityMode::LpBackedSelection
+    );
 
     assert_ok!(Staking::claim_and_compound_native_security_reward(
       RuntimeOrigin::signed(BOB),
@@ -2403,11 +2434,13 @@ fn trusted_session_boundary_finalizes_open_state_and_removes_unactivated_plannin
       },
     );
     polkadot_sdk::pallet_session::CurrentIndex::<crate::Runtime>::put(boundary);
+    let weight_before = System::block_weight();
 
     <crate::configs::DelegationWeightedCollatorSessionManager as SessionManager<
       crate::AccountId,
     >>::start_session(boundary);
 
+    assert_eq!(System::block_weight(), weight_before);
     assert!(Staking::active_native_security_epoch_snapshot().is_none());
     assert_eq!(
       Staking::native_security_reward_pot(active_epoch)
@@ -2461,9 +2494,11 @@ fn failed_session_retention_cancels_the_plan_and_recovers_the_oldest_due_epoch()
     }
     pallet_staking::NativeSecurityRewardLiability::<crate::Runtime>::put(10);
     polkadot_sdk::pallet_session::CurrentIndex::<crate::Runtime>::put(boundary);
+    let weight_before = System::block_weight();
     <crate::configs::DelegationWeightedCollatorSessionManager as SessionManager<
       crate::AccountId,
     >>::start_session(boundary);
+    assert_eq!(System::block_weight(), weight_before);
     assert!(Staking::native_security_reward_pot(due_epoch).is_some());
     assert!(Staking::native_security_reward_pot(boundary).is_none());
 
@@ -2471,9 +2506,11 @@ fn failed_session_retention_cancels_the_plan_and_recovers_the_oldest_due_epoch()
     let _ = crate::Balances::deposit_creating(&reward_account, 10);
     let recovery_boundary = boundary + 1;
     polkadot_sdk::pallet_session::CurrentIndex::<crate::Runtime>::put(recovery_boundary);
+    let recovery_weight = System::block_weight();
     <crate::configs::DelegationWeightedCollatorSessionManager as SessionManager<
       crate::AccountId,
     >>::start_session(recovery_boundary);
+    assert_eq!(System::block_weight(), recovery_weight);
     assert!(Staking::native_security_reward_pot(due_epoch).is_none());
     assert_eq!(Staking::native_security_reward_liability(), 0);
   });

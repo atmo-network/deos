@@ -395,7 +395,7 @@ function walkRuPages(directory) {
 
 function parseArgs(argv) {
   const options = {
-    wikiDir: join(projectRoot, "wiki"),
+    wikiDir: join(projectRoot, "wiki/deos"),
     configPath: join(skillDir, "native-russian-style.json"),
     frontendPath: join(
       projectRoot,

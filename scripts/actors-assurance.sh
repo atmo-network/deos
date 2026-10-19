@@ -11,6 +11,11 @@ INCLUDE_OCCUPANCY_PROFILE="${INCLUDE_OCCUPANCY_PROFILE:-0}"
 # refresh rather than to release acceptance. They stay runnable with INCLUDE_NIGHTLY_HEAVY=1.
 INCLUDE_NIGHTLY_HEAVY="${INCLUDE_NIGHTLY_HEAVY:-0}"
 QUICK_MODE="${QUICK_MODE:-0}"
+H1_DIAGNOSTIC=0
+EMBEDDING_ONLY=0
+PACKAGE_ONLY=0
+INTEGRATED_TRANSFER_BASELINE=0
+TRANSFER_BASELINE_PROFILE=""
 INTEGRATED_W0_W1=0
 INTEGRATED_W1_ACTOR_ONLY=0
 INTEGRATED_W1_CONTINUOUS_USER=0
@@ -53,8 +58,11 @@ REQUIRED_HEAVY_PROFILES=(
 PACKAGE_HEAVY_PROFILES=(
     "maximum_dormant_identity_population_adds_no_idle_scan"
 )
-OCCUPANCY_HEAVY_PROFILE="profile_scheduler_queue_wakeup_occupancy_10k"
-DIAGNOSTIC_HEAVY_PROFILES=("profile_scheduler_wallclock_matrix")
+OCCUPANCY_HEAVY_PROFILE="current_cadenced_scheduler_occupancy_10k"
+OCCUPANCY_PROGRESS_PROFILE="current_cadenced_scheduler_first_sweep_10k"
+TOPOLOGY_PROGRESS_PROFILE="current_cadenced_sparse_topology_first_sweep"
+HISTORICAL_OCCUPANCY_PROFILE="profile_scheduler_queue_wakeup_occupancy_10k"
+DIAGNOSTIC_HEAVY_PROFILES=("profile_scheduler_wallclock_matrix" "$HISTORICAL_OCCUPANCY_PROFILE")
 
 usage() {
     cat <<'EOF'
@@ -64,20 +72,49 @@ Usage: actors-assurance.sh [OPTIONS]
 Runs the DEOS Actors assurance contract across the package archive, external-consumer fixture, and deos-runtime.
 
 Source identity hashes tracked and untracked source bytes and executable mode in
-template, scripts, web-client, simulator, docs, .github, .cargo, and root build configuration.
+template, scripts, web-client, simulators, docs, .github, .cargo, and root build configuration.
 It includes staged changes and committed content, is independent of checkout path
 and commit packaging, and excludes build outputs, .papi metadata/descriptors, and Skills.
 Weight, production Wasm, and metadata retain their separate artifact identities.
 
-self-test checks source identity in an isolated temporary Git repository, without
-Cargo, network access, or build artifacts. The assurance gate also runs it automatically.
+self-test checks source identity in an isolated temporary Git repository and
+focused native mode exclusivity, without Cargo, network access, or build artifacts.
+The assurance gate also runs it automatically.
 
 Options:
-  --skip-occupancy-profile   Skip the gating 10k occupancy profile
+  --skip-occupancy-profile   Skip current 10k native safety/censoring acceptance
   --quick                    Run only fast checks (Clippy + light tests)
-  --exact-heavy-profile NAME Run one declared runtime/package heavy profile
+  --package-only             Check nonempty surface, build/verify the local Cargo
+                             archive and run its distributed semantic oracle offline.
+                             No publication, npm, metadata, production Wasm or
+                             runtime tests; output stays under template/target.
+  --embedding-only           Run independent consumer default/DEX/try-runtime/
+                             combined tests and no-std check only; native Cargo,
+                             no npm, metadata, production Wasm or runtime stress.
+  --h1-diagnostic            Run native isolated public User 1/2/4/8/12-Step,
+                             recipient-retry and authored nonce-Close diagnostics.
+                             No Wasm/metadata/npm prerequisite; no capacity acceptance.
+                             Compares plain/observed final roots; named SDK state events only.
+                             DEOS_VERBOSE=1 exposes ACTORS_H1 JSON rows and identities.
+  --exact-heavy-profile NAME Run one declared runtime/package heavy profile;
+                             current_cadenced_scheduler_occupancy_10k checks safety
+                             and reports every censored Actor at 10k/2500 blocks.
+                             current_cadenced_scheduler_first_sweep_10k separately
+                             checks all first completions in N+1=10001 blocks.
+                             current_cadenced_sparse_topology_first_sweep compares
+                             5000 dense/sparse Actors (stride32), 5001 blocks each.
+                             No selection runs another automatically.
+                             profile_scheduler_queue_wakeup_occupancy_10k retains
+                             its historical strict target, exact-only, not acceptance.
   --production-reference-replay
                              Run the current pinned production-Wasm block/proof replay
+  --router-predicate-baseline PROFILE
+                                 Run Router+4 true predicates: short, system-first,
+                                 user-first; exact production-Wasm/proof replay.
+  --transfer-baseline PROFILE     Run scoped Transfer tests: short, system-first,
+                                  user-first, system-recurring, user-recurring.
+                                  Only explicit recurring selection runs 2 x (64+100).
+                                  Each command has a 60-minute bound; never builds Wasm.
   --integrated-w0-w1              Run only the full-Executive W0/W1 preparation gate
   --integrated-w1-actor-only      Run the exact-Wasm 100-block Actor-only W1 campaign
   --integrated-w1-continuous-user Run the exact-Wasm 100-block continuous-user W1 campaign
@@ -177,6 +214,17 @@ parse_args() {
             --quick)
                 QUICK_MODE=1
                 ;;
+            --h1-diagnostic)
+                H1_DIAGNOSTIC=1
+                ;;
+            --package-only)
+                [[ "$PACKAGE_ONLY" == 0 ]] || { log_error 'Duplicate --package-only'; exit 2; }
+                PACKAGE_ONLY=1
+                ;;
+            --embedding-only)
+                [[ "$EMBEDDING_ONLY" == 0 ]] || { log_error 'Duplicate --embedding-only'; exit 2; }
+                EMBEDDING_ONLY=1
+                ;;
             --exact-heavy-profile)
                 [[ $# -ge 2 ]] || {
                     log_error "--exact-heavy-profile requires a profile name"
@@ -187,6 +235,28 @@ parse_args() {
                 ;;
             --production-reference-replay)
                 PRODUCTION_REFERENCE_REPLAY=1
+                ;;
+            --router-predicate-baseline)
+                [[ $# -ge 2 ]] || { log_error '--router-predicate-baseline requires a profile'; exit 2; }
+                [[ "$INTEGRATED_TRANSFER_BASELINE" == 0 ]] || { log_error 'Select one economic baseline profile'; exit 2; }
+                case "$2" in
+                    short|system-first|user-first) ;;
+                    *) log_error "Unknown Router predicate baseline: $2"; exit 2 ;;
+                esac
+                INTEGRATED_TRANSFER_BASELINE=1
+                TRANSFER_BASELINE_PROFILE="router-$2"
+                shift
+                ;;
+            --transfer-baseline)
+                [[ $# -ge 2 ]] || { log_error '--transfer-baseline requires a profile'; exit 2; }
+                [[ "$INTEGRATED_TRANSFER_BASELINE" == 0 ]] || { log_error 'Select one Transfer baseline profile'; exit 2; }
+                case "$2" in
+                    short|system-first|user-first|system-recurring|user-recurring) ;;
+                    *) log_error "Unknown Transfer baseline profile: $2"; exit 2 ;;
+                esac
+                INTEGRATED_TRANSFER_BASELINE=1
+                TRANSFER_BASELINE_PROFILE="$2"
+                shift
                 ;;
             --integrated-w0-w1)
                 INTEGRATED_W0_W1=1
@@ -245,7 +315,17 @@ parse_args() {
         esac
         shift
     done
-    local integrated_count=$((INTEGRATED_W0_W1 + INTEGRATED_W1_ACTOR_ONLY + INTEGRATED_W1_CONTINUOUS_USER + INTEGRATED_W2_SCHEDULES + INTEGRATED_W3_OPENING_MATRIX + INTEGRATED_W4_HETEROGENEOUS_EFFECTS + INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP + INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE + INTEGRATED_CURRENT_W7_DEADLINES + INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER + INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE + INTEGRATED_W9_RESOURCE_INDEPENDENCE + INTEGRATED_CONTROL_ATTRIBUTION + INTEGRATED_FUNDED_USER_ACTION))
+    local integrated_count=$((INTEGRATED_TRANSFER_BASELINE + INTEGRATED_W0_W1 + INTEGRATED_W1_ACTOR_ONLY + INTEGRATED_W1_CONTINUOUS_USER + INTEGRATED_W2_SCHEDULES + INTEGRATED_W3_OPENING_MATRIX + INTEGRATED_W4_HETEROGENEOUS_EFFECTS + INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP + INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE + INTEGRATED_CURRENT_W7_DEADLINES + INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER + INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE + INTEGRATED_W9_RESOURCE_INDEPENDENCE + INTEGRATED_CONTROL_ATTRIBUTION + INTEGRATED_FUNDED_USER_ACTION))
+    if [[ "$PACKAGE_ONLY" == 1 && ( "$EMBEDDING_ONLY" == 1 || "$QUICK_MODE" == 1 || "$H1_DIAGNOSTIC" == 1 || "$integrated_count" -gt 0 || "$BACKPRESSURE_AUDIT" == 1 || "$PRODUCTION_REFERENCE_REPLAY" == 1 || -n "$EXACT_HEAVY_PROFILE" ) ]]; then
+        log_error '--package-only selects one independent archive cohort'; exit 2
+    fi
+    if [[ "$EMBEDDING_ONLY" == 1 && ( "$QUICK_MODE" == 1 || "$H1_DIAGNOSTIC" == 1 || "$integrated_count" -gt 0 || "$BACKPRESSURE_AUDIT" == 1 || "$PRODUCTION_REFERENCE_REPLAY" == 1 || -n "$EXACT_HEAVY_PROFILE" ) ]]; then
+        log_error '--embedding-only selects one independent native consumer cohort'; exit 2
+    fi
+    if [[ "$H1_DIAGNOSTIC" == "1" && ( "$QUICK_MODE" == "1" || "$integrated_count" -gt 0 || "$BACKPRESSURE_AUDIT" == "1" || "$PRODUCTION_REFERENCE_REPLAY" == "1" || -n "$EXACT_HEAVY_PROFILE" ) ]]; then
+        log_error "--h1-diagnostic selects one independent native diagnostic cohort"
+        exit 2
+    fi
     if [[ "$integrated_count" -gt 1 ]]; then
         log_error "Select exactly one integrated workload cohort"
         exit 2
@@ -268,7 +348,9 @@ parse_args() {
     fi
     if [[ -n "$EXACT_HEAVY_PROFILE" ]]; then
         local exact_matches=0 profile
-        [[ "$EXACT_HEAVY_PROFILE" == "$OCCUPANCY_HEAVY_PROFILE" ]] && exact_matches=$((exact_matches + 1))
+        for profile in "$OCCUPANCY_HEAVY_PROFILE" "$OCCUPANCY_PROGRESS_PROFILE" "$TOPOLOGY_PROGRESS_PROFILE" "$HISTORICAL_OCCUPANCY_PROFILE"; do
+            [[ "$EXACT_HEAVY_PROFILE" == "$profile" ]] && exact_matches=$((exact_matches + 1))
+        done
         for profile in "${REQUIRED_HEAVY_PROFILES[@]}" "${PACKAGE_HEAVY_PROFILES[@]}"; do
             [[ "$EXACT_HEAVY_PROFILE" == "$profile" ]] && exact_matches=$((exact_matches + 1))
         done
@@ -307,37 +389,9 @@ check_prerequisites() {
     log_success "Release gate prerequisites checked"
 }
 
-worktree_evidence_identity() {
-    (
-        cd "$PROJECT_ROOT" || exit 1
-        git ls-files --cached --others --exclude-standard -z -- \
-            template scripts web-client simulator docs .github .cargo \
-            ':/*.toml' ':/*.json' .gitignore .gitattributes .npmrc \
-            ':(exclude,glob)**/target/**' ':(exclude,glob)**/node_modules/**' \
-            ':(exclude,glob)**/build/**' ':(exclude,glob)**/dist/**' \
-            ':(exclude,glob)**/.svelte-kit/**' ':(exclude)web-client/.papi' \
-            ':(exclude)template/chain_spec.json' \
-            | LC_ALL=C sort -zu \
-            | while IFS= read -r -d '' path; do
-                if [[ -L "$path" ]]; then
-                    log_error "Source identity cannot certify a symlink: $path" >&2
-                    exit 1
-                fi
-                # A tracked deletion has the same source tree before and after staging.
-                [[ -e "$path" ]] || continue
-                if [[ -x "$path" ]]; then
-                    printf 'executable\0'
-                else
-                    printf 'regular\0'
-                fi
-                sha256sum --zero -- "$path" || exit 1
-            done \
-            | sha256sum | awk '{print $1}'
-    )
-}
-
 run_self_test() (
     local fixture
+    local QUICK_MODE=0 EMBEDDING_ONLY=0 PACKAGE_ONLY=0
     require_commands bash git sha256sum sort mktemp
     fixture="$(mktemp -d "${TMPDIR:-/tmp}/deos-source-identity.XXXXXX")"
     trap 'rm -rf -- "$fixture"' EXIT
@@ -346,6 +400,111 @@ run_self_test() (
     assert_equal() { [[ "$1" == "$2" ]] || { log_error "$3"; exit 1; }; }
     assert_changed() { [[ "$1" != "$2" ]] || { log_error "$3"; exit 1; }; }
 
+    (parse_args --h1-diagnostic; [[ "$H1_DIAGNOSTIC" == "1" ]])
+    local baseline_profile conflicting_mode
+    for baseline_profile in short system-first user-first system-recurring user-recurring; do
+        (parse_args --transfer-baseline "$baseline_profile"; [[ "$TRANSFER_BASELINE_PROFILE" == "$baseline_profile" && "$INTEGRATED_TRANSFER_BASELINE" == 1 ]])
+    done
+    for conflicting_mode in --quick --integrated-w0-w1 --h1-diagnostic --production-reference-replay --backpressure-audit; do
+        if (parse_args --transfer-baseline short "$conflicting_mode") >/dev/null 2>&1; then
+            log_error "Transfer baseline accepted conflicting mode: $conflicting_mode"; exit 1
+        fi
+    done
+    if (parse_args --transfer-baseline short --transfer-baseline user-recurring) >/dev/null 2>&1; then
+        log_error 'Transfer baseline accepted duplicate selectors'; exit 1
+    fi
+    if (parse_args --transfer-baseline unknown) >/dev/null 2>&1 || (parse_args --transfer-baseline) >/dev/null 2>&1; then
+        log_error 'Transfer baseline accepted missing/unknown profile'; exit 1
+    fi
+    for baseline_profile in short system-first user-first; do
+        (parse_args --router-predicate-baseline "$baseline_profile"; [[ "$TRANSFER_BASELINE_PROFILE" == "router-$baseline_profile" && "$INTEGRATED_TRANSFER_BASELINE" == 1 ]])
+    done
+    for conflicting_mode in --quick --integrated-w0-w1 --h1-diagnostic --production-reference-replay --backpressure-audit; do
+        if (parse_args --router-predicate-baseline short "$conflicting_mode") >/dev/null 2>&1; then
+            log_error "Router predicate baseline accepted conflicting mode: $conflicting_mode"; exit 1
+        fi
+    done
+    if (parse_args --router-predicate-baseline short --transfer-baseline short) >/dev/null 2>&1 \
+        || (parse_args --transfer-baseline short --router-predicate-baseline short) >/dev/null 2>&1 \
+        || (parse_args --router-predicate-baseline short --router-predicate-baseline user-first) >/dev/null 2>&1 \
+        || (parse_args --router-predicate-baseline unknown) >/dev/null 2>&1 \
+        || (parse_args --router-predicate-baseline) >/dev/null 2>&1; then
+        log_error 'Router predicate baseline accepted invalid/duplicate selector'; exit 1
+    fi
+    local conflicting
+    for conflicting in --quick --integrated-w0-w1 --production-reference-replay --backpressure-audit; do
+        if (parse_args --h1-diagnostic "$conflicting") >/dev/null 2>&1; then
+            log_error "H1 diagnostic accepted conflicting mode: $conflicting"
+            exit 1
+        fi
+    done
+    if (parse_args --h1-diagnostic --exact-heavy-profile maximum_dormant_identity_population_adds_no_idle_scan) >/dev/null 2>&1; then
+        log_error 'H1 diagnostic accepted a heavy-profile cohort'
+        exit 1
+    fi
+    local occupancy
+    for occupancy in "$OCCUPANCY_HEAVY_PROFILE" "$OCCUPANCY_PROGRESS_PROFILE" "$TOPOLOGY_PROGRESS_PROFILE" "$HISTORICAL_OCCUPANCY_PROFILE"; do
+        (parse_args --exact-heavy-profile "$occupancy"; [[ "$EXACT_HEAVY_PROFILE" == "$occupancy" ]])
+    done
+    assert_equal "$(INCLUDE_NIGHTLY_HEAVY=0 INCLUDE_OCCUPANCY_PROFILE=1 required_heavy_profiles)" \
+        "$OCCUPANCY_HEAVY_PROFILE" 'Current occupancy inventory selected a historical target'
+    if (parse_args --exact-heavy-profile missing_occupancy_profile) >/dev/null 2>&1; then
+        log_error 'Exact heavy selector accepted an undeclared occupancy profile'; exit 1
+    fi
+    (parse_args --embedding-only; [[ "$EMBEDDING_ONLY" == 1 ]])
+    for conflicting_mode in --quick --h1-diagnostic --integrated-w0-w1 --production-reference-replay --backpressure-audit; do
+        if (parse_args --embedding-only "$conflicting_mode") >/dev/null 2>&1; then
+            log_error "Embedding accepted conflicting mode: $conflicting_mode"; exit 1
+        fi
+    done
+    if (parse_args --embedding-only --exact-heavy-profile "$OCCUPANCY_HEAVY_PROFILE") >/dev/null 2>&1 \
+        || (parse_args --embedding-only --embedding-only) >/dev/null 2>&1; then
+        log_error 'Embedding accepted duplicate/heavy selection'; exit 1
+    fi
+    (
+        check_prerequisites() { log_error 'Embedding touched full-runtime prerequisites'; return 1; }
+        capture_evidence_identity() { return 1; }
+        snapshot_wasm_artifact() { return 1; }
+        run_embedding_only() { printf 'embedding-native-only'; }
+        assert_equal "$(main --embedding-only)" 'embedding-native-only' 'Embedding dispatch crossed full-runtime setup'
+    )
+    (parse_args --package-only; [[ "$PACKAGE_ONLY" == 1 ]])
+    for conflicting_mode in --quick --embedding-only --h1-diagnostic --integrated-w0-w1 --production-reference-replay --backpressure-audit; do
+        if (parse_args --package-only "$conflicting_mode") >/dev/null 2>&1; then
+            log_error "Package accepted conflicting mode: $conflicting_mode"; exit 1
+        fi
+    done
+    if (parse_args --package-only --package-only) >/dev/null 2>&1 \
+        || (parse_args --package-only --exact-heavy-profile "$OCCUPANCY_HEAVY_PROFILE") >/dev/null 2>&1; then
+        log_error 'Package accepted duplicate/heavy selection'; exit 1
+    fi
+    (
+        check_prerequisites() { return 1; }
+        capture_evidence_identity() { return 1; }
+        snapshot_wasm_artifact() { return 1; }
+        run_package_only() { printf 'package-offline-only'; }
+        assert_equal "$(main --package-only)" 'package-offline-only' 'Package dispatch crossed full-runtime setup'
+    )
+    (
+        timeout() { shift; "$@"; }
+        cargo() {
+            if [[ "$1" == pkgid ]]; then
+                printf 'path+file:///fixture#pallet-deos-actors@0.7.27\n'
+            else
+                printf '%s\n' Cargo.toml src/lib.rs tests/current_state_semantic_oracle.rs tests/fixtures/current_state_round_trace_v1.tsv README.md docs/embedding.md docs/specification.en.md docs/architecture.en.md
+            fi
+        }
+        run_shell_step() {
+            [[ "$3" == *'cargo package '* && "$3" != *'--no-verify'* && "$3" == *'--test current_state_semantic_oracle'* ]] || exit 1
+            printf 'archive-verification-selected'
+        }
+        [[ "$(run_package_archive_gate)" == *archive-verification-selected* ]] || exit 1
+        [[ "$(run_package_archive_gate list-only)" != *archive-verification-selected* ]] || exit 1
+        cargo() { printf '%s\n' Cargo.toml src/lib.rs; }
+        if run_package_archive_gate >/dev/null 2>&1; then
+            log_error 'Package surface accepted incomplete content'; exit 1
+        fi
+    )
     git -C "$fixture" init -q
     git -C "$fixture" config user.name 'Source identity test'
     git -C "$fixture" config user.email 'source-identity@example.invalid'
@@ -395,7 +554,7 @@ run_self_test() (
         log_error 'Symlink source must fail closed instead of certifying external bytes'
         exit 1
     fi
-    log_success 'Actors source identity self-test passed'
+    log_success 'Actors source identity and diagnostic selection self-test passed'
 )
 
 capture_evidence_identity() {
@@ -506,6 +665,41 @@ verify_heavy_profiles_resolve_exactly_once() {
         log_info "  exact package profile: ${profile} (1 test)"
     done
     log_success "All package heavy profiles resolve to exactly one test"
+}
+
+run_transfer_baseline_gate() {
+    local prefix='tests::production_block_replay::transfer_baseline::transfer_baseline'
+    local profile listing native
+    require_commands timeout
+    listing="$(cd "$TEMPLATE_DIR" && SKIP_WASM_BUILD=1 timeout 60m cargo test --release --lib -p deos-runtime --locked -- --list)"
+    case "$TRANSFER_BASELINE_PROFILE" in
+        router-*)
+            prefix='tests::production_block_replay::transfer_baseline::router_predicate_baseline'
+            case "$TRANSFER_BASELINE_PROFILE" in
+                router-short) profile="${prefix}_short_replays_exact_production_wasm" ;;
+                router-system-first) profile="${prefix}_system_first" ;;
+                router-user-first) profile="${prefix}_user_first" ;;
+            esac
+            ;;
+        short)
+            profile="${prefix}_short_replays_exact_production_wasm"
+            for native in short_profiles first_block_preserves_partial_fifo owner_partition_and_phase_contract fee_sink_allocations_reconcile legacy_runner_preserves_demand_modes; do
+                [[ "$(printf '%s\n' "$listing" | grep -Fxc "${prefix}_${native}: test")" == 1 ]] || {
+                    log_error "Missing/duplicate short native profile: $native"; return 1;
+                }
+            done
+            run_shell_step "Transfer baseline: short native conformance only" "60" \
+                "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 cargo test --lib -p deos-runtime --locked 'tests::production_block_replay::transfer_baseline::transfer_baseline_' -- --nocapture"
+            ;;
+        *)
+            profile="${prefix}_${TRANSFER_BASELINE_PROFILE//-/_}"
+            ;;
+    esac
+    [[ "$(printf '%s\n' "$listing" | grep -Fxc "$profile: test")" == 1 ]] || {
+        log_error "Transfer baseline must select exactly one declared profile: $profile"; return 1;
+    }
+    run_shell_step "Economic baseline: exact production-Wasm $TRANSFER_BASELINE_PROFILE" "60" \
+        "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release --lib -p deos-runtime --locked '$profile' -- --exact --ignored --nocapture"
 }
 
 run_integrated_w0_w1_gate() {
@@ -797,6 +991,9 @@ run_production_reference_replay() {
 }
 
 run_exact_heavy_profile() {
+    if [[ "$EXACT_HEAVY_PROFILE" == "$HISTORICAL_OCCUPANCY_PROFILE" ]]; then
+        log_warning 'Historical occupancy target selected explicitly; its result is not current safety acceptance'
+    fi
     local package="deos-runtime"
     local profile
     for profile in "${PACKAGE_HEAVY_PROFILES[@]}"; do
@@ -818,9 +1015,77 @@ run_exact_heavy_profile() {
         "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p '$package' --locked '$EXACT_HEAVY_PROFILE' -- --ignored --nocapture"
 }
 
-# The nightly `scheduler_stress_fifo_*` matrices assert throughput bounds measured against the
-# previous engine; the new architecture serves fewer actors per block by construction, so those
-# bounds belong to the deferred workload refresh rather than to release acceptance.
+run_package_archive_gate() {
+    local listing required count
+    listing="$(cd "$TEMPLATE_DIR" && timeout 15m cargo package -p pallet-deos-actors --allow-dirty --locked --list)" || return 1
+    count="$(printf '%s\n' "$listing" | grep -c . || true)"
+    [[ "$count" -gt 0 ]] || { log_error 'Actor package selected no files'; return 1; }
+    for required in Cargo.toml src/lib.rs tests/current_state_semantic_oracle.rs tests/fixtures/current_state_round_trace_v1.tsv README.md docs/embedding.md docs/specification.en.md docs/architecture.en.md; do
+        grep -Fxq "$required" <<< "$listing" || { log_error "Actor package omits $required"; return 1; }
+    done
+    log_info "Actor package surface files=$count; required code/host/specification/architecture entries present"
+    [[ "${DEOS_VERBOSE:-0}" != 1 ]] || printf '%s\n' "$listing"
+    [[ "${1:-}" != list-only ]] || return 0
+    local package_id version archive
+    package_id="$(cd "$TEMPLATE_DIR" && cargo pkgid --locked -p pallet-deos-actors)" || return 1
+    version="${package_id##*@}"
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]] || { log_error 'Invalid package version'; return 1; }
+    archive="$TEMPLATE_DIR/target/package/pallet-deos-actors-$version"
+    run_shell_step "Actors gate: pallet package archive and distributed oracle" "15" \
+        "cd \"$TEMPLATE_DIR\" && cargo package -p pallet-deos-actors --allow-dirty --locked --target-dir \"$TEMPLATE_DIR/target\" && test -s \"$archive.crate\" && cargo test --locked --manifest-path \"$archive/Cargo.toml\" --target-dir \"$TEMPLATE_DIR/target\" --test current_state_semantic_oracle && sha256sum \"$archive.crate\""
+}
+
+run_package_only() {
+    require_directory "$TEMPLATE_DIR" 'Template directory'
+    hydrate_local_tool_paths
+    require_commands cargo git sha256sum timeout
+    run_self_test
+    local source_before
+    source_before="$(worktree_evidence_identity)"
+    log_info "Offline package source: $source_before"
+    log_info 'Package-only: Cargo verification, no publication, production artifacts or other acceptance cohorts'
+    CARGO_NET_OFFLINE=true SKIP_WASM_BUILD=1 run_package_archive_gate
+    [[ "$(worktree_evidence_identity)" == "$source_before" ]] || { log_error 'Package source changed during execution'; return 1; }
+    log_success 'Actor archive verification retained exact source identity'
+}
+
+run_independent_embedding_gate() {
+    local profile feature_args listing count
+    for profile in default dex-fixture try-runtime dex-fixture,try-runtime; do
+        feature_args=""
+        [[ "$profile" == default ]] || feature_args="--features $profile"
+        listing="$(cd "$TEMPLATE_DIR" && SKIP_WASM_BUILD=1 timeout 15m cargo test --$CARGO_PROFILE \
+            -p pallet-deos-actors-embedding-fixture --locked --lib $feature_args -- --list 2>&1)" || {
+            log_error "Embedding $profile listing/build failed"
+            printf '%s\n' "$listing" | tail -n 40
+            return 1
+        }
+        [[ "${DEOS_VERBOSE:-0}" != 1 ]] || printf '%s\n' "$listing"
+        count="$(printf '%s\n' "$listing" | grep -c ': test$' || true)"
+        [[ "$count" -gt 0 ]] || { log_error "Embedding $profile selected no tests"; return 1; }
+        log_info "Embedding profile=$profile tests=$count"
+        run_shell_step "Actors gate: independent embedding $profile" "15" \
+            "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 cargo test --$CARGO_PROFILE -p pallet-deos-actors-embedding-fixture --locked --lib $feature_args"
+    done
+    run_shell_step "Actors gate: independent embedding no-std contract" "15" \
+        "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 cargo check --$CARGO_PROFILE -p pallet-deos-actors-embedding-fixture --locked --no-default-features"
+}
+
+run_embedding_only() {
+    require_directory "$TEMPLATE_DIR" 'Template directory'
+    hydrate_local_tool_paths
+    require_commands cargo git sha256sum timeout
+    run_self_test
+    local source_before
+    source_before="$(worktree_evidence_identity)"
+    log_info "Native embedding source: $source_before"
+    log_info 'Embedding-only: production Wasm/metadata not required or executed; no runtime stress'
+    run_independent_embedding_gate
+    [[ "$(worktree_evidence_identity)" == "$source_before" ]] || { log_error 'Embedding source changed during execution'; return 1; }
+    log_success 'Independent embedding matrix retained exact source identity'
+}
+
+# Legacy nightly throughput targets stay separate from current native/embedding safety.
 run_gate() {
     run_self_test
     run_shell_step "Actors gate: fee-envelope vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --metadata ../web-client/.papi/metadata/deos.scale --weights runtime/src/weights/pallet_deos_actors.rs --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
@@ -834,34 +1099,13 @@ run_gate() {
     if [[ "$QUICK_MODE" == "1" ]]; then
         run_shell_step "Actors quick gate: Clippy" "" "cd \"$TEMPLATE_DIR\" && cargo clippy --locked -p pallet-deos-actors -p deos-runtime -p pallet-deos-actors-embedding-fixture --all-targets -- -D warnings"
         run_shell_step "Actors quick gate: basic tests" "" "cd \"$TEMPLATE_DIR\" && cargo test -q --locked -p pallet-deos-actors --lib && cargo test -q --locked -p pallet-deos-actors-embedding-fixture --lib"
-        run_shell_step "Actors quick gate: package archive surface" "" "cd \"$TEMPLATE_DIR\" && cargo package -p pallet-deos-actors --allow-dirty --locked --list"
+        run_package_archive_gate list-only
         return
     fi
 
-    run_shell_step \
-        "Actors gate: pallet package archive" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo package -p pallet-deos-actors --allow-dirty --locked"
+    run_package_archive_gate
 
-    run_shell_step \
-        "Actors gate: independent embedding default profile" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p pallet-deos-actors-embedding-fixture --locked --lib"
-
-    run_shell_step \
-        "Actors gate: independent embedding DEX profile" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p pallet-deos-actors-embedding-fixture --locked --lib --features dex-fixture"
-
-    run_shell_step \
-        "Actors gate: independent embedding try-runtime profile" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p pallet-deos-actors-embedding-fixture --locked --lib --features try-runtime"
-
-    run_shell_step \
-        "Actors gate: independent embedding no-std contract" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo check --$CARGO_PROFILE -p pallet-deos-actors-embedding-fixture --locked --no-default-features"
+    run_independent_embedding_gate
 
     if [[ "$QUICK_MODE" != "1" ]]; then
         verify_heavy_profiles_resolve_exactly_once
@@ -883,7 +1127,7 @@ run_gate() {
             "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p pallet-deos-actors --locked ${profile} -- --ignored --nocapture"
     done
     if [[ "$INCLUDE_OCCUPANCY_PROFILE" != "1" ]]; then
-        log_warning "Skipping occupancy profile"
+        log_warning "Skipping current native occupancy safety/censoring profile"
     fi
     log_info "Non-gating diagnostics (not resolved or executed by this gate): ${DIAGNOSTIC_HEAVY_PROFILES[*]}"
 }
@@ -918,8 +1162,51 @@ run_backpressure_audit() {
     done
 }
 
+run_h1_diagnostic() {
+    require_directory "$TEMPLATE_DIR" "Template directory"
+    hydrate_local_tool_paths
+    require_commands cargo rustc git sha256sum timeout
+    case "$CARGO_PROFILE" in
+        release|dev) ;;
+        *) log_error 'H1 diagnostic requires CARGO_PROFILE=release|dev'; return 2 ;;
+    esac
+    local minutes="${DEOS_TEST_TIMEOUT_MINUTES:-15}"
+    [[ "$minutes" =~ ^[1-9][0-9]*$ ]] || { log_error 'DEOS_TEST_TIMEOUT_MINUTES must be positive'; return 2; }
+    local source_before weight_before listing
+    source_before="$(worktree_evidence_identity)"
+    weight_before="$(sha256sum "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" | awk '{print $1}')"
+    log_info "H1 native diagnostic source: $source_before"
+    log_info "H1 declared Actors Weight: $weight_before"
+    log_info "H1 HEAD/tree anchors (not a clean-tree certificate): $(git -C "$PROJECT_ROOT" rev-parse HEAD 'HEAD^{tree}' | tr '\n' ' ')"
+    (cd "$TEMPLATE_DIR" && rustc --version --verbose && cargo --version)
+    log_info 'Executor: native library test; no production or benchmark Wasm executes'
+    local profile='tests::actors_h1_diagnostic::h1_public_user_lengths_report_declared_cost_and_q1'
+    listing="$(cd "$TEMPLATE_DIR" && SKIP_WASM_BUILD=1 timeout "${minutes}m" cargo test --profile "$CARGO_PROFILE" -p deos-runtime --locked --lib -- --list)"
+    [[ "$(printf '%s\n' "$listing" | grep -Fxc "$profile: test" || true)" == "1" ]] || {
+        log_error 'H1 diagnostic must select exactly one non-ignored runtime test'
+        return 1
+    }
+    run_shell_step "H1 public User workflow diagnostic" "$minutes" \
+        "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 cargo test --profile '$CARGO_PROFILE' -p deos-runtime --locked --lib '$profile' -- --exact --nocapture"
+    [[ "$(worktree_evidence_identity)" == "$source_before" ]] || { log_error 'H1 source changed during execution'; return 1; }
+    [[ "$(sha256sum "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" | awk '{print $1}')" == "$weight_before" ]] || { log_error 'H1 Weight changed during execution'; return 1; }
+    log_success 'H1 diagnostic retained source and declared Weight; physical/capacity qualification remains open'
+}
+
 main() {
     parse_args "$@"
+    if [[ "$PACKAGE_ONLY" == 1 ]]; then
+        run_package_only
+        return
+    fi
+    if [[ "$EMBEDDING_ONLY" == 1 ]]; then
+        run_embedding_only
+        return
+    fi
+    if [[ "$H1_DIAGNOSTIC" == "1" ]]; then
+        run_h1_diagnostic
+        return
+    fi
     phase_banner "DEOS Actors assurance"
     check_prerequisites
     capture_evidence_identity
@@ -934,6 +1221,8 @@ main() {
         run_production_reference_replay
     elif [[ "$INTEGRATED_W0_W1" == "1" ]]; then
         run_integrated_w0_w1_gate
+    elif [[ "$INTEGRATED_TRANSFER_BASELINE" == "1" ]]; then
+        run_transfer_baseline_gate
     elif [[ "$INTEGRATED_W1_ACTOR_ONLY" == "1" ]]; then
         run_integrated_w1_campaign_gate actor-only
     elif [[ "$INTEGRATED_W1_CONTINUOUS_USER" == "1" ]]; then

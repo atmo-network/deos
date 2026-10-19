@@ -26,8 +26,8 @@ required_package_roots=(
 required_family_surfaces=(
     "${required_package_roots[@]}"
     "$TEMPLATE_DIR/runtime/src"
-    "$PROJECT_ROOT/docs"
-    "$PROJECT_ROOT/simulator"
+    "$PROJECT_ROOT/docs/deos"
+    "$PROJECT_ROOT/simulators/tmctol"
     "$PROJECT_ROOT/scripts"
     "$PROJECT_ROOT/web-client/src"
     "$PROJECT_ROOT/web-client/docs"
@@ -219,7 +219,7 @@ run_normative_drift_fixtures() {
     new_fixture "$TEMPLATE_DIR/pallets/actors/src" plural rs; plural_path="$NEW_FIXTURE_PATH"
     new_fixture "$TEMPLATE_DIR/pallets/actors/docs" condition md; condition_path="$NEW_FIXTURE_PATH"
     new_fixture "$TEMPLATE_DIR/primitives/src" duplicate rs; duplicate_path="$NEW_FIXTURE_PATH"
-    new_fixture "$PROJECT_ROOT/docs" signed-preimage md; soft_path="$NEW_FIXTURE_PATH"
+    new_fixture "$PROJECT_ROOT/docs/deos" signed-preimage md; soft_path="$NEW_FIXTURE_PATH"
     new_fixture "$TEMPLATE_DIR/pallets/staking/docs" numbered-phase md; phase_path="$NEW_FIXTURE_PATH"
     new_fixture "$TEMPLATE_DIR/pallets/staking/src" staking-view rs; staking_path="$NEW_FIXTURE_PATH"
     new_fixture "$PROJECT_ROOT/web-client/scripts" router-retry mjs; retry_path="$NEW_FIXTURE_PATH"
@@ -434,7 +434,7 @@ main() {
     reject_pattern '\b(?:DirectTransfer|UnsupportedTarget|UnsupportedPayloadKind)\b' \
         "Constructor-free governance treasury variant reintroduced" \
         "$TEMPLATE_DIR/pallets/governance" "$TEMPLATE_DIR/runtime" \
-        "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/wiki"
+        "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/docs/deos" "$PROJECT_ROOT/wiki"
     require_anchor 'ProposalTreasurySpendSettlementKind::InvoiceScalarTransfer' \
         "$TEMPLATE_DIR/runtime/src/configs/governance_config.rs" \
         "Canonical runtime governance treasury settlement constructor is missing"
@@ -511,7 +511,7 @@ main() {
         "Global LP aggregate lacks its O(1) governance consumer provenance"
     reject_pattern '\b(?:stake_native|NativeStakeRequiresDedicatedCall|StakeNative)\b' \
         "Dedicated native staking call or compatibility vocabulary reintroduced" \
-        "$TEMPLATE_DIR" "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/scripts" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/wiki"
+        "$TEMPLATE_DIR" "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/scripts" "$PROJECT_ROOT/docs/deos" "$PROJECT_ROOT/wiki"
     reject_pattern "$stale_phase_pattern" \
         "Stale numbered Phase terminology reintroduced into active protocol truth" \
         "${required_family_surfaces[@]}"
@@ -555,7 +555,7 @@ main() {
         "Duplicated or reconstructed typed error vocabulary reintroduced outside its owner" \
         "${required_family_surfaces[@]}"
     require_anchor 'No adapter infers retry from error text, pallet identity, or a raw `DispatchError`' \
-        "$PROJECT_ROOT/docs/core.architecture.en.md" \
+        "$PROJECT_ROOT/docs/deos/core.architecture.en.md" \
         "Local failure ownership is missing from the Runtime Composition DAG"
     require_anchor 'adapter_failure_keeps_boundary_and_retry_independent' \
         "$TEMPLATE_DIR/pallets/router/src/tests.rs" \
@@ -593,7 +593,7 @@ main() {
         "$TEMPLATE_DIR/pallets/oracle/docs/architecture.en.md" \
         "Oracle current-truth-only architecture boundary is missing"
     reject_pattern '\bretry_class\(\)' "Legacy Router retry vocabulary reintroduced" \
-        "$TEMPLATE_DIR/pallets/router" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/web-client/src"
+        "$TEMPLATE_DIR/pallets/router" "$PROJECT_ROOT/docs/deos" "$PROJECT_ROOT/web-client/src"
     reject_pattern "$router_retry_reconstruction_pattern" \
         "Router retry policy reconstructed outside typed RetryDisposition ownership" \
         "${required_family_surfaces[@]}"
@@ -624,7 +624,7 @@ main() {
         "Router narrow execution-error boundary evidence is missing"
     reject_pattern '\bNoMultiHopRoute\b' \
         "Constructor-free Router no-route duplicate reintroduced" \
-        "$TEMPLATE_DIR" "$PROJECT_ROOT/web-client" "$PROJECT_ROOT/docs"
+        "$TEMPLATE_DIR" "$PROJECT_ROOT/web-client" "$PROJECT_ROOT/docs/deos"
     require_anchor '`PreparedRoute` remains a public Rust package type solely' \
         "$TEMPLATE_DIR/pallets/router/docs/architecture.en.md" \
         "Router prepared-versus-public representation boundary is missing"
@@ -677,7 +677,7 @@ main() {
     reject_pattern '(?:pub\s+attempt:\s*u32|ActorRunState\.attempt|\brun_state\.attempt|\battempt:\s*u32)' \
         "Removed Actors cycle-global attempt ordinal reintroduced" \
         "$TEMPLATE_DIR/pallets/actors/src" "$TEMPLATE_DIR/pallets/actors/docs" \
-        "$PROJECT_ROOT/docs/actors-control-plane.contract.en.md" \
+        "$PROJECT_ROOT/docs/deos/actors-control-plane.contract.en.md" \
         "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/web-client/docs"
     require_anchor 'run_attempts_have_unique_chain_coordinates_without_the_stored_ordinal' \
         "$actors_tests" "Actors attempt-identity contraction proof is missing"
@@ -689,7 +689,7 @@ main() {
         "Actors classification-to-dispatch boundary is missing"
     reject_pattern '\bActorEligibilityError\b' \
         "Duplicated Actors eligibility error wrapper reintroduced" \
-        "$TEMPLATE_DIR" "$PROJECT_ROOT/web-client" "$PROJECT_ROOT/docs"
+        "$TEMPLATE_DIR" "$PROJECT_ROOT/web-client" "$PROJECT_ROOT/docs/deos"
     require_anchor 'Classification\(ActorClassificationError\)' \
         "$actors_lifecycle_types" \
         "Actors simulation classification wrapper is missing"
@@ -738,14 +738,14 @@ main() {
         "$actors_tests" "Actors shared failure-cause simulation evidence is missing"
     reject_pattern '\b(?:SimulationStepOutcome|SimulationStatus)\b' \
         "Retired simulation-only Actors outcome vocabulary reintroduced" \
-        "$TEMPLATE_DIR/pallets/actors" "$TEMPLATE_DIR/runtime" "$PROJECT_ROOT/docs" \
+        "$TEMPLATE_DIR/pallets/actors" "$TEMPLATE_DIR/runtime" "$PROJECT_ROOT/docs/deos" \
         "$PROJECT_ROOT/wiki" "$PROJECT_ROOT/web-client"
     reject_pattern 'MaxOpeningPredicateResults|opening_predicate_results|ObservationTiming::Opening' \
         "Retired Actors Opening predicate authority reintroduced" \
-        "$TEMPLATE_DIR/pallets/actors" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/web-client/src"
+        "$TEMPLATE_DIR/pallets/actors" "$PROJECT_ROOT/docs/deos" "$PROJECT_ROOT/web-client/src"
     reject_pattern '\bPredicateEvaluation\b' \
         "Tri-state Actors predicate evaluation reintroduced" \
-        "$TEMPLATE_DIR/pallets/actors" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/web-client/src"
+        "$TEMPLATE_DIR/pallets/actors" "$PROJECT_ROOT/docs/deos" "$PROJECT_ROOT/web-client/src"
     require_anchor 'predicates_observe_current_step_state' "$actors_tests" \
         "Actors current predicate freshness evidence is missing"
     require_anchor 'predicate_is_rechecked_from_current_state_after_retry' "$actors_tests" \
@@ -772,7 +772,7 @@ main() {
         "Retired Actors execution-plan field vocabulary reintroduced" \
         "$TEMPLATE_DIR/pallets/actors/src" "$TEMPLATE_DIR/pallets/actors/embedding-runtime" \
         "$TEMPLATE_DIR/pallets/actors/examples" "$TEMPLATE_DIR/pallets/actors/docs" \
-        "$TEMPLATE_DIR/pallets/actors/README.md" "$TEMPLATE_DIR/runtime" "$PROJECT_ROOT/docs" \
+        "$TEMPLATE_DIR/pallets/actors/README.md" "$TEMPLATE_DIR/runtime" "$PROJECT_ROOT/docs/deos" \
         "$PROJECT_ROOT/wiki" "$PROJECT_ROOT/web-client/src"
     require_anchor 'pub precondition_skips: u32' "$actors_lifecycle_types" \
         "Actors canonical precondition-skip counter is missing"
@@ -785,7 +785,7 @@ main() {
         "Actors exact unsuccessful-attempt streak field is missing"
     reject_pattern '\bconsecutive_failures\b' \
         "Retired ambiguous Actors failure-streak field reintroduced" \
-        "$TEMPLATE_DIR" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/wiki" "$PROJECT_ROOT/web-client"
+        "$TEMPLATE_DIR" "$PROJECT_ROOT/docs/deos" "$PROJECT_ROOT/wiki" "$PROJECT_ROOT/web-client"
     require_anchor 'generated_predicate_weight_scales_with_bounded_step_visits' "$actors_tests" \
         "Actors bounded predicate Weight evidence is missing"
     reject_pattern 'BalanceExhausted|FeeBudgetExhausted' \
@@ -840,7 +840,7 @@ main() {
         "Actors generated Cadenced Trigger Weight owner is missing"
     reject_pattern 'Cadenced never reads or sets `pending_signal`|including while Running/Suspended or already pending|setting or coalescing readiness' \
         "Actors documentation revived paid latched activity or bypassed canonical cadence readiness" \
-        "$TEMPLATE_DIR/pallets/actors/docs" "$PROJECT_ROOT/docs"
+        "$TEMPLATE_DIR/pallets/actors/docs" "$PROJECT_ROOT/docs/deos"
     reject_pattern '\bFresh (?:cohort|opportunity|opening|Active|activation|cycle)\b' \
         "Actors specification revived ambiguous Fresh scheduler vocabulary" \
         "$TEMPLATE_DIR/pallets/actors/docs/specification.en.md"
@@ -864,7 +864,7 @@ main() {
     reject_pattern '\b(?:MaxTimerJitterBlocks|ActorMaxTimerJitterBlocks|cadence_phase_blocks|timer_jitter_blocks|phase_window|worst_case_phase|cadence_phase)\b' \
         "Retired Actors timer-phase surface reintroduced" \
         "$TEMPLATE_DIR/pallets/actors/src" "$TEMPLATE_DIR/pallets/actors/embedding-runtime" \
-        "$TEMPLATE_DIR/runtime/src" "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/docs"
+        "$TEMPLATE_DIR/runtime/src" "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/docs/deos"
     require_anchor '"decision": "retain-capped-exponential"' \
         "$TEMPLATE_DIR/pallets/actors/tests/fixtures/retry-backoff-decision.v1.json" \
         "Actors retry-backoff decision fixture is missing"
@@ -911,7 +911,7 @@ main() {
     fi
 
     phase_banner "Step 4: Specification and implementation-map ownership"
-    local core_architecture="$PROJECT_ROOT/docs/core.architecture.en.md"
+    local core_architecture="$PROJECT_ROOT/docs/deos/core.architecture.en.md"
     require_anchor 'Public Surface Closure Map' "$core_architecture" \
         "Cross-system public-surface closure map is missing"
     require_anchor 'Package architecture maps keep executable anchors beside their owning invariants' \
@@ -922,8 +922,8 @@ main() {
     reject_pattern '\b(?:fn|pub fn)\s+[a-z][a-z0-9_]+\s*\(' \
         "Exhaustive implementation symbol reintroduced into core composition architecture" \
         "$core_architecture"
-    local tmctol_spec="$PROJECT_ROOT/docs/tmctol.specification.en.md"
-    local builder_contract="$PROJECT_ROOT/docs/builder-economy.contract.en.md"
+    local tmctol_spec="$PROJECT_ROOT/docs/deos/tmctol.specification.en.md"
+    local builder_contract="$PROJECT_ROOT/docs/deos/builder-economy.contract.en.md"
     local specification_docs=("$tmctol_spec")
     local architecture_docs=("$core_architecture")
     require_anchor 'tmctol\.specification\.en\.md' "$builder_contract" \
@@ -949,7 +949,7 @@ main() {
         "$TEMPLATE_DIR/pallets/governance/docs/specification.en.md" \
         "Governance specification lost the canonical invoice settlement policy owner"
     require_anchor 'builder-economy\.contract\.en\.md' \
-        "$PROJECT_ROOT/docs/framework-instance.contract.en.md" \
+        "$PROJECT_ROOT/docs/deos/framework-instance.contract.en.md" \
         "Framework/instance contract no longer routes Builder composition to its owner"
     local subsystem
     for subsystem in governance staking actors router oracle; do
@@ -982,7 +982,7 @@ main() {
         "Project-specific token, Actor, or invoice policy reintroduced into the TMCTOL standard" \
         "$tmctol_spec"
     local integration_doc
-    for integration_doc in "$PROJECT_ROOT"/docs/*.integration.en.md; do
+    for integration_doc in "$PROJECT_ROOT"/docs/deos/*.integration.en.md; do
         architecture_docs+=("$integration_doc")
         require_anchor 'owns only concrete DEOS composition' "$integration_doc" \
             "Integration document does not state its concrete-composition boundary"
@@ -993,22 +993,22 @@ main() {
     done
     reject_pattern '^## (?:Storage Topology|Call Surface|Error Surface|Package Modules)$' \
         "Package-local implementation inventory reintroduced into a root integration document" \
-        "$PROJECT_ROOT/docs/actors.integration.en.md" "$PROJECT_ROOT/docs/oracle.integration.en.md"
+        "$PROJECT_ROOT/docs/deos/actors.integration.en.md" "$PROJECT_ROOT/docs/deos/oracle.integration.en.md"
     reject_pattern '^```rust$' \
         "Decorative Rust implementation syntax reintroduced outside a package owner" \
-        "$core_architecture" "$PROJECT_ROOT/docs/actors.integration.en.md" \
-        "$PROJECT_ROOT/docs/oracle.integration.en.md"
+        "$core_architecture" "$PROJECT_ROOT/docs/deos/actors.integration.en.md" \
+        "$PROJECT_ROOT/docs/deos/oracle.integration.en.md"
     reject_pattern '(?:0\.7\.|pre-launch|pre-release|release line|current slice|historical .* extraction gate)' \
         "Release diary reintroduced into current architecture or integration truth" \
         "${architecture_docs[@]}"
 
     phase_banner "Step 5: Canonical terminology and generated projection"
     local terminology_surfaces=(
-        "$PROJECT_ROOT/docs/README.md"
-        "$PROJECT_ROOT/docs/framework-instance.contract.en.md"
-        "$PROJECT_ROOT/docs/core.architecture.en.md"
-        "$PROJECT_ROOT/docs/actors.integration.en.md"
-        "$PROJECT_ROOT/docs/actors-control-plane.contract.en.md"
+        "$PROJECT_ROOT/docs/deos/README.md"
+        "$PROJECT_ROOT/docs/deos/framework-instance.contract.en.md"
+        "$PROJECT_ROOT/docs/deos/core.architecture.en.md"
+        "$PROJECT_ROOT/docs/deos/actors.integration.en.md"
+        "$PROJECT_ROOT/docs/deos/actors-control-plane.contract.en.md"
         "$TEMPLATE_DIR/pallets/README.md"
         "$TEMPLATE_DIR/pallets/actors/README.md"
         "$TEMPLATE_DIR/pallets/actors/docs/specification.en.md"
@@ -1024,8 +1024,8 @@ main() {
         "${terminology_surfaces[@]}"
     reject_pattern 'BLDR_BUCKET_A_ACTORS_ID|BLDR Bucket A|BLDR `Bucket A`|bldr_bucket_a|AnchorBucketState|anchor_bucket_state' \
         "Retired BLDR bucket-qualified anchor identity reintroduced" \
-        "$TEMPLATE_DIR/primitives" "$TEMPLATE_DIR/runtime/src" "$PROJECT_ROOT/docs" \
-        "$PROJECT_ROOT/simulator" "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/wiki"
+        "$TEMPLATE_DIR/primitives" "$TEMPLATE_DIR/runtime/src" "$PROJECT_ROOT/docs/deos" \
+        "$PROJECT_ROOT/simulators/tmctol" "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/wiki"
     reject_pattern_except "$plural_preconditions_pattern" "$plural_detector_exception_pattern" \
         "Plural Preconditions terminology reintroduced where singular Precondition owns the optional DNF" \
         "${required_family_surfaces[@]}"
@@ -1036,27 +1036,27 @@ main() {
         "Parallel current SecurityEpoch, NativeSecurityMode, or Fee Sink terminology reintroduced" \
         "$TEMPLATE_DIR/pallets/staking/docs" "$TEMPLATE_DIR/pallets/staking/README.md" \
         "$PROJECT_ROOT/web-client/docs" "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/wiki"
-    require_anchor '^### Actor Contract$' "$PROJECT_ROOT/wiki/glossary/core-terms.en.md" \
+    require_anchor '^### Actor Contract$' "$PROJECT_ROOT/wiki/deos/glossary/core-terms.en.md" \
         "Generated wiki glossary lacks canonical Actor Contract"
-    require_anchor '^### Step$' "$PROJECT_ROOT/wiki/glossary/core-terms.en.md" \
+    require_anchor '^### Step$' "$PROJECT_ROOT/wiki/deos/glossary/core-terms.en.md" \
         "Generated wiki glossary lacks canonical Step"
-    require_anchor '^### Precondition$' "$PROJECT_ROOT/wiki/glossary/core-terms.en.md" \
+    require_anchor '^### Precondition$' "$PROJECT_ROOT/wiki/deos/glossary/core-terms.en.md" \
         "Generated wiki glossary lacks canonical Precondition"
-    require_anchor '^### Predicate$' "$PROJECT_ROOT/wiki/glossary/core-terms.en.md" \
+    require_anchor '^### Predicate$' "$PROJECT_ROOT/wiki/deos/glossary/core-terms.en.md" \
         "Generated wiki glossary lacks canonical Predicate"
-    require_anchor '^### `SecurityEpoch`$' "$PROJECT_ROOT/wiki/glossary/core-terms.en.md" \
+    require_anchor '^### `SecurityEpoch`$' "$PROJECT_ROOT/wiki/deos/glossary/core-terms.en.md" \
         "Generated wiki glossary lacks canonical SecurityEpoch"
-    require_anchor '^### `NativeSecurityMode`$' "$PROJECT_ROOT/wiki/glossary/core-terms.en.md" \
+    require_anchor '^### `NativeSecurityMode`$' "$PROJECT_ROOT/wiki/deos/glossary/core-terms.en.md" \
         "Generated wiki glossary lacks canonical NativeSecurityMode"
-    require_anchor '^### `FailureClass`$' "$PROJECT_ROOT/wiki/glossary/core-terms.en.md" \
+    require_anchor '^### `FailureClass`$' "$PROJECT_ROOT/wiki/deos/glossary/core-terms.en.md" \
         "Generated wiki glossary lacks canonical FailureClass"
-    require_anchor '^### `RetryDisposition`$' "$PROJECT_ROOT/wiki/glossary/core-terms.en.md" \
+    require_anchor '^### `RetryDisposition`$' "$PROJECT_ROOT/wiki/deos/glossary/core-terms.en.md" \
         "Generated wiki glossary lacks canonical RetryDisposition"
-    require_anchor '^### Fee Sink$' "$PROJECT_ROOT/wiki/glossary/core-terms.en.md" \
+    require_anchor '^### Fee Sink$' "$PROJECT_ROOT/wiki/deos/glossary/core-terms.en.md" \
         "Generated wiki glossary lacks canonical Fee Sink"
-    require_anchor '"Actor Contract": "actor-system"' "$PROJECT_ROOT/wiki/_meta/aliases.json" \
+    require_anchor '"Actor Contract": "actor-system"' "$PROJECT_ROOT/wiki/deos/_meta/aliases.json" \
         "Generated wiki alias metadata lacks canonical Actor Contract navigation"
-    require_anchor '"SecurityEpoch": "staking"' "$PROJECT_ROOT/wiki/_meta/aliases.json" \
+    require_anchor '"SecurityEpoch": "staking"' "$PROJECT_ROOT/wiki/deos/_meta/aliases.json" \
         "Generated wiki alias metadata lacks canonical SecurityEpoch navigation"
     reject_pattern '<!-- (?:BEGIN|END) MANUAL -->' \
         "Manual semantic overlay reintroduced into the generated wiki" "$PROJECT_ROOT/wiki"

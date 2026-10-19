@@ -1,0 +1,78 @@
+---
+type: concept
+title: Read-Model Split
+description: DEOS classifies user-facing data as either bounded on-chain canonical projection or indexed/materialized view. The split exists to avoid both silent indexer dependency and pushing dashboard history into consensus state.
+locale: en
+canonical_page_id: read-model-split
+translation_status: source
+available_locales:
+  - en
+  - ru
+sources:
+  - resource: ../../../docs/deos/read-model.contract.en.md
+  - resource: ../../../docs/deos/core.architecture.en.md
+status: stable
+audience: newcomer
+tags:
+  - concept
+  - data
+  - read-model
+related:
+  - First Steps
+  - DEOS Framework Overview
+  - Governance Domains
+  - Reference Client
+  - Core Terms
+---
+
+# Read-Model Split
+
+## Summary
+
+DEOS uses an explicit two-class read model for product and operator data. Every public datum should be treated as either a bounded on-chain canonical projection or an indexed/materialized view.
+
+This is an architectural rule, not just a frontend wording preference.
+
+## The Two Classes
+
+### On-Chain Canonical Projection
+
+Use this class when the data is part of the live protocol contract, needs to be consumed directly by clients, and can stay bounded in storage and servicing cost.
+
+Examples include active governance state, live balances, current pool reserves, and the current sparse Actors Continuation for a suspended actor. Its cursor, attempt, frozen suffix inputs, and cumulative outcomes remain bounded facts needed for live recovery. The read-only `ActorEligibilityApi::actor_eligibility` projection belongs to the same class: current readiness, the scheduler-owned phase, and the next eligible block at one finalized block, so clients do not reimplement cadence, cooldown, window, backoff, breaker, or latch arithmetic.
+
+### Indexed or Materialized View
+
+Use this class when the data is archival, historical, search-heavy, analytical, or otherwise unbounded.
+
+Examples include full proposal archives, long-range chart history, trading dashboards, wallet-performance analytics, and unbounded Actors attempt timelines reconstructed from `(actor_id, cycle_nonce, attempt)` events.
+
+## Why the Split Exists
+
+The docs reject two failure modes:
+
+- `Silent indexer dependency`, where the product claims to be chain-native but actually depends on off-chain infrastructure for core UX
+- `Consensus-state dashboard creep`, where unbounded history or analytics are pushed into chain state just to avoid external tooling
+
+## Product Honesty Rule
+
+If a user-facing screen depends on materialized data, that dependency should be explicit. The product should not present it as if it were indistinguishable from bounded protocol truth.
+
+In the browser, DEOS also tracks a second realization axis: whether a value is read directly, cached for the session, derived inside the session, or provided by an external materialized service. That browser axis does not replace the canonical/materialized split; it explains how the client currently realizes the datum.
+
+## Why This Matters for New Work
+
+When adding a new query surface, the first question is not only “what data does the UI want?” A better question is:
+
+- Should this become a bounded on-chain projection?
+- Or should it become an external materialized view?
+
+That decision protects both protocol integrity and product honesty.
+
+## Related
+
+- [First Steps](../getting-started/first-steps.en.md)
+- [DEOS Framework Overview](../overview/deos-framework.en.md)
+- [Governance Domains](governance-domains.en.md)
+- [Reference Client](../overview/reference-client.en.md)
+- [Core Terms](../glossary/core-terms.en.md)

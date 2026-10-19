@@ -261,7 +261,9 @@ Current rules:
 
 ## 9. Generated Wiki Boundary
 
-`WikiWidget` renders generated repo-local wiki markdown from `/wiki`.
+The accepted successor boundary is the [Wiki Publication and Embedding Contract](../../docs/deos/wiki-publication.contract.en.md): one independently deployable DEOS EN/RU website, with optional future embedding restricted to an explicitly configured trusted-origin iframe and tiling lifecycle. No downstream brand or production origin is selected here. Site navigation, rendering, localization, search, layer filters and graph state must not be duplicated in the client.
+
+The current implementation remains the legacy direct renderer: `WikiWidget` renders generated repo-local wiki markdown from `/wiki/deos`. Its imports and loader are scoped to that base plane during renderer retirement; this path binding adds no layer-selection or second-site behavior. Standalone MVP evidence belongs to the Skill-owned website; no iframe acceptance is claimed. The following describes that existing code until the replacement is verified and unused renderer owners are removed; it is not an instruction to extend it.
 
 This content is an isolated strict OKF v0.2 bundle and is treated as trusted reviewed repository content, not user input. Its reserved root `index.md` declares the bundle but remains outside localized navigation and graph nodes. The independent Wiki Sync Skill owns validation before generated output is retained; the client does not invoke or depend on Skill internals.
 
@@ -272,6 +274,8 @@ The widget consumes generated metadata:
 - `_meta/graph.json` for related-page navigation;
 - `_meta/state.json` for explicit status and provenance;
 - `_meta/locales.json` for locale/page discovery.
+
+The optional Skill-owned mdBook compiler currently reuses the client's pure relation-vocabulary contract at build time. The formatter imports no Skill code and initializes no client runtime for that consumer; preserve or relocate its vocabulary before renderer retirement. Project/client build and CI must not invoke the Skill's website pipeline.
 
 The wiki reader keeps established facts and Wiki-to-Wiki navigation primary. Source-document provenance remains non-rendered metadata for validation, not a source-path panel or article navigation into repository documentation. Concrete non-document resources may remain linked.
 

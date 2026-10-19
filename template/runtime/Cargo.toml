@@ -20,11 +20,13 @@ docify = { workspace = true }
 substrate-wasm-builder = { optional = true, workspace = true, default-features = true }
 
 [dev-dependencies]
+cpu-time = "=1.0.0"
 cumulus-primitives-parachain-inherent = "=0.27.0"
 cumulus-primitives-proof-size-hostfunction = "=0.21.0"
 cumulus-test-relay-sproof-builder = "=0.28.0"
 sc-executor = "=0.51.0"
 sc-block-builder = "=0.52.0"
+sc-client-db = { version = "=0.55.0", default-features = false }
 
 [dependencies]
 cid.workspace = true
@@ -103,6 +105,9 @@ std = [
   "serde_json/std",
   "substrate-wasm-builder",
 ]
+
+# Optional fixture authority; plain runtime-benchmarks retains the ordinary provider.
+benchmark-authority-scaffolding = ["runtime-benchmarks"]
 
 runtime-benchmarks = [
   "cumulus-pallet-parachain-system/runtime-benchmarks",

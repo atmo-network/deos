@@ -718,6 +718,7 @@ fn proposal_submit_resolve_and_reject_follow_active_lifecycle() {
     assert_ok!(submit_test_proposal(7, 101, DEFAULT_PROPOSER));
     assert_eq!(Governance::active_proposal_ids(7).into_inner(), vec![101]);
     assert_ok!(Governance::reject_proposal(RuntimeOrigin::root(), 7, 101));
+    assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 101));
     assert!(!ActiveProposals::<Test>::contains_key(7, 101));
     assert!(Governance::active_proposal_ids(7).is_empty());
     System::assert_last_event(RuntimeEvent::Governance(Event::ProposalRejected {
@@ -2167,6 +2168,147 @@ fn executor_failure_rolls_back_its_effect_but_commits_failure_and_cleanup() {
       1
     );
     assert!(crate::PendingEnactments::<Test>::get().is_empty());
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
+  });
+}
+
+#[test]
+fn terminal_results_release_pending_authority_before_history_cleanup() {
+  for delay in [0, 2] {
+    for (kind, preimage, success) in [
+      (ProposalPayloadKind::Intent, false, true),
+      (ProposalPayloadKind::L2SignalToL1, false, true),
+      (ProposalPayloadKind::L1RootAction, false, true),
+      (ProposalPayloadKind::L1RootAction, true, false),
+      (ProposalPayloadKind::L1RootAction, true, true),
+    ] {
+      new_test_ext().execute_with(|| {
+        ProposalEnactmentDelay::set(delay);
+        let hash = H256::repeat_byte(75);
+        set_payload_executor_enabled(true);
+        set_payload_preimage_state(hash, preimage, false);
+        set_payload_execution_result(hash, success);
+        approve_pending_payload(100, kind, hash);
+        let terminal_epoch = 1 + delay;
+        if delay != 0 {
+          assert_eq!(
+            ProposalPendingEnactmentAt::<Test>::get(7, 100),
+            Some(terminal_epoch)
+          );
+          assert_eq!(crate::PendingEnactments::<Test>::get().len(), 1);
+          assert!(Governance::finalized_proposal_outcome_expiry_bucket(4).is_empty());
+          #[cfg(feature = "try-runtime")]
+          assert_ok!(Governance::do_try_state());
+          System::set_block_number(terminal_epoch);
+          Governance::on_initialize(terminal_epoch);
+        }
+        let enactment = match kind {
+          ProposalPayloadKind::Intent | ProposalPayloadKind::L2SignalToL1 => {
+            crate::ProposalEnactmentOutcome::AdvisoryFinalized {
+              epoch: terminal_epoch,
+            }
+          }
+          _ if !preimage || !success => crate::ProposalEnactmentOutcome::ExecutionFailed {
+            epoch: terminal_epoch,
+          },
+          _ => crate::ProposalEnactmentOutcome::Enacted {
+            epoch: terminal_epoch,
+          },
+        };
+        assert_eq!(
+          Governance::finalized_proposal_outcome(7, 100),
+          Some(approved_outcome(1, 1, enactment))
+        );
+        assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
+        assert!(crate::PendingEnactments::<Test>::get().is_empty());
+        assert_eq!(crate::PendingEnactmentCursor::<Test>::get(), 0);
+        assert!(ProposalMetadataByItem::<Test>::contains_key(7, 100));
+        assert_eq!(
+          Governance::finalized_proposal_ids(7).into_inner(),
+          vec![100]
+        );
+        let retention: u32 =
+          <Test as crate::Config>::FinalizedProposalOutcomeRetentionEpochs::get();
+        let expiry = terminal_epoch + u64::from(retention);
+        assert_eq!(
+          Governance::finalized_proposal_outcome_expiry_bucket(expiry).len(),
+          1
+        );
+        #[cfg(feature = "try-runtime")]
+        assert_ok!(Governance::do_try_state());
+        System::set_block_number(expiry);
+        service_governance_through(expiry);
+        assert!(!FinalizedProposals::<Test>::contains_key(7, 100));
+        assert!(!ProposalMetadataByItem::<Test>::contains_key(7, 100));
+        assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
+        assert!(Governance::finalized_proposal_ids(7).is_empty());
+        #[cfg(feature = "try-runtime")]
+        assert_ok!(Governance::do_try_state());
+      });
+    }
+  }
+}
+
+#[test]
+fn late_bookkeeping_refusal_restores_pending_authority_and_all_effects() {
+  new_test_ext().execute_with(|| {
+    ProposalEnactmentDelay::set(2);
+    let hash = H256::repeat_byte(76);
+    set_payload_preimage_state(hash, true, false);
+    set_payload_executor_enabled(true);
+    approve_pending_payload(100, ProposalPayloadKind::L1RootAction, hash);
+    System::set_block_number(3);
+    set_payload_execution_remove_finalization(true);
+    assert_noop!(
+      Governance::maybe_execute_proposal_payload(7, 100, 1, 1, 3),
+      Error::<Test>::FinalizedProposalMissing
+    );
+    assert_eq!(payload_execution_calls(), 1);
+    assert_eq!(ProposalPendingEnactmentAt::<Test>::get(7, 100), Some(3));
+    assert_eq!(crate::PendingEnactments::<Test>::get().len(), 1);
+    assert_eq!(
+      Governance::finalized_proposal_outcome(7, 100),
+      Some(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::NotAttempted
+      ))
+    );
+    assert!(Governance::finalized_proposal_outcome_expiry_bucket(6).is_empty());
+    assert_eq!(
+      polkadot_sdk::frame_support::storage::unhashed::get::<H256>(
+        b"mock-governance-payload-effect"
+      ),
+      None
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
+    set_payload_execution_remove_finalization(false);
+    System::set_block_number(4);
+    Governance::on_initialize(4);
+    assert_eq!(payload_execution_calls(), 2);
+    assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
+    assert!(crate::PendingEnactments::<Test>::get().is_empty());
+    assert_eq!(
+      Governance::finalized_proposal_outcome(7, 100),
+      Some(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::Enacted { epoch: 4 }
+      ))
+    );
+    assert!(Governance::finalized_proposal_outcome_expiry_bucket(6).is_empty());
+    assert_eq!(
+      Governance::finalized_proposal_outcome_expiry_bucket(7).len(),
+      1
+    );
+    assert_eq!(
+      polkadot_sdk::frame_support::storage::unhashed::get::<H256>(
+        b"mock-governance-payload-effect"
+      ),
+      Some(hash)
+    );
     #[cfg(feature = "try-runtime")]
     assert_ok!(Governance::do_try_state());
   });
@@ -4480,6 +4622,7 @@ fn immediate_veto_cancels_proposal_without_reward_credit() {
       Governance::finalized_proposal_outcome(7, 100),
       Some(veto_cancelled_outcome(1, 51))
     );
+    assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
     assert_eq!(
       Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_inner(0)

@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Apply this contract to every Russian concept declared by `wiki/_meta/locales.json`, Russian strings in shared `_meta` manifests, and Russian WikiWidget copy.
+- Apply this contract to every Russian concept declared by `wiki/deos/_meta/locales.json`, Russian strings in shared `_meta` manifests, and Russian WikiWidget copy.
 - Preserve semantic claims, uncertainty, provenance, canonical page IDs, locale mirrors, links, graph topology, and frontend behavior.
 - Preserve exact project and code identities when translation would make lookup or protocol meaning less precise: DEOS, TMCTOL, named DEOS subsystems, Actors, Actor roles, code symbols, asset symbols, protocol types, Polkadot SDK, XCM, FRAME, SCALE, XYK, LP, UI Kit, and Domain DAG.
 

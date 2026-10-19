@@ -51,7 +51,7 @@ check_prerequisites() {
     }
     if (( ${#FILES[@]} == 0 )); then
         mapfile -t FILES < <({
-            find "$PROJECT_ROOT/docs" -maxdepth 1 -type f -name '*.architecture.en.md' -print
+            find "$PROJECT_ROOT/docs/deos" -maxdepth 1 -type f -name '*.architecture.en.md' -print
             find "$PROJECT_ROOT/template/pallets" -path '*/docs/architecture.en.md' -type f -print
         } | sort)
     fi

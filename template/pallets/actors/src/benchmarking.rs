@@ -109,6 +109,12 @@ mod benches {
     due: BlockNumberFor<T>,
     sovereign_id: Option<SystemSovereignId>,
   ) -> ActorId {
+    let now = frame_system::Pallet::<T>::block_number();
+    let next = now
+      .checked_add(&One::one())
+      .expect("guard needs Block space");
+    assert!(due >= next, "guard needs a future Block key");
+    let expiry_guard = due == next;
     let owner: T::AccountId = account("deadline-maintenance-guard", seed, 0);
     let mut contract = system_contract::<T>(
       Schedule {
@@ -118,9 +124,19 @@ mod benches {
       make_inert_contract_steps::<T>(),
     )
     .expect("guard Contract exists");
-    contract.window = Some(ScheduleWindow {
-      start: due,
-      end: due.saturating_add(T::MinWindowLength::get()),
+    contract.window = Some(if expiry_guard {
+      // B+1 readiness belongs to Service; an unlatched window ending now expires at due.
+      ScheduleWindow {
+        start: now
+          .checked_sub(&T::MinWindowLength::get().max(One::one()))
+          .expect("next-block guard needs a complete expiry window"),
+        end: now,
+      }
+    } else {
+      ScheduleWindow {
+        start: due,
+        end: due.saturating_add(T::MinWindowLength::get()),
+      }
     });
     if let Some(sovereign_id) = sovereign_id {
       Pallet::<T>::create_system_actor_at_sovereign_id(
@@ -140,17 +156,18 @@ mod benches {
     }
     .expect("future-window guard is admitted");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
-      .expect("guard readiness is published");
+    if !expiry_guard {
+      Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
+        .expect("guard readiness is published");
+    }
     let actor = Pallet::<T>::load_actor_ref(actor_id).expect("guard has generation authority");
-    // Public readiness already places the paid latch at its future window. A second
-    // Service-to-Deadline transfer would fabricate a Service source that no longer exists.
+    // Both roles arrive through public publication, never a fabricated Service transfer.
     let handle = DeadlineHandles::<T>::get(actor_id).expect("guard owns canonical Deadline");
     assert_eq!(handle.actor, actor);
     assert_eq!(handle.key, WakeupKey::Block(due));
     let (record, process) = Pallet::<T>::load_canonical_actor_semantic_state(actor)
-      .expect("public future-window readiness has coherent authority");
-    assert!(record.hot.pending_signal);
+      .expect("public window guard has coherent authority");
+    assert_eq!(record.hot.pending_signal, !expiry_guard);
     assert_eq!(process.status, ProcessStatus::Serving);
     assert_eq!(
       process.residence,
@@ -1265,6 +1282,13 @@ mod benches {
   fn prepare_paid_trigger<T: Config>(
     family: TriggerFamily,
   ) -> Result<PaidTriggerFixture<T>, BenchmarkError> {
+    prepare_paid_trigger_for_class::<T>(family, ActorType::User)
+  }
+
+  fn prepare_paid_trigger_for_class<T: Config>(
+    family: TriggerFamily,
+    actor_type: ActorType,
+  ) -> Result<PaidTriggerFixture<T>, BenchmarkError> {
     let (owner, asset, trigger, funding) = large_header_fields::<T>();
     let (owner, asset, source, trigger, weight) = match family {
       TriggerFamily::Manual => {
@@ -1309,7 +1333,9 @@ mod benches {
     let trigger_width = trigger.encoded_size();
     ensure_creation_balance::<T>(&owner);
     let steps = maximum_temporal_control_steps::<T>(asset)?;
-    prefund_active_user_creation::<T>(&owner, &steps);
+    if actor_type == ActorType::User {
+      prefund_active_user_creation::<T>(&owner, &steps);
+    }
     let mut contract = user_contract::<T>(
       Schedule {
         trigger,
@@ -1317,7 +1343,7 @@ mod benches {
       },
       steps,
     )
-    .expect("maximum paid User Trigger Contract exists");
+    .expect("maximum Trigger Contract exists");
     contract.funding = funding;
     contract.parked_balance_activation = Some(maximum_parked_balance_activation::<T>(&owner)?);
     let start = frame_system::Pallet::<T>::block_number();
@@ -1325,11 +1351,19 @@ mod benches {
       start,
       end: start.saturating_add(T::MinWindowLength::get()),
     });
-    Pallet::<T>::create_user_actor(
-      RawOrigin::Signed(owner.clone()).into(),
-      Mutability::Mutable,
-      Some(contract),
-    )?;
+    match actor_type {
+      ActorType::User => Pallet::<T>::create_user_actor(
+        RawOrigin::Signed(owner.clone()).into(),
+        Mutability::Mutable,
+        Some(contract),
+      )?,
+      ActorType::System => Pallet::<T>::create_system_actor(
+        RawOrigin::Root.into(),
+        owner.clone(),
+        Mutability::Mutable,
+        Some(contract),
+      )?,
+    }
     let actor_id = NextActorId::<T>::get() - 1;
     assert_max_contract_geometry::<T>(actor_id);
     if family == TriggerFamily::AddressEvent {
@@ -1360,7 +1394,7 @@ mod benches {
       .unwrap()
       .sovereign_account;
     let native = T::FeeNativeAssetId::get();
-    let fee = Pallet::<T>::trigger_fee_for_weight(ActorType::User, family, weight).trigger_fee;
+    let fee = Pallet::<T>::trigger_fee_for_weight(actor_type, family, weight).trigger_fee;
     Ok(PaidTriggerFixture {
       actor_id,
       owner,
@@ -1528,6 +1562,30 @@ mod benches {
         .expect("minimal Pipeline-admission apoptosis must succeed");
     }
     assert!(!Pallet::<T>::active_actor_exists(actor_id));
+  }
+
+  fn assert_protocol_idle_without_residence<T: Config>(actor_id: ActorId) {
+    let state = Pallet::<T>::active_actor_state(actor_id).expect("passive Actor remains Active");
+    assert_eq!(state.hot.lifecycle, ActiveLifecycle::Active);
+    assert_eq!(state.hot.cycle_state, CycleState::Idle);
+    assert!(!state.hot.pending_signal);
+    assert!(state.run_state.is_none());
+    assert!(state.contract.window.is_none());
+    assert!(state.contract.parked_balance_activation.is_none());
+    let process =
+      ActorProcesses::<T>::get(actor_id).expect("passive Actor keeps process authority");
+    assert!(process.residence.is_none());
+    assert!(matches!(
+      process.status,
+      ProcessStatus::Disabled(ProcessDisablement {
+        cause: ProcessDisableCause::Protocol,
+        revival_authority: ProcessRevivalAuthority::Protocol,
+        basis: SuspendedProcessBasis::Idle,
+      })
+    ));
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
+    assert!(!ParkedBalanceEpisodes::<T>::contains_key(actor_id));
   }
 
   struct CloseDestructionFixture<T: Config> {
@@ -1846,6 +1904,8 @@ mod benches {
     Temporal { one_shot: bool },
     AddressEvent,
     AddressEventCycleBalance,
+    AddressEventLaterFragment,
+    AddressEventLaterFragmentRetry,
     AddressEventDeadlinePage(CloseDeadlinePageGeometry),
   }
 
@@ -1894,12 +1954,29 @@ mod benches {
     BenchmarkError,
   > {
     let one_shot = matches!(header, PrefixCloseHeader::Temporal { one_shot: true });
+    let later_fragment = matches!(
+      header,
+      PrefixCloseHeader::AddressEventLaterFragment
+        | PrefixCloseHeader::AddressEventLaterFragmentRetry
+    );
+    let later_retry = matches!(header, PrefixCloseHeader::AddressEventLaterFragmentRetry);
+    if later_fragment {
+      assert_eq!(phase, CycleState::Running);
+      assert!(maximum_prefix);
+      if T::MaxContractSteps::get() < 9 {
+        return Err(BenchmarkError::Stop(
+          "later fragment needs a complete second tail",
+        ));
+      }
+    }
     // Every maximum-prefix shape must retain the distribution field in the Run it closes.
     let capture_balance = maximum_prefix;
     let address_event = matches!(
       header,
       PrefixCloseHeader::AddressEvent
         | PrefixCloseHeader::AddressEventCycleBalance
+        | PrefixCloseHeader::AddressEventLaterFragment
+        | PrefixCloseHeader::AddressEventLaterFragmentRetry
         | PrefixCloseHeader::AddressEventDeadlinePage(_)
     );
     let deadline_page = match header {
@@ -2041,11 +2118,62 @@ mod benches {
     for step in steps.iter_mut().skip(2) {
       *step = wide_tail.clone();
     }
-    retain_admitted_contract_geometry::<T>(actor_type, &mut steps, &[0, 1])?;
-    if steps.iter().skip(2).any(|step| step != &wide_tail) {
-      return Err(BenchmarkError::Stop(
-        "temporal Close must retain every unvisited wide Step",
-      ));
+    if later_fragment {
+      // These authored prefix visits advance on either Task result; the later chunk stays wide.
+      for step in &mut steps[2..5] {
+        step.on_error = StepErrorPolicy::ContinueNextStep;
+      }
+    }
+    if later_retry {
+      // The optional consumer fixture supplies a fully wide pair in the reference host.
+      // Other hosts may use their ordinary LP fixture only when all three IDs are wide.
+      let (lp_asset, asset_a, asset_b, _) =
+        match T::BenchmarkHelper::setup_remove_liquidity_consumer_outputs(&expected_sovereign)? {
+          Some(fixture) => fixture,
+          None => T::BenchmarkHelper::setup_remove_liquidity(&expected_sovereign)?,
+        };
+      // A host fixture may capture this same asset in Step 0; do not spend its whole prefund.
+      let lp_amount = T::AssetOps::minimum_balance(lp_asset).max(One::one());
+      let mut step = wide_tail.clone();
+      step.precondition = steps[1].precondition.clone();
+      step.task = ActorTask::RemoveLiquidity {
+        lp_asset,
+        asset_a,
+        asset_b,
+        lp_amount: AmountResolution::Fixed(lp_amount),
+        min_amount_a: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value(),
+        min_amount_b: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value(),
+      };
+      if step.task.encoded_size() != TaskOf::<T>::max_encoded_len()
+        || step.encoded_size() != wide_tail.encoded_size()
+      {
+        return Err(BenchmarkError::Stop(
+          "host cannot supply a maximum-width LP retry",
+        ));
+      }
+      assert_eq!(
+        T::LiquidityOps::lp_assets(lp_asset),
+        Some((asset_a, asset_b))
+      );
+      assert!(T::AssetOps::balance(&expected_sovereign, lp_asset) >= lp_amount);
+      steps[5] = step;
+    }
+    let protected: &[u32] = if later_retry {
+      &[0, 1, 5, 6, 7, 8]
+    } else {
+      &[0, 1]
+    };
+    retain_admitted_contract_geometry::<T>(actor_type, &mut steps, protected)?;
+    let unvisited_start = if later_fragment { 5 } else { 2 };
+    for (index, step) in steps.iter().enumerate().skip(unvisited_start) {
+      if later_retry && index == 5 {
+        assert_eq!(step.task.encoded_size(), TaskOf::<T>::max_encoded_len());
+        assert_eq!(step.encoded_size(), wide_tail.encoded_size());
+      } else if step != &wide_tail {
+        return Err(BenchmarkError::Stop(
+          "temporal Close must retain every unvisited wide Step",
+        ));
+      }
     }
     let (trigger_family, trigger_weight) = if address_event {
       (
@@ -2255,17 +2383,8 @@ mod benches {
       assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
     }
     if one_shot && actor_type == ActorType::User {
-      assert_eq!(
-        ActorProcesses::<T>::get(actor_id).unwrap().residence,
-        Some(ProcessResidence::Service(ServiceResidenceKind::Live))
-      );
+      assert_protocol_idle_without_residence::<T>(actor_id);
       assert!(!TriggerDeadlineHandles::<T>::contains_key(actor_id));
-      assert!(
-        !Pallet::<T>::active_actor_view(actor_id)
-          .unwrap()
-          .lifecycle
-          .is_paused()
-      );
     }
     let record = benchmark_fixture_semantic_record::<T>(actor_id).unwrap();
     assert_eq!(
@@ -2350,7 +2469,9 @@ mod benches {
       let contract = Pallet::<T>::actor_contract(actor_id).unwrap();
       let maximum = wide_tail.encoded_size();
       for (index, step) in contract.steps.iter().enumerate() {
-        let error_gap = if index == 1 && phase == CycleState::Running {
+        let error_gap = if (index == 1 && phase == CycleState::Running)
+          || (later_fragment && (2..5).contains(&index))
+        {
           wide_tail.on_error.encoded_size() - StepErrorPolicy::ContinueNextStep.encoded_size()
         } else {
           0
@@ -4667,6 +4788,79 @@ mod benches {
 
   #[cfg(feature = "std")]
   impl<T: Config> Pallet<T> {
+    /// Reuse the generated c0 Deadline boundary with caller-owned native recording, not the SDK runner.
+    pub fn verify_prepass_deadline_c0_benchmark(
+      recording: &mut impl polkadot_sdk::frame_benchmarking::Recording,
+      verify: bool,
+    ) -> Result<(), BenchmarkError> {
+      use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, BenchmarkingSetup};
+      <mandatory_prepass_deadline_control as BenchmarkingSetup<T>>::instance(
+        &mandatory_prepass_deadline_control,
+        recording,
+        &[(BenchmarkParameter::c, 0)],
+        verify,
+      )
+    }
+
+    /// Native matched cuts only. The facade owns the single FRAME layer; callbacks only prepare
+    /// recording and snapshot the prefix. Owned checks survive the preparing host, never its Ext.
+    pub fn prepare_prepass_deadline_witness() -> Result<
+      (
+        ActorId,
+        impl Fn(bool, &mut dyn FnMut(), &mut dyn FnMut()) -> Result<Vec<u8>, DispatchError>,
+        impl Fn(),
+      ),
+      BenchmarkError,
+    > {
+      use std::{cell::RefCell, rc::Rc};
+      let fixture = prepare_prepass_deadline_source::<T>(false)?;
+      let actor_id = fixture.actor.actor_id;
+      let checks = PrepassDeadlineChecks::<T>::capture(fixture);
+      let outcome = Rc::new(RefCell::new(None));
+      let execution_outcome = outcome.clone();
+      let now = checks.fixture.now;
+      Ok((
+        actor_id,
+        move |parent: bool, ready: &mut dyn FnMut(), prefix: &mut dyn FnMut()| {
+          assert!(execution_outcome.borrow().is_none());
+          let execute = |mut entry: PrepassEntry<BlockNumberFor<T>>| {
+            let before = entry.state;
+            let actual = Self::service_prepass_deadlines(
+              now,
+              entry.now_tick,
+              &mut entry.state,
+              entry.budget,
+              entry.control_envelopes[1],
+            )
+            .map_err(DispatchError::from)?;
+            Ok::<_, DispatchError>((before, entry.state, actual, entry.control_envelopes[1]))
+          };
+          let settled = if parent {
+            ready();
+            polkadot_sdk::frame_support::storage::with_storage_layer(|| {
+              let entry = Self::begin_mandatory_prepass(now).map_err(DispatchError::from)?;
+              assert!(!GlobalCircuitBreaker::<T>::get());
+              prefix();
+              execute(entry)
+            })?
+          } else {
+            let entry = Self::begin_mandatory_prepass(now).map_err(DispatchError::from)?;
+            ready();
+            polkadot_sdk::frame_support::storage::with_storage_layer(|| execute(entry))?
+          };
+          // Encoding is local only. No semantic storage reads precede the caller's snapshots.
+          let encoded = settled.encode();
+          *execution_outcome.borrow_mut() = Some(settled);
+          Ok(encoded)
+        },
+        move || {
+          let (before, state, actual, envelope) =
+            outcome.borrow_mut().take().expect("one successful cut");
+          checks.verify(before, state, actual, envelope);
+        },
+      ))
+    }
+
     /// Prepare the parked handoff source without exposing fixture internals or owning the host DB.
     /// Callers commit setup, record Close/root, then verify; this is not a production price API.
     pub fn prepare_parked_handoff_close_witness() -> Result<
@@ -5244,6 +5438,131 @@ mod benches {
     Ok(state)
   }
 
+  // Inclusive frozen-success control, not a finalizer-only owner or a production coefficient.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn block_resource_idle_finalize_control() -> Result<(), BenchmarkError> {
+    if GlobalCircuitBreaker::<T>::get()
+      || !Pallet::<T>::current_scheduler_tick().is_ok_and(|tick| tick <= 2)
+    {
+      return Err(BenchmarkError::Stop(
+        "host must be unfrozen and not require Tick rewind",
+      ));
+    }
+    // The helper supplies synthetic benchmark context, not authenticated relay history.
+    let mut expected = prepare_breaker_resource_state::<T>()?;
+    let origin = T::GlobalBreakerOrigin::try_successful_origin()
+      .map_err(|_| BenchmarkError::Stop("host must provide breaker authority"))?;
+    Pallet::<T>::set_global_circuit_breaker(origin, true)?;
+    expected.halt_optional_actor_work();
+    let state = CurrentBlockResourceState::<T>::get().expect("Prepass state remains present");
+    assert_eq!(state, expected);
+    assert!(GlobalCircuitBreaker::<T>::get());
+    assert!(state.optional_actor_work_halted());
+    assert_eq!(state.outstanding_reservations(), 0);
+    let now = frame_system::Pallet::<T>::block_number();
+    let housekeeping = T::WeightInfo::scheduler_on_idle_base()
+      .checked_add(&T::WeightInfo::block_resource_finalize())
+      .ok_or(BenchmarkError::Stop("fixed idle declaration overflows"))?;
+    let reserve = T::ActorOnIdleReserve::get();
+    let budget = state.budget().expect("Prepass freezes a valid budget");
+    let usage = state.usage();
+    let control_remaining = budget
+      .limits()
+      .actor_control()
+      .checked_sub(&usage.actor_control_used())
+      .ok_or(BenchmarkError::Stop("frozen Control usage exceeds limit"))?;
+    if housekeeping == Weight::zero()
+      || reserve == Weight::MAX
+      || !housekeeping.all_lte(reserve)
+      || !housekeeping.all_lte(control_remaining)
+    {
+      return Err(BenchmarkError::Stop(
+        "finite idle reserve and Control must admit fixed work",
+      ));
+    }
+    let control_after = usage
+      .actor_control_used()
+      .checked_add(&housekeeping)
+      .ok_or(BenchmarkError::Stop("Control settlement overflows"))?;
+    if FinalizedBlockResourceTelemetry::<T>::get()
+      .is_some_and(|snapshot| snapshot.block_number() == now)
+    {
+      return Err(BenchmarkError::Stop(
+        "telemetry must not already cover this block",
+      ));
+    }
+    let events = frame_system::Pallet::<T>::events();
+    let starvation = IdleStarvationState::<T>::get();
+    let service_header = ServiceHeader::<T>::get();
+    let service_nodes = ServiceNodes::<T>::iter().collect::<Vec<_>>();
+    let deadlines = [
+      close_deadline_index_snapshot::<T>(WakeupClock::Block),
+      close_deadline_index_snapshot::<T>(WakeupClock::Tick),
+    ];
+    let peer_ids = ServiceNodes::<T>::iter_keys()
+      .chain(ActorProcesses::<T>::iter_keys())
+      .collect::<alloc::collections::BTreeSet<_>>();
+    let peer_count = peer_ids.len();
+    // Empty populations are vacuous. Custody coverage is native plus watched assets only.
+    let peers = peer_ids
+      .iter()
+      .map(|id| {
+        (
+          *id,
+          Pallet::<T>::actor_identity(*id),
+          parked_close_peer_snapshot::<T>(*id),
+        )
+      })
+      .collect::<Vec<_>>();
+    let returned;
+    #[block]
+    {
+      returned = <Pallet<T> as Hooks<BlockNumberFor<T>>>::on_idle(now, reserve);
+      <Pallet<T> as Hooks<BlockNumberFor<T>>>::on_finalize(now);
+    }
+    assert_eq!(returned, housekeeping);
+    assert!(!CurrentBlockResourceState::<T>::exists());
+    let telemetry = FinalizedBlockResourceTelemetry::<T>::get()
+      .expect("literal idle publishes fresh telemetry before finalization");
+    assert_eq!(telemetry.block_number(), now);
+    assert_eq!(telemetry.budget(), budget);
+    assert_eq!(telemetry.fixed_reserved(), budget.fixed_envelope());
+    assert!(telemetry.optional_actor_work_halted());
+    assert_eq!(telemetry.usage().actor_control_used(), control_after);
+    assert_eq!(
+      telemetry.usage().actor_effect_used(),
+      usage.actor_effect_used()
+    );
+    assert_eq!(
+      telemetry.usage().user_dispatch_used(),
+      usage.user_dispatch_used()
+    );
+    assert!(GlobalCircuitBreaker::<T>::get());
+    assert_eq!(frame_system::Pallet::<T>::events(), events);
+    assert_eq!(IdleStarvationState::<T>::get(), starvation);
+    assert_eq!(ServiceHeader::<T>::get(), service_header);
+    assert_eq!(ServiceNodes::<T>::iter().collect::<Vec<_>>(), service_nodes);
+    assert_eq!(
+      close_deadline_index_snapshot::<T>(WakeupClock::Block),
+      deadlines[0]
+    );
+    assert_eq!(
+      close_deadline_index_snapshot::<T>(WakeupClock::Tick),
+      deadlines[1]
+    );
+    let after_ids = ServiceNodes::<T>::iter_keys()
+      .chain(ActorProcesses::<T>::iter_keys())
+      .collect::<alloc::collections::BTreeSet<_>>();
+    assert_eq!(after_ids.len(), peer_count);
+    assert_eq!(after_ids, peer_ids);
+    assert_eq!(peers.len(), peer_count);
+    for (id, identity, snapshot) in peers {
+      assert_eq!(Pallet::<T>::actor_identity(id), identity);
+      assert_eq!(parked_close_peer_snapshot::<T>(id), snapshot);
+    }
+    Ok(())
+  }
+
   // Componentless public setter witness; the categorical diagnostic retains the other states.
   // Dispatch admission and the governance enactment envelope require separate qualification.
   #[benchmark(extra)]
@@ -5472,10 +5791,10 @@ mod benches {
     Ok(())
   }
 
-  // Shared public input for joint successful creation and late-refusal/rollback corners.
-  fn prepare_user_creation_payload<T: Config>(
+  // Shared public Contract input; owner-slot occupancy belongs to the creation caller only.
+  fn prepare_user_creation_contract<T: Config>(
     mutability: Mutability,
-  ) -> Result<(T::AccountId, u8, ActorContractOf<T>), BenchmarkError> {
+  ) -> Result<(T::AccountId, ActorContractOf<T>), BenchmarkError> {
     let (owner, asset, trigger, funding) = large_header_fields::<T>();
     let (_, mut precondition) =
       prepare_max_encoded_step_precondition::<T>(0, benchmark_predicate_capacity::<T>(), false)?;
@@ -5520,6 +5839,13 @@ mod benches {
       parked_balance_activation: None,
       auto_close_at_cycle_nonce: Some(T::MaxAutoCloseNonceHorizon::get()),
     };
+    Ok((owner, contract))
+  }
+
+  fn prepare_user_creation_payload<T: Config>(
+    mutability: Mutability,
+  ) -> Result<(T::AccountId, u8, ActorContractOf<T>), BenchmarkError> {
+    let (owner, contract) = prepare_user_creation_contract::<T>(mutability)?;
     let slot = prefill_reachable_owner_slots::<T>(&owner);
     Ok((owner, slot, contract))
   }
@@ -6618,9 +6944,8 @@ mod benches {
     assert!(found);
   }
 
-  #[benchmark]
-  fn process_dependency_scan_unit() -> Result<(), BenchmarkError> {
-    frame_system::Pallet::<T>::set_block_number(1u32.into());
+  fn prepare_dependency_scan_member<T: Config>()
+  -> Result<(DependencySourceId, ActorId), BenchmarkError> {
     let owner_account: T::AccountId = account("dependency-scan-unit", 0, 0);
     let asset = T::BenchmarkHelper::setup_max_encoded_predicate_assets(&owner_account, 1)?
       .into_iter()
@@ -6680,6 +7005,13 @@ mod benches {
       }
     })
     .map_err(|_| BenchmarkError::Stop("dependency revision publication failed"))?;
+    Ok((source, actor_id))
+  }
+
+  #[benchmark]
+  fn process_dependency_scan_unit() -> Result<(), BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let (source, actor_id) = prepare_dependency_scan_member::<T>()?;
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
 
     #[block]
@@ -6846,6 +7178,7 @@ mod benches {
         "benchmark Actor left Park prematurely",
       ));
     };
+    let now = frame_system::Pallet::<T>::block_number();
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
 
     #[block]
@@ -6855,7 +7188,7 @@ mod benches {
         expected,
         ServiceResidenceKind::Pending,
         evidence,
-        1u32.into(),
+        now,
         None,
       )
       .expect("qualified current balance wakes benchmark Actor");
@@ -6940,7 +7273,13 @@ mod benches {
       "parked balance requires an active Contract",
     ))?;
     contract.parked_balance_activation = Some(activation);
-    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    // Immediate review peers need enough Block space for a valid expiry window.
+    let first = T::MinWindowLength::get()
+      .checked_add(&One::one())
+      .ok_or(BenchmarkError::Stop(
+        "parked review needs expiry-window Block space",
+      ))?;
+    frame_system::Pallet::<T>::set_block_number(first);
     Pallet::<T>::update_contract(RawOrigin::Root.into(), actor_id, contract)?;
     let actor = Pallet::<T>::load_actor_ref(actor_id).ok_or(BenchmarkError::Stop(
       "replacement did not retain Actor identity",
@@ -7951,10 +8290,16 @@ mod benches {
   #[benchmark]
   fn process_due_parked_balance_review() -> Result<(), BenchmarkError> {
     let actor = prepare_due_parked_balance_review::<T>("due-balance-review")?;
-    prepare_deadline_removal_neighbors::<T>(actor);
-    prepare_deadline_destination_vacancy::<T>(3u32.into());
-    frame_system::Pallet::<T>::set_block_number(2u32.into());
     let source = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
+    let WakeupKey::Block(now) = source.key else {
+      panic!("parked review uses Block authority")
+    };
+    let next = now.checked_add(&One::one()).ok_or(BenchmarkError::Stop(
+      "parked review needs destination Block space",
+    ))?;
+    prepare_deadline_removal_neighbors::<T>(actor);
+    prepare_deadline_destination_vacancy::<T>(next);
+    frame_system::Pallet::<T>::set_block_number(now);
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
 
     #[block]
@@ -7962,8 +8307,8 @@ mod benches {
       Pallet::<T>::process_next_due_block_dependency_review(
         &mut meter,
         ServiceResidenceKind::Live,
-        2u32.into(),
-        Some(WakeupKey::Block(3u32.into())),
+        now,
+        Some(WakeupKey::Block(next)),
       )
       .expect("unchanged maximum balance plan re-arms benchmark Actor");
     }
@@ -7974,7 +8319,7 @@ mod benches {
     let destination = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
     assert_eq!(
       (destination.key, destination.page, destination.slot),
-      (WakeupKey::Block(3u32.into()), 0, 31)
+      (WakeupKey::Block(next), 0, 31)
     );
     assert_eq!(
       DeadlineHeaders::<T>::get(destination.key).unwrap().count,
@@ -7990,8 +8335,14 @@ mod benches {
   fn process_due_parked_balance_review_deep_index() -> Result<(), BenchmarkError> {
     let actor = prepare_due_parked_balance_review::<T>("due-balance-review-index")?;
     let source = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
-    let keys = populate_canonical_deadline_index::<T>(3u32.into());
-    frame_system::Pallet::<T>::set_block_number(2u32.into());
+    let WakeupKey::Block(now) = source.key else {
+      panic!("parked review uses Block authority")
+    };
+    let next = now.checked_add(&One::one()).ok_or(BenchmarkError::Stop(
+      "parked review needs destination Block space",
+    ))?;
+    let keys = populate_canonical_deadline_index::<T>(next);
+    frame_system::Pallet::<T>::set_block_number(now);
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
 
     #[block]
@@ -7999,8 +8350,8 @@ mod benches {
       Pallet::<T>::process_next_due_block_dependency_review(
         &mut meter,
         ServiceResidenceKind::Live,
-        2u32.into(),
-        Some(WakeupKey::Block(3u32.into())),
+        now,
+        Some(WakeupKey::Block(next)),
       )
       .expect("maximum balance plan replaces the deep-index minimum");
     }
@@ -8008,7 +8359,7 @@ mod benches {
     assert!(ParkedBalanceEpisodes::<T>::contains_key(actor.actor_id));
     assert!(!DeadlineHeaders::<T>::contains_key(source.key));
     let destination = DeadlineHandles::<T>::get(actor.actor_id).unwrap();
-    assert_eq!(destination.key, WakeupKey::Block(3u32.into()));
+    assert_eq!(destination.key, WakeupKey::Block(next));
     assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Block), keys);
     assert_eq!(DeadlineIndexPositions::<T>::get(source.key), None);
     assert_eq!(DeadlineIndexPositions::<T>::get(destination.key), Some(0));
@@ -9567,8 +9918,8 @@ mod benches {
     );
   }
 
-  /// Isolated invocation-receipt owner at maximum encoded field width. No Actor lifecycle,
-  /// Task effect, fee transfer or state-hold work is included in this measurement.
+  /// Invoked receipt envelope: optional failed-result plus Action-fee receipt at maximum width.
+  /// Both actual event calls are priced without lifecycle, Task effect, fee transfer or hold work.
   #[benchmark]
   fn action_invocation_receipt() {
     frame_system::Pallet::<T>::set_block_number(1u32.into());
@@ -9580,10 +9931,25 @@ mod benches {
       actual_effect_weight: Weight::MAX,
       fee,
     };
+    let failed = Event::<T>::StepFailed {
+      actor_id: ActorId::MAX,
+      cycle_nonce: u64::MAX,
+      step_index: u32::MAX,
+      retry_class: crate::RetryClass::Temporary,
+      error: DispatchError::Module(polkadot_sdk::sp_runtime::ModuleError {
+        index: u8::MAX,
+        error: [u8::MAX; 4],
+        message: None,
+      }),
+    };
+    let events_before = frame_system::Pallet::<T>::event_count();
     #[block]
     {
+      Pallet::<T>::deposit_event(failed.clone());
       Pallet::<T>::deposit_action_fee_receipt(ActorId::MAX, u64::MAX, u32::MAX, Weight::MAX, fee);
     }
+    assert_eq!(frame_system::Pallet::<T>::event_count(), events_before + 2);
+    frame_system::Pallet::<T>::assert_has_event(failed.into());
     frame_system::Pallet::<T>::assert_last_event(expected.into());
   }
 
@@ -9679,6 +10045,89 @@ mod benches {
       }
       .into(),
     );
+    Ok(())
+  }
+
+  /// Categorical invoked-effect control: empty-recipient refusal (0), existing-recipient success (1).
+  /// The host supplies the same non-fee-native minimum-balance asset used by retry witnesses.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn task_transfer_minimum(a: Linear<0, 1>) -> Result<(), BenchmarkError> {
+    let owner = measured_account::<T>("minimum-transfer-owner", 0);
+    let caller = Pallet::<T>::sovereign_account_id(&owner, 0);
+    let (asset, amount, recipient) = T::BenchmarkHelper::setup_temporary_transfer(&owner, &caller)?;
+    assert_ne!(asset, T::FeeNativeAssetId::get());
+    let minimum = T::AssetOps::minimum_balance(asset);
+    assert!(!amount.is_zero() && amount < minimum);
+    let target = minimum
+      .checked_add(&amount)
+      .expect("minimum plus attempted amount fits");
+    let excess = T::AssetOps::balance(&caller, asset)
+      .checked_sub(&target)
+      .expect("retry fixture funds minimum plus attempted amount");
+    if !excess.is_zero() {
+      T::AssetOps::burn(&caller, asset, excess).map_err(|failure| failure.error)?;
+    }
+    assert!(T::AssetOps::total_balance(&recipient, asset).is_zero());
+    if a == 1 {
+      T::AssetOps::mint(&recipient, asset, minimum).map_err(|failure| failure.error)?;
+    }
+    let (actor_id, source) = register_measured_user_task::<T>(
+      &owner,
+      ActorTask::Transfer {
+        to: recipient.clone(),
+        asset,
+        amount: AmountResolution::Fixed(amount),
+      },
+    )?;
+    assert_eq!(source, caller);
+    T::BenchmarkHelper::enable_asset_ops_ingress();
+    let source_before = T::AssetOps::total_balance(&caller, asset);
+    let recipient_before = T::AssetOps::total_balance(&recipient, asset);
+    assert_eq!(source_before, target);
+    let events_before = frame_system::Pallet::<T>::events().encode();
+    let result;
+    #[block]
+    {
+      result = Pallet::<T>::benchmark_prepared_transfer(
+        actor_id,
+        &caller,
+        recipient.clone(),
+        asset,
+        amount,
+      );
+    }
+    if a == 0 {
+      let failure = result.expect_err("below-minimum recipient must really refuse");
+      assert_eq!(failure.retry, RetryClass::Temporary);
+      assert_eq!(
+        failure.error,
+        Error::<T>::RecipientDepositUnavailable.into()
+      );
+      assert_eq!(T::AssetOps::total_balance(&caller, asset), source_before);
+      assert_eq!(
+        T::AssetOps::total_balance(&recipient, asset),
+        recipient_before
+      );
+      assert_eq!(frame_system::Pallet::<T>::events().encode(), events_before);
+    } else {
+      result.expect("existing minimum-funded recipient accepts the Transfer");
+      assert_eq!(T::AssetOps::total_balance(&caller, asset), minimum);
+      assert_eq!(
+        T::AssetOps::total_balance(&recipient, asset),
+        recipient_before + amount
+      );
+      frame_system::Pallet::<T>::assert_last_event(
+        Event::<T>::TransferExecuted {
+          actor_id,
+          cycle_nonce: 1,
+          step_index: 0,
+          to: recipient,
+          asset,
+          amount,
+        }
+        .into(),
+      );
+    }
     Ok(())
   }
 
@@ -12054,12 +12503,7 @@ mod benches {
     });
     let hot = Pallet::<T>::actor_hot(actor_id).expect("target survives due processing");
     if retained_run.is_none() && target == MixedDeadlineTarget::UserObservation {
-      assert_eq!(hot.cycle_state, CycleState::Idle);
-      assert!(!hot.pending_signal);
-      assert!(matches!(
-        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
-        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
-      ));
+      assert_protocol_idle_without_residence::<T>(actor_id);
     } else {
       assert_eq!(hot.cycle_state, CycleState::Running);
       assert!(retained_run.is_some());
@@ -12956,6 +13400,739 @@ mod benches {
       CurrentBlockResourceState::<T>::get().map(|state| state.phase()),
       Some(BlockResourcePhase::ExternalPhase)
     );
+  }
+
+  /// Whole public-call source control, including children; never an additive P coefficient.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn mandatory_prepass_control(c: Linear<0, 2>) {
+    GlobalCircuitBreaker::<T>::put(false);
+    CurrentBlockResourceState::<T>::kill();
+    T::BenchmarkHelper::advance_to_scheduler_tick(2)
+      .expect("source control requires the host clock helper");
+    T::BenchmarkHelper::prepare_actor_prepass_context()
+      .expect("source control requires real host context");
+    if c == 0 {
+      GlobalCircuitBreaker::<T>::put(true);
+    }
+    if c == 2 {
+      Pallet::<T>::actor_prepass(RawOrigin::None.into())
+        .expect("duplicate source follows a successful real prefix");
+    }
+    assert!(!ActorReadyTail::<T>::exists());
+    assert!(!PrepassExecutionCutoff::<T>::exists());
+    let now = frame_system::Pallet::<T>::block_number();
+    let prefix = CurrentBlockResourceState::<T>::get();
+    let before_root =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let result;
+    #[block]
+    {
+      result = Pallet::<T>::actor_prepass(RawOrigin::None.into());
+    }
+    let state =
+      CurrentBlockResourceState::<T>::get().expect("the public parent publishes resource state");
+    assert_eq!(state.block_number(), now);
+    assert_eq!(state.phase(), BlockResourcePhase::ExternalPhase);
+    assert_eq!(state.outstanding_reservations(), 0);
+    assert!(state.budget().is_ok());
+    assert!(!ActorReadyTail::<T>::exists());
+    assert!(!PrepassExecutionCutoff::<T>::exists());
+    if c == 2 {
+      assert_eq!(
+        result.unwrap_err().error,
+        Error::<T>::PrepassDuplicateOrStale.into()
+      );
+      // FRAME wraps the public dispatchable in a storage layer: its inner halt rolls back on Err.
+      assert_eq!(
+        state,
+        prefix.expect("duplicate source has its committed prefix")
+      );
+    } else {
+      let actual = result.expect("first public Prepass succeeds").actual_weight;
+      assert_eq!(
+        actual,
+        Some(
+          state
+            .usage()
+            .actor_control_used()
+            .saturating_add(state.usage().actor_effect_used())
+        )
+      );
+      if c == 0 {
+        assert!(state.optional_actor_work_halted());
+        assert_eq!(
+          state.usage().actor_control_used(),
+          T::WeightInfo::scheduler_on_initialize_cutoff()
+        );
+        assert_eq!(state.usage().actor_effect_used(), Weight::zero());
+      }
+    }
+    if c != 1 {
+      // Normalize only the expected resource publication; all earlier source state must survive.
+      polkadot_sdk::sp_io::storage::start_transaction();
+      if let Some(prefix) = prefix {
+        CurrentBlockResourceState::<T>::put(prefix);
+      } else {
+        CurrentBlockResourceState::<T>::kill();
+      }
+      let restored_root =
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      polkadot_sdk::sp_io::storage::rollback_transaction();
+      assert_eq!(restored_root, before_root);
+    }
+  }
+
+  /// Entry source only; excludes public origin/return glue, branches and downstream work.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn mandatory_prepass_entry_control(c: Linear<0, 1>) {
+    GlobalCircuitBreaker::<T>::put(false);
+    CurrentBlockResourceState::<T>::kill();
+    T::BenchmarkHelper::advance_to_scheduler_tick(2)
+      .expect("entry control requires the host clock helper");
+    T::BenchmarkHelper::prepare_actor_prepass_context()
+      .expect("entry control requires real host context");
+    if c == 1 {
+      Pallet::<T>::actor_prepass(RawOrigin::None.into())
+        .expect("duplicate entry follows a successful public prefix");
+    }
+    let now = frame_system::Pallet::<T>::block_number();
+    let prefix = CurrentBlockResourceState::<T>::get();
+    let before_root =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let result;
+    #[block]
+    {
+      // Match the public dispatchable's rollback layer, not an unwrapped private Err.
+      result = polkadot_sdk::frame_support::storage::with_storage_layer(|| {
+        Pallet::<T>::begin_mandatory_prepass(now).map_err(DispatchError::from)
+      });
+    }
+    if c == 0 {
+      let entry = result.expect("fresh entry succeeds without publishing its local state");
+      assert_eq!(entry.state.block_number(), now);
+      assert_eq!(entry.state.phase(), BlockResourcePhase::PrepassExecuting);
+      assert_eq!(entry.state.outstanding_reservations(), 0);
+      assert_eq!(entry.state.budget(), Ok(entry.budget));
+      assert_eq!(
+        entry.control_envelopes[0],
+        T::WeightInfo::scheduler_on_initialize_cutoff()
+      );
+      assert_eq!(
+        entry.control_envelopes[1],
+        Pallet::<T>::deadline_service_weight_upper()
+      );
+      assert_eq!(
+        entry.control_envelopes[2],
+        T::WeightInfo::dependency_scan_source_probe()
+          .checked_add(
+            &T::WeightInfo::process_dependency_scan_unit()
+              .max(T::WeightInfo::process_dependency_scan_completion_unit())
+          )
+          .expect("entry dependency envelope fits")
+      );
+      assert_eq!(
+        entry.control_envelopes[3],
+        T::WeightInfo::scheduler_on_idle_base()
+          .checked_add(&T::WeightInfo::block_resource_finalize())
+          .expect("entry finalization envelope fits")
+      );
+      assert_eq!(
+        entry.now_tick,
+        scheduler_tick_floor(T::Time::now(), T::CadenceTickMillis::get())
+          .expect("entry clock is valid")
+      );
+      assert_eq!(
+        entry.state.usage().actor_control_used(),
+        entry.control_envelopes[0]
+      );
+      assert_eq!(entry.state.usage().actor_effect_used(), Weight::zero());
+    } else {
+      assert_eq!(
+        result.err().expect("duplicate entry refuses"),
+        Error::<T>::PrepassDuplicateOrStale.into()
+      );
+    }
+    assert_eq!(CurrentBlockResourceState::<T>::get(), prefix);
+    assert!(!ActorReadyTail::<T>::exists());
+    assert!(!PrepassExecutionCutoff::<T>::exists());
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      before_root
+    );
+  }
+
+  /// Parent Deadline ledger boundary with actual clock inputs; peer Tick outcomes stay opaque.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn mandatory_prepass_deadline_control(c: Linear<0, 1>) -> Result<(), BenchmarkError> {
+    let fixture = prepare_prepass_deadline_source::<T>(c == 1)?;
+    let mut entry = Pallet::<T>::begin_mandatory_prepass(fixture.now)
+      .map_err(|_| BenchmarkError::Stop("deadline source entry must admit"))?;
+    let before = entry.state;
+    let checks = PrepassDeadlineChecks::<T>::capture(fixture);
+    let actual;
+    #[block]
+    {
+      // The public layer rolls back storage only; an error cell cannot reuse local-ledger assertions.
+      actual = polkadot_sdk::frame_support::storage::with_storage_layer(|| {
+        Pallet::<T>::service_prepass_deadlines(
+          checks.fixture.now,
+          entry.now_tick,
+          &mut entry.state,
+          entry.budget,
+          entry.control_envelopes[1],
+        )
+        .map_err(DispatchError::from)
+      })
+      .expect("the actual finite Deadline wrapper must admit and settle");
+    }
+    checks.verify(before, entry.state, actual, entry.control_envelopes[1]);
+    Ok(())
+  }
+
+  fn prepare_prepass_deadline_source<T: Config>(
+    deep: bool,
+  ) -> Result<RetryDeadlineServiceFixture<BlockNumberFor<T>>, BenchmarkError> {
+    T::BenchmarkHelper::advance_to_scheduler_tick(2)
+      .map_err(|_| BenchmarkError::Stop("deadline control requires the host clock"))?;
+    let fixture = prepare_retry_deadline_service::<T>(deep)?;
+    T::BenchmarkHelper::prepare_actor_prepass_context()
+      .map_err(|_| BenchmarkError::Stop("deadline control requires host context"))?;
+    assert!(!GlobalCircuitBreaker::<T>::get());
+    assert!(CurrentBlockResourceState::<T>::get().is_none());
+    assert_eq!(
+      Pallet::<T>::classify_next_due_block_deadline(fixture.now),
+      Ok(DueBlockDeadlineBranch::Retry(fixture.actor))
+    );
+    Ok(fixture)
+  }
+
+  struct PrepassDeadlineChecks<T: Config> {
+    fixture: RetryDeadlineServiceFixture<BlockNumberFor<T>>,
+    run: ActorRunStateOf<T>,
+    semantic: ActorSemanticStateOf<T>,
+    handle: DeadlineHandleOf<T>,
+  }
+
+  impl<T: Config> PrepassDeadlineChecks<T> {
+    fn capture(fixture: RetryDeadlineServiceFixture<BlockNumberFor<T>>) -> Self {
+      let run =
+        ActorRunStateStore::<T>::get(fixture.actor.actor_id).expect("paid retry Run exists");
+      let semantic =
+        ActorSemanticStates::<T>::get(fixture.actor.actor_id).expect("retry semantics exist");
+      let handle =
+        DeadlineHandles::<T>::get(fixture.actor.actor_id).expect("retry Deadline exists");
+      Self {
+        fixture,
+        run,
+        semantic,
+        handle,
+      }
+    }
+
+    fn verify(
+      &self,
+      before: BlockResourceState<BlockNumberFor<T>>,
+      state: BlockResourceState<BlockNumberFor<T>>,
+      actual: Weight,
+      envelope: Weight,
+    ) {
+      let Self {
+        fixture,
+        run,
+        semantic,
+        handle,
+      } = self;
+      assert_eq!(state.phase(), BlockResourcePhase::PrepassExecuting);
+      assert_eq!(state.outstanding_reservations(), 0);
+      assert_eq!(state.budget(), before.budget());
+      assert_eq!(
+        state.usage().actor_effect_used(),
+        before.usage().actor_effect_used()
+      );
+      assert_eq!(
+        state.usage().actor_control_used(),
+        before
+          .usage()
+          .actor_control_used()
+          .checked_add(&actual)
+          .expect("complete Control delta fits")
+      );
+      assert!(actual.all_lte(envelope));
+      assert!(CurrentBlockResourceState::<T>::get().is_none());
+      assert_eq!(
+        ActorRunStateStore::<T>::get(fixture.actor.actor_id),
+        Some(run.clone())
+      );
+      assert_eq!(
+        ActorSemanticStates::<T>::get(fixture.actor.actor_id),
+        Some(semantic.clone())
+      );
+      assert!(!DeadlineHandles::<T>::contains_key(fixture.actor.actor_id));
+      assert!(!DeadlinePages::<T>::contains_key(handle.key, handle.page));
+      let node =
+        ServiceNodes::<T>::get(fixture.actor.actor_id).expect("selected retry returned once");
+      assert_eq!(
+        node.eligible_from,
+        fixture.now.checked_add(&One::one()).expect("B+1 exists")
+      );
+      assert!(matches!(
+        ActorProcesses::<T>::get(fixture.actor.actor_id).and_then(|p| p.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Live))
+      ));
+      if let Some(keys) = fixture.index_keys {
+        assert!(!DeadlineHeaders::<T>::contains_key(WakeupKey::Block(
+          fixture.now
+        )));
+        assert_eq!(DeadlineIndexLen::<T>::get(WakeupClock::Block), keys - 1);
+        assert_eq!(
+          DeadlineIndexPositions::<T>::get(WakeupKey::Block(
+            fixture.now.saturating_add(1_000u32.into())
+          )),
+          Some(0)
+        );
+      } else {
+        let header = DeadlineHeaders::<T>::get(handle.key).expect("populated source peers survive");
+        assert_eq!((header.first_page, header.count), (1, 96));
+      }
+      assert!(!ActorReadyTail::<T>::exists());
+      assert!(!PrepassExecutionCutoff::<T>::exists());
+      #[cfg(feature = "try-runtime")]
+      Pallet::<T>::do_try_state().expect("Deadline coordination preserves canonical authority");
+    }
+  }
+
+  #[benchmark(extra)]
+  fn mandatory_prepass_dependency_control(c: Linear<0, 2>) -> Result<(), BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    T::BenchmarkHelper::advance_to_scheduler_tick(2)
+      .map_err(|_| BenchmarkError::Stop("dependency control requires host clock"))?;
+    let prepared = if c == 0 {
+      None
+    } else {
+      let (source, actor_id) = prepare_dependency_scan_member::<T>()?;
+      if c == 2 {
+        let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+        if Pallet::<T>::process_next_dependency_scan_unit(&mut meter)
+          .map_err(|_| BenchmarkError::Stop("setup member unit failed"))?
+          != Some(DependencyScanMutation::Advanced(1))
+        {
+          return Err(BenchmarkError::Stop(
+            "setup did not advance exactly one member",
+          ));
+        }
+      }
+      Some((source, actor_id))
+    };
+    T::BenchmarkHelper::prepare_actor_prepass_context()
+      .map_err(|_| BenchmarkError::Stop("dependency control requires host context"))?;
+    if GlobalCircuitBreaker::<T>::get() || CurrentBlockResourceState::<T>::get().is_some() {
+      return Err(BenchmarkError::Stop(
+        "dependency control requires an unpublished normal prefix",
+      ));
+    }
+    let now = frame_system::Pallet::<T>::block_number();
+    let mut entry = Pallet::<T>::begin_mandatory_prepass(now)
+      .map_err(|_| BenchmarkError::Stop("dependency entry must admit"))?;
+    Pallet::<T>::service_prepass_deadlines(
+      now,
+      entry.now_tick,
+      &mut entry.state,
+      entry.budget,
+      entry.control_envelopes[1],
+    )
+    .map_err(|_| BenchmarkError::Stop("dependency Deadline prelude must settle"))?;
+    let list = DependencyScanSourceListState::<T>::get();
+    let fixture = if let Some((source, actor_id)) = prepared {
+      let revision = DependencyRevisions::<T>::get(source);
+      let owner = PendingCheckOwners::<T>::get(actor_id).ok_or(BenchmarkError::Stop(
+        "registered Pending authority is missing",
+      ))?;
+      let registration = DependencyRegistrations::<T>::get(source, actor_id)
+        .ok_or(BenchmarkError::Stop("live source registration is missing"))?;
+      let expected_event = PendingDependencyEvent {
+        owner,
+        source,
+        revision: revision.revision,
+      };
+      if list
+        != (DependencyScanSourceList {
+          cursor: Some(source),
+          count: 1,
+        })
+        || DependencyScanSourceNodes::<T>::get(source)
+          != Some(DependencyScanSourceNode {
+            previous: source,
+            next: source,
+          })
+        || revision.scan_target != Some(revision.revision)
+        || revision.revision == 0
+        || revision.scan_cursor != u64::from(c - 1)
+        || revision.scan_end != 1
+        || (c == 1
+          && (registration.acknowledged_revision >= revision.revision
+            || PendingDependencyEvents::<T>::contains_key(actor_id)))
+        || (c == 2
+          && (registration.acknowledged_revision != revision.revision
+            || PendingDependencyEvents::<T>::get(actor_id) != Some(expected_event)))
+      {
+        return Err(BenchmarkError::Stop(
+          "post-prelude registered singleton class is unavailable",
+        ));
+      }
+      Some((
+        source,
+        actor_id,
+        expected_event,
+        ActorSemanticStates::<T>::get(actor_id),
+        ActorRunStateStore::<T>::get(actor_id),
+      ))
+    } else {
+      if list != DependencyScanSourceList::default() {
+        return Err(BenchmarkError::Stop(
+          "actual post-prelude empty selector is unavailable",
+        ));
+      }
+      None
+    };
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("dependency source starts canonical");
+    let before = entry.state;
+    let expected = if c == 0 {
+      T::WeightInfo::dependency_scan_source_probe()
+    } else {
+      entry.control_envelopes[2]
+    };
+    let actual;
+    #[block]
+    {
+      // This successful storage adapter does not certify borrowed-ledger rollback on errors.
+      actual = polkadot_sdk::frame_support::storage::with_storage_layer(|| {
+        Pallet::<T>::service_prepass_dependency_scan(
+          &mut entry.state,
+          entry.budget,
+          entry.control_envelopes[2],
+        )
+        .map_err(DispatchError::from)
+      })
+      .expect("finite dependency wrapper must admit and settle");
+    }
+    assert_eq!(actual, expected);
+    assert_eq!(entry.state.phase(), BlockResourcePhase::PrepassExecuting);
+    assert_eq!(entry.state.budget(), before.budget());
+    assert_eq!(entry.state.outstanding_reservations(), 0);
+    assert_eq!(
+      entry.state.usage().actor_effect_used(),
+      before.usage().actor_effect_used()
+    );
+    assert_eq!(
+      entry.state.usage().actor_control_used(),
+      before
+        .usage()
+        .actor_control_used()
+        .checked_add(&actual)
+        .unwrap()
+    );
+    assert!(CurrentBlockResourceState::<T>::get().is_none());
+    if let Some((source, actor_id, event, semantic, run)) = fixture {
+      assert_eq!(PendingDependencyEvents::<T>::get(actor_id), Some(event));
+      assert_eq!(PendingCheckOwners::<T>::get(actor_id), Some(event.owner));
+      assert_eq!(ActorSemanticStates::<T>::get(actor_id), semantic);
+      assert_eq!(ActorRunStateStore::<T>::get(actor_id), run);
+      let registration = DependencyRegistrations::<T>::get(source, actor_id).unwrap();
+      assert_eq!(registration.acknowledged_revision, event.revision);
+      assert_eq!(registration.actor, event.owner.actor);
+      assert_eq!(registration.plan_revision, event.owner.plan_revision);
+      let revision = DependencyRevisions::<T>::get(source);
+      assert_eq!(revision.revision, event.revision);
+      if c == 1 {
+        assert_eq!(
+          (
+            revision.scan_target,
+            revision.scan_cursor,
+            revision.scan_end
+          ),
+          (Some(event.revision), 1, 1)
+        );
+        assert_eq!(DependencyScanSourceListState::<T>::get(), list);
+      } else {
+        assert!(revision.scan_target.is_none());
+        assert_eq!((revision.scan_cursor, revision.scan_end), (0, 0));
+        assert!(!DependencyScanSourceNodes::<T>::contains_key(source));
+        assert_eq!(
+          DependencyScanSourceListState::<T>::get(),
+          DependencyScanSourceList::default()
+        );
+      }
+    } else {
+      assert_eq!(DependencyScanSourceListState::<T>::get(), list);
+    }
+    assert!(!ActorReadyTail::<T>::exists());
+    assert!(!PrepassExecutionCutoff::<T>::exists());
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("dependency coordination preserves canonical authority");
+    Ok(())
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn prepass_retry_prefix_witness_matches_standalone_cut() {
+    use polkadot_sdk::{
+      frame_support::storage::with_storage_layer,
+      sp_core::{Blake2Hasher, H256},
+      sp_io::hashing::blake2_256,
+      sp_runtime::StateVersion,
+      sp_trie::{LayoutV1, StorageProof, delta_trie_root, recorder::Recorder},
+    };
+    use std::collections::BTreeSet;
+
+    struct Evidence {
+      state: BlockResourceState<BlockNumberFor<Test>>,
+      deadline: Weight,
+      delta: Vec<(Vec<u8>, Option<Vec<u8>>)>,
+      root: H256,
+      prefix_nodes: BTreeSet<Vec<u8>>,
+      body_nodes: BTreeSet<Vec<u8>>,
+    }
+
+    let mut source = new_test_ext();
+    let (fixture, run, semantic, fees) = source.execute_with(|| {
+      <Test as Config>::BenchmarkHelper::advance_to_scheduler_tick(2).unwrap();
+      let fixture = prepare_retry_deadline_service::<Test>(false).unwrap();
+      <Test as Config>::BenchmarkHelper::prepare_actor_prepass_context().unwrap();
+      assert!(!GlobalCircuitBreaker::<Test>::get());
+      assert!(CurrentBlockResourceState::<Test>::get().is_none());
+      assert_eq!(
+        Pallet::<Test>::classify_next_due_block_deadline(fixture.now),
+        Ok(DueBlockDeadlineBranch::Retry(fixture.actor))
+      );
+      Pallet::<Test>::do_try_state().unwrap();
+      let run = ActorRunStateStore::<Test>::get(fixture.actor.actor_id).unwrap();
+      let semantic = ActorSemanticStates::<Test>::get(fixture.actor.actor_id).unwrap();
+      (fixture, run, semantic, crate::mock::fee_collections())
+    });
+    source.commit_all().unwrap();
+    assert_eq!(source.overlayed_changes().changes().count(), 0);
+    assert_eq!(source.state_version, StateVersion::V1);
+    let (snapshot, original_root) = source.into_raw_snapshot();
+    let mut evidence = Vec::new();
+
+    for parent_prefix in [true, false] {
+      let mut ext = polkadot_sdk::sp_io::TestExternalities::from_raw_snapshot(
+        snapshot.clone(),
+        original_root,
+        StateVersion::V1,
+      );
+      let mut prepared_entry = if parent_prefix {
+        None
+      } else {
+        let entry =
+          ext.execute_with(|| Pallet::<Test>::begin_mandatory_prepass(fixture.now).unwrap());
+        // Model the standalone cut without pretending to run SDK whitelist/counter setup.
+        ext.commit_all().unwrap();
+        assert_eq!(*ext.backend.root(), original_root);
+        assert_eq!(ext.overlayed_changes().changes().count(), 0);
+        Some(entry)
+      };
+      let recorder = Recorder::<Blake2Hasher>::default();
+      assert!(recorder.to_storage_proof().is_empty());
+      let (state, deadline, prefix_nodes) = ext.execute_with_recorder(recorder.clone(), || {
+        with_storage_layer(|| {
+          let mut entry = prepared_entry
+            .take()
+            .unwrap_or_else(|| Pallet::<Test>::begin_mandatory_prepass(fixture.now).unwrap());
+          if parent_prefix {
+            assert!(!GlobalCircuitBreaker::<Test>::get());
+          }
+          let prefix_nodes = recorder
+            .to_storage_proof()
+            .iter_nodes()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+          let deadline = Pallet::<Test>::service_prepass_deadlines(
+            fixture.now,
+            entry.now_tick,
+            &mut entry.state,
+            entry.budget,
+            entry.control_envelopes[1],
+          )?;
+          Ok::<_, DispatchError>((entry.state, deadline, prefix_nodes))
+        })
+        .unwrap()
+      });
+      let body_proof = recorder.to_storage_proof();
+      let body_nodes = body_proof.iter_nodes().cloned().collect::<BTreeSet<_>>();
+      assert!(
+        recorder
+          .recorded_keys()
+          .keys()
+          .all(|root| *root == original_root)
+      );
+      let delta = ext
+        .overlayed_changes()
+        .changes()
+        .map(|(key, entry)| (key.clone(), entry.clone().value().cloned()))
+        .collect::<Vec<_>>();
+      // Root work has its own snapshot and never changes the saved body proof.
+      let root = ext.execute_with_recorder(recorder.clone(), || {
+        H256::from_slice(&polkadot_sdk::sp_io::storage::root(StateVersion::V1))
+      });
+      let full_proof = recorder.to_storage_proof();
+      let full_nodes = full_proof.iter_nodes().cloned().collect::<BTreeSet<_>>();
+      assert!(full_nodes.is_superset(&body_nodes));
+      assert_eq!(*ext.backend.root(), original_root);
+      assert_eq!(*ext.as_backend().root(), root);
+      assert_ne!(root, original_root);
+      let mut database = full_proof.to_memory_db::<Blake2Hasher>();
+      assert_eq!(
+        delta_trie_root::<LayoutV1<Blake2Hasher>, _, _, _, _, _>(
+          &mut database,
+          original_root,
+          delta.clone(),
+          None,
+          None,
+        )
+        .unwrap(),
+        root
+      );
+      let mut body_database = body_proof.to_memory_db::<Blake2Hasher>();
+      let body_complete = match delta_trie_root::<LayoutV1<Blake2Hasher>, _, _, _, _, _>(
+        &mut body_database,
+        original_root,
+        delta.clone(),
+        None,
+        None,
+      ) {
+        Ok(body_root) => {
+          assert_eq!(body_root, root);
+          true
+        }
+        Err(_) => false,
+      };
+      assert!(
+        full_nodes
+          .iter()
+          .any(|node| H256::from(blake2_256(node)) == original_root)
+      );
+      let missing_root = StorageProof::new(
+        full_nodes
+          .iter()
+          .filter(|node| H256::from(blake2_256(node)) != original_root)
+          .cloned(),
+      );
+      let mut incomplete = missing_root.to_memory_db::<Blake2Hasher>();
+      assert!(
+        delta_trie_root::<LayoutV1<Blake2Hasher>, _, _, _, _, _>(
+          &mut incomplete,
+          original_root,
+          delta.clone(),
+          None,
+          None,
+        )
+        .is_err()
+      );
+      ext.execute_with(|| {
+        assert!(CurrentBlockResourceState::<Test>::get().is_none());
+        assert!(!DeadlineHandles::<Test>::contains_key(
+          fixture.actor.actor_id
+        ));
+        let node = ServiceNodes::<Test>::get(fixture.actor.actor_id).unwrap();
+        assert_eq!(node.eligible_from, fixture.now + 1);
+        assert_eq!(
+          ActorRunStateStore::<Test>::get(fixture.actor.actor_id),
+          Some(run.clone())
+        );
+        assert_eq!(
+          ActorSemanticStates::<Test>::get(fixture.actor.actor_id),
+          Some(semantic.clone())
+        );
+        assert_eq!(crate::mock::fee_collections(), fees);
+        Pallet::<Test>::do_try_state().unwrap();
+      });
+      assert_eq!(state.phase(), BlockResourcePhase::PrepassExecuting);
+      assert_eq!(state.outstanding_reservations(), 0);
+      assert_eq!(state.usage().actor_effect_used(), Weight::zero());
+      assert_eq!(
+        state.usage().actor_control_used(),
+        <Test as Config>::WeightInfo::scheduler_on_initialize_cutoff()
+          .checked_add(&deadline)
+          .unwrap()
+      );
+      eprintln!(
+        "PREPASS_RETRY_PREFIX parent={parent_prefix} prefix_nodes={} body_nodes={} full_nodes={} body_delta_complete={body_complete}; native_mock_only=true timings=excluded",
+        prefix_nodes.len(),
+        body_nodes.len(),
+        full_nodes.len(),
+      );
+      evidence.push(Evidence {
+        state,
+        deadline,
+        delta,
+        root,
+        prefix_nodes,
+        body_nodes,
+      });
+    }
+    let parent = &evidence[0];
+    let standalone = &evidence[1];
+    assert_eq!(parent.state, standalone.state);
+    assert_eq!(parent.deadline, standalone.deadline);
+    assert_eq!(parent.delta, standalone.delta);
+    assert_eq!(parent.root, standalone.root);
+    assert_eq!(
+      parent.body_nodes,
+      parent
+        .prefix_nodes
+        .union(&standalone.body_nodes)
+        .cloned()
+        .collect(),
+      "matched original-root witness retains prefix inputs instead of resetting them"
+    );
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn mandatory_prepass_dependency_control_native_source_cases() {
+    for c in 0..=2 {
+      for verify in [false, true] {
+        new_test_ext().execute_with(|| {
+          _mandatory_prepass_dependency_control::<Test>(c, verify)
+            .unwrap_or_else(|error| panic!("dependency c={c} verify={verify}: {error:?}"));
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn mandatory_prepass_deadline_control_native_source_cases() {
+    for c in 0..=1 {
+      for verify in [false, true] {
+        new_test_ext().execute_with(|| {
+          _mandatory_prepass_deadline_control::<Test>(c, verify)
+            .expect("Deadline source cell must be constructible");
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn mandatory_prepass_entry_control_native_source_cases() {
+    for c in 0..=1 {
+      for verify in [false, true] {
+        new_test_ext().execute_with(|| _mandatory_prepass_entry_control::<Test>(c, verify));
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn mandatory_prepass_control_native_source_cases() {
+    for c in 0..=2 {
+      for verify in [false, true] {
+        new_test_ext().execute_with(|| _mandatory_prepass_control::<Test>(c, verify));
+      }
+    }
   }
 
   #[benchmark]
@@ -24614,7 +25791,7 @@ mod benches {
         assert!(state.run_state.is_none());
         assert_eq!(state.identity.cycle_nonce, 1);
         assert_eq!(state.hot.cycle_state, CycleState::Idle);
-        assert!(ServiceNodes::<T>::contains_key(fixture.actor_id));
+        assert_protocol_idle_without_residence::<T>(fixture.actor_id);
         assert!(!ActorControlLocators::<T>::contains_key(fixture.actor_id));
       }
       RunningInnerBranch::Progress => {
@@ -24667,7 +25844,39 @@ mod benches {
   fn prepare_reachable_suspended_tail_retry<T: Config>(
     s: u32,
     p: u32,
-  ) -> Result<(ActorId, u32), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+  ) -> Result<(ActorId, u32), BenchmarkError> {
+    prepare_reachable_suspended_tail_retry_for_type::<T>(s, p, ActorType::System)
+  }
+
+  fn fund_user_tail_action_capacity<T: Config>(actor_id: ActorId) {
+    let (state, _, loaded) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("User tail has current admitted resources");
+    assert_eq!(state.identity.actor_class.actor_type(), ActorType::User);
+    let fee =
+      Pallet::<T>::maximum_current_action_fee(ActorType::User, &loaded.step, loaded.resources)
+        .expect("User tail Action liability is bounded")
+        .total_fee;
+    let native = T::FeeNativeAssetId::get();
+    let required = fee
+      .checked_add(&fee)
+      .and_then(|two| two.checked_add(&fee))
+      .and_then(|three| {
+        three.checked_add(&T::MinUserBalance::get().max(T::AssetOps::minimum_balance(native)))
+      })
+      .expect("three Action liabilities and native floor fit");
+    let payer = &state.identity.sovereign_account;
+    let current = T::AssetOps::balance(payer, native);
+    if current < required {
+      T::AssetOps::mint(payer, native, required - current)
+        .expect("User Action funding is independent of Pipeline payment");
+    }
+  }
+
+  fn prepare_reachable_suspended_tail_retry_for_type<T: Config>(
+    s: u32,
+    p: u32,
+    actor_type: ActorType,
+  ) -> Result<(ActorId, u32), BenchmarkError> {
     let maximum = T::MaxContractSteps::get();
     let chunk = MAX_STEPS_PER_TAIL_CHUNK;
     if s == 0
@@ -24694,6 +25903,9 @@ mod benches {
       .position(|asset| *asset != T::FeeNativeAssetId::get())
       .expect("retry requires a non-native asset");
     let retry_asset = assets.remove(position);
+    if actor_type == ActorType::User {
+      assets.retain(|asset| *asset != T::FeeNativeAssetId::get());
+    }
     assets.truncate(p as usize);
     assert_eq!(assets.len() as u32, p);
     assert!(assets.iter().all(|asset| *asset != retry_asset));
@@ -24712,7 +25924,7 @@ mod benches {
       ))
     };
     let actor_id = prepare_reachable_running_with_cooldown::<T>(
-      ActorType::System,
+      actor_type,
       count,
       Some((
         cursor,
@@ -24735,6 +25947,9 @@ mod benches {
       assert_eq!(run.cursor, expected_cursor);
       frame_system::Pallet::<T>::set_block_number(run.eligible_at);
       Pallet::<T>::execute_cycle(Weight::MAX);
+    }
+    if actor_type == ActorType::User {
+      fund_user_tail_action_capacity::<T>(actor_id);
     }
     let state =
       Pallet::<T>::active_actor_state(actor_id).expect("target has real Running authority");
@@ -24768,6 +25983,160 @@ mod benches {
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real due retry source passes full audit");
     Ok((actor_id, cursor))
+  }
+
+  fn prepare_user_suspended_tail_skip<T: Config>(
+    s: u32,
+    p: u32,
+  ) -> Result<(ActorId, u32, T::AssetId), BenchmarkError> {
+    let maximum = T::MaxContractSteps::get();
+    let chunk = MAX_STEPS_PER_TAIL_CHUNK;
+    if s < 2
+      || s > chunk
+      || maximum <= s
+      || p > benchmark_predicate_capacity::<T>()
+      || T::MaxRetryAttempts::get() < 3
+    {
+      return Err(BenchmarkError::Stop(
+        "host cannot represent User suspended-tail progress",
+      ));
+    }
+    let count = if s == chunk {
+      maximum
+    } else {
+      1 + s + ((maximum - 1 - s) / chunk) * chunk
+    };
+    let cursor = if s == chunk { 1 } else { count - s };
+    let owner: T::AccountId = account("reachable-state-owner", 0, 0);
+    let sovereign = Pallet::<T>::sovereign_account_id(&owner, 0);
+    let (asset, amount, recipient) =
+      T::BenchmarkHelper::setup_temporary_transfer(&owner, &sovereign)?;
+    let minimum = T::AssetOps::minimum_balance(asset);
+    assert_ne!(asset, T::FeeNativeAssetId::get());
+    assert!(!amount.is_zero() && amount < minimum);
+    assert!(T::AssetOps::balance(&recipient, asset).is_zero());
+    // Percent resolves after the User's asset minimum: half of two inputs is one sub-minimum input.
+    let target = amount
+      .checked_add(&amount)
+      .and_then(|two| minimum.checked_add(&two))
+      .expect("minimum plus two inputs fits");
+    let current = T::AssetOps::balance(&sovereign, asset);
+    if current > target {
+      T::AssetOps::burn(&sovereign, asset, current - target)
+        .expect("fixture source narrows exactly");
+    } else if current < target {
+      T::AssetOps::mint(&sovereign, asset, target - current).expect("fixture source is sufficient");
+    }
+    let mut assets = T::BenchmarkHelper::setup_predicate_assets(&owner, p + 2)?;
+    assets.retain(|candidate| *candidate != asset && *candidate != T::FeeNativeAssetId::get());
+    assets.truncate(p as usize);
+    assert_eq!(assets.len() as u32, p);
+    let precondition = (p > 0).then(|| {
+      packed_predicate_clauses::<T>(
+        assets
+          .into_iter()
+          .map(|asset| Predicate::BalanceBelow {
+            asset,
+            threshold: One::one(),
+          })
+          .collect(),
+        p.div_ceil(T::MaxPreconditionClauses::get()).max(1),
+      )
+    });
+    let actor_id = prepare_reachable_running_with_cooldown::<T>(
+      ActorType::User,
+      count,
+      Some((
+        cursor,
+        Step {
+          precondition,
+          task: ActorTask::Transfer {
+            to: recipient.clone(),
+            asset,
+            amount: AmountResolution::Percent(Perbill::from_percent(50)),
+          },
+          on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
+        },
+      )),
+      0,
+    )?;
+    assert_eq!(
+      Pallet::<T>::actor_identity(actor_id)
+        .unwrap()
+        .sovereign_account,
+      sovereign
+    );
+    for expected in 1..cursor {
+      let run = ActorRunStateStore::<T>::get(actor_id).unwrap();
+      assert_eq!(run.cursor, expected);
+      frame_system::Pallet::<T>::set_block_number(run.eligible_at);
+      Pallet::<T>::execute_cycle(Weight::MAX);
+    }
+    fund_user_tail_action_capacity::<T>(actor_id);
+    let run = ActorRunStateStore::<T>::get(actor_id).unwrap();
+    assert_eq!(run.cursor, cursor);
+    let native = T::FeeNativeAssetId::get();
+    let payer_before = T::AssetOps::balance(&sovereign, native);
+    let sink_before = T::AssetOps::balance(&T::FeeSink::get(), native);
+    frame_system::Pallet::<T>::set_block_number(run.eligible_at);
+    Pallet::<T>::execute_cycle(Weight::MAX);
+    let paid = T::AssetOps::balance(&T::FeeSink::get(), native)
+      .checked_sub(&sink_before)
+      .expect("failed invoked Action credits the sink");
+    assert!(!paid.is_zero());
+    assert_eq!(
+      payer_before.checked_sub(&T::AssetOps::balance(&sovereign, native)),
+      Some(paid)
+    );
+    let state = Pallet::<T>::active_actor_state(actor_id).expect("genuine failed User survives");
+    let run = state.run_state.as_ref().unwrap();
+    assert_eq!(state.hot.cycle_state, CycleState::Suspended);
+    assert_eq!(
+      (run.cursor, run.unsuccessful_attempts_at_cursor),
+      (cursor, 1)
+    );
+    assert_eq!(
+      run.last_step_outcome,
+      Some(StepOutcome::Failed(crate::TaskFailure::temporary(
+        Error::<T>::RecipientDepositUnavailable,
+      )))
+    );
+    assert_eq!(T::AssetOps::balance(&sovereign, asset), target);
+    assert!(T::AssetOps::balance(&recipient, asset).is_zero());
+    // An ordinary host-ledger repair outside recording changes resolution, not the Contract/Run.
+    T::AssetOps::burn(&sovereign, asset, target).expect("fixture input exhaustion is legal");
+    frame_system::Pallet::<T>::set_block_number(run.eligible_at);
+    let context = Pallet::<T>::step_control_weight_context(count, cursor, p).unwrap();
+    assert_eq!(context.steps_in_fragment, s);
+    Ok((actor_id, cursor, asset))
+  }
+
+  fn execute_direct_user_service_inner<T: Config>(
+    source: (ActorRef, ServiceResidenceKind),
+    state: ActiveActorStateOf<T>,
+    admission: ActorAdmissionCertificateOf<T>,
+    loaded: LoadedActorStepOf<T>,
+    now: BlockNumberFor<T>,
+    deadline: Option<WakeupKey<BlockNumberFor<T>>>,
+  ) -> crate::scheduler::StepCommitEvidence {
+    let maximum_fee =
+      Pallet::<T>::maximum_current_action_fee(ActorType::User, &loaded.step, loaded.resources)
+        .expect("current User Action liability is bounded");
+    let plan = Pallet::<T>::build_canonical_current_step_plan(
+      source.0.actor_id,
+      state.identity.clone(),
+      state.hot.clone(),
+      state.run_state.clone(),
+      admission.clone(),
+      loaded,
+      maximum_fee,
+    )
+    .expect("carried User plan builds");
+    Pallet::<T>::execute_effectful_step_on_service_with_deadline(
+      source.0, source.1, state, plan, &admission, now, deadline,
+    )
+    .map_err(|failure| failure.cause)
+    .expect("User inner Service attempt commits")
   }
 
   fn assert_reachable_suspended_tail_retry_state<T: Config>(
@@ -24937,6 +26306,8 @@ mod benches {
     Ok(actor_id)
   }
 
+  /// Complete cached-state inspection plus current host authority for the staged Service guard.
+  /// This changed benchmark does not install the unpriced guard in the production classifier.
   #[benchmark]
   fn scheduler_actor_state_probe() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     let actor_id = prepare_reachable_running::<T>(T::MaxContractSteps::get())?;
@@ -24962,27 +26333,58 @@ mod benches {
     assert!(state.contract.window.is_none());
     assert!(state.contract.close_when.is_none());
     assert!(state.contract.auto_close_at_cycle_nonce.is_none());
+    let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    // Native-only observation excludes all fixture/current-authority work before recording.
+    #[cfg(test)]
+    crate::mock::take_admission_authority_calls();
     #[block]
     {
-      core::hint::black_box(
-        Pallet::<T>::load_current_step_service_state(actor_id)
-          .expect("benchmark current-Step service state loads coherently"),
+      let loaded = Pallet::<T>::load_current_step_service_state(actor_id)
+        .expect("benchmark current-Step service state loads coherently");
+      assert!(
+        Pallet::<T>::admission_matches_current_authority(&loaded.1),
+        "complete classification authenticates current host authority"
       );
+      core::hint::black_box(loaded);
     }
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root,
+      "classification is readonly"
+    );
     assert!(matches!(
       Pallet::<T>::load_actor_state(actor_id),
       LoadedActorStateOf::Active(_)
     ));
     Ok(())
   }
-  /// Existing full-header, committed-prefix sources; categories are not a regression axis.
+  /// 0..3 retain loader-only sources; 4..7 add current authority, 8..11 a full later fragment.
+  /// Later-fragment sources are Running at 8/9 and genuinely Suspended at 10/11.
+  /// Categories name independent sources, not a regression axis or universal geometry maximum.
   #[benchmark(extra, pov_mode = Measured)]
-  fn scheduler_actor_state_probe_wide_header(c: Linear<0, 3>) -> Result<(), BenchmarkError> {
-    let fixture = prepare_wide_header_prefix_close::<T>(c)?;
-    let actor_id = fixture.actor_id;
-    let (_, phase) = prefix_close_class_and_phase(c);
+  fn scheduler_actor_state_probe_wide_header(c: Linear<0, 11>) -> Result<(), BenchmarkError> {
+    let (actor_id, phase) = if c >= 8 {
+      let actor_type = if c.is_multiple_of(2) {
+        ActorType::User
+      } else {
+        ActorType::System
+      };
+      let phase = if c >= 10 {
+        CycleState::Suspended
+      } else {
+        CycleState::Running
+      };
+      (
+        prepare_service_head_allowance_later_fragment::<T>(actor_type, phase)?,
+        phase,
+      )
+    } else {
+      let source = c % 4;
+      let fixture = prepare_wide_header_prefix_close::<T>(source)?;
+      (fixture.actor_id, prefix_close_class_and_phase(source).1)
+    };
     let before_run = ActorRunStateStore::<T>::get(actor_id).expect("real prefix retains Run");
-    if phase == CycleState::Suspended {
+    if phase == CycleState::Suspended && c < 8 {
       frame_system::Pallet::<T>::set_block_number(before_run.eligible_at);
       service_canonical_suspended_retry::<T>(actor_id, before_run.eligible_at);
     }
@@ -25001,12 +26403,34 @@ mod benches {
       Trigger::AddressEvent { .. }
     ));
     assert!(expected.contract.parked_balance_activation.is_some());
+    assert!(expected.contract.auto_close_at_cycle_nonce.is_none());
     assert!(expected.contract.close_when.is_none());
+    assert!(before_run.balance_snapshot.is_some());
+    if c >= 8 {
+      assert_eq!(before_run.cursor, 5);
+      let chunk = ActorContractTailChunks::<T>::get(actor_id, 1).unwrap();
+      assert_eq!(chunk.steps.len() as u32, MAX_STEPS_PER_TAIL_CHUNK);
+      assert!(
+        chunk
+          .steps
+          .iter()
+          .all(|step| step.task.encoded_size() == TaskOf::<T>::max_encoded_len())
+      );
+    }
     let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
     let actual;
+    #[cfg(test)]
+    crate::mock::take_admission_authority_calls();
     #[block]
     {
       actual = Pallet::<T>::load_current_step_service_state(actor_id);
+      if c >= 4 {
+        let admission = &actual.as_ref().expect("full-span current state exists").1;
+        assert!(
+          Pallet::<T>::admission_matches_current_authority(admission),
+          "wide/full-fragment classification authenticates current authority"
+        );
+      }
       core::hint::black_box(&actual);
     }
     let (state, _, step) = actual.expect("wide current-Step service state loads");
@@ -25025,6 +26449,231 @@ mod benches {
       step.step,
       expected.contract.steps[before_run.cursor as usize]
     );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root
+    );
+    Ok(())
+  }
+
+  fn prepare_service_head_allowance_source<T: Config>(
+    source: u32,
+  ) -> Result<ActorId, BenchmarkError> {
+    assert!(source < 6);
+    let actor_type = if source.is_multiple_of(2) {
+      ActorType::User
+    } else {
+      ActorType::System
+    };
+    let actor_id = if source < 2 {
+      let fixture = prepare_paid_trigger_for_class::<T>(TriggerFamily::AddressEvent, actor_type)?;
+      Pallet::<T>::notify_address_event(
+        fixture.actor_id,
+        fixture.asset,
+        One::one(),
+        &fixture.source,
+      )?;
+      assert_paid_trigger::<T>(&fixture);
+      fixture.actor_id
+    } else {
+      let shape = match source {
+        2 => 0,
+        3 => 2,
+        4 => 1,
+        5 => 3,
+        _ => unreachable!(),
+      };
+      let fixture = prepare_wide_header_prefix_close::<T>(shape)?;
+      if source >= 4 {
+        let due = ActorRunStateStore::<T>::get(fixture.actor_id)
+          .unwrap()
+          .eligible_at;
+        frame_system::Pallet::<T>::set_block_number(due);
+        service_canonical_suspended_retry::<T>(fixture.actor_id, due);
+      }
+      fixture.actor_id
+    };
+    let phase = match source {
+      0 | 1 => CycleState::Idle,
+      2 | 3 => CycleState::Running,
+      _ => CycleState::Suspended,
+    };
+    qualify_service_head_allowance_source::<T>(actor_id, actor_type, phase)
+  }
+
+  fn qualify_service_head_allowance_source<T: Config>(
+    actor_id: ActorId,
+    actor_type: ActorType,
+    phase: CycleState,
+  ) -> Result<ActorId, BenchmarkError> {
+    let actor = Pallet::<T>::load_actor_ref(actor_id).unwrap();
+    assert_eq!(
+      ServiceHeader::<T>::get().cursor,
+      Some(actor),
+      "source must be the real frontier without cursor repair"
+    );
+    let before = Pallet::<T>::active_actor_state(actor_id).unwrap();
+    assert_eq!(before.identity.actor_class.actor_type(), actor_type);
+    assert_eq!(before.hot.cycle_state, phase);
+    assert!(before.contract.close_when.is_none());
+    assert_eq!(before.contract.on_unfunded, OnUnfunded::Close);
+    assert_eq!(
+      before.contract.steps.len() as u32,
+      T::MaxContractSteps::get()
+    );
+    for seed in 60_001..60_003 {
+      let peer = bench_create_system_with_plan::<T>(seed, Default::default());
+      let owner = Pallet::<T>::actor_identity(peer).unwrap().owner;
+      Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), peer)?;
+    }
+    assert_eq!(ServiceHeader::<T>::get().cursor, Some(actor));
+    assert!(ServiceHeader::<T>::get().count >= 3);
+    let eligible = ServiceNodes::<T>::get(actor_id).unwrap().eligible_from;
+    let now = frame_system::Pallet::<T>::block_number()
+      .checked_add(&One::one())
+      .ok_or(BenchmarkError::Stop("head allowance clock overflow"))?
+      .max(eligible);
+    frame_system::Pallet::<T>::set_block_number(now);
+    assert!(ServiceHeader::<T>::get().round_block < Some(now));
+    assert!(ServiceNodes::<T>::get(actor_id).unwrap().last_considered < now);
+    Ok(actor_id)
+  }
+
+  fn prepare_service_head_allowance_later_fragment<T: Config>(
+    actor_type: ActorType,
+    phase: CycleState,
+  ) -> Result<ActorId, BenchmarkError> {
+    assert!(matches!(phase, CycleState::Running | CycleState::Suspended));
+    let fixture = prepare_prefix_close::<T>(
+      actor_type,
+      if phase == CycleState::Suspended {
+        PrefixCloseHeader::AddressEventLaterFragmentRetry
+      } else {
+        PrefixCloseHeader::AddressEventLaterFragment
+      },
+      CycleState::Running,
+      true,
+    )?;
+    let actor_id = fixture.actor_id;
+    let original_run = ActorRunStateStore::<T>::get(actor_id).unwrap();
+    let last_visit = if phase == CycleState::Suspended { 5 } else { 4 };
+    for cursor in 2..=last_visit {
+      let run = ActorRunStateStore::<T>::get(actor_id).expect("paid prefix Run remains");
+      assert_eq!(run.cursor, cursor);
+      let eligible = ServiceNodes::<T>::get(actor_id)
+        .unwrap()
+        .eligible_from
+        .max(run.eligible_at);
+      let now = frame_system::Pallet::<T>::block_number()
+        .checked_add(&One::one())
+        .ok_or(BenchmarkError::Stop("later-fragment clock overflow"))?
+        .max(eligible);
+      frame_system::Pallet::<T>::set_block_number(now);
+      Pallet::<T>::execute_cycle(Weight::MAX);
+      let run = ActorRunStateStore::<T>::get(actor_id).expect("authored continuation retains Run");
+      assert_eq!(run.cursor, if cursor == 5 { 5 } else { cursor + 1 });
+      assert_eq!(run.balance_snapshot, original_run.balance_snapshot);
+      assert_eq!(run.cycle_nonce, original_run.cycle_nonce);
+      assert_eq!(
+        run.cumulative_outcomes.committed_effectful_tasks,
+        original_run.cumulative_outcomes.committed_effectful_tasks
+      );
+    }
+    if phase == CycleState::Suspended {
+      let run = ActorRunStateStore::<T>::get(actor_id).unwrap();
+      assert_eq!(
+        benchmark_fixture_hot::<T>(actor_id).unwrap().cycle_state,
+        CycleState::Suspended
+      );
+      assert!(
+        matches!(&run.last_step_outcome, Some(StepOutcome::Failed(failure)) if failure.retry == RetryClass::Temporary)
+      );
+      assert_eq!(run.suspension, Some(SuspensionReason::Temporary));
+      assert_eq!(
+        DeadlineHandles::<T>::get(actor_id).unwrap().key,
+        WakeupKey::Block(run.eligible_at)
+      );
+      assert!(!ServiceNodes::<T>::contains_key(actor_id));
+      frame_system::Pallet::<T>::set_block_number(run.eligible_at);
+      service_canonical_suspended_retry::<T>(actor_id, run.eligible_at);
+      assert_eq!(ActorRunStateStore::<T>::get(actor_id), Some(run));
+    }
+    let chunk = ActorContractTailChunks::<T>::get(actor_id, 1).unwrap();
+    assert_eq!(chunk.steps.len() as u32, MAX_STEPS_PER_TAIL_CHUNK);
+    assert!(
+      chunk
+        .steps
+        .iter()
+        .all(|step| step.task.encoded_size() == TaskOf::<T>::max_encoded_len())
+    );
+    qualify_service_head_allowance_source::<T>(actor_id, actor_type, phase)
+  }
+
+  /// Original phase/class and fault cases retain 0..23; 24/25 add a full later fragment.
+  /// Measures the query only, not source construction, snapshots, worker or returned head work.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn service_head_allowance(c: Linear<0, 25>) -> Result<(), BenchmarkError> {
+    let mode = if c < 24 { c / 6 } else { 0 };
+    let actor_id = if c < 24 {
+      prepare_service_head_allowance_source::<T>(c % 6)?
+    } else {
+      prepare_service_head_allowance_later_fragment::<T>(
+        if c == 24 {
+          ActorType::User
+        } else {
+          ActorType::System
+        },
+        CycleState::Running,
+      )?
+    };
+    let cursor = ActorRunStateStore::<T>::get(actor_id).map_or(0, |run| run.cursor);
+    match mode {
+      0 => {}
+      1 => {
+        if cursor == 0 {
+          ActorContractHeads::<T>::mutate(actor_id, |head| {
+            head
+              .as_mut()
+              .unwrap()
+              .first_step_resources
+              .as_mut()
+              .unwrap()
+              .control = Weight::MAX;
+          });
+        } else {
+          let chunk = (cursor - 1) / MAX_STEPS_PER_TAIL_CHUNK;
+          let local = ((cursor - 1) % MAX_STEPS_PER_TAIL_CHUNK) as usize;
+          ActorContractTailChunks::<T>::mutate(actor_id, chunk, |tail| {
+            tail.as_mut().unwrap().step_resources[local].control = Weight::MAX;
+          });
+        }
+      }
+      2 => {
+        if cursor == 0 {
+          ActorContractHeads::<T>::remove(actor_id);
+        } else {
+          ActorContractTailChunks::<T>::remove(actor_id, (cursor - 1) / MAX_STEPS_PER_TAIL_CHUNK);
+        }
+      }
+      3 => ActorSemanticStates::<T>::mutate(actor_id, |state| {
+        let Some(ActorSemanticState::Active(record)) = state else {
+          unreachable!()
+        };
+        record.admission.production_weight_identity[0] ^= 1;
+      }),
+      _ => unreachable!(),
+    }
+    let now = frame_system::Pallet::<T>::block_number();
+    let header = ServiceHeader::<T>::get();
+    let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let actual;
+    #[block]
+    {
+      actual = Pallet::<T>::service_head_allowance_diagnostic(now);
+      core::hint::black_box(&actual);
+    }
+    assert_eq!(actual.is_some(), mode == 0);
+    assert_eq!(ServiceHeader::<T>::get(), header);
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
       root
@@ -28210,6 +29859,92 @@ mod benches {
     Ok(())
   }
 
+  struct ZeroStepCreationPrefund<T: Config> {
+    sovereign: T::AccountId,
+    native_balance: T::Balance,
+    projected_head: ActorContractHeadOf<T>,
+    trigger_fee: T::Balance,
+  }
+
+  fn prefund_zero_step_creation<T: Config>(
+    owner: &T::AccountId,
+    actor_type: ActorType,
+    contract: &ActorContractOf<T>,
+    trigger_weight: Weight,
+    system_native_custody: T::Balance,
+  ) -> ZeroStepCreationPrefund<T> {
+    assert!(contract.steps.is_empty() && contract.close_when.is_none());
+    assert_eq!(contract.on_unfunded, OnUnfunded::Close);
+    let actor_id = NextActorId::<T>::get();
+    let sovereign = match actor_type {
+      ActorType::User => {
+        let slot =
+          Pallet::<T>::available_owner_slot(owner, None).expect("zero-Step owner has a free slot");
+        Pallet::<T>::sovereign_account_id(owner, slot)
+      }
+      ActorType::System => Pallet::<T>::sovereign_account_id_system(actor_id),
+    };
+    assert!(!ActorSemanticStates::<T>::contains_key(actor_id));
+    assert!(!SovereignIndex::<T>::contains_key(&sovereign));
+    let certificate = Pallet::<T>::build_admission_certificate(contract)
+      .expect("prospective zero-Step authority is available");
+    let (projected_head, chunks) = Pallet::<T>::decompose_admitted_contract_geometry(
+      actor_id,
+      actor_type,
+      contract,
+      &certificate,
+    )
+    .expect("complete prospective zero-Step Contract has checked prices");
+    assert!(chunks.is_empty());
+    let pipeline_fee = Pallet::<T>::pipeline_fee_breakdown(
+      actor_type,
+      projected_head.header.pipeline_machine_envelope,
+    )
+    .total_fee;
+    let trigger_fee =
+      Pallet::<T>::trigger_fee_for_weight(actor_type, contract.trigger.family(), trigger_weight)
+        .trigger_fee;
+    let required = match actor_type {
+      ActorType::User => T::MinUserBalance::get()
+        .checked_add(&pipeline_fee)
+        .and_then(|value| value.checked_add(&trigger_fee))
+        .expect("native floor and complete readiness/Pipeline fees fit"),
+      ActorType::System => system_native_custody,
+    };
+    let native = T::FeeNativeAssetId::get();
+    let available = T::AssetOps::balance(&sovereign, native);
+    if available < required {
+      T::AssetOps::mint(&sovereign, native, required - available)
+        .expect("future zero-Step sovereign is prefunded before publication");
+    }
+    let native_balance = T::AssetOps::balance(&sovereign, native);
+    assert!(native_balance >= required);
+    ZeroStepCreationPrefund {
+      sovereign,
+      native_balance,
+      projected_head,
+      trigger_fee,
+    }
+  }
+
+  fn assert_zero_step_creation_prefund<T: Config>(
+    actor_id: ActorId,
+    prefund: &ZeroStepCreationPrefund<T>,
+  ) {
+    let identity = Pallet::<T>::actor_identity(actor_id).expect("zero-Step identity is published");
+    assert_eq!(identity.sovereign_account, prefund.sovereign);
+    assert_eq!(
+      T::AssetOps::balance(&identity.sovereign_account, T::FeeNativeAssetId::get()),
+      prefund.native_balance,
+      "public creation neither supplies nor consumes sovereign prefunding"
+    );
+    assert_eq!(
+      ActorContractHeads::<T>::get(actor_id).unwrap().encode(),
+      prefund.projected_head.encode(),
+      "public creation independently produces the complete prospective head"
+    );
+  }
+
   fn prepare_zero_step_opening<T: Config>(actor_type: ActorType) -> ActorId {
     prepare_zero_step_opening_with_window::<T>(actor_type, None)
   }
@@ -28226,55 +29961,44 @@ mod benches {
       trigger: Trigger::manual(),
       cooldown_blocks: 0,
     };
-    if actor_type == ActorType::User {
-      prefund_active_user_creation::<T>(&owner, &steps);
-      let mut contract = user_contract::<T>(schedule, steps);
-      contract
-        .as_mut()
-        .expect("active User Contract exists")
-        .window = window;
-      Pallet::<T>::create_user_actor(
+    let mut contract = match actor_type {
+      ActorType::User => user_contract::<T>(schedule, steps),
+      ActorType::System => system_contract::<T>(schedule, steps),
+    }
+    .expect("active zero-Step Contract exists");
+    contract.window = window;
+    let trigger_weight = T::WeightInfo::manual_trigger();
+    let prefund =
+      prefund_zero_step_creation::<T>(&owner, actor_type, &contract, trigger_weight, Zero::zero());
+    match actor_type {
+      ActorType::User => Pallet::<T>::create_user_actor(
         RawOrigin::Signed(owner.clone()).into(),
         Mutability::Mutable,
-        contract,
-      )
-      .expect("zero-Step User Contract is admitted");
-    } else {
-      let mut contract = system_contract::<T>(schedule, steps);
-      contract
-        .as_mut()
-        .expect("active System Contract exists")
-        .window = window;
-      Pallet::<T>::create_system_actor(
+        Some(contract),
+      ),
+      ActorType::System => Pallet::<T>::create_system_actor(
         RawOrigin::Root.into(),
         owner.clone(),
         Mutability::Mutable,
-        contract,
-      )
-      .expect("zero-Step System Contract is admitted");
+        Some(contract),
+      ),
     }
+    .expect("zero-Step Contract is admitted");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    let identity = benchmark_fixture_identity::<T>(actor_id).expect("admitted identity exists");
-    if actor_type == ActorType::User {
-      let fee = Pallet::<T>::pipeline_fee_for_actor(actor_id, actor_type)
-        .expect("certified zero-Step Pipeline fee exists")
-        .total_fee
-        .checked_add(
-          &Pallet::<T>::trigger_fee_for_weight(
-            ActorType::User,
-            TriggerFamily::Manual,
-            T::WeightInfo::manual_trigger(),
-          )
-          .trigger_fee,
-        )
-        .expect("User readiness and Pipeline fees fit");
-      T::AssetOps::mint(&identity.sovereign_account, T::FeeNativeAssetId::get(), fee)
-        .expect("User readiness and Pipeline have funding");
-    }
+    assert_zero_step_creation_prefund::<T>(actor_id, &prefund);
+    let trigger_fee =
+      Pallet::<T>::trigger_fee_for_weight(actor_type, TriggerFamily::Manual, trigger_weight)
+        .trigger_fee;
+    assert_eq!(
+      trigger_fee, prefund.trigger_fee,
+      "creation preserves the Trigger quote"
+    );
     Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
       .expect("real Manual occurrence publishes zero-Step readiness");
-    // A fresh occurrence publishes one Pending Service member for the following block, so the
-    // fixture advances to that eligible block instead of reading a retired legacy primary cell.
+    assert_eq!(
+      T::AssetOps::balance(&prefund.sovereign, T::FeeNativeAssetId::get()),
+      prefund.native_balance - trigger_fee
+    );
     let (state, _, step) = Pallet::<T>::load_frame_actor_service_state(actor_id)
       .expect("zero-Step canonical publication is coherent");
     assert!(step.is_none() && state.hot.pending_signal);
@@ -28298,15 +30022,22 @@ mod benches {
     (state, admission)
   }
 
-  fn execute_zero_step_inner<T: Config>(
+  fn prepare_zero_step_inner_context<T: Config>(
     actor_id: ActorId,
+  ) -> (ActorRef, ServiceResidenceKind) {
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("zero-Step Actor reference exists");
+    let (_, kind) = Pallet::<T>::load_service_actor_semantic_state_with_kind(actor)
+      .expect("zero-Step canonical Service residence exists");
+    (actor, kind)
+  }
+
+  fn execute_prepared_zero_step_inner<T: Config>(
+    actor: ActorRef,
+    kind: ServiceResidenceKind,
     state: ActiveActorStateOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
   ) {
-    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("zero-Step Actor reference exists");
-    let (_, kind) = Pallet::<T>::load_service_actor_semantic_state_with_kind(actor)
-      .expect("zero-Step canonical Service residence exists");
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       match Pallet::<T>::execute_zero_step_on_service(actor, kind, state, admission, now)
         .map(|_| ())
@@ -28321,6 +30052,16 @@ mod benches {
       }
     })
     .expect("zero-Step inner atom commits");
+  }
+
+  fn execute_zero_step_inner<T: Config>(
+    actor_id: ActorId,
+    state: ActiveActorStateOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+  ) {
+    let (actor, kind) = prepare_zero_step_inner_context::<T>(actor_id);
+    execute_prepared_zero_step_inner::<T>(actor, kind, state, admission, now);
   }
 
   fn assert_zero_step_completion<T: Config>(
@@ -28357,10 +30098,11 @@ mod benches {
   fn scheduler_inner_zero_step_complete() {
     let actor_id = prepare_zero_step_opening::<T>(ActorType::System);
     let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    let (actor, kind) = prepare_zero_step_inner_context::<T>(actor_id);
     let now = frame_system::Pallet::<T>::block_number();
     #[block]
     {
-      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+      execute_prepared_zero_step_inner::<T>(actor, kind, state, &admission, now);
     }
     assert_zero_step_completion::<T>(actor_id, ActorType::System, Zero::zero());
   }
@@ -28373,6 +30115,7 @@ mod benches {
       .expect("zero-Step User state hold exists")
       .encode();
     let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    let (actor, kind) = prepare_zero_step_inner_context::<T>(actor_id);
     let native = T::FeeNativeAssetId::get();
     let sovereign = state.identity.sovereign_account.clone();
     let sink = T::FeeSink::get();
@@ -28384,7 +30127,7 @@ mod benches {
     let now = frame_system::Pallet::<T>::block_number();
     #[block]
     {
-      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+      execute_prepared_zero_step_inner::<T>(actor, kind, state, &admission, now);
     }
     assert_eq!(T::AssetOps::balance(&sovereign, native), payer_before - fee);
     assert_eq!(T::AssetOps::balance(&sink, native), sink_before + fee);
@@ -28396,69 +30139,894 @@ mod benches {
     );
   }
 
-  /// Diagnostic complete User zero-Step Service turn, including discovery, admission and
-  /// resource settlement. Singleton Manual geometry does not certify the general outer maximum.
-  #[benchmark(extra, pov_mode = Measured)]
-  fn scheduler_service_zero_step_user_complete() {
-    let actor_id = prepare_zero_step_opening::<T>(ActorType::User);
-    let identity = benchmark_fixture_identity::<T>(actor_id).expect("User identity exists");
-    let hold_before = ActorStateHolds::<T>::get(actor_id)
-      .expect("zero-Step User state hold exists")
-      .encode();
-    let native = T::FeeNativeAssetId::get();
-    let sink = T::FeeSink::get();
-    let payer_before = T::AssetOps::balance(&identity.sovereign_account, native);
-    let sink_before = T::AssetOps::balance(&sink, native);
-    let fee = Pallet::<T>::pipeline_fee_for_actor(actor_id, ActorType::User)
-      .expect("certified Pipeline fee exists")
-      .total_fee;
+  struct CanonicalServiceFixture<T: Config> {
+    actor: ActorRef,
+    actor_type: ActorType,
+    header: Option<ZeroStepHeaderFixture<T>>,
+    hold: Option<Vec<u8>>,
+    payer: T::AccountId,
+    payer_before: T::Balance,
+    sink_before: T::Balance,
+    fee: T::Balance,
+    now: BlockNumberFor<T>,
+    limits: BlockResourceLimits,
+    resources: BlockResourceState<BlockNumberFor<T>>,
+    meter: polkadot_sdk::sp_weights::WeightMeter,
+  }
+
+  fn prepare_canonical_zero_step_service<T: Config>(
+    actor_type: ActorType,
+    full_header: bool,
+    round_begun: u32,
+  ) -> CanonicalServiceFixture<T> {
+    assert!(round_begun <= 1);
+    let header = full_header.then(|| {
+      prepare_zero_step_header::<T>(actor_type, ZeroStepHeaderSource::AddressEvent, false)
+    });
+    let actor_id = header.as_ref().map_or_else(
+      || prepare_zero_step_opening::<T>(actor_type),
+      |fixture| fixture.actor.actor_id,
+    );
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("real ready Service source exists");
+    let (state, _, step) = Pallet::<T>::load_frame_actor_service_state(actor_id)
+      .expect("complete canonical source is coherent");
+    assert!(step.is_none() && state.contract.steps.is_empty());
+    assert!(state.hot.pending_signal && state.run_state.is_none());
+    assert!(state.contract.close_when.is_none());
+    assert_eq!(state.contract.on_unfunded, OnUnfunded::Close);
     let now = frame_system::Pallet::<T>::block_number();
-    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("real Service actor exists");
-    assert_eq!(ServiceHeader::<T>::get().count, 1);
-    assert_eq!(ServiceHeader::<T>::get().cursor, Some(actor));
-    let limits = T::BlockResourceBudget::get().limits();
+    assert_eq!(
+      Pallet::<T>::service_terminal_control_upper(&state, None),
+      Weight::zero()
+    );
+    let before_round = ServiceHeader::<T>::get();
+    assert_eq!(before_round.count, if full_header { 3 } else { 1 });
+    assert_eq!(before_round.cursor, Some(actor));
+    assert_ne!(before_round.round_block, Some(now));
+    if round_begun == 1 {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        Pallet::<T>::begin_service_round(now).expect("ordinary prepared round begins");
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+    }
+    assert_eq!(
+      ServiceHeader::<T>::get().round_block == Some(now),
+      round_begun == 1
+    );
+    let native = T::FeeNativeAssetId::get();
+    let payer = state.identity.sovereign_account;
+    let fee = Pallet::<T>::pipeline_fee_for_actor(actor_id, actor_type)
+      .expect("certified cached Pipeline quote exists")
+      .total_fee;
+    let budget = T::BlockResourceBudget::get();
     let mut resources = BlockResourceState::new(now);
     resources
-      .begin_prepass(T::BlockResourceBudget::get())
+      .begin_prepass(budget)
       .expect("fixture prepass opens");
     resources
       .open_external_phase()
       .expect("fixture external phase opens");
-    resources.begin_drain().expect("fixture drain opens");
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    resources
+      .begin_drain()
+      .expect("fixture enters ordinary Drain");
+    CanonicalServiceFixture {
+      actor,
+      actor_type,
+      header,
+      hold: ActorStateHolds::<T>::get(actor_id).map(|hold| hold.encode()),
+      payer_before: T::AssetOps::balance(&payer, native),
+      sink_before: T::AssetOps::balance(&T::FeeSink::get(), native),
+      payer,
+      fee,
+      now,
+      limits: budget.limits(),
+      resources,
+      meter: polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX),
+    }
+  }
+
+  fn execute_canonical_zero_step_service<T: Config>(
+    fixture: &mut CanonicalServiceFixture<T>,
+  ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
+    Pallet::<T>::service_canonical_round_head_with_resources(
+      &mut fixture.meter,
+      fixture.now,
+      &mut fixture.resources,
+      fixture.limits,
+      BlockResourceDomain::ActorDrainEffect,
+    )
+  }
+
+  fn assert_canonical_zero_step_service<T: Config>(
+    fixture: CanonicalServiceFixture<T>,
+    result: Result<ServiceRoundEncounter, ServiceRoundError>,
+  ) {
+    assert_eq!(result, Ok(ServiceRoundEncounter::Eligible(fixture.actor)));
+    assert_eq!(fixture.resources.outstanding_reservations(), 0);
+    assert!(!fixture.resources.optional_actor_work_halted());
+    let used = fixture.resources.usage();
+    assert_eq!(used.actor_effect_used(), Weight::zero());
+    assert!(used.actor_control_used().ref_time() > 0 && used.actor_control_used().proof_size() > 0);
+    assert_eq!(fixture.meter.consumed(), used.actor_control_used());
+    let native = T::FeeNativeAssetId::get();
+    assert_eq!(
+      T::AssetOps::balance(&fixture.payer, native),
+      fixture.payer_before - fixture.fee
+    );
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      fixture.sink_before + fixture.fee
+    );
+    assert_eq!(
+      ActorStateHolds::<T>::get(fixture.actor.actor_id).map(|hold| hold.encode()),
+      fixture.hold
+    );
+    assert!(!ServiceNodes::<T>::contains_key(fixture.actor.actor_id));
+    assert_eq!(
+      ServiceHeader::<T>::get().count,
+      if fixture.header.is_some() { 2 } else { 0 }
+    );
+    assert_eq!(
+      DeadlineHandles::<T>::contains_key(fixture.actor.actor_id),
+      fixture.header.is_some()
+    );
+    if let Some(header) = fixture.header {
+      assert_zero_step_header::<T>(header, false);
+    } else {
+      assert_zero_step_completion::<T>(fixture.actor.actor_id, fixture.actor_type, fixture.fee);
+    }
+  }
+
+  struct CanonicalInspectionRefusalFixture<T: Config> {
+    service: CanonicalServiceFixture<T>,
+    inspection: Weight,
+    root: Vec<u8>,
+  }
+
+  fn prepare_canonical_zero_step_refusal<T: Config>(
+    c: u32,
+  ) -> CanonicalInspectionRefusalFixture<T> {
+    assert!(c < 16);
+    let profile = c / 4;
+    let actor_type = if matches!(profile, 1 | 2) {
+      ActorType::User
+    } else {
+      ActorType::System
+    };
+    let service = prepare_canonical_zero_step_service::<T>(actor_type, profile >= 2, (c / 2) % 2);
+    canonical_inspection_refusal_fixture(service, !c.is_multiple_of(2))
+  }
+
+  fn canonical_inspection_refusal_fixture<T: Config>(
+    mut service: CanonicalServiceFixture<T>,
+    proof: bool,
+  ) -> CanonicalInspectionRefusalFixture<T> {
+    let inspection = T::WeightInfo::service_round_begin_populated()
+      .checked_add(&T::WeightInfo::service_round_probe_eligible())
+      .and_then(|weight| weight.checked_add(&T::WeightInfo::scheduler_actor_state_probe()))
+      .expect("configured inspection declaration fits");
+    assert!(inspection.ref_time() > 0 && inspection.proof_size() > 0);
+    // The declaration selects a refusal boundary, not a physical price for this body.
+    let limit = if proof {
+      Weight::from_parts(Weight::MAX.ref_time(), inspection.proof_size())
+    } else {
+      Weight::from_parts(inspection.ref_time(), Weight::MAX.proof_size())
+    };
+    service.meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(limit);
+    let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    CanonicalInspectionRefusalFixture {
+      service,
+      inspection,
+      root,
+    }
+  }
+
+  fn execute_canonical_zero_step_refusal<T: Config>(
+    fixture: &mut CanonicalInspectionRefusalFixture<T>,
+  ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
+    execute_canonical_zero_step_service::<T>(&mut fixture.service)
+  }
+
+  fn assert_canonical_inspection_refusal<T: Config>(
+    fixture: &CanonicalInspectionRefusalFixture<T>,
+    result: Result<ServiceRoundEncounter, ServiceRoundError>,
+  ) {
+    assert_eq!(result, Err(ServiceRoundError::InsufficientWeight));
+    assert_eq!(fixture.service.meter.consumed(), fixture.inspection);
+    assert_eq!(
+      fixture.service.resources.usage().actor_control_used(),
+      fixture.inspection
+    );
+    assert_eq!(
+      fixture.service.resources.usage().actor_effect_used(),
+      Weight::zero()
+    );
+    assert_eq!(fixture.service.resources.outstanding_reservations(), 0);
+    assert!(!fixture.service.resources.optional_actor_work_halted());
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      fixture.root
+    );
+    let native = T::FeeNativeAssetId::get();
+    assert_eq!(
+      T::AssetOps::balance(&fixture.service.payer, native),
+      fixture.service.payer_before
+    );
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      fixture.service.sink_before
+    );
+    assert_eq!(
+      ActorStateHolds::<T>::get(fixture.service.actor.actor_id).map(|hold| hold.encode()),
+      fixture.service.hold
+    );
+    let state = Pallet::<T>::active_actor_state(fixture.service.actor.actor_id).unwrap();
+    assert!(state.hot.pending_signal && state.run_state.is_none());
+    assert_eq!(state.hot.cycle_state, CycleState::Idle);
+    assert!(ServiceNodes::<T>::contains_key(
+      fixture.service.actor.actor_id
+    ));
+  }
+
+  /// Actual canonical inspection through complete admission refusal; c encodes source/round/axis.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_service_zero_step_admission_refusal(c: Linear<0, 15>) {
+    let mut fixture = prepare_canonical_zero_step_refusal::<T>(c);
     let result;
     #[block]
     {
-      result = Pallet::<T>::service_canonical_round_head_with_resources(
-        &mut meter,
-        now,
-        &mut resources,
-        limits,
-        BlockResourceDomain::ActorDrainEffect,
-      );
+      result = execute_canonical_zero_step_refusal::<T>(&mut fixture);
     }
-    assert_eq!(result, Ok(ServiceRoundEncounter::Eligible(actor)));
-    assert_eq!(resources.outstanding_reservations(), 0);
-    assert!(!resources.optional_actor_work_halted());
-    let usage = resources.usage();
+    assert_canonical_inspection_refusal::<T>(&fixture, result);
+  }
+
+  fn prepare_user_pipeline_capacity<T: Config>(
+    c: u32,
+  ) -> Result<(ActorId, T::AccountId, bool), BenchmarkError> {
+    assert!(c < 4);
+    let wide = c >= 2;
+    let sufficient = c.is_multiple_of(2);
+    let (owner, contract) = if wide {
+      let (owner, mut contract) = prepare_user_creation_contract::<T>(Mutability::Mutable)?;
+      contract.window = Some(ScheduleWindow {
+        start: 1u32.into(),
+        end: T::MinWindowLength::get()
+          .checked_add(&2u32.into())
+          .ok_or(BenchmarkError::Stop("capacity window must fit"))?,
+      });
+      for step in &mut contract.steps {
+        step
+          .precondition
+          .as_mut()
+          .unwrap()
+          .clauses
+          .sort_by_key(Encode::encode);
+      }
+      (owner, contract)
+    } else {
+      let owner = account("pipeline-capacity-owner", 0, 0);
+      ensure_creation_balance::<T>(&owner);
+      (
+        owner,
+        user_contract::<T>(
+          Schedule {
+            trigger: Trigger::Manual,
+            cooldown_blocks: 0,
+          },
+          ContractSteps::<T>::default(),
+        )
+        .unwrap(),
+      )
+    };
+    // All funding precedes public creation and the real paid occurrence, including shortfall.
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let actor_id = NextActorId::<T>::get();
+    let slot = Pallet::<T>::available_owner_slot(&owner, None).unwrap();
+    let payer = Pallet::<T>::sovereign_account_id(&owner, slot);
+    let native = T::FeeNativeAssetId::get();
+    assert!(
+      T::AssetOps::balance(&payer, native).is_zero(),
+      "future custody must be fresh"
+    );
+    let certificate = Pallet::<T>::build_admission_certificate(&contract).ok_or(
+      BenchmarkError::Stop("capacity source needs complete admission authority"),
+    )?;
+    let (projected, _) = Pallet::<T>::decompose_admitted_contract_geometry(
+      actor_id,
+      ActorType::User,
+      &contract,
+      &certificate,
+    )
+    .ok_or(BenchmarkError::Stop(
+      "capacity source needs complete cached pricing",
+    ))?;
+    let family = contract.trigger.family();
+    let trigger_weight = if wide {
+      T::WeightInfo::address_event_trigger_occurrence()
+    } else {
+      T::WeightInfo::manual_trigger()
+    };
+    let trigger_fee =
+      Pallet::<T>::trigger_fee_for_weight(ActorType::User, family, trigger_weight).trigger_fee;
+    if trigger_fee.is_zero() {
+      return Err(BenchmarkError::Stop(
+        "shortfall source requires a nonzero readiness fee",
+      ));
+    }
+    let pipeline = Pallet::<T>::pipeline_fee_breakdown(
+      ActorType::User,
+      projected.header.pipeline_machine_envelope,
+    )
+    .total_fee;
+    let required = T::MinUserBalance::get()
+      .checked_add(&pipeline)
+      .ok_or(BenchmarkError::Stop("capacity floor must fit"))?;
+    let shortfall = if sufficient { Zero::zero() } else { One::one() };
+    let prefund = required
+      .checked_add(&trigger_fee)
+      .and_then(|value| value.checked_sub(&shortfall))
+      .ok_or(BenchmarkError::Stop("capacity readiness funding must fit"))?;
+    assert!(prefund >= required);
+    T::AssetOps::mint(&payer, native, prefund).map_err(|failure| failure.error)?;
+    let ingress_asset = if let Trigger::AddressEvent {
+      asset_filter: AssetFilter::Whitelist(assets),
+      ..
+    } = &contract.trigger
+    {
+      Some(
+        *assets
+          .iter()
+          .find(|asset| **asset != native)
+          .ok_or(BenchmarkError::Stop(
+            "capacity AddressEvent needs a non-native asset",
+          ))?,
+      )
+    } else {
+      None
+    };
+    Pallet::<T>::create_user_actor(
+      RawOrigin::Signed(owner.clone()).into(),
+      Mutability::Mutable,
+      Some(contract),
+    )?;
+    assert_eq!(
+      ActorContractHeads::<T>::get(actor_id).unwrap().encode(),
+      projected.encode()
+    );
+    assert_eq!(T::AssetOps::balance(&payer, native), prefund);
+    if let Some(asset) = ingress_asset {
+      let amount = T::AssetOps::minimum_balance(asset).max(One::one());
+      T::AssetOps::mint(&owner, asset, amount).map_err(|failure| failure.error)?;
+      T::BenchmarkHelper::transfer_signed(&owner, &payer, asset, amount)?;
+    } else {
+      Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)?;
+    }
+    assert_eq!(T::AssetOps::balance(&payer, native), required - shortfall);
+    let state = Pallet::<T>::active_actor_state(actor_id).unwrap();
+    assert!(state.hot.pending_signal && state.run_state.is_none());
+    assert_eq!(state.hot.cycle_state, CycleState::Idle);
+    assert_eq!(
+      state.contract.steps.len() as u32,
+      if wide { T::MaxContractSteps::get() } else { 0 }
+    );
+    let head = ActorContractHeads::<T>::get(actor_id).unwrap();
+    if wide {
+      assert_eq!(
+        head.header.encoded_size(),
+        ActorContractHeaderOf::<T>::max_encoded_len()
+          - ParkedBalanceActivationOf::<T>::max_encoded_len()
+      );
+      let first = head.first_step.as_ref().unwrap();
+      assert_eq!(first.task.encoded_size(), TaskOf::<T>::max_encoded_len());
+      assert_eq!(
+        first.precondition.as_ref().unwrap().predicate_count(),
+        benchmark_predicate_capacity::<T>()
+      );
+    } else {
+      assert!(head.first_step.is_none());
+    }
+    assert!(ActorStateHolds::<T>::contains_key(actor_id));
+    frame_system::Pallet::<T>::set_block_number(
+      ServiceNodes::<T>::get(actor_id).unwrap().eligible_from,
+    );
+    assert_distinct_measured_accounts::<T>(&[&payer, &T::FeeSink::get()]);
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("paid capacity source remains coherent");
+    Ok((actor_id, payer, sufficient))
+  }
+
+  /// Categorical cached-Head inspection, not a slope or a complete I/K bound.
+  /// c/2 selects minimal zero-Step or full-header/body; parity selects exact/one-short custody.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_user_pipeline_capacity(c: Linear<0, 3>) -> Result<(), BenchmarkError> {
+    let (actor_id, payer, expected) = prepare_user_pipeline_capacity::<T>(c)?;
+    let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let result;
+    #[block]
+    {
+      result = Pallet::<T>::pipeline_capacity_sufficient(actor_id, ActorType::User, &payer);
+    }
+    assert_eq!(
+      result.expect("cached Pipeline capacity remains readable"),
+      expected
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root
+    );
+    Ok(())
+  }
+
+  fn prepare_canonical_user_inspection_refusal<T: Config>(
+    c: u32,
+  ) -> Result<CanonicalInspectionRefusalFixture<T>, BenchmarkError> {
+    assert!(c < 8);
+    let (actor_id, payer, _) = prepare_user_pipeline_capacity::<T>(2 + c / 4)?;
+    let actor = Pallet::<T>::load_actor_ref(actor_id).unwrap();
+    let (state, _, loaded) = Pallet::<T>::load_frame_actor_service_state(actor_id).unwrap();
+    assert_eq!(loaded.unwrap().cursor, 0);
+    assert_eq!(
+      state.contract.steps.len() as u32,
+      T::MaxContractSteps::get()
+    );
+    assert!(state.hot.pending_signal && state.run_state.is_none());
+    assert!(state.contract.close_when.is_none());
+    assert_eq!(state.contract.on_unfunded, OnUnfunded::Close);
+    let now = frame_system::Pallet::<T>::block_number();
+    let before = ServiceHeader::<T>::get();
+    assert_eq!(before.count, 1);
+    assert_eq!(before.cursor, Some(actor));
+    assert_ne!(before.round_block, Some(now));
+    if (c / 2) % 2 == 1 {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        Pallet::<T>::begin_service_round(now).unwrap();
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+    }
+    let budget = T::BlockResourceBudget::get();
+    let mut resources = BlockResourceState::new(now);
+    resources.begin_prepass(budget).unwrap();
+    resources.open_external_phase().unwrap();
+    resources.begin_drain().unwrap();
+    let native = T::FeeNativeAssetId::get();
+    let service = CanonicalServiceFixture {
+      actor,
+      actor_type: ActorType::User,
+      header: None,
+      hold: ActorStateHolds::<T>::get(actor_id).map(|hold| hold.encode()),
+      payer_before: T::AssetOps::balance(&payer, native),
+      sink_before: T::AssetOps::balance(&T::FeeSink::get(), native),
+      payer,
+      fee: Pallet::<T>::pipeline_fee_for_actor(actor_id, ActorType::User)
+        .unwrap()
+        .total_fee,
+      now,
+      limits: budget.limits(),
+      resources,
+      meter: polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX),
+    };
+    Ok(canonical_inspection_refusal_fixture(
+      service,
+      !c.is_multiple_of(2),
+    ))
+  }
+
+  fn execute_canonical_user_inspection_refusal<T: Config>(
+    fixture: &mut CanonicalInspectionRefusalFixture<T>,
+  ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
+    Pallet::<T>::service_canonical_round_head_with_resources(
+      &mut fixture.service.meter,
+      fixture.service.now,
+      &mut fixture.service.resources,
+      fixture.service.limits,
+      BlockResourceDomain::ActorDrainEffect,
+    )
+  }
+
+  /// Complete canonical inspection through refusal, not the cached-capacity helper or a price.
+  /// c/4 selects exact/short paid capacity, (c/2)%2 the round and parity the local meter axis.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_service_user_inspection_refusal(c: Linear<0, 7>) -> Result<(), BenchmarkError> {
+    let mut fixture = prepare_canonical_user_inspection_refusal::<T>(c)?;
+    let result;
+    #[block]
+    {
+      result = execute_canonical_user_inspection_refusal::<T>(&mut fixture);
+    }
+    assert_canonical_inspection_refusal::<T>(&fixture, result);
+    Ok(())
+  }
+
+  struct CanonicalSharedRefusalFixture<T: Config> {
+    inspection: CanonicalInspectionRefusalFixture<T>,
+    user_dispatch_before: Weight,
+  }
+
+  fn prepare_canonical_user_shared_refusal<T: Config>(
+    c: u32,
+  ) -> Result<CanonicalSharedRefusalFixture<T>, BenchmarkError> {
+    assert!(c < 4);
+    let mut inspection = prepare_canonical_user_inspection_refusal::<T>(c)?;
+    let mut resources = BlockResourceState::new(inspection.service.now);
+    resources
+      .begin_prepass(T::BlockResourceBudget::get())
+      .unwrap();
+    resources.open_external_phase().unwrap();
+    let shared = inspection.service.limits.shared_economic();
+    let demand = if c.is_multiple_of(2) {
+      Weight::from_parts(shared.ref_time(), 0)
+    } else {
+      Weight::from_parts(0, shared.proof_size())
+    };
+    let mut user = resources
+      .reserve(
+        inspection.service.limits,
+        BlockResourceDomain::UserDispatch,
+        demand,
+      )
+      .unwrap();
+    resources.settle(&mut user, demand).unwrap();
+    resources.begin_drain().unwrap();
+    inspection.service.resources = resources;
+    inspection.service.meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    Ok(CanonicalSharedRefusalFixture {
+      inspection,
+      user_dispatch_before: demand,
+    })
+  }
+
+  fn assert_canonical_user_shared_refusal<T: Config>(
+    fixture: &CanonicalSharedRefusalFixture<T>,
+    result: Result<ServiceRoundEncounter, ServiceRoundError>,
+  ) {
+    let source = &fixture.inspection;
+    assert_eq!(result, Err(ServiceRoundError::ResourceUnavailable));
+    assert_eq!(source.service.meter.consumed(), source.inspection);
+    assert_eq!(
+      source.service.resources.usage().actor_control_used(),
+      source.inspection
+    );
+    assert_eq!(
+      source.service.resources.usage().actor_effect_used(),
+      Weight::zero()
+    );
+    assert_eq!(
+      source.service.resources.usage().user_dispatch_used(),
+      fixture.user_dispatch_before
+    );
+    assert_eq!(source.service.resources.outstanding_reservations(), 0);
+    assert!(!source.service.resources.optional_actor_work_halted());
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      source.root
+    );
+    let native = T::FeeNativeAssetId::get();
+    assert_eq!(
+      T::AssetOps::balance(&source.service.payer, native),
+      source.service.payer_before
+    );
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      source.service.sink_before
+    );
+    assert_eq!(
+      ActorStateHolds::<T>::get(source.service.actor.actor_id).map(|hold| hold.encode()),
+      source.service.hold
+    );
+    let state = Pallet::<T>::active_actor_state(source.service.actor.actor_id).unwrap();
+    assert!(state.hot.pending_signal && state.run_state.is_none());
+    assert_eq!(state.hot.cycle_state, CycleState::Idle);
+    assert!(ServiceNodes::<T>::contains_key(
+      source.service.actor.actor_id
+    ));
+  }
+
+  /// Later shared-economic refusal includes Action-fee quotation, plan construction and settlement.
+  /// c/2 selects the round state and parity the exhausted shared RefTime/ProofSize axis, not slopes.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_service_user_shared_refusal(c: Linear<0, 3>) -> Result<(), BenchmarkError> {
+    let mut fixture = prepare_canonical_user_shared_refusal::<T>(c)?;
+    let result;
+    #[block]
+    {
+      result = execute_canonical_user_inspection_refusal::<T>(&mut fixture.inspection);
+    }
+    assert_canonical_user_shared_refusal::<T>(&fixture, result);
+    Ok(())
+  }
+
+  fn prepare_canonical_user_opening_no_action<T: Config>(
+    r: u32,
+  ) -> Result<CanonicalInspectionRefusalFixture<T>, BenchmarkError> {
+    assert!(r <= 1);
+    // Same public source, Contract and paid capacity as I; only execution capacity differs.
+    let mut fixture = prepare_canonical_user_inspection_refusal::<T>(2 * r)?;
+    fixture.service.meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    let (state, _, loaded) =
+      Pallet::<T>::load_frame_actor_service_state(fixture.service.actor.actor_id).unwrap();
+    let loaded = loaded.unwrap();
+    assert!(matches!(
+      loaded.step.on_error,
+      StepErrorPolicy::RetryLater { .. }
+    ));
+    let action =
+      Pallet::<T>::maximum_current_action_fee(ActorType::User, &loaded.step, loaded.resources)
+        .map_err(|_| BenchmarkError::Stop("effectful source needs an Action quote"))?;
+    if action.total_fee.is_zero() {
+      return Err(BenchmarkError::Stop(
+        "no-Action source needs a nonzero Action fee",
+      ));
+    }
+    assert_eq!(
+      T::AssetOps::balance(
+        &state.identity.sovereign_account,
+        T::FeeNativeAssetId::get()
+      ),
+      T::MinUserBalance::get()
+        .checked_add(&fixture.service.fee)
+        .unwrap(),
+    );
+    Ok(fixture)
+  }
+
+  fn assert_canonical_user_opening_no_action<T: Config>(
+    fixture: &CanonicalInspectionRefusalFixture<T>,
+    result: Result<ServiceRoundEncounter, ServiceRoundError>,
+  ) {
+    assert_eq!(
+      result,
+      Ok(ServiceRoundEncounter::Eligible(fixture.service.actor))
+    );
+    let state = Pallet::<T>::active_actor_state(fixture.service.actor.actor_id).unwrap();
+    assert_eq!(state.hot.cycle_state, CycleState::Suspended);
+    assert!(!state.hot.pending_signal);
+    let run = state.run_state.as_ref().unwrap();
+    assert_eq!(run.cursor, 0);
+    assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+    assert_eq!(run.last_committed_step_block, None);
+    assert_eq!(
+      run.last_step_outcome,
+      Some(StepOutcome::FundingUnavailable(
+        crate::FundingUnavailableReason::ServiceFee
+      )),
+    );
+    assert_eq!(fixture.service.resources.outstanding_reservations(), 0);
+    assert!(!fixture.service.resources.optional_actor_work_halted());
+    let usage = fixture.service.resources.usage();
     assert_eq!(usage.actor_effect_used(), Weight::zero());
     assert!(usage.actor_control_used().ref_time() > 0);
     assert!(usage.actor_control_used().proof_size() > 0);
-    assert_eq!(meter.consumed(), usage.actor_control_used());
+    assert_eq!(fixture.service.meter.consumed(), usage.actor_control_used());
+    let native = T::FeeNativeAssetId::get();
     assert_eq!(
-      T::AssetOps::balance(&identity.sovereign_account, native),
-      payer_before - fee
+      T::AssetOps::balance(&fixture.service.payer, native),
+      fixture.service.payer_before - fixture.service.fee,
     );
-    assert_eq!(T::AssetOps::balance(&sink, native), sink_before + fee);
-    assert_zero_step_completion::<T>(actor_id, ActorType::User, fee);
-    assert_eq!(ServiceHeader::<T>::get().count, 0);
-    assert!(!ServiceNodes::<T>::contains_key(actor_id));
-    assert!(!DeadlineHandles::<T>::contains_key(actor_id));
     assert_eq!(
-      ActorStateHolds::<T>::get(actor_id).map(|hold| hold.encode()),
-      Some(hold_before),
-      "complete zero-Step Service preserves the installed state hold"
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      fixture.service.sink_before + fixture.service.fee,
     );
+    assert_eq!(
+      ActorStateHolds::<T>::get(fixture.service.actor.actor_id).map(|hold| hold.encode()),
+      fixture.service.hold,
+    );
+    assert_ne!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      fixture.root,
+      "Opening and the real typed funding refusal must commit, unlike I rollback",
+    );
+  }
+
+  /// Full canonical User Opening with I's effectful source and no invoked Task.
+  /// r selects round state; no effect subtraction, tariff or production upper is implied.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_service_user_opening_no_action(r: Linear<0, 1>) -> Result<(), BenchmarkError> {
+    let mut fixture = prepare_canonical_user_opening_no_action::<T>(r)?;
+    let result;
+    #[block]
+    {
+      result = execute_canonical_user_inspection_refusal::<T>(&mut fixture);
+    }
+    assert_canonical_user_opening_no_action::<T>(&fixture, result);
+    Ok(())
+  }
+
+  /// Prepared resource-aware pass, not a hook, admitted history, price or Task-throughput point.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_resource_pass_control(c: Linear<0, 3>) -> Result<(), BenchmarkError> {
+    let mut fixture = prepare_canonical_user_opening_no_action::<T>(0)?;
+    let before = fixture.service.resources;
+    let limits = fixture.service.limits;
+    let control = limits.actor_control();
+    let effect = limits.shared_economic();
+    let combined = control.checked_add(&effect).ok_or(BenchmarkError::Stop(
+      "configured combined pass limit overflows",
+    ))?;
+    if before.phase() != BlockResourcePhase::FreshDrain
+      || before.usage() != BlockResourceUsage::default()
+      || before.outstanding_reservations() != 0
+      || before.optional_actor_work_halted()
+      || !fixture.inspection.all_lte(control)
+      || T::MaxExecutionsPerBlock::get() == 0
+      || T::MaxQueueEntriesScannedPerBlock::get() == 0
+    {
+      return Err(BenchmarkError::Stop(
+        "prepared finite pass source is unavailable",
+      ));
+    }
+    let pass_control = match c {
+      2 => Weight::from_parts(fixture.inspection.ref_time(), control.proof_size()),
+      3 => Weight::from_parts(control.ref_time(), fixture.inspection.proof_size()),
+      _ => control,
+    };
+    let pass_limit = if c == 1 { Weight::zero() } else { combined };
+    let pass;
+    #[block]
+    {
+      pass = Pallet::<T>::execute_cycle_to_cutoff_with_resources(
+        pass_limit,
+        0,
+        &mut fixture.service.resources,
+        limits,
+        BlockResourceDomain::ActorDrainEffect,
+        pass_control,
+      );
+    }
+    assert!(!pass.effect_reconciliation_uncertain);
+    assert_eq!(pass.effect_consumed, Weight::zero());
+    assert_eq!(
+      pass.reconciled_domains(),
+      Some((pass.consumed, Weight::zero()))
+    );
+    assert_eq!(fixture.service.resources.budget(), before.budget());
+    assert_eq!(
+      fixture.service.resources.phase(),
+      BlockResourcePhase::FreshDrain
+    );
+    assert_eq!(fixture.service.resources.outstanding_reservations(), 0);
+    assert!(!fixture.service.resources.optional_actor_work_halted());
+    assert_eq!(
+      fixture.service.resources.usage().actor_effect_used(),
+      Weight::zero()
+    );
+    assert_eq!(
+      fixture.service.resources.usage().actor_control_used(),
+      pass.consumed
+    );
+    let native = T::FeeNativeAssetId::get();
+    assert_eq!(
+      ActorStateHolds::<T>::get(fixture.service.actor.actor_id).map(|hold| hold.encode()),
+      fixture.service.hold,
+    );
+    if c == 0 {
+      assert!(pass.starvation_observed && !pass.starved);
+      assert!(pass.consumed.ref_time() > 0 && pass.consumed.proof_size() > 0);
+      let state = Pallet::<T>::active_actor_state(fixture.service.actor.actor_id).unwrap();
+      assert_eq!(state.hot.cycle_state, CycleState::Suspended);
+      assert!(!state.hot.pending_signal);
+      let run = state.run_state.unwrap();
+      assert_eq!(run.cursor, 0);
+      assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+      assert_eq!(run.last_committed_step_block, None);
+      assert_eq!(
+        run.last_step_outcome,
+        Some(StepOutcome::FundingUnavailable(
+          crate::FundingUnavailableReason::ServiceFee,
+        ))
+      );
+      assert!(!ServiceNodes::<T>::contains_key(
+        fixture.service.actor.actor_id
+      ));
+      assert!(DeadlineHandles::<T>::contains_key(
+        fixture.service.actor.actor_id
+      ));
+      assert_eq!(
+        T::AssetOps::balance(&fixture.service.payer, native),
+        fixture.service.payer_before - fixture.service.fee
+      );
+      assert_eq!(
+        T::AssetOps::balance(&T::FeeSink::get(), native),
+        fixture.service.sink_before + fixture.service.fee
+      );
+      assert_ne!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        fixture.root
+      );
+    } else {
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        fixture.root
+      );
+      assert_eq!(
+        T::AssetOps::balance(&fixture.service.payer, native),
+        fixture.service.payer_before
+      );
+      assert_eq!(
+        T::AssetOps::balance(&T::FeeSink::get(), native),
+        fixture.service.sink_before
+      );
+      let state = Pallet::<T>::active_actor_state(fixture.service.actor.actor_id).unwrap();
+      assert_eq!(state.hot.cycle_state, CycleState::Idle);
+      assert!(state.hot.pending_signal && state.run_state.is_none());
+      assert_eq!(
+        ServiceHeader::<T>::get().cursor,
+        Some(fixture.service.actor)
+      );
+      if c == 1 {
+        assert_eq!(pass.consumed, Weight::zero());
+        assert!(!pass.starvation_observed && !pass.starved);
+        assert_eq!(fixture.service.resources, before);
+      } else {
+        assert_eq!(pass.consumed, fixture.inspection);
+        assert!(pass.starvation_observed && pass.starved);
+      }
+    }
+    assert!(!ActorReadyTail::<T>::exists());
+    assert!(!PrepassExecutionCutoff::<T>::exists());
+    #[cfg(feature = "try-runtime")]
+    Pallet::<T>::do_try_state().expect("prepared pass preserves canonical Actor authority");
+    Ok(())
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn scheduler_resource_pass_control_native_source_cases() {
+    for c in 0..=3 {
+      for verify in [false, true] {
+        new_test_ext().execute_with(|| {
+          _scheduler_resource_pass_control::<Test>(c, verify)
+            .unwrap_or_else(|error| panic!("resource pass c={c} verify={verify}: {error:?}"));
+        });
+      }
+    }
+  }
+
+  /// Complete canonical User Manual turn; r selects unbegun/prepared round, not a slope.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_service_zero_step_user_complete(r: Linear<0, 1>) {
+    let mut fixture = prepare_canonical_zero_step_service::<T>(ActorType::User, false, r);
+    let result;
+    #[block]
+    {
+      result = execute_canonical_zero_step_service::<T>(&mut fixture);
+    }
+    assert_canonical_zero_step_service::<T>(fixture, result);
+  }
+
+  /// Complete canonical System Manual counterpart, including selector and resource reconciliation.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_service_zero_step_system_complete(r: Linear<0, 1>) {
+    let mut fixture = prepare_canonical_zero_step_service::<T>(ActorType::System, false, r);
+    let result;
+    #[block]
+    {
+      result = execute_canonical_zero_step_service::<T>(&mut fixture);
+    }
+    assert_canonical_zero_step_service::<T>(fixture, result);
+  }
+
+  /// Complete canonical full User AddressEvent turn; window placement is already included.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_service_zero_step_user_address_event(r: Linear<0, 1>) {
+    let mut fixture = prepare_canonical_zero_step_service::<T>(ActorType::User, true, r);
+    let result;
+    #[block]
+    {
+      result = execute_canonical_zero_step_service::<T>(&mut fixture);
+    }
+    assert_canonical_zero_step_service::<T>(fixture, result);
+  }
+
+  /// Complete canonical full System AddressEvent counterpart; no User tariff is implied.
+  #[benchmark(extra, pov_mode = Measured)]
+  fn scheduler_service_zero_step_system_address_event(r: Linear<0, 1>) {
+    let mut fixture = prepare_canonical_zero_step_service::<T>(ActorType::System, true, r);
+    let result;
+    #[block]
+    {
+      result = execute_canonical_zero_step_service::<T>(&mut fixture);
+    }
+    assert_canonical_zero_step_service::<T>(fixture, result);
   }
 
   /// Diagnostic complete zero-Step branch that preserves independent window expiry outside Service.
@@ -30017,9 +32585,6 @@ mod benches {
       "host supports a nonterminal nonce target"
     );
     let steps = ContractSteps::<T>::default();
-    if actor_type == ActorType::User {
-      prefund_active_user_creation::<T>(&owner, &steps);
-    }
     let schedule = Schedule {
       trigger,
       cooldown_blocks: 0,
@@ -30049,6 +32614,21 @@ mod benches {
         "immutable maximum-header witness requires authored User terminal nonce"
       );
     }
+    let system_native_custody = if actor_type == ActorType::System {
+      let minimum = T::AssetOps::minimum_balance(T::FeeNativeAssetId::get()).max(One::one());
+      minimum
+        .checked_add(&minimum)
+        .expect("two native minima fit")
+    } else {
+      Zero::zero()
+    };
+    let prefund = prefund_zero_step_creation::<T>(
+      &owner,
+      actor_type,
+      &contract,
+      trigger_weight,
+      system_native_custody,
+    );
     let hold_reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
     let owner_hold_before = T::StateHoldCurrency::balance_on_hold(&hold_reason, &owner);
     match actor_type {
@@ -30108,6 +32688,7 @@ mod benches {
         );
       }
     }
+    assert_zero_step_creation_prefund::<T>(actor_id, &prefund);
     let payer = identity.sovereign_account;
     let class = identity.actor_class;
     assert_eq!(class.owner_slot().is_some(), actor_type == ActorType::User);
@@ -30124,30 +32705,10 @@ mod benches {
       .then(|| singleton_temporal_source::<T>(actor_id, TriggerFamily::Cadenced));
     let trigger_fee =
       Pallet::<T>::trigger_fee_for_weight(actor_type, family, trigger_weight).trigger_fee;
-    if actor_type == ActorType::User {
-      // Creation prefunding uses a windowless template. Fund this installed header's Pipeline
-      // envelope, including window placement, rather than the empty plan's zero Action fees.
-      let pipeline_fee = Pallet::<T>::pipeline_fee_for_actor(actor_id, actor_type)
-        .expect("installed zero-Step Pipeline quote exists")
-        .total_fee;
-      let required = T::MinUserBalance::get()
-        .checked_add(&pipeline_fee)
-        .and_then(|amount| amount.checked_add(&trigger_fee))
-        .expect("ledger floor, Pipeline and Trigger fees fit");
-      let available = T::AssetOps::balance(&payer, T::FeeNativeAssetId::get());
-      if available < required {
-        T::AssetOps::mint(&payer, T::FeeNativeAssetId::get(), required - available)
-          .expect("installed zero-Step fee shortfall is prefunded");
-      }
-    } else {
-      // Positive native custody is a preservation witness, not a System fee prerequisite.
-      let minimum = T::AssetOps::minimum_balance(T::FeeNativeAssetId::get()).max(One::one());
-      let custody = minimum
-        .checked_add(&minimum)
-        .expect("two native minima fit");
-      T::AssetOps::mint(&payer, T::FeeNativeAssetId::get(), custody)
-        .expect("System native custody witness is funded");
-    }
+    assert_eq!(
+      trigger_fee, prefund.trigger_fee,
+      "creation preserves the Trigger quote without extra funding"
+    );
     assert!(!Pallet::<T>::actor_hot(actor_id).unwrap().pending_signal);
     let amount = T::AssetOps::minimum_balance(asset).max(One::one());
     T::AssetOps::mint(&owner, asset, amount).expect("signed source has transferable custody");
@@ -30677,10 +33238,11 @@ mod benches {
       prepare_zero_step_header::<T>(ActorType::User, ZeroStepHeaderSource::AddressEvent, false);
     let actor_id = fixture.actor.actor_id;
     let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    let (actor, kind) = prepare_zero_step_inner_context::<T>(actor_id);
     let now = frame_system::Pallet::<T>::block_number();
     #[block]
     {
-      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+      execute_prepared_zero_step_inner::<T>(actor, kind, state, &admission, now);
     }
     assert_zero_step_header::<T>(fixture, false);
   }
@@ -30709,10 +33271,11 @@ mod benches {
       prepare_zero_step_header::<T>(ActorType::System, ZeroStepHeaderSource::AddressEvent, false);
     let actor_id = fixture.actor.actor_id;
     let (state, admission) = consume_zero_step_opening::<T>(actor_id);
+    let (actor, kind) = prepare_zero_step_inner_context::<T>(actor_id);
     let now = frame_system::Pallet::<T>::block_number();
     #[block]
     {
-      execute_zero_step_inner::<T>(actor_id, state, &admission, now);
+      execute_prepared_zero_step_inner::<T>(actor, kind, state, &admission, now);
     }
     assert_zero_step_header::<T>(fixture, false);
   }
@@ -32140,6 +34703,75 @@ mod benches {
     Ok(())
   }
 
+  /// User inner Opening progress with real Pipeline collection and retained User hold.
+  /// Zero-resolution skips isolate Control; Action collection and receipt remain separate owners.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_opening_user_progress_min(
+    t: Linear<
+      1,
+      {
+        T::MaxContractSteps::get()
+          .saturating_sub(1)
+          .div_ceil(MAX_STEPS_PER_TAIL_CHUNK)
+          .max(1)
+      },
+    >,
+  ) -> Result<(), BenchmarkError> {
+    let (actor_id, count) = prepare_reachable_opening::<T>(t, ReachableOpeningProfile::UserPaged)?;
+    let accounting_before = user_pipeline_accounting::<T>(actor_id);
+    let hold_before = ActorStateHolds::<T>::get(actor_id).expect("User state hold exists");
+    let now = frame_system::Pallet::<T>::block_number();
+    let (state, admission, loaded_step) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
+    assert_eq!(state.identity.actor_class.actor_type(), ActorType::User);
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("User generation exists");
+    let (_, kind) = Pallet::<T>::load_service_actor_semantic_state_with_kind(actor)
+      .expect("User owns canonical Service residence");
+    let evidence;
+    #[block]
+    {
+      let maximum_fee = Pallet::<T>::maximum_current_action_fee(
+        ActorType::User,
+        &loaded_step.step,
+        loaded_step.resources,
+      )
+      .expect("current User Action liability is bounded");
+      let plan = Pallet::<T>::build_canonical_current_step_plan(
+        actor_id,
+        state.identity.clone(),
+        state.hot.clone(),
+        state.run_state.clone(),
+        admission.clone(),
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("carried User plan builds");
+      evidence = Pallet::<T>::execute_effectful_step_on_service_with_deadline(
+        actor, kind, state, plan, &admission, now, None,
+      )
+      .map_err(|failure| failure.cause)
+      .expect("User inner Opening progress commits");
+    }
+    assert_eq!(evidence.actual_effect_weight, Weight::zero());
+    assert_user_pipeline_accounting::<T>(actor_id, accounting_before);
+    assert_eq!(ActorStateHolds::<T>::get(actor_id), Some(hold_before));
+    assert_reachable_opening::<T>(actor_id, count, ReachableOpeningProfile::UserPaged);
+    let absent_action: <T as frame_system::Config>::RuntimeEvent = Event::<T>::ActionFeeCharged {
+      actor_id,
+      cycle_nonce: 1,
+      step_index: 0,
+      actual_effect_weight: Weight::zero(),
+      fee: Zero::zero(),
+    }
+    .into();
+    assert!(
+      !frame_system::Pallet::<T>::events()
+        .iter()
+        .any(|record| record.event == absent_action)
+    );
+    Ok(())
+  }
+
   /// True current-Step Balance predicates precede System StopCycle and retained Service placement.
   /// No Action receipt, Task effect or retained Run is produced. Tail count is not tail evaluation.
   #[benchmark(pov_mode = Measured)]
@@ -32295,6 +34927,116 @@ mod benches {
     }
     assert_eq!(effect_weight, Weight::zero());
     assert_reachable_suspended_tail_retry_state::<T>(actor_id, cursor, 2);
+    Ok(())
+  }
+
+  /// User retry through its hold path; no Task effect or Action collection is invoked.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_suspended_user_tail_retry(
+    s: Linear<
+      1,
+      {
+        T::MaxContractSteps::get()
+          .saturating_sub(1)
+          .clamp(1, MAX_STEPS_PER_TAIL_CHUNK)
+      },
+    >,
+    p: Linear<0, { benchmark_predicate_capacity::<T>() }>,
+  ) -> Result<(), BenchmarkError> {
+    let (id, cursor) = prepare_reachable_suspended_tail_retry_for_type::<T>(s, p, ActorType::User)?;
+    let (state, admission, loaded) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(id);
+    let now = frame_system::Pallet::<T>::block_number();
+    assert_eq!(state.identity.actor_class.actor_type(), ActorType::User);
+    let payer = state.identity.sovereign_account.clone();
+    let native = T::FeeNativeAssetId::get();
+    let payer_before = T::AssetOps::balance(&payer, native);
+    let sink_before = T::AssetOps::balance(&T::FeeSink::get(), native);
+    let hold_before = ActorStateHolds::<T>::get(id).expect("User hold exists");
+    let source = Pallet::<T>::load_actor_ref(id).expect("User generation exists");
+    let (_, kind) = Pallet::<T>::load_service_actor_semantic_state_with_kind(source).unwrap();
+    let due = Pallet::<T>::suspension_eligible_at(
+      state.contract.cooldown_blocks,
+      state.contract.window,
+      now,
+      2,
+    )
+    .expect("second retry backoff fits");
+    let evidence;
+    #[block]
+    {
+      evidence = execute_direct_user_service_inner::<T>(
+        (source, kind),
+        state,
+        admission,
+        loaded,
+        now,
+        Some(WakeupKey::Block(due)),
+      );
+    }
+    assert_eq!(evidence.actual_effect_weight, Weight::zero());
+    assert_reachable_suspended_tail_retry_state::<T>(id, cursor, 2);
+    assert_eq!(ActorStateHolds::<T>::get(id), Some(hold_before));
+    assert_eq!(T::AssetOps::balance(&payer, native), payer_before);
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      sink_before
+    );
+    Ok(())
+  }
+
+  /// User resumed progress after a real recipient refusal; zero resolution isolates Control.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_suspended_user_tail_progress(
+    s: Linear<
+      2,
+      {
+        T::MaxContractSteps::get()
+          .saturating_sub(1)
+          .clamp(2, MAX_STEPS_PER_TAIL_CHUNK)
+      },
+    >,
+    p: Linear<0, { benchmark_predicate_capacity::<T>() }>,
+  ) -> Result<(), BenchmarkError> {
+    let (id, cursor, asset) = prepare_user_suspended_tail_skip::<T>(s, p)?;
+    let (state, admission, loaded) =
+      benchmark_fixture_consume_frame_current_step_service_state::<T>(id);
+    let now = frame_system::Pallet::<T>::block_number();
+    assert_eq!(state.identity.actor_class.actor_type(), ActorType::User);
+    let payer = state.identity.sovereign_account.clone();
+    let native = T::FeeNativeAssetId::get();
+    let payer_before = T::AssetOps::balance(&payer, native);
+    let sink_before = T::AssetOps::balance(&T::FeeSink::get(), native);
+    let hold_before = ActorStateHolds::<T>::get(id).expect("User hold exists");
+    let source = Pallet::<T>::load_actor_ref(id).expect("User generation exists");
+    let (_, kind) = Pallet::<T>::load_service_actor_semantic_state_with_kind(source).unwrap();
+    let evidence;
+    #[block]
+    {
+      evidence =
+        execute_direct_user_service_inner::<T>((source, kind), state, admission, loaded, now, None);
+    }
+    assert_eq!(evidence.actual_effect_weight, Weight::zero());
+    let state = Pallet::<T>::active_actor_state(id).expect("progress retains User");
+    assert_eq!(state.hot.cycle_state, CycleState::Running);
+    let run = state.run_state.unwrap();
+    assert_eq!(
+      (run.cursor, run.unsuccessful_attempts_at_cursor),
+      (cursor + 1, 0)
+    );
+    assert_eq!(run.last_committed_step_block, Some(now));
+    assert_eq!(
+      run.last_step_outcome,
+      Some(StepOutcome::Skipped(StepSkippedReason::ResolutionSkipped))
+    );
+    assert_committed_service_turn::<T>(id, now);
+    assert_eq!(ActorStateHolds::<T>::get(id), Some(hold_before));
+    assert!(T::AssetOps::balance(&payer, asset).is_zero());
+    assert_eq!(T::AssetOps::balance(&payer, native), payer_before);
+    assert_eq!(
+      T::AssetOps::balance(&T::FeeSink::get(), native),
+      sink_before
+    );
     Ok(())
   }
 
@@ -32925,6 +35667,35 @@ mod benches {
     Ok(())
   }
 
+  struct RetryDeadlineServiceFixture<BlockNumber> {
+    actor: ActorRef,
+    now: BlockNumber,
+    index_keys: Option<u32>,
+  }
+
+  fn prepare_retry_deadline_service<T: Config>(
+    deep_index: bool,
+  ) -> Result<RetryDeadlineServiceFixture<BlockNumberFor<T>>, BenchmarkError> {
+    let (actor_id, _) = prepare_reachable_opening::<T>(0, ReachableOpeningProfile::RetryMin)?;
+    Pallet::<T>::execute_cycle(Weight::MAX);
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("retry retains its live generation");
+    let now = ActorRunStateStore::<T>::get(actor_id)
+      .expect("ordinary retry attempt retains its Run")
+      .eligible_at;
+    let index_keys = if deep_index {
+      Some(populate_canonical_deadline_index::<T>(now))
+    } else {
+      prepare_deadline_removal_neighbors::<T>(actor);
+      None
+    };
+    frame_system::Pallet::<T>::set_block_number(now);
+    Ok(RetryDeadlineServiceFixture {
+      actor,
+      now,
+      index_keys,
+    })
+  }
+
   /// Measures one complete canonical due-Deadline recovery pass. The fixture owns a legal
   /// populated Block deadline bucket whose due head has three distinct maintenance neighbors;
   /// the outer owner includes the mandatory two-clock envelope, frontier classification, removal, and B+1 Service
@@ -32933,15 +35704,9 @@ mod benches {
   #[benchmark(pov_mode = Measured)]
   fn scheduler_due_deadline_to_service()
   -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let (actor_id, _) = prepare_reachable_opening::<T>(0, ReachableOpeningProfile::RetryMin)?;
-    Pallet::<T>::execute_cycle(Weight::MAX);
-    let actor =
-      Pallet::<T>::load_actor_ref(actor_id).expect("suspended retry retains live Actor authority");
-    let run = ActorRunStateStore::<T>::get(actor_id)
-      .expect("ordinary retry attempt publishes one suspended Run");
-    let now = run.eligible_at;
-    prepare_deadline_removal_neighbors::<T>(actor);
-    frame_system::Pallet::<T>::set_block_number(now);
+    let RetryDeadlineServiceFixture { actor, now, .. } =
+      prepare_retry_deadline_service::<T>(false)?;
+    let actor_id = actor.actor_id;
     let handle = DeadlineHandles::<T>::get(actor_id)
       .expect("due retry owns one legal canonical Deadline member");
     assert_eq!(handle.key, WakeupKey::Block(now));
@@ -32991,14 +35756,13 @@ mod benches {
   /// fullest admitted index. Populated-page unlink remains a separately measured branch.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_due_deadline_to_service_deep_index() -> Result<(), BenchmarkError> {
-    let (actor_id, _) = prepare_reachable_opening::<T>(0, ReachableOpeningProfile::RetryMin)?;
-    Pallet::<T>::execute_cycle(Weight::MAX);
-    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("retry retains its generation");
-    let now = ActorRunStateStore::<T>::get(actor_id)
-      .expect("retry retains its Run")
-      .eligible_at;
-    let keys = populate_canonical_deadline_index::<T>(now);
-    frame_system::Pallet::<T>::set_block_number(now);
+    let RetryDeadlineServiceFixture {
+      actor,
+      now,
+      index_keys,
+    } = prepare_retry_deadline_service::<T>(true)?;
+    let actor_id = actor.actor_id;
+    let keys = index_keys.expect("deep source retains its index population");
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
     let pass;
 
@@ -34008,10 +36772,9 @@ mod benches {
     }
   }
 
-  // Diagnostic: this fixture dispatches the declared maximum inbound context (512 downward
-  // messages of 64 KiB), which exceeds a legal block's XCMP enqueue weight and therefore cannot
-  // produce a production coefficient. The trait keeps the last measured cap while that budget
-  // question is open. See sdk2609-actors-weight-regeneration.
+  // Diagnostic: host preparation may abridge full messages to hashes before dispatch.
+  // Native fixture conformance does not qualify complete context-processing cost.
+  // The trait retains a carried declaration; this extra supplies no production coefficient.
   #[benchmark(extra, pov_mode = Measured)]
   fn maximum_context_inherent() {
     let inherent = T::BenchmarkHelper::prepare_maximum_context_inherent();
@@ -34527,6 +37290,41 @@ mod benches {
   use crate::mock::{Test, new_test_ext};
   #[cfg(test)]
   #[test]
+  fn user_opening_progress_diagnostic_preserves_control_boundaries() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_scheduler_inner_opening_user_progress_min().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn user_suspended_tail_diagnostics_preserve_control_boundaries() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_scheduler_inner_suspended_user_tail_retry().unwrap();
+    });
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_scheduler_inner_suspended_user_tail_progress().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn invoked_receipt_envelope_covers_failure_and_fee_events() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_action_invocation_receipt().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn minimum_transfer_diagnostic_preserves_effect_boundaries() {
+    new_test_ext().execute_with(|| {
+      Pallet::<Test>::test_benchmark_task_transfer_minimum().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
   fn fixture_admission_reduction_preserves_protected_branch_and_structure() {
     new_test_ext().execute_with(|| {
       let count = <<Test as Config>::MaxContractSteps as Get<u32>>::get();
@@ -34560,6 +37358,520 @@ mod benches {
         #[cfg(feature = "try-runtime")]
         Pallet::<Test>::do_try_state().expect("partition close leaves no orphan state");
       });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_canonical_refusal_preserves_paid_source_and_retries_without_retrigger() {
+    for c in 0..16 {
+      new_test_ext().execute_with(|| {
+        let mut fixture = prepare_canonical_zero_step_refusal::<Test>(c);
+        crate::mock::clear_fee_collections();
+        let result = execute_canonical_zero_step_refusal::<Test>(&mut fixture);
+        assert_canonical_inspection_refusal::<Test>(&fixture, result);
+        assert!(crate::mock::fee_collections().is_empty());
+        let now = fixture.service.now + 1;
+        frame_system::Pallet::<Test>::set_block_number(now);
+        fixture.service.now = now;
+        let budget = <Test as Config>::BlockResourceBudget::get();
+        let mut resources = BlockResourceState::new(now);
+        resources.begin_prepass(budget).unwrap();
+        resources.open_external_phase().unwrap();
+        resources.begin_drain().unwrap();
+        fixture.service.resources = resources;
+        fixture.service.meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+        let actor_type = fixture.service.actor_type;
+        let fee = fixture.service.fee;
+        let result = execute_canonical_zero_step_service::<Test>(&mut fixture.service);
+        assert_canonical_zero_step_service::<Test>(fixture.service, result);
+        assert_eq!(
+          crate::mock::fee_collections(),
+          if actor_type == ActorType::User {
+            vec![fee]
+          } else {
+            vec![]
+          }
+        );
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_canonical_refusal_sdk_verification_on_and_off() {
+    for c in 0..16 {
+      for verify in [true, false] {
+        new_test_ext().execute_with(|| {
+          let id = NextActorId::<Test>::get();
+          _scheduler_service_zero_step_admission_refusal::<Test>(c, verify);
+          let profile = c / 4;
+          let actor_type = if matches!(profile, 1 | 2) {
+            ActorType::User
+          } else {
+            ActorType::System
+          };
+          let state = Pallet::<Test>::active_actor_state(id).unwrap();
+          assert_eq!(state.identity.actor_class.actor_type(), actor_type);
+          assert!(state.hot.pending_signal && state.run_state.is_none());
+          assert_eq!(state.hot.cycle_state, CycleState::Idle);
+          assert!(ServiceNodes::<Test>::contains_key(id));
+          assert_eq!(
+            ServiceHeader::<Test>::get().count,
+            if profile >= 2 { 3 } else { 1 }
+          );
+          assert_eq!(
+            ActorStateHolds::<Test>::contains_key(id),
+            actor_type == ActorType::User
+          );
+          let fee = Pallet::<Test>::pipeline_fee_for_actor(id, actor_type)
+            .unwrap()
+            .total_fee;
+          let native = <Test as Config>::FeeNativeAssetId::get();
+          let minimum = <Test as Config>::AssetOps::minimum_balance(native).max(1);
+          let expected = if actor_type == ActorType::User {
+            <Test as Config>::MinUserBalance::get() + fee
+          } else if profile >= 2 {
+            minimum * 2
+          } else {
+            0
+          };
+          assert_eq!(
+            <Test as Config>::AssetOps::balance(&state.identity.sovereign_account, native),
+            expected
+          );
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn canonical_zero_step_service_uses_only_actual_caller_transaction() {
+    fn transaction_level() -> u32 {
+      polkadot_sdk::frame_support::storage::unhashed::get_or_default(
+        polkadot_sdk::frame_support::storage::transactional::TRANSACTION_LEVEL_KEY,
+      )
+    }
+    for actor_type in [ActorType::User, ActorType::System] {
+      for full in [false, true] {
+        for round_begun in 0..=1 {
+          new_test_ext().execute_with(|| {
+            let mut fixture =
+              prepare_canonical_zero_step_service::<Test>(actor_type, full, round_begun);
+            let ambient = transaction_level();
+            let depth = alloc::rc::Rc::new(core::cell::Cell::new(None));
+            if actor_type == ActorType::User {
+              let depth = depth.clone();
+              crate::mock::set_fee_collection_hook(move || depth.set(Some(transaction_level())));
+            }
+            let result = execute_canonical_zero_step_service::<Test>(&mut fixture);
+            assert_eq!(
+              depth.get(),
+              if actor_type == ActorType::User {
+                Some(ambient + 2)
+              } else {
+                None
+              }
+            );
+            assert_eq!(transaction_level(), ambient);
+            assert_canonical_zero_step_service::<Test>(fixture, result);
+          });
+        }
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn canonical_zero_step_sdk_profiles_execute_with_and_without_verification() {
+    for profile in 0..4 {
+      for round_begun in 0..=1 {
+        for verify in [true, false] {
+          new_test_ext().execute_with(|| {
+            let id = NextActorId::<Test>::get();
+            match profile {
+              0 => _scheduler_service_zero_step_system_complete::<Test>(round_begun, verify),
+              1 => _scheduler_service_zero_step_user_complete::<Test>(round_begun, verify),
+              2 => _scheduler_service_zero_step_user_address_event::<Test>(round_begun, verify),
+              3 => _scheduler_service_zero_step_system_address_event::<Test>(round_begun, verify),
+              _ => unreachable!(),
+            };
+            let actor_type = if matches!(profile, 1 | 2) {
+              ActorType::User
+            } else {
+              ActorType::System
+            };
+            let state = Pallet::<Test>::active_actor_state(id).unwrap();
+            assert_eq!(state.identity.actor_class.actor_type(), actor_type);
+            assert_eq!(state.contract.window.is_some(), profile >= 2);
+            let fee = Pallet::<Test>::pipeline_fee_for_actor(id, actor_type)
+              .unwrap()
+              .total_fee;
+            assert_zero_step_completion::<Test>(id, actor_type, fee);
+            assert_eq!(
+              ActorStateHolds::<Test>::contains_key(id),
+              actor_type == ActorType::User
+            );
+            assert!(!ServiceNodes::<Test>::contains_key(id));
+            assert_eq!(
+              ServiceHeader::<Test>::get().count,
+              if profile >= 2 { 2 } else { 0 }
+            );
+            assert_eq!(DeadlineHandles::<Test>::contains_key(id), profile >= 2);
+            let native = <Test as Config>::FeeNativeAssetId::get();
+            let minimum = <Test as Config>::AssetOps::minimum_balance(native).max(1);
+            let expected = if actor_type == ActorType::User {
+              <Test as Config>::MinUserBalance::get()
+            } else if profile >= 2 {
+              minimum * 2
+            } else {
+              0
+            };
+            assert_eq!(
+              <Test as Config>::AssetOps::balance(&state.identity.sovereign_account, native),
+              expected
+            );
+          });
+        }
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_whole_worker_owns_placement_and_matches_canonical_carrier() {
+    use polkadot_sdk::frame_support::storage::{TransactionOutcome, with_transaction_unchecked};
+    fn transaction_level() -> u32 {
+      polkadot_sdk::frame_support::storage::unhashed::get_or_default(
+        polkadot_sdk::frame_support::storage::transactional::TRANSACTION_LEVEL_KEY,
+      )
+    }
+    for actor_type in [ActorType::User, ActorType::System] {
+      for full_header in [false, true] {
+        new_test_ext().execute_with(|| {
+          let fixture = full_header.then(|| {
+            prepare_zero_step_header::<Test>(actor_type, ZeroStepHeaderSource::AddressEvent, false)
+          });
+          let actor_id = fixture.as_ref().map_or_else(
+            || prepare_zero_step_opening::<Test>(actor_type),
+            |fixture| fixture.actor.actor_id,
+          );
+          let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+          let (actor, kind) = prepare_zero_step_inner_context::<Test>(actor_id);
+          let now = frame_system::Pallet::<Test>::block_number();
+          let fee = Pallet::<Test>::pipeline_fee_for_actor(actor_id, actor_type).unwrap().total_fee;
+          let inner = Pallet::<Test>::zero_step_resource_envelope(&state.contract).unwrap().control;
+          let common = Pallet::<Test>::service_turn_control_weight_upper().unwrap();
+          let before_header = ServiceHeader::<Test>::get();
+          assert_eq!(before_header.count, if full_header { 3 } else { 1 });
+          let ambient = transaction_level();
+          let root = || polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+          let before = root();
+          let mut outcomes = Vec::new();
+          for path in 0..3 {
+            let depth = alloc::rc::Rc::new(core::cell::Cell::new(None));
+            if actor_type == ActorType::User {
+              let depth = depth.clone();
+              crate::mock::set_fee_collection_hook(move || depth.set(Some(transaction_level())));
+            }
+            let result = with_transaction_unchecked(|| {
+              crate::mock::clear_fee_collections();
+              let mut reported = Weight::zero();
+              match path {
+                0 => execute_prepared_zero_step_inner::<Test>(
+                  actor, kind, state.clone(), &admission, now,
+                ),
+                1 => {
+                  reported = Pallet::<Test>::execute_zero_step_on_service(
+                    actor, kind, state.clone(), &admission, now,
+                  ).unwrap().actual_control_weight;
+                  assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+                  assert_eq!(ServiceHeader::<Test>::get().count, before_header.count - 1);
+                  let placed = root();
+                  assert_eq!(
+                    Pallet::<Test>::advance_service_head(actor, now),
+                    Err(if full_header { ServiceRoundError::CorruptRing } else { ServiceRoundError::RoundNotStarted }),
+                    "whole worker has already consumed this Service member",
+                  );
+                  assert_eq!(root(), placed);
+                  if full_header {
+                    let destination = DeadlineHandles::<Test>::get(actor_id).unwrap();
+                    assert_eq!(
+                      Pallet::<Test>::transfer_service_member_to_deadline(actor, destination),
+                      Err(DeadlineMutationError::ProcessResidenceMismatch),
+                      "window placement already includes removal and Deadline transfer",
+                    );
+                    assert_eq!(root(), placed);
+                  }
+                }
+                2 => {
+                  let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+                  assert_eq!(
+                    Pallet::<Test>::service_canonical_round_head(&mut meter, now),
+                    Ok(ServiceRoundEncounter::Eligible(actor)),
+                  );
+                  reported = meter.consumed();
+                }
+                _ => unreachable!(),
+              }
+              TransactionOutcome::Rollback((
+                root(), crate::mock::fee_collections(), depth.get(), reported,
+              ))
+            });
+            assert_eq!(root(), before);
+            assert_eq!(transaction_level(), ambient);
+            outcomes.push(result);
+          }
+          assert_eq!(outcomes[0].0, outcomes[1].0);
+          assert_eq!(outcomes[0].0, outcomes[2].0);
+          let expected_fees = if actor_type == ActorType::User { vec![fee] } else { vec![] };
+          for outcome in &outcomes {
+            assert_eq!(outcome.1, expected_fees);
+          }
+          assert_eq!(outcomes[1].3, inner);
+          assert_eq!(outcomes[2].3, inner.checked_add(&common).unwrap());
+          let depths = outcomes.iter().map(|outcome| outcome.2).collect::<Vec<_>>();
+          if actor_type == ActorType::User {
+            assert_eq!(depths, vec![Some(ambient + 3), Some(ambient + 2), Some(ambient + 3)]);
+          } else {
+            assert_eq!(depths, vec![None, None, None]);
+          }
+          eprintln!(
+            "ZERO_STEP_OWNER class={actor_type:?} full={full_header} depths={depths:?} inner={inner:?} common={common:?}",
+          );
+          crate::mock::clear_fee_collections();
+          execute_prepared_zero_step_inner::<Test>(actor, kind, state, &admission, now);
+          if let Some(fixture) = fixture {
+            assert_zero_step_header::<Test>(fixture, false);
+          } else {
+            assert_zero_step_completion::<Test>(actor_id, actor_type, fee);
+          }
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_prepared_inner_context_preserves_source_and_legacy_completion() {
+    for actor_type in [ActorType::User, ActorType::System] {
+      for full_header in [false, true] {
+        new_test_ext().execute_with(|| {
+          let fixture = full_header.then(|| {
+            prepare_zero_step_header::<Test>(actor_type, ZeroStepHeaderSource::AddressEvent, false)
+          });
+          let actor_id = fixture.as_ref().map_or_else(
+            || prepare_zero_step_opening::<Test>(actor_type),
+            |fixture| fixture.actor.actor_id,
+          );
+          let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+          let now = frame_system::Pallet::<Test>::block_number();
+          let fee = Pallet::<Test>::pipeline_fee_for_actor(actor_id, actor_type)
+            .unwrap()
+            .total_fee;
+          let before =
+            polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+          let fees_before = crate::mock::fee_collections();
+          let (actor, kind) = prepare_zero_step_inner_context::<Test>(actor_id);
+          assert_eq!(
+            polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+            before
+          );
+          assert_eq!(crate::mock::fee_collections(), fees_before);
+          let legacy = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+            crate::mock::clear_fee_collections();
+            execute_zero_step_inner::<Test>(actor_id, state.clone(), &admission, now);
+            let result = (
+              polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+              crate::mock::fee_collections(),
+            );
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(result)
+          });
+          assert_eq!(
+            polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+            before
+          );
+          let prepared = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+            crate::mock::clear_fee_collections();
+            execute_prepared_zero_step_inner::<Test>(actor, kind, state.clone(), &admission, now);
+            let result = (
+              polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+              crate::mock::fee_collections(),
+            );
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(result)
+          });
+          assert_eq!(
+            prepared, legacy,
+            "same committed root and attempted fees at matched transaction depth"
+          );
+          assert_eq!(
+            polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+            before
+          );
+          crate::mock::clear_fee_collections();
+          execute_prepared_zero_step_inner::<Test>(actor, kind, state, &admission, now);
+          assert_eq!(
+            crate::mock::fee_collections(),
+            if actor_type == ActorType::User {
+              vec![fee]
+            } else {
+              vec![]
+            }
+          );
+          if let Some(fixture) = fixture {
+            assert_zero_step_header::<Test>(fixture, false);
+          } else {
+            assert_zero_step_completion::<Test>(actor_id, actor_type, fee);
+          }
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_prepared_inner_profiles_execute_with_and_without_verification() {
+    for profile in 0..4 {
+      for verify in [true, false] {
+        new_test_ext().execute_with(|| {
+          let actor_id = NextActorId::<Test>::get();
+          match profile {
+            0 => _scheduler_inner_zero_step_complete::<Test>(verify),
+            1 => _scheduler_inner_zero_step_user_complete::<Test>(verify),
+            2 => _scheduler_inner_zero_step_user_address_event::<Test>(verify),
+            3 => _scheduler_inner_zero_step_system_address_event::<Test>(verify),
+            _ => unreachable!(),
+          };
+          let actor_type = if matches!(profile, 1 | 2) {
+            ActorType::User
+          } else {
+            ActorType::System
+          };
+          let state = Pallet::<Test>::active_actor_state(actor_id).unwrap();
+          assert_eq!(state.identity.actor_class.actor_type(), actor_type);
+          assert_eq!(state.contract.window.is_some(), profile >= 2);
+          let fee = Pallet::<Test>::pipeline_fee_for_actor(actor_id, actor_type)
+            .unwrap()
+            .total_fee;
+          assert_zero_step_completion::<Test>(actor_id, actor_type, fee);
+          assert_eq!(
+            ActorStateHolds::<Test>::contains_key(actor_id),
+            actor_type == ActorType::User
+          );
+          let native = <Test as Config>::FeeNativeAssetId::get();
+          let minimum = <Test as Config>::AssetOps::minimum_balance(native).max(1);
+          let expected = if actor_type == ActorType::User {
+            <Test as Config>::MinUserBalance::get()
+          } else if profile >= 2 {
+            minimum * 2
+          } else {
+            0
+          };
+          assert_eq!(
+            <Test as Config>::AssetOps::balance(&state.identity.sovereign_account, native),
+            expected
+          );
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn zero_step_fixtures_prefund_complete_contract_before_creation() {
+    for actor_type in [ActorType::User, ActorType::System] {
+      for full_header in [false, true] {
+        new_test_ext().execute_with(|| {
+          let native = <Test as Config>::FeeNativeAssetId::get();
+          let snapshot = alloc::rc::Rc::new(core::cell::RefCell::new(None));
+          if actor_type == ActorType::User {
+            let snapshot = snapshot.clone();
+            assert!(<Test as Config>::ActorCreationFee::get() > 0);
+            crate::mock::set_fee_collection_hook(move || {
+              let actor_id = NextActorId::<Test>::get();
+              assert!(!ActorSemanticStates::<Test>::contains_key(actor_id));
+              // Off-chain test observation at the real Creation Fee callback, before publication.
+              let balances = frame_system::Account::<Test>::iter()
+                .map(|(who, _)| (who, <Test as Config>::AssetOps::balance(&who, native)))
+                .collect::<Vec<_>>();
+              *snapshot.borrow_mut() = Some((actor_id, balances));
+            });
+          }
+          let fixture = full_header.then(|| {
+            prepare_zero_step_header::<Test>(actor_type, ZeroStepHeaderSource::AddressEvent, false)
+          });
+          let actor_id = fixture.as_ref().map_or_else(
+            || prepare_zero_step_opening::<Test>(actor_type),
+            |fixture| fixture.actor.actor_id,
+          );
+          let (state, admission) = consume_zero_step_opening::<Test>(actor_id);
+          assert!(state.contract.steps.is_empty() && state.contract.close_when.is_none());
+          assert_eq!(state.contract.window.is_some(), full_header);
+          assert!(state.hot.pending_signal && state.run_state.is_none());
+          let head = ActorContractHeads::<Test>::get(actor_id).unwrap();
+          assert!(head.first_step.is_none() && head.first_step_resources.is_none());
+          assert!(
+            ActorContractTailChunks::<Test>::iter_prefix(actor_id)
+              .next()
+              .is_none()
+          );
+          let pipeline = Pallet::<Test>::pipeline_fee_for_actor(actor_id, actor_type)
+            .unwrap()
+            .total_fee;
+          let payer = &state.identity.sovereign_account;
+          if actor_type == ActorType::User {
+            let family = state.contract.trigger.family();
+            let trigger_weight = match family {
+              TriggerFamily::Manual => <Test as Config>::WeightInfo::manual_trigger(),
+              TriggerFamily::AddressEvent => {
+                <Test as Config>::WeightInfo::address_event_trigger_occurrence()
+              }
+              _ => unreachable!(),
+            };
+            let trigger =
+              Pallet::<Test>::trigger_fee_for_weight(actor_type, family, trigger_weight)
+                .trigger_fee;
+            let required = <Test as Config>::MinUserBalance::get() + pipeline + trigger;
+            let (unpublished_id, balances) = snapshot.borrow_mut().take().unwrap();
+            assert_eq!(unpublished_id, actor_id);
+            assert_eq!(
+              balances
+                .iter()
+                .find(|(who, _)| who == payer)
+                .map(|(_, value)| *value),
+              Some(required)
+            );
+            assert_eq!(
+              <Test as Config>::AssetOps::balance(payer, native),
+              required - trigger
+            );
+          } else {
+            assert!(snapshot.borrow().is_none() && pipeline.is_zero());
+            let minimum = <Test as Config>::AssetOps::minimum_balance(native).max(1);
+            assert_eq!(
+              <Test as Config>::AssetOps::balance(payer, native),
+              if full_header { minimum * 2 } else { 0 }
+            );
+          }
+          crate::mock::clear_fee_collections();
+          let now = frame_system::Pallet::<Test>::block_number();
+          execute_zero_step_inner::<Test>(actor_id, state, &admission, now);
+          assert_eq!(
+            crate::mock::fee_collections(),
+            if actor_type == ActorType::User {
+              vec![pipeline]
+            } else {
+              vec![]
+            }
+          );
+          if let Some(fixture) = fixture {
+            assert_zero_step_header::<Test>(fixture, false);
+          } else {
+            assert_zero_step_completion::<Test>(actor_id, actor_type, pipeline);
+          }
+        });
+      }
     }
   }
 
@@ -35946,6 +39258,100 @@ mod benches {
 
   #[cfg(test)]
   #[test]
+  fn deadline_guard_sources_partition_expiry_and_paid_readiness() {
+    let min_window = <<Test as Config>::MinWindowLength as Get<BlockNumberFor<Test>>>::get();
+    for explicit_sovereign in [false, true] {
+      for offset in [1, 2] {
+        new_test_ext().execute_with(|| {
+          let now = min_window + 1;
+          frame_system::Pallet::<Test>::set_block_number(now - 1);
+          let reusable = explicit_sovereign.then(|| {
+            let owner = measured_account::<Test>("deadline-sovereign-reuse", 0);
+            Pallet::<Test>::create_system_actor(
+              RawOrigin::Root.into(),
+              owner,
+              Mutability::Mutable,
+              None,
+            )
+            .unwrap();
+            let id = NextActorId::<Test>::get() - 1;
+            let ActorClass::System { sovereign_id } =
+              Pallet::<Test>::actor_identity(id).unwrap().actor_class
+            else {
+              unreachable!()
+            };
+            (id, sovereign_id)
+          });
+          frame_system::Pallet::<Test>::set_block_number(now);
+          if let Some((id, _)) = reusable {
+            Pallet::<Test>::close_actor(RawOrigin::Root.into(), id).unwrap();
+          }
+          let due = now + offset;
+          let id = create_canonical_deadline_guard_at_sovereign::<Test>(
+            0,
+            due,
+            reusable.map(|(_, sovereign_id)| sovereign_id),
+          );
+          let state = Pallet::<Test>::active_actor_state(id).unwrap();
+          let handle = DeadlineHandles::<Test>::get(id).unwrap();
+          assert_eq!(handle.key, WakeupKey::Block(due));
+          assert_eq!(state.hot.pending_signal, offset > 1);
+          assert_eq!(state.hot.cycle_state, CycleState::Idle);
+          assert!(state.run_state.is_none());
+          let window = state.contract.window.unwrap();
+          if offset == 1 {
+            assert_eq!(window.end, now);
+            assert_eq!(state.hot.terminal_at, Some(due));
+            assert!(window.start <= now);
+          } else {
+            assert_eq!(window.start, due);
+          }
+          assert!(!ServiceNodes::<Test>::contains_key(id));
+          Pallet::<Test>::do_try_state().unwrap();
+        });
+      }
+    }
+    new_test_ext().execute_with(|| {
+      let now = min_window + 1;
+      frame_system::Pallet::<Test>::set_block_number(now);
+      let owner = measured_account::<Test>("next-block-paid-control", 0);
+      let mut contract = system_contract::<Test>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        make_inert_contract_steps::<Test>(),
+      )
+      .unwrap();
+      contract.window = Some(ScheduleWindow {
+        start: now + 1,
+        end: now + 1 + min_window,
+      });
+      Pallet::<Test>::create_system_actor(
+        RawOrigin::Root.into(),
+        owner,
+        Mutability::Mutable,
+        Some(contract),
+      )
+      .unwrap();
+      let id = NextActorId::<Test>::get() - 1;
+      Pallet::<Test>::manual_trigger(RawOrigin::Signed(owner).into(), id).unwrap();
+      assert!(
+        Pallet::<Test>::active_actor_state(id)
+          .unwrap()
+          .hot
+          .pending_signal
+      );
+      let node = ServiceNodes::<Test>::get(id).unwrap();
+      assert_eq!(node.kind, ServiceResidenceKind::Pending);
+      assert_eq!(node.eligible_from, now + 1);
+      assert!(!DeadlineHandles::<Test>::contains_key(id));
+      Pallet::<Test>::do_try_state().unwrap();
+    });
+  }
+
+  #[cfg(test)]
+  #[test]
   fn park_review_namespace_terminal_benchmark_corners() {
     for corner in 0..=19 {
       new_test_ext().execute_with(|| {
@@ -36170,9 +39576,7 @@ mod benches {
           Pallet::<Test>::actor_identity(earlier).unwrap().cycle_nonce,
           1
         );
-        assert!(!Pallet::<Test>::actor_hot(earlier).unwrap().pending_signal);
-        assert!(ActorRunStateStore::<Test>::get(earlier).is_none());
-        assert!(ServiceNodes::<Test>::contains_key(earlier));
+        assert_protocol_idle_without_residence::<Test>(earlier);
         assert!(!TriggerDeadlineHandles::<Test>::contains_key(earlier));
       });
       for owner in [CloseDeadlineOwner::Process, CloseDeadlineOwner::Trigger] {
@@ -40102,11 +43506,518 @@ mod benches {
 
   #[cfg(test)]
   #[test]
+  fn service_head_allowance_cost_profiles_preserve_source_with_and_without_verification() {
+    for case in 0..=25 {
+      for verify in [false, true] {
+        new_test_ext().execute_with(|| {
+          _service_head_allowance::<Test>(case, verify).unwrap();
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn service_head_allowance_current_fragment_width_and_isolation() {
+    for actor_type in [ActorType::User, ActorType::System] {
+      new_test_ext().execute_with(|| {
+        let source = if actor_type == ActorType::User { 2 } else { 3 };
+        let actor_id = prepare_service_head_allowance_source::<Test>(source).unwrap();
+        let chunk = ActorContractTailChunks::<Test>::get(actor_id, 0).unwrap();
+        assert!(
+          chunk
+            .steps
+            .iter()
+            .any(|step| step.task.encoded_size() < TaskOf::<Test>::max_encoded_len())
+        );
+        println!(
+          "HEAD_ALLOWANCE_GEOMETRY_V1 source={actor_type:?}/original chunk=0 bytes={} tasks={:?}",
+          chunk.encoded_size(),
+          chunk
+            .steps
+            .iter()
+            .map(|step| step.task.encoded_size())
+            .collect::<Vec<_>>()
+        );
+      });
+      new_test_ext().execute_with(|| {
+        let actor_id = prepare_service_head_allowance_later_fragment::<Test>(actor_type, CycleState::Running).unwrap();
+        let run = ActorRunStateStore::<Test>::get(actor_id).unwrap();
+        assert_eq!(run.cursor, 5);
+        assert!(run.balance_snapshot.is_some());
+        let chunk = ActorContractTailChunks::<Test>::get(actor_id, 1).unwrap();
+        assert_eq!(chunk.steps.len() as u32, MAX_STEPS_PER_TAIL_CHUNK);
+        assert!(chunk.steps.iter().all(|step| step.task.encoded_size() == TaskOf::<Test>::max_encoded_len()));
+        let now = frame_system::Pallet::<Test>::block_number();
+        let expected = Pallet::<Test>::service_head_allowance_diagnostic(now).expect("supported real later fragment");
+        let root = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+        polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+          // Missing noncurrent chunks are an isolation fault, never a publication history.
+          ActorContractTailChunks::<Test>::remove(actor_id, 0);
+          ActorContractTailChunks::<Test>::remove(actor_id, 2);
+          assert_eq!(Pallet::<Test>::service_head_allowance_diagnostic(now), Some(expected));
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+        });
+        assert_eq!(polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1), root);
+        println!("HEAD_ALLOWANCE_GEOMETRY_V1 source={actor_type:?}/later chunk=1 bytes={} tasks={:?} runBytes={} taskMax={}", chunk.encoded_size(), chunk.steps.iter().map(|step| step.task.encoded_size()).collect::<Vec<_>>(), run.encoded_size(), TaskOf::<Test>::max_encoded_len());
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[derive(Default)]
+  struct InspectionReadWindow {
+    balances: Vec<(crate::mock::AccountId, crate::mock::TestAsset)>,
+    authority_calls: u32,
+    starts: u32,
+    stops: u32,
+    root_before: Vec<u8>,
+    root_after: Vec<u8>,
+  }
+
+  #[cfg(test)]
+  impl polkadot_sdk::frame_benchmarking::Recording for InspectionReadWindow {
+    fn start(&mut self) {
+      self.starts += 1;
+      self.root_before =
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      crate::mock::begin_asset_balance_read_trace();
+      crate::mock::take_admission_authority_calls();
+    }
+    fn stop(&mut self) {
+      self.stops += 1;
+      self.balances = crate::mock::take_asset_balance_read_trace();
+      self.authority_calls = crate::mock::take_admission_authority_calls();
+      self.root_after =
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    }
+  }
+
+  #[cfg(test)]
+  #[derive(Default)]
+  struct CanonicalInspectionReadWindow {
+    inspection: InspectionReadWindow,
+    fee_attempts: usize,
+    quotes_before: usize,
+    fee_quotes: usize,
+  }
+
+  #[cfg(test)]
+  impl polkadot_sdk::frame_benchmarking::Recording for CanonicalInspectionReadWindow {
+    fn start(&mut self) {
+      crate::mock::clear_fee_collections();
+      polkadot_sdk::frame_benchmarking::Recording::start(&mut self.inspection);
+      self.quotes_before = crate::mock::weight_to_fee_trace_len();
+    }
+    fn stop(&mut self) {
+      self.fee_quotes = crate::mock::weight_to_fee_trace_len()
+        .checked_sub(self.quotes_before)
+        .unwrap();
+      polkadot_sdk::frame_benchmarking::Recording::stop(&mut self.inspection);
+      self.fee_attempts = crate::mock::fee_collections().len();
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn canonical_user_inspection_refusal_covers_paid_head_round_and_axis() {
+    use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, Benchmarking, BenchmarkingSetup};
+    const EXPECTED_CURRENT_CALLS: u32 = 1;
+    for verify in [false, true] {
+      for c in 0..8 {
+        new_test_ext().execute_with(|| {
+          let profile = Pallet::<Test>::benchmarks(true).into_iter()
+            .find(|entry| entry.name == b"scheduler_service_user_inspection_refusal").unwrap();
+          assert_eq!(profile.components, vec![(BenchmarkParameter::c, 0, 7)]);
+          assert!(!Pallet::<Test>::benchmarks(false).into_iter()
+            .any(|entry| entry.name == b"scheduler_service_user_inspection_refusal"));
+          let mut recording = CanonicalInspectionReadWindow::default();
+          <SelectedBenchmark as BenchmarkingSetup<Test>>::instance(
+            &SelectedBenchmark::scheduler_service_user_inspection_refusal,
+            &mut recording,
+            &[(BenchmarkParameter::c, c)],
+            verify,
+          ).unwrap();
+          let actor_id = NextActorId::<Test>::get() - 1;
+          let state = Pallet::<Test>::active_actor_state(actor_id).unwrap();
+          assert_eq!((recording.inspection.starts, recording.inspection.stops), (1, 1));
+          assert_eq!(
+            recording.inspection.balances,
+            vec![(state.identity.sovereign_account, crate::mock::TestAsset::Native)],
+            "canonical loaded-first-Step refusal must inspect paid-source spendability",
+          );
+          assert_eq!(recording.inspection.authority_calls, EXPECTED_CURRENT_CALLS);
+          assert_eq!(recording.inspection.root_before, recording.inspection.root_after);
+          assert_eq!(recording.fee_attempts, 0, "inspection must not attempt collection");
+          assert!(state.hot.pending_signal && state.run_state.is_none());
+          let head = ActorContractHeads::<Test>::get(actor_id).unwrap();
+          assert_eq!(head.header.step_count, <<Test as Config>::MaxContractSteps as Get<u32>>::get());
+          eprintln!(
+            "CANONICAL_USER_INSPECTION_OWNER c={c} verify={verify} short={} round={} proof={} balance_reads={} current={} head_bytes={} steps={} first_step_bytes={} root_equal={} fee_attempts={}",
+            c / 4, (c / 2) % 2, c % 2, recording.inspection.balances.len(),
+            recording.inspection.authority_calls, head.encoded_size(), head.header.step_count,
+            head.first_step.as_ref().unwrap().encoded_size(),
+            recording.inspection.root_before == recording.inspection.root_after,
+            recording.fee_attempts,
+          );
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn canonical_user_opening_no_action_sdk_owns_paid_effectful_control() {
+    use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, Benchmarking, BenchmarkingSetup};
+    for verify in [false, true] {
+      for r in 0..2 {
+        new_test_ext().execute_with(|| {
+          let profile = Pallet::<Test>::benchmarks(true)
+            .into_iter()
+            .find(|entry| entry.name == b"scheduler_service_user_opening_no_action")
+            .unwrap();
+          assert_eq!(profile.components, vec![(BenchmarkParameter::r, 0, 1)]);
+          assert!(
+            !Pallet::<Test>::benchmarks(false)
+              .into_iter()
+              .any(|entry| entry.name == b"scheduler_service_user_opening_no_action")
+          );
+          let mut recording = CanonicalInspectionReadWindow::default();
+          <SelectedBenchmark as BenchmarkingSetup<Test>>::instance(
+            &SelectedBenchmark::scheduler_service_user_opening_no_action,
+            &mut recording,
+            &[(BenchmarkParameter::r, r)],
+            verify,
+          )
+          .unwrap();
+          assert_eq!(
+            (recording.inspection.starts, recording.inspection.stops),
+            (1, 1)
+          );
+          assert_eq!(
+            recording.inspection.authority_calls, 3,
+            "classification, post-Opening and final commit authenticate current authority"
+          );
+          assert_eq!(
+            recording.fee_attempts, 1,
+            "Pipeline only; no Action collection"
+          );
+          assert_ne!(
+            recording.inspection.root_before,
+            recording.inspection.root_after
+          );
+          let id = NextActorId::<Test>::get() - 1;
+          let state = Pallet::<Test>::active_actor_state(id).unwrap();
+          assert_eq!(state.hot.cycle_state, CycleState::Suspended);
+          assert_eq!(state.run_state.unwrap().last_committed_step_block, None);
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn canonical_shared_refusal_sdk_owner_covers_round_axis_and_quote() {
+    use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, Benchmarking, BenchmarkingSetup};
+    for verify in [false, true] {
+      for c in 0..4 {
+        new_test_ext().execute_with(|| {
+          let profile = Pallet::<Test>::benchmarks(true).into_iter()
+            .find(|entry| entry.name == b"scheduler_service_user_shared_refusal").unwrap();
+          assert_eq!(profile.components, vec![(BenchmarkParameter::c, 0, 3)]);
+          assert!(!Pallet::<Test>::benchmarks(false).into_iter()
+            .any(|entry| entry.name == b"scheduler_service_user_shared_refusal"));
+          let mut recording = CanonicalInspectionReadWindow::default();
+          let _ = crate::mock::with_weight_to_fee_trace(|| {
+            <SelectedBenchmark as BenchmarkingSetup<Test>>::instance(
+              &SelectedBenchmark::scheduler_service_user_shared_refusal,
+              &mut recording, &[(BenchmarkParameter::c, c)], verify,
+            ).unwrap();
+          });
+          let actor_id = NextActorId::<Test>::get() - 1;
+          let state = Pallet::<Test>::active_actor_state(actor_id).unwrap();
+          assert_eq!((recording.inspection.starts, recording.inspection.stops), (1, 1));
+          assert_eq!(recording.inspection.balances, vec![(state.identity.sovereign_account, crate::mock::TestAsset::Native)]);
+          assert_eq!(recording.inspection.authority_calls, 1);
+          assert_eq!(recording.inspection.root_before, recording.inspection.root_after);
+          assert_eq!(recording.fee_quotes, 1, "record only the later body quote, not setup or verification");
+          assert_eq!(recording.fee_attempts, 0);
+          assert!(state.hot.pending_signal && state.run_state.is_none());
+          eprintln!("SHARED_REFUSAL_RAW_OWNER c={c} verify={verify} quote_calls=1 root_equal=true fee_attempts=0 current=1 physical_price=false");
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn canonical_inspection_distinguishes_local_and_shared_refusal_work() {
+    for c in 0..4 {
+      for shared_refusal in [false, true] {
+        new_test_ext().execute_with(|| {
+          let mut fixture = prepare_canonical_user_inspection_refusal::<Test>(c).unwrap();
+          if shared_refusal {
+            let budget = <Test as Config>::BlockResourceBudget::get();
+            let mut resources = BlockResourceState::new(fixture.service.now);
+            resources.begin_prepass(budget).unwrap();
+            resources.open_external_phase().unwrap();
+            let shared = fixture.service.limits.shared_economic();
+            let demand = if c % 2 == 1 {
+              Weight::from_parts(0, shared.proof_size())
+            } else {
+              Weight::from_parts(shared.ref_time(), 0)
+            };
+            let mut user = resources.reserve(
+              fixture.service.limits, BlockResourceDomain::UserDispatch, demand,
+            ).unwrap();
+            resources.settle(&mut user, demand).unwrap();
+            resources.begin_drain().unwrap();
+            fixture.service.resources = resources;
+            fixture.service.meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+          }
+          let user_before = fixture.service.resources.usage().user_dispatch_used();
+          crate::mock::clear_fee_collections();
+          let (result, quotes) = crate::mock::with_weight_to_fee_trace(|| {
+            execute_canonical_user_inspection_refusal::<Test>(&mut fixture)
+          });
+          assert_eq!(result, Err(if shared_refusal {
+            ServiceRoundError::ResourceUnavailable
+          } else {
+            ServiceRoundError::InsufficientWeight
+          }));
+          assert_eq!(quotes.len(), usize::from(shared_refusal), "only the later shared refusal reaches the Action fee quote");
+          assert!(quotes.iter().all(|weight| *weight != Weight::zero()));
+          assert_eq!(fixture.service.meter.consumed(), fixture.inspection);
+          assert_eq!(fixture.service.resources.usage().actor_control_used(), fixture.inspection);
+          assert_eq!(fixture.service.resources.usage().actor_effect_used(), Weight::zero());
+          assert_eq!(fixture.service.resources.usage().user_dispatch_used(), user_before);
+          assert_eq!(fixture.service.resources.outstanding_reservations(), 0);
+          assert!(!fixture.service.resources.optional_actor_work_halted());
+          assert!(crate::mock::fee_collections().is_empty());
+          assert_eq!(polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1), fixture.root);
+          let native = <Test as Config>::FeeNativeAssetId::get();
+          assert_eq!(<Test as Config>::AssetOps::balance(&fixture.service.payer, native), fixture.service.payer_before);
+          assert_eq!(<Test as Config>::AssetOps::balance(&<Test as Config>::FeeSink::get(), native), fixture.service.sink_before);
+          let state = Pallet::<Test>::active_actor_state(fixture.service.actor.actor_id).unwrap();
+          assert!(state.hot.pending_signal && state.run_state.is_none());
+          assert_eq!(state.hot.cycle_state, CycleState::Idle);
+          eprintln!("PUBLIC_I_OWNER_BOUNDARY c={c} shared={shared_refusal} quotes={} root_equal=true effect_attempts=0 declared_inspection_only=true physical_price=false", quotes.len());
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn pipeline_capacity_inspection_owner_covers_public_funding_and_head_boundaries() {
+    use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, Benchmarking, BenchmarkingSetup};
+    new_test_ext().execute_with(|| {
+      let profile = Pallet::<Test>::benchmarks(true)
+        .into_iter()
+        .find(|entry| entry.name == b"scheduler_user_pipeline_capacity")
+        .unwrap();
+      assert_eq!(profile.components, vec![(BenchmarkParameter::c, 0, 3)]);
+      assert!(
+        !Pallet::<Test>::benchmarks(false)
+          .into_iter()
+          .any(|entry| entry.name == b"scheduler_user_pipeline_capacity")
+      );
+    });
+    for c in 0..4 {
+      for verify in [false, true] {
+        new_test_ext().execute_with(|| {
+          let mut recording = InspectionReadWindow::default();
+          <SelectedBenchmark as BenchmarkingSetup<Test>>::instance(
+            &SelectedBenchmark::scheduler_user_pipeline_capacity,
+            &mut recording,
+            &[(BenchmarkParameter::c, c)],
+            verify,
+          )
+          .unwrap();
+          assert_eq!((recording.starts, recording.stops), (1, 1));
+          let state = Pallet::<Test>::active_actor_state(NextActorId::<Test>::get() - 1).unwrap();
+          assert!(state.hot.pending_signal && state.run_state.is_none());
+          assert_eq!(state.hot.cycle_state, CycleState::Idle);
+          assert_eq!(
+            recording.balances,
+            vec![(
+              state.identity.sovereign_account,
+              crate::mock::TestAsset::Native
+            )]
+          );
+          assert_eq!(
+            recording.authority_calls, 0,
+            "cached-fee inspection must not query live authority"
+          );
+          assert_eq!(recording.root_after, recording.root_before, "inspection is readonly even with SDK verification disabled");
+          eprintln!(
+            "PIPELINE_CAPACITY_OWNER c={c} verify={verify} balance_reads=1 current=0 expected_sufficient={}",
+            c.is_multiple_of(2)
+          );
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn inspection_owner_boundaries_expose_idle_user_capacity_read() {
+    use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, BenchmarkingSetup};
+
+    // SDK Recording brackets the real body, excluding fixture funding and verifier reads.
+    for verify in [false, true] {
+      for (name, selected) in [
+        ("round", SelectedBenchmark::service_round_begin_populated),
+        ("eligible", SelectedBenchmark::service_round_probe_eligible),
+        ("state", SelectedBenchmark::scheduler_actor_state_probe),
+      ] {
+        new_test_ext().execute_with(|| {
+          let mut recording = InspectionReadWindow::default();
+          <SelectedBenchmark as BenchmarkingSetup<Test>>::instance(
+            &selected,
+            &mut recording,
+            &[],
+            verify,
+          )
+          .unwrap();
+          assert_eq!((recording.starts, recording.stops), (1, 1));
+          assert!(
+            recording.balances.is_empty(),
+            "{name}: the priced component does not inspect fee spendability"
+          );
+          assert_eq!(recording.authority_calls, u32::from(name == "state"));
+          eprintln!(
+            "INSPECTION_OWNER component={name} verify={verify} current={} balance_reads=0",
+            recording.authority_calls
+          );
+        });
+      }
+      for (category, actor_type) in [(0, ActorType::System), (4, ActorType::User)] {
+        new_test_ext().execute_with(|| {
+          let mut recording = InspectionReadWindow::default();
+          <SelectedBenchmark as BenchmarkingSetup<Test>>::instance(
+            &SelectedBenchmark::scheduler_service_zero_step_admission_refusal,
+            &mut recording,
+            &[(BenchmarkParameter::c, category)],
+            verify,
+          )
+          .unwrap();
+          assert_eq!((recording.starts, recording.stops), (1, 1));
+          let actor_id = NextActorId::<Test>::get() - 1;
+          let state = Pallet::<Test>::active_actor_state(actor_id).unwrap();
+          assert_eq!(state.identity.actor_class.actor_type(), actor_type);
+          assert!(state.hot.pending_signal && state.run_state.is_none());
+          assert_eq!(state.hot.cycle_state, CycleState::Idle);
+          let expected = if actor_type == ActorType::User {
+            vec![(
+              state.identity.sovereign_account,
+              crate::mock::TestAsset::Native,
+            )]
+          } else {
+            Vec::new()
+          };
+          assert_eq!(
+            recording.balances, expected,
+            "User Idle capacity is work outside all three priced component bodies"
+          );
+          assert!(
+            crate::mock::take_asset_balance_read_trace().is_empty(),
+            "recording is disabled before verifier reads"
+          );
+          eprintln!(
+            "INSPECTION_OWNER canonical={actor_type:?} verify={verify} current={} balance_reads={}",
+            recording.authority_calls,
+            recording.balances.len()
+          );
+        });
+      }
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
+  fn service_probe_current_authority_executes_with_and_without_verification() {
+    for verify in [true, false] {
+      new_test_ext().execute_with(|| {
+        crate::mock::take_admission_authority_calls();
+        _scheduler_actor_state_probe::<Test>(verify).unwrap();
+        assert_eq!(
+          crate::mock::take_admission_authority_calls(),
+          1,
+          "body must include current provider, not just the cached loader"
+        );
+        let actor_id = NextActorId::<Test>::get() - 1;
+        let state = Pallet::<Test>::active_actor_state(actor_id).unwrap();
+        let run = state.run_state.unwrap();
+        assert_eq!(state.hot.cycle_state, CycleState::Running);
+        assert_eq!(run.cursor, 1);
+        assert_eq!(
+          state.contract.steps.len() as u32,
+          <<Test as Config>::MaxContractSteps as Get<u32>>::get()
+        );
+      });
+    }
+  }
+
+  #[cfg(test)]
+  #[test]
   fn wide_header_service_probe_executes_all_sources_with_and_without_verification() {
-    for case in 0..=3 {
+    for case in 0..=11 {
       for verify in [true, false] {
         new_test_ext().execute_with(|| {
           _scheduler_actor_state_probe_wide_header::<Test>(case, verify).unwrap();
+          let calls = crate::mock::take_admission_authority_calls();
+          assert_eq!(calls, u32::from(case >= 4));
+          // The later-fragment qualifier appends peers; its source remains the real frontier.
+          let actor_id = if case >= 8 {
+            ServiceHeader::<Test>::get().cursor.unwrap().actor_id
+          } else {
+            NextActorId::<Test>::get() - 1
+          };
+          let state = Pallet::<Test>::active_actor_state(actor_id).unwrap();
+          let actor_type = if (case >= 8 && case.is_multiple_of(2)) || (case < 8 && case % 4 < 2) {
+            ActorType::User
+          } else {
+            ActorType::System
+          };
+          assert_eq!(state.identity.actor_class.actor_type(), actor_type);
+          let phase = if case >= 10 || (case < 8 && !case.is_multiple_of(2)) {
+            CycleState::Suspended
+          } else {
+            CycleState::Running
+          };
+          assert_eq!(state.hot.cycle_state, phase);
+          let run = state.run_state.unwrap();
+          let cursor = if case >= 8 {
+            5
+          } else if phase == CycleState::Suspended {
+            1
+          } else {
+            2
+          };
+          assert_eq!(run.cursor, cursor);
+          assert!(run.balance_snapshot.is_some());
+          assert!(state.contract.parked_balance_activation.is_some());
+          assert!(state.contract.auto_close_at_cycle_nonce.is_none());
+          let chunk_index = (run.cursor - 1) / MAX_STEPS_PER_TAIL_CHUNK;
+          let chunk = ActorContractTailChunks::<Test>::get(actor_id, chunk_index).unwrap();
+          if case >= 8 {
+            assert_eq!((run.cursor, chunk_index), (5, 1));
+            assert!(chunk.steps.iter().all(|step| step.task.encoded_size() == TaskOf::<Test>::max_encoded_len()));
+          }
+          if case >= 10 {
+            assert_eq!(run.suspension, Some(SuspensionReason::Temporary));
+            assert!(matches!(&run.last_step_outcome, Some(StepOutcome::Failed(failure)) if failure.retry == RetryClass::Temporary));
+          }
+          println!(
+            "SERVICE_PROBE_GEOMETRY_V1 case={case} verify={verify} class={actor_type:?} phase={:?} cursor={} chunk={chunk_index} chunkBytes={} tasks={:?} headBytes={} runBytes={} currentCalls={calls}",
+            state.hot.cycle_state,
+            run.cursor,
+            chunk.encoded_size(),
+            chunk.steps.iter().map(|step| step.task.encoded_size()).collect::<Vec<_>>(),
+            ActorContractHeads::<Test>::get(actor_id).unwrap().encoded_size(),
+            run.encoded_size()
+          );
         });
       }
     }
@@ -40947,16 +44858,100 @@ mod benches {
           actor_id: id,
           generation: semantic.generation,
         };
-        let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-        assert_eq!(
-          Pallet::<Test>::detach_actor_publication(actor, state.clone(), state.run_state.as_ref()),
-          Err(Error::<Test>::BehaviorPolicyUnavailable.into())
+        // Close has a required compiled owner, not an optional behavior-port supplement. These
+        // component sources stage policy before the real paid prefix; no public-source or
+        // reference-runtime pricing claim follows from their prepared native authority.
+        let close = Pallet::<Test>::close_control_weight_for_contract(&state.contract).unwrap();
+        let authority = crate::mock::MockAdmissionCertificateAuthority::current().unwrap();
+        assert!(close.all_lte(authority.maximum_lifecycle_weight));
+        assert!(Weight::from_parts(1, 1).all_lte(close));
+        let context =
+          Pallet::<Test>::benchmark_contract_behavior_control_weight_context(&state.contract)
+            .unwrap()
+            .unwrap();
+        assert!(
+          crate::mock::MockAdmissionCertificateAuthority::behavior_close_additional_weight(context)
+            .is_none()
         );
+        let creator = measured_account::<Test>("unqualified-policy-creator", case);
+        ensure_creation_balance::<Test>(&creator);
+        let ActorTask::Transfer { to, asset, .. } = state.contract.steps[0].task.clone() else {
+          panic!("paid source starts with Transfer")
+        };
+        let native = <Test as Config>::FeeNativeAssetId::get();
+        let reason: <Test as Config>::RuntimeHoldReason = HoldReason::ActorState.into();
+        let ledger = || {
+          (
+            <Test as Config>::AssetOps::balance(&creator, native),
+            <Test as Config>::StateHoldCurrency::balance_on_hold(&reason, &creator),
+            <Test as Config>::AssetOps::balance(&state.identity.sovereign_account, native),
+            <Test as Config>::AssetOps::balance(&state.identity.sovereign_account, asset),
+            <Test as Config>::AssetOps::balance(&to, asset),
+            <Test as Config>::AssetOps::balance(&<Test as Config>::FeeSink::get(), native),
+          )
+        };
+        let balances = ledger();
+        let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+        let process = ActorProcesses::<Test>::get(id);
+        let mut collection_attempts = crate::mock::fee_collections();
+        for deficit in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+          // Isolate lifecycle containment from optional Step/inspection availability. Each host
+          // boundary is one unit short on exactly one axis, never an injected Actor certificate.
+          crate::mock::set_missing_behavior_control_weight(false);
+          crate::mock::set_missing_behavior_inspection_weight(false);
+          crate::mock::set_admission_authority_override(Some(AdmissionCertificateAuthority {
+            maximum_lifecycle_weight: close.saturating_sub(deficit),
+            ..authority
+          }));
+          assert_eq!(
+            Pallet::<Test>::create_user_actor(
+              RawOrigin::Signed(creator).into(),
+              Mutability::Mutable,
+              Some(state.contract.clone()),
+            ),
+            Err(Error::<Test>::BehaviorPolicyUnavailable.into())
+          );
+          // Creation calls the collector before publication; its ledger transfer rolls back.
+          // This thread-local diagnostic retains the attempted call, not a committed charge.
+          collection_attempts.push(<Test as Config>::ActorCreationFee::get());
+          assert_eq!(crate::mock::fee_collections(), collection_attempts);
+          // The existing paid source binds the qualified authority. A changed host refuses
+          // detachment as stale, preserving the Run and every committed prefix/economic result.
+          assert_eq!(
+            Pallet::<Test>::detach_actor_publication(
+              actor,
+              state.clone(),
+              state.run_state.as_ref()
+            ),
+            Err(Error::<Test>::ActorInvariant.into())
+          );
+          assert_eq!(
+            polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+            before
+          );
+          assert_eq!(ledger(), balances);
+          assert_eq!(crate::mock::fee_collections(), collection_attempts);
+          assert_eq!(ActorProcesses::<Test>::get(id), process);
+          assert_eq!(ActorRunStateStore::<Test>::get(id), state.run_state);
+          crate::mock::set_admission_authority_override(None);
+        }
+        crate::mock::set_missing_behavior_control_weight(true);
+        crate::mock::set_missing_behavior_inspection_weight(true);
+        // Restore the qualified host, keep the old optional ports absent, and execute detachment
+        // under an explicit outer rollback so this phase test does not leave a half-closed source.
+        polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+          Pallet::<Test>::detach_actor_publication(actor, state.clone(), state.run_state.as_ref())
+            .expect("compiled Close owner and current lifecycle coverage admit detachment");
+          assert!(!ActorProcesses::<Test>::contains_key(id));
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+        });
         assert_eq!(
           polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
           before
         );
-        assert!(ActorProcesses::<Test>::contains_key(id));
+        assert_eq!(ledger(), balances);
+        assert_eq!(crate::mock::fee_collections(), collection_attempts);
+        assert_eq!(ActorProcesses::<Test>::get(id), process);
         assert_eq!(ActorRunStateStore::<Test>::get(id), state.run_state);
       });
     }

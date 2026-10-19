@@ -98,17 +98,19 @@ Surface-pressure warnings are triage signals, not folder-theater mandates.
 
 ## Generated Wiki Boundary
 
-`WikiWidget` renders repo-local generated wiki markdown from `../wiki`.
+The accepted [Wiki Publication and Embedding Contract](../docs/deos/wiki-publication.contract.en.md) assigns all Wiki rendering, navigation, localization, semantic-layer filtering, search and graph traversal to the independently deployable DEOS EN/RU website. The framework selects no downstream brand or hosting origin. If embedding is explicitly prioritized, the web-client's target responsibility is only a configured trusted-origin iframe and its lifecycle in the tiling layout. It must not maintain a second Wiki frontend.
+
+The current `WikiWidget` is still the legacy direct renderer of repo-local generated wiki markdown from `../wiki/deos`; the standalone MVP lives in the optional Wiki Sync Skill and iframe migration is deferred. Follow-up work is tracked in [`../BACKLOG.md`](../BACKLOG.md), without delaying higher-priority framework work. The implementation below describes that existing renderer, not acceptance of the successor site/embed. Do not remove it or its dependencies until the replacement works and all remaining consumers have been checked.
 
 The wiki is trusted reviewed repository content, not arbitrary user input. The independent Wiki Sync Skill validates `/wiki` as a strict OKF v0.2 bundle and rejects raw HTML blocks, dangerous URL schemes, inline DOM event handlers, and malformed frontmatter before generated content is retained. The client consumes that reviewed output without depending on Skill internals.
 
 The widget consumes:
 
-- `../wiki/_meta/navigation.json`
-- `../wiki/_meta/aliases.json`
-- `../wiki/_meta/graph.json`
-- `../wiki/_meta/state.json`
-- `../wiki/_meta/locales.json`
+- `../wiki/deos/_meta/navigation.json`
+- `../wiki/deos/_meta/aliases.json`
+- `../wiki/deos/_meta/graph.json`
+- `../wiki/deos/_meta/state.json`
+- `../wiki/deos/_meta/locales.json`
 
 ## Local Development
 

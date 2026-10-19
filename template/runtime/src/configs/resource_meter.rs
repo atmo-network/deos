@@ -26,6 +26,8 @@ impl TransactionExtension<RuntimeCall> for BlockResourceMeterExtension {
   type Pre = BlockResourceReservation;
 
   fn weight(&self, _call: &RuntimeCall) -> Weight {
+    #[cfg(all(test, not(feature = "runtime-benchmarks")))]
+    let _span = crate::tests::production_block_replay::meter_attribution::span("weight");
     <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::block_resource_meter_extension()
   }
 
@@ -37,6 +39,8 @@ impl TransactionExtension<RuntimeCall> for BlockResourceMeterExtension {
     info: &DispatchInfoOf<RuntimeCall>,
     len: usize,
   ) -> Result<Self::Pre, TransactionValidityError> {
+    #[cfg(all(test, not(feature = "runtime-benchmarks")))]
+    let _span = crate::tests::production_block_replay::meter_attribution::span("prepare");
     let mut state = pallet_deos_actors::CurrentBlockResourceState::<Runtime>::get()
       .ok_or(InvalidTransaction::Custom(MISSING_RESOURCE_STATE))?;
     state
@@ -67,6 +71,8 @@ impl TransactionExtension<RuntimeCall> for BlockResourceMeterExtension {
     len: usize,
     _result: &DispatchResult,
   ) -> Result<Weight, TransactionValidityError> {
+    #[cfg(all(test, not(feature = "runtime-benchmarks")))]
+    let _span = crate::tests::production_block_replay::meter_attribution::span("post");
     // FRAME reclaims dispatch work, not the base extrinsic or encoded bytes.
     let actual_info = frame_support::dispatch::DispatchInfo {
       call_weight: post_info.calc_actual_weight(info),
@@ -245,6 +251,90 @@ mod tests {
         assert_eq!(settled.outstanding_reservations(), 0);
       }
     });
+  }
+
+  #[test]
+  fn governance_vote_proof_charge_limits_frozen_shared_usage()
+  -> Result<(), TransactionValidityError> {
+    use polkadot_sdk::sp_runtime::traits::ExtensionPostDispatchWeightHandler;
+    crate::tests::common::seeded_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let budget = BlockResourceBudgetValue::get();
+      assert_eq!(ACTOR_CONTROL_RATIO, (1, 3));
+      assert_eq!(budget.maximum_block().proof_size(), 10_485_760);
+      assert_eq!(budget.fixed_envelope().proof_size(), 2_988_132);
+      let shared = budget.limits().shared_economic();
+      assert_eq!(shared.proof_size(), 4_998_419);
+      let call = RuntimeCall::Governance(pallet_governance::Call::cast_vote {
+        domain: 101,
+        item_id: 110,
+        vote: pallet_governance::ProposalVoteKind::Approve,
+      });
+      let mut info = call.get_dispatch_info();
+      assert_eq!(info.call_weight.proof_size(), 656_094);
+      info.extension_weight = BlockResourceMeterExtension.weight(&call);
+      let len = call.encoded_size();
+      let charged = frame_system::calculate_consumed_extrinsic_weight::<RuntimeCall>(
+        &RuntimeBlockWeights::get(),
+        &info,
+        len,
+      );
+      let ceiling = shared.proof_size() / charged.proof_size();
+      assert_eq!(ceiling, 7);
+      assert!(charged.saturating_mul(ceiling + 1).ref_time() <= shared.ref_time());
+      assert!(charged.saturating_mul(ceiling + 1).proof_size() > shared.proof_size());
+      // Policy algebra only; no alternate budget or fixed-prefix credit is installed.
+      let maximum_proof = budget.maximum_block().proof_size();
+      let policy_shared_upper = maximum_proof - maximum_proof / 3;
+      assert!(shared.proof_size() <= policy_shared_upper);
+      assert_eq!(policy_shared_upper / info.call_weight.proof_size(), 10);
+      pallet_deos_actors::CurrentBlockResourceState::<Runtime>::put(external_state(1));
+      let mut post = PostDispatchInfoOf::<RuntimeCall>::default();
+      post.set_extension_weight(&info);
+      for completed in 1..=ceiling {
+        let reservation = BlockResourceMeterExtension.prepare(
+          (),
+          &RuntimeOrigin::signed(crate::tests::common::ALICE),
+          &call,
+          &info,
+          len,
+        )?;
+        assert_eq!(
+          BlockResourceMeterExtension::post_dispatch_details(
+            reservation,
+            &info,
+            &post,
+            len,
+            &Err(polkadot_sdk::sp_runtime::DispatchError::Other("projection")),
+          ),
+          Ok(Weight::zero())
+        );
+        let state = pallet_deos_actors::CurrentBlockResourceState::<Runtime>::get()
+          .ok_or(InvalidTransaction::Custom(MISSING_RESOURCE_STATE))?;
+        assert_eq!(
+          state.usage().user_dispatch_used(),
+          charged.saturating_mul(completed)
+        );
+        assert_eq!(state.outstanding_reservations(), 0);
+        assert_eq!(state.budget(), Ok(budget));
+      }
+      let before = pallet_deos_actors::CurrentBlockResourceState::<Runtime>::get();
+      assert_eq!(
+        BlockResourceMeterExtension.prepare(
+          (),
+          &RuntimeOrigin::signed(crate::tests::common::ALICE),
+          &call,
+          &info,
+          len,
+        ),
+        Err(InvalidTransaction::Custom(RESOURCE_RESERVATION_REJECTED).into())
+      );
+      assert_eq!(
+        pallet_deos_actors::CurrentBlockResourceState::<Runtime>::get(),
+        before
+      );
+      Ok(())
+    })
   }
 
   #[test]

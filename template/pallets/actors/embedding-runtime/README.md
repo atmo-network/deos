@@ -15,7 +15,9 @@ The fixture deliberately uses:
 - Every local Contract length from zero through eight Steps, bounded predicate and funding-policy geometry, admission rejection above configured caps, and current-state resolution through every nonterminal Step under the independent 8/16/16/4 limits.
 - No DEOS primitives, TMCTOL topology, governance catalog, DEOS Router, TMC, or staking pallet.
 
-Run its focused evidence from `template/`:
+From the repository root, run the complete current consumer matrix with `timeout 25m env CARGO_PROFILE=release ./scripts/actors-assurance.sh --embedding-only`. The project-owned route checks nonempty default/DEX/try-runtime/combined test selections and no-std, retaining source identity with bounded steps; it needs Cargo/Git/hash tools, not npm, metadata, production Wasm or runtime stress. Every Cargo operation sets `SKIP_WASM_BUILD=1`. This is native independent-host evidence, not DEOS production composition or physical-price qualification.
+
+Individual package-owned routes from `template/`:
 
 ```bash
 cargo test -p pallet-deos-actors-embedding-fixture

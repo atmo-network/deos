@@ -3435,17 +3435,27 @@ pub mod pallet {
     pub(crate) fn zero_step_resource_envelope(
       contract: &ActorContractOf<T>,
     ) -> Option<ActorStepResourceEnvelope> {
-      if !contract.steps.is_empty() {
-        return None;
-      }
-      let control = match Self::contract_behavior_control_weight_context(contract)? {
-        Some(behavior) => {
-          T::StepControlWeight::maximum_behavior_zero_step_control_weight(behavior)?
-        }
+      Self::try_zero_step_resource_envelope(contract).ok()
+    }
+
+    fn try_zero_step_resource_envelope(
+      contract: &ActorContractOf<T>,
+    ) -> Result<ActorStepResourceEnvelope, Error<T>> {
+      ensure!(
+        contract.steps.is_empty(),
+        Error::<T>::AdmissionBoundOverflow
+      );
+      let behavior = Self::contract_behavior_control_weight_context(contract)
+        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+      let control = match behavior {
+        Some(behavior) => T::StepControlWeight::maximum_behavior_zero_step_control_weight(behavior)
+          .ok_or(Error::<T>::BehaviorPolicyUnavailable)?,
         None => T::WeightInfo::scheduler_inner_zero_step_complete(),
       };
-      Some(ActorStepResourceEnvelope {
-        control: control.checked_add(&Self::idle_window_placement_weight(contract))?,
+      Ok(ActorStepResourceEnvelope {
+        control: control
+          .checked_add(&Self::idle_window_placement_weight(contract))
+          .ok_or(Error::<T>::AdmissionBoundOverflow)?,
         effect: Weight::zero(),
       })
     }
@@ -3453,38 +3463,48 @@ pub mod pallet {
     pub(crate) fn derive_step_resource_envelopes(
       contract: &ActorContractOf<T>,
     ) -> Option<ActorAdmissionResourcesOf<T>> {
-      let step_count = u32::try_from(contract.steps.len()).ok()?;
-      let behavior = Self::contract_behavior_control_weight_context(contract)?;
+      Self::try_derive_step_resource_envelopes(contract).ok()
+    }
+
+    // Internal loaders retain fail-closed Option semantics; admission preserves the refusing owner.
+    fn try_derive_step_resource_envelopes(
+      contract: &ActorContractOf<T>,
+    ) -> Result<ActorAdmissionResourcesOf<T>, Error<T>> {
+      let step_count =
+        u32::try_from(contract.steps.len()).map_err(|_| Error::<T>::AdmissionBoundOverflow)?;
+      let behavior = Self::contract_behavior_control_weight_context(contract)
+        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
       contract
         .steps
         .iter(/* deos-bypass: bounded-iter */)
         .enumerate()
         .map(|(cursor, step)| {
-          let cursor = u32::try_from(cursor).ok()?;
+          let cursor = u32::try_from(cursor).map_err(|_| Error::<T>::AdmissionBoundOverflow)?;
           let predicate_evaluation_units = step
             .precondition
             .as_ref()
             .map_or(0, Precondition::evaluation_units);
-          let context =
-            Self::step_control_weight_context(step_count, cursor, predicate_evaluation_units)?;
+          let context = Self::step_control_weight_context(step_count, cursor, predicate_evaluation_units)
+            .ok_or(Error::<T>::AdmissionBoundOverflow)?;
           let completion = contract
             .parked_balance_activation
             .as_ref()
-            .map_or(Weight::zero(), |_| {
-              T::WeightInfo::complete_cycle_to_parked_balance()
-            });
-          Some(ActorStepResourceEnvelope {
-            control: (match behavior {
-              Some(behavior) => T::StepControlWeight::maximum_behavior_control_weight(context, step, behavior),
-              None => T::StepControlWeight::maximum_control_weight(context, step),
-            })?
-              .checked_add(&completion)?,
-            effect: T::TaskEffectWeight::maximum_effect_weight(&step.task)?,
+            .map_or(Weight::zero(), |_| T::WeightInfo::complete_cycle_to_parked_balance());
+          let control = match behavior {
+            Some(behavior) => T::StepControlWeight::maximum_behavior_control_weight(context, step, behavior)
+              .ok_or(Error::<T>::BehaviorPolicyUnavailable)?,
+            None => T::StepControlWeight::maximum_control_weight(context, step)
+              .ok_or(Error::<T>::AdmissionBoundOverflow)?,
+          };
+          Ok(ActorStepResourceEnvelope {
+            control: control.checked_add(&completion).ok_or(Error::<T>::AdmissionBoundOverflow)?,
+            effect: T::TaskEffectWeight::maximum_effect_weight(&step.task)
+              .ok_or(Error::<T>::AdmissionBoundOverflow)?,
           })
         })
-        .collect::<Option<Vec<_>>>()?
+        .collect::<Result<Vec<_>, Error<T>>>()?
         .try_into()
-        .ok()
+        .map_err(|_| Error::<T>::AdmissionBoundOverflow)
     }
 
     /// Builds the admission certificate for any Contract shape the host can price. A policy-bearing
@@ -8849,9 +8869,10 @@ pub mod pallet {
           if !meter.can_consume(branch_weight) {
             return Err(DependencyReviewWorkerError::InsufficientWeight);
           }
+          // A failed return can roll back source removal, but not the performed Control work.
+          meter.consume(branch_weight);
           Self::return_due_deadline_member_to_service(actor, ServiceResidenceKind::Live, now)
             .map_err(DependencyReviewWorkerError::Deadline)?;
-          meter.consume(branch_weight);
           Ok(DueBlockDeadlineMutation::RetryReturned(actor))
         }
         DueBlockDeadlineBranch::Review(_) => Self::process_next_due_block_dependency_review(
@@ -9184,9 +9205,107 @@ pub mod pallet {
       Ok(DueDeadlineServicePass { block, tick })
     }
 
-    /// Admits canonical head inspection first, then the selected complete Control/effect branch.
-    /// Execution and retry/terminal placement share one transaction. Capacity, fee, or authority
-    /// refusal preserves process/ring authority, but never erases inspection or incurred work.
+    /// Read-only diagnostic of existing head admission, not an execution permit.
+    /// Its own inspection cost is unpriced and excluded; no production caller may use this bound.
+    #[cfg(any(test, feature = "runtime-benchmarks"))]
+    pub(crate) fn service_head_allowance_diagnostic(
+      now: BlockNumberFor<T>,
+    ) -> Option<ActorStepResourceEnvelope> {
+      if now != frame_system::Pallet::<T>::block_number() || GlobalCircuitBreaker::<T>::get() {
+        return None;
+      }
+      let header = ServiceHeader::<T>::get();
+      let actor = header.cursor?;
+      if header.count == 0
+        || header.count > T::MaxQueueLength::get()
+        || header.round_block.is_some_and(|round| round > now)
+      {
+        return None;
+      }
+      let node = ServiceNodes::<T>::get(actor.actor_id)?;
+      if node.generation != actor.generation
+        || node.last_considered >= now
+        || node.eligible_from > now
+      {
+        return None;
+      }
+      if header.count == 1 {
+        if node.previous != actor || node.next != actor {
+          return None;
+        }
+      } else {
+        if node.previous == actor
+          || node.next == actor
+          || (header.count == 2) != (node.previous == node.next)
+        {
+          return None;
+        }
+        let previous = ServiceNodes::<T>::get(node.previous.actor_id)?;
+        let next = ServiceNodes::<T>::get(node.next.actor_id)?;
+        if previous.generation != node.previous.generation
+          || next.generation != node.next.generation
+          || previous.next != actor
+          || next.previous != actor
+        {
+          return None;
+        }
+      }
+      let process = ActorProcesses::<T>::get(actor.actor_id)?;
+      if process.generation != actor.generation
+        || process.status != ProcessStatus::Serving
+        || process.residence != Some(ProcessResidence::Service(node.kind))
+        || process
+          .last_attempted
+          .is_some_and(|attempted| attempted >= now)
+      {
+        return None;
+      }
+      let (record, _) =
+        Self::load_canonical_actor_semantic_state_with_process(actor, Some(process), None).ok()?;
+      let head = ActorContractHeads::<T>::get(actor.actor_id)?;
+      if head.header.step_count == 0
+        || head.header.step_count > T::MaxContractSteps::get()
+        || head.header.has_close_when
+        || head.header.on_unfunded != OnUnfunded::Close
+        || !Self::admission_matches_current_authority(&record.admission)
+        || !record
+          .hot
+          .trigger_runtime_state
+          .is_compatible_with(&head.header.trigger)
+        || !record
+          .admission
+          .authorizes_wake(head.header.trigger.wake_qualification(&head.header.window))
+      {
+        return None;
+      }
+      let (_, loaded) =
+        Self::load_actor_service_geometry(actor.actor_id, &record.hot, &record.admission, &head)?;
+      let resources = Self::current_step_service_resources(&loaded?)?;
+      let inspection = T::WeightInfo::service_round_begin_populated()
+        .checked_add(&T::WeightInfo::service_round_probe_eligible())?
+        .checked_add(&T::WeightInfo::scheduler_actor_state_probe())?;
+      let suffix = T::WeightInfo::service_round_admit_eligible()
+        .max(T::WeightInfo::service_member_retire_interior())
+        .max(T::WeightInfo::service_member_retire_pair_cursor())
+        .max(T::WeightInfo::service_member_retire_singleton());
+      let control = inspection
+        .checked_add(&resources.control)?
+        .checked_add(&Self::close_dispatch_weight_upper())?
+        .checked_add(&suffix)?
+        .checked_add(
+          &T::AdmissionCertificateAuthority::service_refusal_completion_weight()
+            .unwrap_or_else(Weight::zero),
+        )?;
+      control.checked_add(&resources.effect)?;
+      Some(ActorStepResourceEnvelope {
+        control,
+        effect: resources.effect,
+      })
+    }
+
+    /// Admits canonical inspection, then the complete Control/effect branch. Actor workers own
+    /// nested rollback; qualified collector refusal may retain only round/cursor completion.
+    /// Capacity and unsafe refusal retain the head; neither rollback erases performed work.
     pub(crate) fn service_canonical_round_head(
       meter: &mut WeightMeter,
       now: BlockNumberFor<T>,
@@ -9238,6 +9357,66 @@ pub mod pallet {
         Some(control_remaining),
       )
       .map(|(encounter, _)| encounter)
+    }
+
+    /// Missing physical qualification is not permission to reuse an unrelated normal suffix.
+    fn service_refusal_completion_for_contract(contract: &ActorContractOf<T>) -> Option<Weight> {
+      if contract.close_when.is_some() || contract.on_unfunded != OnUnfunded::Close {
+        return None;
+      }
+      T::AdmissionCertificateAuthority::service_refusal_completion_weight()
+    }
+
+    /// Called only after a nested Actor worker rolled back a qualified collector refusal.
+    /// The source and its local ring neighborhood must still be the admitted generation. The
+    /// only writes are round/cursor control; last_attempted, semantic state and Run are untouched.
+    fn complete_refused_service_turn(
+      actor: ActorRef,
+      source: &ActiveActorStateOf<T>,
+      admission: &ActorAdmissionCertificateOf<T>,
+      expected_process: ActorProcessOf<T>,
+      now: BlockNumberFor<T>,
+    ) -> Result<(), ServiceRoundError> {
+      let (record, process) = Self::load_canonical_actor_semantic_state(actor)
+        .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+      if process != expected_process
+        || record.identity != source.identity
+        || record.hot != source.hot
+        || record.admission != *admission
+        || ActorRunStateStore::<T>::get(actor.actor_id) != source.run_state
+      {
+        return Err(ServiceRoundError::ProcessResidenceMismatch);
+      }
+      let header = ServiceHeader::<T>::get();
+      let node = ServiceNodes::<T>::get(actor.actor_id).ok_or(ServiceRoundError::CorruptRing)?;
+      if header.cursor != Some(actor)
+        || header.count == 0
+        || header.count > T::MaxQueueLength::get()
+      {
+        return Err(ServiceRoundError::CorruptRing);
+      }
+      if header.count == 1 {
+        if node.previous != actor || node.next != actor {
+          return Err(ServiceRoundError::CorruptRing);
+        }
+      } else {
+        if node.previous == actor
+          || node.next == actor
+          || (header.count == 2) != (node.previous == node.next)
+        {
+          return Err(ServiceRoundError::CorruptRing);
+        }
+        let previous = ServiceNodes::<T>::get(node.previous.actor_id)
+          .filter(|previous| previous.generation == node.previous.generation)
+          .ok_or(ServiceRoundError::CorruptRing)?;
+        let next = ServiceNodes::<T>::get(node.next.actor_id)
+          .filter(|next| next.generation == node.next.generation)
+          .ok_or(ServiceRoundError::CorruptRing)?;
+        if previous.next != actor || next.previous != actor {
+          return Err(ServiceRoundError::CorruptRing);
+        }
+      }
+      Self::advance_idle_service_head(actor, now)
     }
 
     /// StopCycle has no Action effect. Preserve its stored/priced maximum while assigning its
@@ -9359,11 +9538,9 @@ pub mod pallet {
           .max(T::WeightInfo::service_member_retire_singleton()),
       );
       let control_owned_by_caller = caller_control_remaining.is_some();
-      let can_consume = |control: Weight, effect: Weight| {
-        meter.can_consume(control.saturating_add(effect))
-          && caller_control_remaining.is_none_or(|remaining| control.all_lte(remaining))
-      };
-      if !can_consume(selector_envelope, Weight::zero()) {
+      if !meter.can_consume(selector_envelope)
+        || caller_control_remaining.is_some_and(|remaining| !selector_envelope.all_lte(remaining))
+      {
         return Err(ServiceRoundError::DiscoveryUnavailable);
       }
       // Admit round discovery before any topology read or round-marker mutation. Empty/closed
@@ -9396,8 +9573,12 @@ pub mod pallet {
       // Set only after complete admission, before entering a mutating branch. Semantic rollback
       // restores topology/custody, not work already performed under this envelope.
       let mut incurred: Option<ActorStepResourceEnvelope> = None;
-      let result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
         let result = (|| {
+          let can_consume = |control: Weight, effect: Weight| {
+            meter.can_consume(control.saturating_add(effect))
+              && caller_control_remaining.is_none_or(|remaining| control.all_lte(remaining))
+          };
           Self::begin_service_round(now)?;
           let mut encounter = Self::consider_service_head(now)?;
           let mut execution_weight = Weight::zero();
@@ -9574,6 +9755,11 @@ pub mod pallet {
               ),
             }
             .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
+            // Refusal preserves the canonical Run and its paid identity; it never cancels or
+            // recharges an earlier committed Pipeline under a changed host certificate.
+            if !Self::admission_matches_current_authority(&admission) {
+              return Err(ServiceRoundError::ProcessResidenceMismatch);
+            }
             let instance = Self::derive_active_actor_view(
               state.identity.clone(),
               state.hot.clone(),
@@ -9960,6 +10146,9 @@ pub mod pallet {
               };
               let terminal_control =
                 Self::service_terminal_control_upper(&state, Some(&loaded_step.step));
+              let refusal_completion =
+                Self::service_refusal_completion_for_contract(&state.contract);
+              let refusal_control = refusal_completion.unwrap_or_else(Weight::zero);
               let effectful_control = resources
                 .control
                 .saturating_add(financial_entry)
@@ -9970,7 +10159,9 @@ pub mod pallet {
                       .max(T::WeightInfo::service_member_retire_pair_cursor())
                       .max(T::WeightInfo::service_member_retire_singleton()),
                   ),
-                );
+                )
+                .checked_add(&refusal_control)
+                .ok_or(ServiceRoundError::ResourceUnavailable)?;
               if !can_consume(
                 inspection_envelope.saturating_add(effectful_control),
                 resources.effect,
@@ -10042,6 +10233,7 @@ pub mod pallet {
                 control: effectful_control,
                 effect: resources.effect,
               });
+              let refusal_source = refusal_completion.map(|_| state.clone());
               let mut evidence = match Self::execute_effectful_step_on_service_with_deadline(
                 actor,
                 service_kind,
@@ -10062,6 +10254,37 @@ pub mod pallet {
                     control: effectful_control,
                     effect: actual_effect_weight,
                   });
+                  if let Some(source) = refusal_source.as_ref().filter(|_| {
+                    matches!(
+                      failure.cause,
+                      crate::scheduler::AttemptTransactionError::FeeCollection
+                    )
+                  }) {
+                    if !actual_effect_weight.all_lte(resources.effect) {
+                      return Err(ServiceRoundError::ResourceUnavailable);
+                    }
+                    Self::complete_refused_service_turn(actor, source, &admission, process, now)?;
+                    if let (Some((resource_state, _)), Some(reservation)) =
+                      (resource_authority.as_mut(), reservation.as_mut())
+                    {
+                      resource_state
+                        .settle_actor_step(
+                          reservation,
+                          if control_owned_by_caller {
+                            Weight::zero()
+                          } else {
+                            effectful_control
+                          },
+                          actual_effect_weight,
+                        )
+                        .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
+                    }
+                    return Ok((
+                      ServiceRoundEncounter::ConsumedRefusal(actor),
+                      effectful_control.saturating_add(actual_effect_weight),
+                      None,
+                    ));
+                  }
                   let attempt = Self::finalize_service_namespace_rollback(
                     actor,
                     failure.cause,
@@ -10103,7 +10326,10 @@ pub mod pallet {
               {
                 effectful_control
               } else {
-                evidence.actual_control_weight.saturating_add(suffix)
+                evidence
+                  .actual_control_weight
+                  .saturating_add(suffix)
+                  .saturating_add(refusal_control)
               };
               if evidence.attempt.is_none() {
                 encounter = ServiceRoundEncounter::NoWork(actor);
@@ -10131,7 +10357,13 @@ pub mod pallet {
                 .control;
               let zero_step_base = zero_step_control.saturating_add(zero_step_suffix);
               let terminal_control = Self::service_terminal_control_upper(&state, None);
-              let zero_step_envelope = zero_step_base.saturating_add(terminal_control);
+              let refusal_completion =
+                Self::service_refusal_completion_for_contract(&state.contract);
+              let refusal_control = refusal_completion.unwrap_or_else(Weight::zero);
+              let zero_step_envelope = zero_step_base
+                .saturating_add(terminal_control)
+                .checked_add(&refusal_control)
+                .ok_or(ServiceRoundError::ResourceUnavailable)?;
               if !can_consume(
                 inspection_envelope.saturating_add(zero_step_envelope),
                 Weight::zero(),
@@ -10160,6 +10392,7 @@ pub mod pallet {
                 control: zero_step_envelope,
                 effect: Weight::zero(),
               });
+              let refusal_source = refusal_completion.map(|_| state.clone());
               let evidence = match Self::execute_zero_step_on_service(
                 actor,
                 service_kind,
@@ -10169,6 +10402,33 @@ pub mod pallet {
               ) {
                 Ok(evidence) => Ok(evidence),
                 Err(cause) => {
+                  if let Some(source) = refusal_source.as_ref().filter(|_| {
+                    matches!(
+                      cause,
+                      crate::scheduler::AttemptTransactionError::FeeCollection
+                    )
+                  }) {
+                    Self::complete_refused_service_turn(actor, source, &admission, process, now)?;
+                    if let (Some((resource_state, _)), Some(reservation)) =
+                      (resource_authority.as_mut(), reservation.as_mut())
+                    {
+                      resource_state
+                        .settle(
+                          reservation,
+                          if control_owned_by_caller {
+                            Weight::zero()
+                          } else {
+                            zero_step_envelope
+                          },
+                        )
+                        .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
+                    }
+                    return Ok((
+                      ServiceRoundEncounter::ConsumedRefusal(actor),
+                      zero_step_envelope,
+                      None,
+                    ));
+                  }
                   Self::finalize_service_namespace_rollback(actor, cause, terminal_control).map(
                     |attempt| crate::scheduler::StepCommitEvidence {
                       actual_control_weight: zero_step_control,
@@ -10194,6 +10454,7 @@ pub mod pallet {
                 evidence
                   .actual_control_weight
                   .saturating_add(zero_step_suffix)
+                  .saturating_add(refusal_control)
               };
               attempt = evidence.attempt;
               if let (Some((resource_state, _)), Some(reservation)) =
@@ -10215,28 +10476,65 @@ pub mod pallet {
           }
           Ok((encounter, execution_weight, attempt))
         })();
-        match result {
-          Ok(outcome) => {
-            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(outcome))
-          }
-          Err(error) => {
-            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-          }
-        }
-      });
-      let inspection_actual = if loaded_classification {
-        inspection_envelope
-      } else {
-        selector_envelope
-      };
-      let (encounter, execution_weight, attempt) = match result {
-        Ok(outcome) => outcome,
-        Err(error) => {
-          if let (Some((state, _)), Some(after_inspection)) =
-            (resource_authority.as_mut(), resource_after_inspection)
-          {
-            **state = after_inspection;
-          }
+        // Final resource settlement belongs inside the same Service commit boundary. Meters and
+        // the frozen resource ledger retain performed work independently of storage rollback.
+        let result = (|| {
+          let inspection_actual = if loaded_classification {
+            inspection_envelope
+          } else {
+            selector_envelope
+          };
+          let (encounter, execution_weight, attempt) = match result {
+            Ok(outcome) => outcome,
+            Err(error) => {
+              if let (Some((state, _)), Some(after_inspection)) =
+                (resource_authority.as_mut(), resource_after_inspection)
+              {
+                **state = after_inspection;
+              }
+              for (reservation, actual) in [
+                (&mut inspection_reservation, selector_envelope),
+                (
+                  &mut classification_reservation,
+                  loaded_classification_envelope,
+                ),
+                (&mut policy_inspection_reservation, policy_inspection_weight),
+                (
+                  &mut financial_inspection_reservation,
+                  financial_inspection_weight,
+                ),
+              ] {
+                if let (Some((state, _)), Some(reservation)) =
+                  (resource_authority.as_mut(), reservation.as_mut())
+                {
+                  state
+                    .settle(reservation, actual)
+                    .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
+                }
+              }
+              meter.consume(inspection_actual);
+              if let Some(work) = incurred {
+                meter.consume(work.control.saturating_add(work.effect));
+                if let Some((state, limits)) = resource_authority.as_mut() {
+                  // Restore only the failed branch's ledger booking, from its already-admitted
+                  // prefix. No new capacity is needed; known effects may refund within their domain.
+                  let control = if control_owned_by_caller {
+                    Weight::zero()
+                  } else {
+                    work.control
+                  };
+                  let retained = state
+                    .reserve_actor_step(*limits, effect_domain, control, work.effect)
+                    .and_then(|mut reservation| {
+                      state.settle_actor_step(&mut reservation, control, work.effect)
+                    });
+                  state.halt_optional_actor_work();
+                  retained.map_err(|_| ServiceRoundError::ResourceUnavailable)?;
+                }
+              }
+              return Err(error);
+            }
+          };
           for (reservation, actual) in [
             (&mut inspection_reservation, selector_envelope),
             (
@@ -10258,51 +10556,18 @@ pub mod pallet {
             }
           }
           meter.consume(inspection_actual);
-          if let Some(work) = incurred {
-            meter.consume(work.control.saturating_add(work.effect));
-            if let Some((state, limits)) = resource_authority.as_mut() {
-              // Restore only the failed branch's ledger booking, from its already-admitted
-              // prefix. No new capacity is needed; known effects may refund within their domain.
-              let control = if control_owned_by_caller {
-                Weight::zero()
-              } else {
-                work.control
-              };
-              let retained = state
-                .reserve_actor_step(*limits, effect_domain, control, work.effect)
-                .and_then(|mut reservation| {
-                  state.settle_actor_step(&mut reservation, control, work.effect)
-                });
-              state.halt_optional_actor_work();
-              retained.map_err(|_| ServiceRoundError::ResourceUnavailable)?;
-            }
+          meter.consume(execution_weight);
+          Ok((encounter, attempt))
+        })();
+        match result {
+          Ok(outcome) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(outcome))
           }
-          return Err(error);
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
         }
-      };
-      for (reservation, actual) in [
-        (&mut inspection_reservation, selector_envelope),
-        (
-          &mut classification_reservation,
-          loaded_classification_envelope,
-        ),
-        (&mut policy_inspection_reservation, policy_inspection_weight),
-        (
-          &mut financial_inspection_reservation,
-          financial_inspection_weight,
-        ),
-      ] {
-        if let (Some((state, _)), Some(reservation)) =
-          (resource_authority.as_mut(), reservation.as_mut())
-        {
-          state
-            .settle(reservation, actual)
-            .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
-        }
-      }
-      meter.consume(inspection_actual);
-      meter.consume(execution_weight);
-      Ok((encounter, attempt))
+      })
     }
 
     fn validate_parked_dependency_plan(
@@ -11007,9 +11272,12 @@ pub mod pallet {
     ) -> Result<Option<ActorSemanticStateOf<T>>, ActorSemanticMutationError> {
       let current = ActorSemanticStates::<T>::get(actor_id);
       let replacement = apply_actor_semantic_mutation(current.as_ref(), &mutation)?;
-      match &replacement {
-        Some(state) => ActorSemanticStates::<T>::insert(actor_id, state),
-        None => ActorSemanticStates::<T>::remove(actor_id),
+      // Equal replacements still require the fresh read and complete expected-value validation.
+      if replacement != current {
+        match &replacement {
+          Some(state) => ActorSemanticStates::<T>::insert(actor_id, state),
+          None => ActorSemanticStates::<T>::remove(actor_id),
+        }
       }
       Ok(replacement)
     }
@@ -12387,8 +12655,17 @@ pub mod pallet {
 
   impl<T: Config> Pallet<T> {}
 
+  pub(crate) struct PrepassEntry<BlockNumber> {
+    pub(crate) state: BlockResourceState<BlockNumber>,
+    pub(crate) budget: BlockResourceBudget,
+    pub(crate) now_tick: SchedulerTick,
+    pub(crate) control_envelopes: [Weight; 4],
+  }
+
   impl<T: Config> Pallet<T> {
-    fn execute_mandatory_prepass(now: BlockNumberFor<T>) -> Result<Weight, Error<T>> {
+    pub(crate) fn begin_mandatory_prepass(
+      now: BlockNumberFor<T>,
+    ) -> Result<PrepassEntry<BlockNumberFor<T>>, Error<T>> {
       ensure!(
         T::PrepassContext::context_ready(),
         Error::<T>::PrepassContextIncomplete
@@ -12451,19 +12728,26 @@ pub mod pallet {
       state
         .settle(&mut prepass_reservation, control_weight)
         .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+      Ok(PrepassEntry {
+        state,
+        budget,
+        now_tick,
+        control_envelopes: [
+          control_weight,
+          deadline_maximum,
+          dependency_scan_envelope,
+          drain_finalization_control,
+        ],
+      })
+    }
 
-      // Freeze preserves exact frontier and round authority while the block protocol continues.
-      if GlobalCircuitBreaker::<T>::get() {
-        state.halt_optional_actor_work();
-        state
-          .open_external_phase()
-          .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
-        CurrentBlockResourceState::<T>::put(state);
-        return Ok(control_weight);
-      }
-
-      // Deadline authority precedes competing detector and Service work. Each clock gets one
-      // admitted attempt; returned members retain the ordinary B+1 eligibility boundary.
+    pub(crate) fn service_prepass_deadlines(
+      now: BlockNumberFor<T>,
+      now_tick: SchedulerTick,
+      state: &mut BlockResourceState<BlockNumberFor<T>>,
+      budget: BlockResourceBudget,
+      deadline_maximum: Weight,
+    ) -> Result<Weight, Error<T>> {
       let mut deadline_reservation = state
         .reserve(
           budget.limits(),
@@ -12484,7 +12768,14 @@ pub mod pallet {
       state
         .settle(&mut deadline_reservation, deadline_actual)
         .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+      Ok(deadline_actual)
+    }
 
+    pub(crate) fn service_prepass_dependency_scan(
+      state: &mut BlockResourceState<BlockNumberFor<T>>,
+      budget: BlockResourceBudget,
+      dependency_scan_envelope: Weight,
+    ) -> Result<Weight, Error<T>> {
       let mut dependency_scan_reservation = state
         .reserve(
           budget.limits(),
@@ -12503,6 +12794,40 @@ pub mod pallet {
       state
         .settle(&mut dependency_scan_reservation, dependency_scan_actual)
         .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+      Ok(dependency_scan_actual)
+    }
+
+    fn execute_mandatory_prepass(now: BlockNumberFor<T>) -> Result<Weight, Error<T>> {
+      let PrepassEntry {
+        mut state,
+        budget,
+        now_tick,
+        control_envelopes:
+          [
+            control_weight,
+            deadline_maximum,
+            dependency_scan_envelope,
+            drain_finalization_control,
+          ],
+      } = Self::begin_mandatory_prepass(now)?;
+
+      // Freeze preserves exact frontier and round authority while the block protocol continues.
+      if GlobalCircuitBreaker::<T>::get() {
+        state.halt_optional_actor_work();
+        state
+          .open_external_phase()
+          .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+        CurrentBlockResourceState::<T>::put(state);
+        return Ok(control_weight);
+      }
+
+      // Deadline authority precedes competing detector and Service work. Each clock gets one
+      // admitted attempt; returned members retain the ordinary B+1 eligibility boundary.
+      let deadline_actual =
+        Self::service_prepass_deadlines(now, now_tick, &mut state, budget, deadline_maximum)?;
+
+      let dependency_scan_actual =
+        Self::service_prepass_dependency_scan(&mut state, budget, dependency_scan_envelope)?;
 
       let control_remaining = budget
         .limits()
@@ -13923,10 +14248,10 @@ pub mod pallet {
     /// Cleanup covers every reachable terminal branch; StopCycle's Task allowance is Control.
     pub(crate) fn contract_service_resources_upper(
       contract: &ActorContractOf<T>,
-    ) -> Option<ActorStepResourceEnvelope> {
-      let resources = Self::derive_step_resource_envelopes(contract)?;
+    ) -> Result<ActorStepResourceEnvelope, Error<T>> {
+      let resources = Self::try_derive_step_resource_envelopes(contract)?;
       let mut maximum = if contract.steps.is_empty() {
-        Self::zero_step_resource_envelope(contract)?
+        Self::try_zero_step_resource_envelope(contract)?
       } else {
         ActorStepResourceEnvelope {
           control: Weight::zero(),
@@ -13934,38 +14259,59 @@ pub mod pallet {
         }
       };
       for (step, resource) in contract.steps.iter(/* deos-bypass: bounded-iter */).zip(resources) {
-        let resource = Self::step_service_resources(step, resource)?;
+        let resource =
+          Self::step_service_resources(step, resource).ok_or(Error::<T>::AdmissionBoundOverflow)?;
         maximum.control = maximum.control.max(resource.control);
         maximum.effect = maximum.effect.max(resource.effect);
       }
-      let mut cleanup = Self::close_control_weight_for_contract(contract)?;
+      let mut cleanup = Self::close_control_weight_for_contract(contract)
+        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
       let financial_inspection_and_entry = if contract.on_unfunded == OnUnfunded::AwaitFunding {
-        let bytes = Self::financial_wait_episode_bytes()?;
+        let bytes =
+          Self::financial_wait_episode_bytes().ok_or(Error::<T>::AdmissionBoundOverflow)?;
         maximum.control = maximum
           .control
           .max(T::WeightInfo::at_time_trigger_occurrence());
         if contract.close_when.is_some() {
-          cleanup =
-            cleanup.max(T::AdmissionCertificateAuthority::current()?.maximum_lifecycle_weight);
+          cleanup = cleanup.max(
+            T::AdmissionCertificateAuthority::current()
+              .ok_or(Error::<T>::AdmissionBoundOverflow)?
+              .maximum_lifecycle_weight,
+          );
           if contract.steps.is_empty() {
             maximum.control = maximum.control.max(
               T::StepControlWeight::maximum_behavior_zero_step_service_weight(
-                Self::behavior_service_inspection_bounds()?,
-              )?,
+                Self::behavior_service_inspection_bounds()
+                  .ok_or(Error::<T>::AdmissionBoundOverflow)?,
+              )
+              .ok_or(Error::<T>::BehaviorPolicyUnavailable)?,
             );
           }
         }
-        T::AdmissionCertificateAuthority::financial_wait_service_weight(bytes)?
-          .checked_add(&T::AdmissionCertificateAuthority::financial_wait_entry_weight(bytes)?)?
+        T::AdmissionCertificateAuthority::financial_wait_service_weight(bytes)
+          .ok_or(Error::<T>::AdmissionBoundOverflow)?
+          .checked_add(
+            &T::AdmissionCertificateAuthority::financial_wait_entry_weight(bytes)
+              .ok_or(Error::<T>::AdmissionBoundOverflow)?,
+          )
+          .ok_or(Error::<T>::AdmissionBoundOverflow)?
       } else {
         Weight::zero()
       };
-      maximum.control = Self::service_turn_control_weight_upper()?
-        .checked_add(&Self::policy_service_inspection_weight(contract)?)?
-        .checked_add(&financial_inspection_and_entry)?
-        .checked_add(&maximum.control)?
-        .checked_add(&cleanup)?;
-      Some(maximum)
+      let inspection = Self::policy_service_inspection_weight(contract)
+        .ok_or(Error::<T>::BehaviorPolicyUnavailable)?;
+      maximum.control = Self::service_turn_control_weight_upper()
+        .and_then(|common| common.checked_add(&inspection))
+        .and_then(|control| control.checked_add(&financial_inspection_and_entry))
+        .and_then(|control| {
+          control.checked_add(
+            &Self::service_refusal_completion_for_contract(contract).unwrap_or_else(Weight::zero),
+          )
+        })
+        .and_then(|control| control.checked_add(&maximum.control))
+        .and_then(|control| control.checked_add(&cleanup))
+        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+      Ok(maximum)
     }
 
     fn ensure_contract_fits_service_budget(
@@ -13980,8 +14326,7 @@ pub mod pallet {
         Error::<T>::ContractStepsExceedOnIdleBudget
       );
       let limits = T::BlockResourceBudget::get().limits();
-      let service = Self::contract_service_resources_upper(contract)
-        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+      let service = Self::contract_service_resources_upper(contract)?;
       let control = Self::mandatory_actor_control_weight_upper()
         .and_then(|mandatory| limits.actor_control().checked_sub(&mandatory))
         .ok_or(Error::<T>::ContractStepsExceedOnIdleBudget)?;

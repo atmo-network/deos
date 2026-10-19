@@ -1,0 +1,88 @@
+/* A small reading-layout extension; mdBook owns the document and navigation UI. */
+:root {
+  --content-max-width: 78ch;
+}
+.content {
+  min-width: 0;
+}
+.content main {
+  overflow-wrap: anywhere;
+}
+.content pre,
+.content .table-wrapper {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.wiki-open-current {
+  font-family: sans-serif;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-size: 1.2rem;
+  padding-inline: 0.6rem;
+}
+.wiki-context {
+  max-width: var(--content-max-width);
+  margin: 1.2rem auto;
+  padding: 0 15px 1rem;
+  border-bottom: 1px solid var(--table-border-color);
+}
+.wiki-context-row,
+.wiki-layer-choices,
+.wiki-locale-choices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.wiki-context-row {
+  justify-content: space-between;
+}
+.wiki-context a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0.3rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+.wiki-context a[aria-current="true"] {
+  border-color: var(--links);
+  background: var(--quote-bg);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 0.3rem;
+}
+.wiki-context a:focus-visible {
+  outline: 2px solid var(--links);
+  outline-offset: 2px;
+}
+.wiki-context-status {
+  margin: 0.7rem 0 0;
+  font-size: 0.9em;
+}
+[data-wiki-layer-exit]::after {
+  content: " ↗ " attr(data-wiki-layer-exit);
+  font-size: 0.8em;
+}
+.chapter-item[hidden],
+.part-title[hidden],
+main [hidden] {
+  display: none !important;
+}
+html[data-wiki-layer="pending"] main {
+  visibility: hidden;
+}
+html[data-wiki-layer="error"] :is(.content, #mdbook-sidebar, #mdbook-search-wrapper),
+html[data-wiki-layer="outside"] :is(.content, #mdbook-sidebar, #mdbook-search-wrapper) {
+  display: none;
+}
+@media (max-width: 440px) {
+  .content {
+    padding-inline: 12px;
+  }
+  .content table {
+    font-size: 0.9em;
+  }
+}

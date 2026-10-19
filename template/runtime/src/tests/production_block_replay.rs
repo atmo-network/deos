@@ -49,6 +49,9 @@ use polkadot_sdk::{
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(not(feature = "runtime-benchmarks"))]
+use polkadot_sdk::frame_support::traits::Get;
+
+#[cfg(not(feature = "runtime-benchmarks"))]
 #[path = "../../examples/actor_retention_fixture/wide_contract.rs"]
 mod retention_wide_contract;
 
@@ -57,6 +60,34 @@ mod retention_wide_contract;
 mod pvf_fixture;
 #[cfg(not(feature = "runtime-benchmarks"))]
 use crate as pvf_runtime;
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[path = "production_block_replay/bare_accounting.rs"]
+mod bare_accounting;
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[path = "production_block_replay/inherent_accounting.rs"]
+mod inherent_accounting;
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[path = "production_block_replay/freeze_entry.rs"]
+mod freeze_entry;
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[path = "production_block_replay/prepass_context_order.rs"]
+mod prepass_context_order;
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[path = "production_block_replay/transfer_baseline.rs"]
+mod transfer_baseline;
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[path = "production_block_replay/meter_attribution.rs"]
+pub(crate) mod meter_attribution;
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[path = "production_block_replay/pvf_first.rs"]
+mod pvf_first;
 
 const PREPARED_W1_ACTORS: u32 = 128;
 const W1_TARGET_CYCLES: u32 = 10_000;
@@ -91,8 +122,8 @@ const CONTROL_ATTRIBUTION_BLOCKS: u32 = 9;
 /// Exact-Wasm profiles fail closed on other bytes. This identity is not a certificate of
 /// complete Weight/resource, host or release acceptance.
 const ACCEPTED_PRODUCTION_WASM_SHA256: [u8; 32] = [
-  0x5c, 0x1f, 0x79, 0x7c, 0xd5, 0x32, 0x81, 0xda, 0x0d, 0xa8, 0x69, 0x6e, 0xf9, 0xcd, 0x05, 0x08,
-  0x70, 0xbb, 0x2b, 0xbc, 0xe0, 0xeb, 0x72, 0xde, 0x2f, 0xc4, 0xd3, 0x13, 0x3d, 0x9a, 0x5c, 0xfc,
+  0x8c, 0xc3, 0xb9, 0x38, 0xfc, 0xbe, 0x72, 0x0e, 0xd3, 0x28, 0xa9, 0x54, 0x6d, 0x9b, 0xa2, 0xc1,
+  0x07, 0x02, 0x6c, 0xbe, 0x71, 0xa0, 0x0b, 0x9b, 0x86, 0xe6, 0x8d, 0x70, 0xd1, 0x52, 0x98, 0xfb,
 ];
 const REFERENCE_ACTIVE_SYSTEM_ACTORS: u32 = 3;
 const REFERENCE_SYSTEM_ACTOR_IDENTITIES: u32 = 15;
@@ -744,6 +775,26 @@ fn trusted_genesis_session_callbacks_preserve_empty_security_obligations() {
       assert_eq!(
         Staking::native_security_mode(),
         pallet_staking::NativeSecurityMode::TrustedSet
+      );
+      assert_empty();
+      let genesis_session = (
+        Session::validators(),
+        Session::queued_keys(),
+        polkadot_sdk::pallet_aura::Authorities::<Runtime>::get(),
+      );
+      assert_eq!(System::block_number(), 0);
+      assert_eq!(System::block_weight().total(), Weight::zero());
+      let genesis_hash = System::block_hash(0);
+      System::initialize(&1, &genesis_hash, &Default::default());
+      assert_eq!(System::block_number(), 1);
+      assert_eq!(System::block_weight().total(), Weight::zero());
+      assert_eq!(
+        (
+          Session::validators(),
+          Session::queued_keys(),
+          polkadot_sdk::pallet_aura::Authorities::<Runtime>::get(),
+        ),
+        genesis_session,
       );
       assert_empty();
       assert_noop!(
@@ -4893,21 +4944,24 @@ fn assert_complete_block_replays_with_aura(authored: &AuthoredBlock) -> Header {
 }
 
 #[cfg(not(feature = "runtime-benchmarks"))]
-fn assert_no_auxiliary_block_overlay(ext: &TestExternalities) {
+fn block_auxiliary_overlay_result(ext: &TestExternalities) -> Result<(), &'static str> {
   let overlay = ext.overlayed_changes();
-  assert!(
-    overlay.children().next().is_none(),
-    "TOP-only block fixture cannot discard child storage changes"
-  );
-  assert!(
-    overlay.transaction_index_ops().is_empty(),
-    "block fixture cannot discard transaction index changes"
-  );
+  if overlay.children().next().is_some() {
+    return Err("TOP-only block fixture cannot discard child storage changes");
+  }
+  if !overlay.transaction_index_ops().is_empty() {
+    return Err("block fixture cannot discard transaction index changes");
+  }
   // Inspect a copy so the diagnostic never consumes the import's offchain changes.
-  assert!(
-    overlay.clone().offchain_drain_committed().next().is_none(),
-    "block fixture cannot discard offchain changes"
-  );
+  if overlay.clone().offchain_drain_committed().next().is_some() {
+    return Err("block fixture cannot discard offchain changes");
+  }
+  Ok(())
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn assert_no_auxiliary_block_overlay(ext: &TestExternalities) {
+  block_auxiliary_overlay_result(ext).unwrap_or_else(|reason| panic!("{reason}"));
 }
 
 #[test]
@@ -5819,6 +5873,2397 @@ fn cadenced_mint_keeps_parked_scans_active_through_complete_native_blocks() {
   }
 }
 
+#[cfg(not(feature = "runtime-benchmarks"))]
+type IntentFeeEventRecord = polkadot_sdk::frame_system::EventRecord<RuntimeEvent, crate::Hash>;
+
+// Receipt binding only: these amounts are not ledger movements or independently priced fees.
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn verify_signed_intent_fee_receipts(
+  owner: &crate::AccountId,
+  first_signed_index: u32,
+  events: &[IntentFeeEventRecord],
+) -> Result<[crate::Balance; 5], &'static str> {
+  use polkadot_sdk::frame_system::Phase;
+  let last = first_signed_index
+    .checked_add(4)
+    .ok_or("Intent fee index overflow")?;
+  let offset = |phase: &Phase| match phase {
+    Phase::ApplyExtrinsic(index) if *index >= first_signed_index && *index <= last => {
+      Ok((*index - first_signed_index) as usize)
+    }
+    _ => Err("Intent fee phase mismatch"),
+  };
+  let opening_fee = <Runtime as pallet_governance::Config>::ProposalOpeningFee::get();
+  let mut transaction = [0; 5];
+  let mut opening = [false; 2];
+  for record in events {
+    match &record.event {
+      RuntimeEvent::TransactionPayment(
+        polkadot_sdk::pallet_transaction_payment::Event::TransactionFeePaid {
+          who,
+          actual_fee,
+          tip,
+        },
+      ) => {
+        let index = offset(&record.phase)?;
+        if who != owner || *tip != 0 || *actual_fee == 0 {
+          return Err("Intent transaction fee mismatch");
+        }
+        if transaction[index] != 0 {
+          return Err("Duplicate Intent transaction fee");
+        }
+        transaction[index] = *actual_fee;
+      }
+      RuntimeEvent::Governance(pallet_governance::Event::ProposalOpeningFeeCollected {
+        domain,
+        item_id,
+        proposer,
+        amount,
+      }) => {
+        let slot = match (*domain, *item_id, offset(&record.phase)?) {
+          (101, 110, 2) => 0,
+          (102, 110, 4) => 1,
+          _ => return Err("Intent opening fee identity mismatch"),
+        };
+        if proposer != owner || *amount != opening_fee {
+          return Err("Intent opening fee mismatch");
+        }
+        if opening[slot] {
+          return Err("Duplicate Intent opening fee");
+        }
+        opening[slot] = true;
+      }
+      _ => {}
+    }
+  }
+  if transaction.contains(&0) || opening.contains(&false) {
+    return Err("Incomplete Intent fee receipts");
+  }
+  Ok(transaction)
+}
+
+// Synthetic receipts for parser tests only; no block, signature, money or price is observed.
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn synthetic_intent_fee_receipts(first: u32) -> Vec<IntentFeeEventRecord> {
+  let mut records = Vec::new();
+  for index in 0..5 {
+    let phase = polkadot_sdk::frame_system::Phase::ApplyExtrinsic(first + index);
+    if index == 2 || index == 4 {
+      records.push(IntentFeeEventRecord {
+        phase: phase.clone(),
+        event: RuntimeEvent::Governance(pallet_governance::Event::ProposalOpeningFeeCollected {
+          domain: if index == 2 { 101 } else { 102 },
+          item_id: 110,
+          proposer: ALICE,
+          amount: <Runtime as pallet_governance::Config>::ProposalOpeningFee::get(),
+        }),
+        topics: Vec::new(),
+      });
+    }
+    records.push(IntentFeeEventRecord {
+      phase,
+      event: RuntimeEvent::TransactionPayment(
+        polkadot_sdk::pallet_transaction_payment::Event::TransactionFeePaid {
+          who: ALICE,
+          actual_fee: u128::from(index + 1),
+          tip: 0,
+        },
+      ),
+      topics: Vec::new(),
+    });
+  }
+  records
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_fee_receipts_bind_positions_without_state() {
+  for first in [0, 7, u32::MAX - 4] {
+    let mut records = synthetic_intent_fee_receipts(first);
+    // Cash events belong to the independent ledger check, not fee-receipt totals.
+    records.push(IntentFeeEventRecord {
+      phase: polkadot_sdk::frame_system::Phase::Finalization,
+      event: RuntimeEvent::Balances(polkadot_sdk::pallet_balances::Event::Deposit {
+        who: ALICE,
+        amount: 999,
+      }),
+      topics: Vec::new(),
+    });
+    assert_eq!(
+      verify_signed_intent_fee_receipts(&ALICE, first, &records),
+      Ok([1, 2, 3, 4, 5])
+    );
+  }
+  assert_eq!(
+    verify_signed_intent_fee_receipts(&ALICE, u32::MAX - 3, &[]),
+    Err("Intent fee index overflow")
+  );
+  assert_eq!(
+    verify_signed_intent_fee_receipts(&ALICE, 7, &[]),
+    Err("Incomplete Intent fee receipts")
+  );
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_fee_receipts_refuse_missing_duplicate_and_misattributed_models() {
+  use polkadot_sdk::frame_system::Phase;
+  let cases: &[(fn(&mut Vec<IntentFeeEventRecord>), &str)] = &[
+    (
+      |e| {
+        e.remove(3);
+      },
+      "Incomplete Intent fee receipts",
+    ),
+    (
+      |e| {
+        e.remove(2);
+      },
+      "Incomplete Intent fee receipts",
+    ),
+    (|e| e.push(e[0].clone()), "Duplicate Intent transaction fee"),
+    (|e| e.push(e[2].clone()), "Duplicate Intent opening fee"),
+    (
+      |e| e[0].phase = Phase::Initialization,
+      "Intent fee phase mismatch",
+    ),
+    (
+      |e| e[0].phase = Phase::ApplyExtrinsic(6),
+      "Intent fee phase mismatch",
+    ),
+    (
+      |e| e[0].phase = Phase::ApplyExtrinsic(12),
+      "Intent fee phase mismatch",
+    ),
+    (
+      |e| {
+        if let RuntimeEvent::TransactionPayment(
+          polkadot_sdk::pallet_transaction_payment::Event::TransactionFeePaid { who, .. },
+        ) = &mut e[0].event
+        {
+          *who = crate::AccountId::new([99; 32]);
+        }
+      },
+      "Intent transaction fee mismatch",
+    ),
+    (
+      |e| {
+        if let RuntimeEvent::TransactionPayment(
+          polkadot_sdk::pallet_transaction_payment::Event::TransactionFeePaid { tip, .. },
+        ) = &mut e[0].event
+        {
+          *tip = 1;
+        }
+      },
+      "Intent transaction fee mismatch",
+    ),
+    (
+      |e| {
+        if let RuntimeEvent::TransactionPayment(
+          polkadot_sdk::pallet_transaction_payment::Event::TransactionFeePaid {
+            actual_fee, ..
+          },
+        ) = &mut e[0].event
+        {
+          *actual_fee = 0;
+        }
+      },
+      "Intent transaction fee mismatch",
+    ),
+    (
+      |e| {
+        if let RuntimeEvent::Governance(pallet_governance::Event::ProposalOpeningFeeCollected {
+          domain,
+          ..
+        }) = &mut e[2].event
+        {
+          *domain = 102;
+        }
+      },
+      "Intent opening fee identity mismatch",
+    ),
+    (
+      |e| {
+        if let RuntimeEvent::Governance(pallet_governance::Event::ProposalOpeningFeeCollected {
+          item_id,
+          ..
+        }) = &mut e[2].event
+        {
+          *item_id = 111;
+        }
+      },
+      "Intent opening fee identity mismatch",
+    ),
+    (
+      |e| e[2].phase = Phase::ApplyExtrinsic(8),
+      "Intent opening fee identity mismatch",
+    ),
+    (
+      |e| {
+        if let RuntimeEvent::Governance(pallet_governance::Event::ProposalOpeningFeeCollected {
+          amount,
+          ..
+        }) = &mut e[2].event
+        {
+          *amount += 1;
+        }
+      },
+      "Intent opening fee mismatch",
+    ),
+    (
+      |e| {
+        if let RuntimeEvent::Governance(pallet_governance::Event::ProposalOpeningFeeCollected {
+          proposer,
+          ..
+        }) = &mut e[2].event
+        {
+          *proposer = crate::AccountId::new([99; 32]);
+        }
+      },
+      "Intent opening fee mismatch",
+    ),
+  ];
+  for &(corrupt, reason) in cases {
+    let mut records = synthetic_intent_fee_receipts(7);
+    corrupt(&mut records);
+    let before = records.encode();
+    assert_eq!(
+      verify_signed_intent_fee_receipts(&ALICE, 7, &records),
+      Err(reason)
+    );
+    assert_eq!(records.encode(), before);
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IntentNativeBalance {
+  free: crate::Balance,
+  reserved: crate::Balance,
+}
+
+// Two existing accounts only; issuance, receipt attribution and hold reasons are separate owners.
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn verify_intent_balance_ledger(
+  accounts: &[crate::AccountId; 2],
+  before: [IntentNativeBalance; 2],
+  after: [IntentNativeBalance; 2],
+  events: &[IntentFeeEventRecord],
+) -> Result<(), &'static str> {
+  use polkadot_sdk::pallet_balances::Event as B;
+  if accounts[0] == accounts[1] {
+    return Err("Intent ledger accounts alias");
+  }
+  let mut balances = before;
+  for record in events {
+    let RuntimeEvent::Balances(event) = &record.event else {
+      continue;
+    };
+    for (account, balance) in accounts.iter().zip(&mut balances) {
+      // Free debit/credit, reserved debit/credit; no receipt event is a cash event.
+      let (fd, fc, rd, rc) = match event {
+        B::Transfer { from, to, amount } => (
+          if from == account { *amount } else { 0 },
+          if to == account { *amount } else { 0 },
+          0,
+          0,
+        ),
+        B::Deposit { who, amount } if who == account => (0, *amount, 0, 0),
+        B::Withdraw { who, amount } if who == account => (*amount, 0, 0, 0),
+        B::Reserved { who, amount } | B::Held { who, amount, .. } if who == account => {
+          (*amount, 0, 0, *amount)
+        }
+        B::Unreserved { who, amount } | B::Released { who, amount, .. } if who == account => {
+          (0, *amount, *amount, 0)
+        }
+        B::Endowed { account: who, .. }
+        | B::DustLost { account: who, .. }
+        | B::BalanceSet { who, .. }
+        | B::Slashed { who, .. }
+        | B::Minted { who, .. }
+        | B::Burned { who, .. }
+        | B::Suspended { who, .. }
+        | B::Restored { who, .. }
+        | B::BurnedHeld { who, .. }
+          if who == account =>
+        {
+          return Err("Unsupported Intent account balance effect");
+        }
+        B::ReserveRepatriated { from, to, .. }
+        | B::TransferOnHold {
+          source: from,
+          dest: to,
+          ..
+        }
+        | B::TransferAndHold {
+          source: from,
+          dest: to,
+          ..
+        } if from == account || to == account => {
+          return Err("Unsupported Intent account balance effect");
+        }
+        B::Unexpected(_) | B::TotalIssuanceForced { .. } => {
+          return Err("Unsupported Intent global balance effect");
+        }
+        // Unwatched account effects and named non-cash events add no movement here.
+        B::Endowed { .. }
+        | B::DustLost { .. }
+        | B::BalanceSet { .. }
+        | B::Deposit { .. }
+        | B::Withdraw { .. }
+        | B::Reserved { .. }
+        | B::Unreserved { .. }
+        | B::Held { .. }
+        | B::Released { .. }
+        | B::Slashed { .. }
+        | B::Minted { .. }
+        | B::Burned { .. }
+        | B::Suspended { .. }
+        | B::Restored { .. }
+        | B::BurnedHeld { .. }
+        | B::ReserveRepatriated { .. }
+        | B::TransferOnHold { .. }
+        | B::TransferAndHold { .. }
+        | B::Upgraded { .. }
+        | B::Locked { .. }
+        | B::Unlocked { .. }
+        | B::Frozen { .. }
+        | B::Thawed { .. }
+        | B::MintedCredit { .. }
+        | B::BurnedDebt { .. }
+        | B::Issued { .. }
+        | B::Rescinded { .. } => continue,
+        _ => return Err("Unsupported Intent balance event"),
+      };
+      balance.free = balance
+        .free
+        .checked_sub(fd)
+        .and_then(|v| v.checked_add(fc))
+        .ok_or("Intent ledger free arithmetic")?;
+      balance.reserved = balance
+        .reserved
+        .checked_sub(rd)
+        .and_then(|v| v.checked_add(rc))
+        .ok_or("Intent ledger reserved arithmetic")?;
+    }
+  }
+  if balances != after {
+    return Err("Intent ledger balance mismatch");
+  }
+  Ok(())
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn synthetic_intent_balance_movements() -> Vec<IntentFeeEventRecord> {
+  use polkadot_sdk::pallet_balances::Event as B;
+  let sink = crate::AccountId::new([55; 32]);
+  let other = crate::AccountId::new([77; 32]);
+  let reason =
+    crate::RuntimeHoldReason::Preimage(polkadot_sdk::pallet_preimage::HoldReason::Preimage);
+  [
+    B::Withdraw {
+      who: ALICE,
+      amount: 30,
+    },
+    B::Held {
+      reason,
+      who: ALICE,
+      amount: 20,
+    },
+    B::Reserved {
+      who: ALICE,
+      amount: 7,
+    },
+    B::Transfer {
+      from: ALICE,
+      to: sink.clone(),
+      amount: 100,
+    },
+    B::Unreserved {
+      who: ALICE,
+      amount: 7,
+    },
+    B::Deposit {
+      who: ALICE,
+      amount: 5,
+    },
+    B::Deposit {
+      who: sink.clone(),
+      amount: 25,
+    },
+    B::Endowed {
+      account: other.clone(),
+      free_balance: 50,
+    },
+    B::Transfer {
+      from: sink.clone(),
+      to: other,
+      amount: 50,
+    },
+    B::Held {
+      reason,
+      who: sink.clone(),
+      amount: 10,
+    },
+    B::Released {
+      reason,
+      who: sink,
+      amount: 10,
+    },
+  ]
+  .into_iter()
+  .map(|event| IntentFeeEventRecord {
+    phase: polkadot_sdk::frame_system::Phase::Finalization,
+    event: RuntimeEvent::Balances(event),
+    topics: Vec::new(),
+  })
+  .collect()
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_balance_ledger_reconciles_cash_and_reserved_models_without_state() {
+  let accounts = [ALICE, crate::AccountId::new([55; 32])];
+  let before = [
+    IntentNativeBalance {
+      free: 1_000,
+      reserved: 0,
+    },
+    IntentNativeBalance {
+      free: 10,
+      reserved: 0,
+    },
+  ];
+  let after = [
+    IntentNativeBalance {
+      free: 855,
+      reserved: 20,
+    },
+    IntentNativeBalance {
+      free: 85,
+      reserved: 0,
+    },
+  ];
+  let mut events = synthetic_intent_balance_movements();
+  // Deliberately unrelated receipt value: receipt/cash coupling is not this component's claim.
+  events.push(IntentFeeEventRecord {
+    phase: polkadot_sdk::frame_system::Phase::ApplyExtrinsic(7),
+    event: RuntimeEvent::TransactionPayment(
+      polkadot_sdk::pallet_transaction_payment::Event::TransactionFeePaid {
+        who: ALICE,
+        actual_fee: 999,
+        tip: 0,
+      },
+    ),
+    topics: Vec::new(),
+  });
+  let encoded = events.encode();
+  assert_eq!(
+    verify_intent_balance_ledger(&accounts, before, after, &events),
+    Ok(())
+  );
+  assert_eq!(events.encode(), encoded);
+  let mut doubled_hold = after;
+  doubled_hold[0].reserved += 20;
+  assert_eq!(
+    verify_intent_balance_ledger(&accounts, before, doubled_hold, &events),
+    Err("Intent ledger balance mismatch")
+  );
+  let mut ignored_allocation = after;
+  ignored_allocation[1].free += 50;
+  assert_eq!(
+    verify_intent_balance_ledger(&accounts, before, ignored_allocation, &events),
+    Err("Intent ledger balance mismatch")
+  );
+  events.remove(6); // A transfer-only ledger would miss the collector's Deposit.
+  assert_eq!(
+    verify_intent_balance_ledger(&accounts, before, after, &events),
+    Err("Intent ledger balance mismatch")
+  );
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_balance_ledger_refuses_unqualified_effects_and_arithmetic() {
+  use polkadot_sdk::pallet_balances::Event as B;
+  let accounts = [ALICE, crate::AccountId::new([55; 32])];
+  let zero = [IntentNativeBalance {
+    free: 0,
+    reserved: 0,
+  }; 2];
+  let check = |event| {
+    verify_intent_balance_ledger(
+      &accounts,
+      zero,
+      zero,
+      &[IntentFeeEventRecord {
+        phase: polkadot_sdk::frame_system::Phase::Initialization,
+        event: RuntimeEvent::Balances(event),
+        topics: Vec::new(),
+      }],
+    )
+  };
+  for event in [
+    B::Minted {
+      who: ALICE,
+      amount: 1,
+    },
+    B::DustLost {
+      account: ALICE,
+      amount: 1,
+    },
+    B::ReserveRepatriated {
+      from: accounts[1].clone(),
+      to: ALICE,
+      amount: 1,
+      destination_status: polkadot_sdk::frame_support::traits::BalanceStatus::Free,
+    },
+  ] {
+    assert_eq!(
+      check(event),
+      Err("Unsupported Intent account balance effect")
+    );
+  }
+  assert_eq!(
+    check(B::TotalIssuanceForced { old: 0, new: 1 }),
+    Err("Unsupported Intent global balance effect")
+  );
+  assert_eq!(
+    check(B::Withdraw {
+      who: ALICE,
+      amount: 1
+    }),
+    Err("Intent ledger free arithmetic")
+  );
+  assert_eq!(
+    check(B::Unreserved {
+      who: ALICE,
+      amount: 1
+    }),
+    Err("Intent ledger reserved arithmetic")
+  );
+  let mut maximum = zero;
+  maximum[0].free = u128::MAX;
+  assert_eq!(
+    verify_intent_balance_ledger(
+      &accounts,
+      maximum,
+      maximum,
+      &[IntentFeeEventRecord {
+        phase: polkadot_sdk::frame_system::Phase::Finalization,
+        event: RuntimeEvent::Balances(B::Deposit {
+          who: ALICE,
+          amount: 1
+        }),
+        topics: Vec::new(),
+      }]
+    ),
+    Err("Intent ledger free arithmetic")
+  );
+  assert_eq!(
+    verify_intent_balance_ledger(&[ALICE, ALICE], zero, zero, &[]),
+    Err("Intent ledger accounts alias")
+  );
+}
+
+// Binds receipt quantities to their native channels; snapshots still come from the caller.
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn verify_intent_packet_cash(
+  owner: &crate::AccountId,
+  first_signed_index: u32,
+  before: [IntentNativeBalance; 2],
+  after: [IntentNativeBalance; 2],
+  events: &[IntentFeeEventRecord],
+) -> Result<(), &'static str> {
+  use polkadot_sdk::{frame_system::Phase, pallet_balances::Event as B};
+  let fees = verify_signed_intent_fee_receipts(owner, first_signed_index, events)?;
+  let sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+  if owner == &sink {
+    return Err("Intent ledger accounts alias");
+  }
+  let mut withdrawals = [0u128; 5];
+  let mut refunds = [0u128; 5];
+  let mut collections = [0u128; 5];
+  let mut openings = [0u128; 5];
+  for record in events {
+    let Phase::ApplyExtrinsic(index) = &record.phase else {
+      continue;
+    };
+    let Some(index) = index.checked_sub(first_signed_index).filter(|i| *i < 5) else {
+      continue;
+    };
+    let index = index as usize;
+    let RuntimeEvent::Balances(event) = &record.event else {
+      continue;
+    };
+    let (sum, amount) = match event {
+      B::Withdraw { who, amount } if who == owner => (&mut withdrawals[index], *amount),
+      B::Deposit { who, amount } if who == owner => (&mut refunds[index], *amount),
+      B::Deposit { who, amount } if who == &sink => (&mut collections[index], *amount),
+      B::Transfer { from, to, amount } if from == owner && to == &sink => {
+        (&mut openings[index], *amount)
+      }
+      B::Withdraw { who, .. } if who == &sink => return Err("Intent signed cash owner mismatch"),
+      B::Transfer { from, to, .. }
+        if from == owner || to == owner || from == &sink || to == &sink =>
+      {
+        return Err("Intent signed cash owner mismatch");
+      }
+      _ => continue,
+    };
+    *sum = sum
+      .checked_add(amount)
+      .ok_or("Intent signed cash arithmetic")?;
+  }
+  let opening_fee = <Runtime as pallet_governance::Config>::ProposalOpeningFee::get();
+  for (index, fee) in fees.into_iter().enumerate() {
+    if withdrawals[index].checked_sub(refunds[index]) != Some(fee) || collections[index] != fee {
+      return Err("Intent signed transaction cash mismatch");
+    }
+    if openings[index]
+      != if index == 2 || index == 4 {
+        opening_fee
+      } else {
+        0
+      }
+    {
+      return Err("Intent signed opening cash mismatch");
+    }
+  }
+  verify_intent_balance_ledger(&[owner.clone(), sink], before, after, events)
+}
+
+// Synthetic money/receipt model only; event phases are inputs, not Executive observations.
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn synthetic_intent_packet_cash() -> (
+  [IntentNativeBalance; 2],
+  [IntentNativeBalance; 2],
+  Vec<IntentFeeEventRecord>,
+) {
+  use polkadot_sdk::{frame_system::Phase, pallet_balances::Event as B};
+  let sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+  let opening_fee = <Runtime as pallet_governance::Config>::ProposalOpeningFee::get();
+  let before = [
+    IntentNativeBalance {
+      free: 2 * opening_fee + 1_000,
+      reserved: 0,
+    },
+    IntentNativeBalance {
+      free: 100,
+      reserved: 0,
+    },
+  ];
+  let after = [
+    IntentNativeBalance {
+      free: 985,
+      reserved: 0,
+    },
+    IntentNativeBalance {
+      free: 2 * opening_fee + 65,
+      reserved: 0,
+    },
+  ];
+  let mut records = Vec::new();
+  for index in 0..5 {
+    let fee = u128::from(index + 1);
+    let mut cash = vec![B::Withdraw {
+      who: ALICE,
+      amount: fee + 7,
+    }];
+    if index == 2 || index == 4 {
+      cash.push(B::Transfer {
+        from: ALICE,
+        to: sink.clone(),
+        amount: opening_fee,
+      });
+    }
+    cash.extend([
+      B::Deposit {
+        who: ALICE,
+        amount: 7,
+      },
+      B::Deposit {
+        who: sink.clone(),
+        amount: fee,
+      },
+    ]);
+    records.extend(cash.into_iter().map(|event| IntentFeeEventRecord {
+      phase: Phase::ApplyExtrinsic(7 + index),
+      event: RuntimeEvent::Balances(event),
+      topics: Vec::new(),
+    }));
+  }
+  records.extend(synthetic_intent_fee_receipts(7));
+  records.push(IntentFeeEventRecord {
+    phase: Phase::Finalization,
+    event: RuntimeEvent::Balances(B::Transfer {
+      from: sink,
+      to: crate::AccountId::new([77; 32]),
+      amount: 50,
+    }),
+    topics: Vec::new(),
+  });
+  (before, after, records)
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_packet_cash_binds_receipts_and_native_models() {
+  use polkadot_sdk::{frame_system::Phase, pallet_balances::Event as B};
+  let (before, after, records) = synthetic_intent_packet_cash();
+  assert_eq!(
+    verify_intent_packet_cash(&ALICE, 7, before, after, &records),
+    Ok(())
+  );
+  let cases: &[(fn(&mut Vec<IntentFeeEventRecord>), &str)] = &[
+    (
+      |e| {
+        let sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+        e.iter_mut()
+          .find(
+            |r| matches!(&r.event, RuntimeEvent::Balances(B::Deposit { who, .. }) if who == &sink),
+          )
+          .unwrap()
+          .phase = Phase::ApplyExtrinsic(8);
+      },
+      "Intent signed transaction cash mismatch",
+    ),
+    (
+      |e| {
+        e.iter_mut().find(|r| matches!(&r.event, RuntimeEvent::Balances(B::Transfer { from, .. }) if from == &ALICE)).unwrap().phase = Phase::ApplyExtrinsic(10);
+      },
+      "Intent signed opening cash mismatch",
+    ),
+    (
+      |e| {
+        let index = e
+          .iter()
+          .position(
+            |r| matches!(&r.event, RuntimeEvent::Balances(B::Deposit { who, .. }) if who == &ALICE),
+          )
+          .unwrap();
+        e.remove(index);
+      },
+      "Intent signed transaction cash mismatch",
+    ),
+    (
+      |e| {
+        e.push(IntentFeeEventRecord {
+          phase: Phase::ApplyExtrinsic(7),
+          event: RuntimeEvent::Balances(B::Transfer {
+            from: <Runtime as pallet_deos_actors::Config>::FeeSink::get(),
+            to: crate::AccountId::new([77; 32]),
+            amount: 1,
+          }),
+          topics: Vec::new(),
+        })
+      },
+      "Intent signed cash owner mismatch",
+    ),
+    (
+      |e| {
+        e.push(IntentFeeEventRecord {
+          phase: Phase::ApplyExtrinsic(7),
+          event: RuntimeEvent::Balances(B::Deposit {
+            who: <Runtime as pallet_deos_actors::Config>::FeeSink::get(),
+            amount: u128::MAX,
+          }),
+          topics: Vec::new(),
+        })
+      },
+      "Intent signed cash arithmetic",
+    ),
+    (
+      |e| {
+        let index = e
+          .iter()
+          .position(|r| matches!(&r.event, RuntimeEvent::TransactionPayment(_)))
+          .unwrap();
+        e.remove(index);
+      },
+      "Incomplete Intent fee receipts",
+    ),
+  ];
+  for &(corrupt, reason) in cases {
+    let mut events = records.clone();
+    corrupt(&mut events);
+    let encoded = events.encode();
+    assert_eq!(
+      verify_intent_packet_cash(&ALICE, 7, before, after, &events),
+      Err(reason)
+    );
+    assert_eq!(events.encode(), encoded);
+  }
+  let mut incorrect_after = after;
+  incorrect_after[1].free += 1;
+  assert_eq!(
+    verify_intent_packet_cash(&ALICE, 7, before, incorrect_after, &records),
+    Err("Intent ledger balance mismatch")
+  );
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_packet_cash_rejects_equal_total_receipt_disagreement() {
+  let (before, after, mut records) = synthetic_intent_packet_cash();
+  for (actual, replacement) in records
+    .iter_mut()
+    .filter_map(|r| match &mut r.event {
+      RuntimeEvent::TransactionPayment(
+        polkadot_sdk::pallet_transaction_payment::Event::TransactionFeePaid { actual_fee, .. },
+      ) => Some(actual_fee),
+      _ => None,
+    })
+    .zip([2, 1])
+  {
+    *actual = replacement;
+  }
+  assert_eq!(
+    verify_signed_intent_fee_receipts(&ALICE, 7, &records),
+    Ok([2, 1, 3, 4, 5])
+  );
+  let sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+  assert_eq!(
+    verify_intent_balance_ledger(&[ALICE, sink], before, after, &records),
+    Ok(())
+  );
+  assert_eq!(
+    verify_intent_packet_cash(&ALICE, 7, before, after, &records),
+    Err("Intent signed transaction cash mismatch")
+  );
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[derive(Debug)]
+struct IntentStateSnapshot {
+  number: u32,
+  nonce: crate::Nonce,
+  balances: [IntentNativeBalance; 2],
+  events: Vec<IntentFeeEventRecord>,
+}
+
+// Enforce the selected fixed-code profile before committing either execution overlay.
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn intent_code_overlay_result(ext: &TestExternalities) -> Result<(), &'static str> {
+  if ext
+    .overlayed_changes()
+    .changes()
+    .any(|(key, _)| key.as_slice() == well_known_keys::CODE)
+  {
+    return Err("Intent replay CODE overlay entry");
+  }
+  Ok(())
+}
+
+// Private observation boundary, not an executor: keep the complete supplied base and no writes.
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn observe_intent_storage<R>(
+  source: &Storage,
+  observe: impl FnOnce() -> Result<R, &'static str>,
+) -> Result<R, &'static str> {
+  let code = source
+    .top
+    .get(well_known_keys::CODE)
+    .filter(|bytes| !bytes.is_empty())
+    .ok_or("Intent snapshot CODE absent or empty")?;
+  // SDK new/new_with_state_version overwrite CODE with empty bytes. Pass the same input CODE.
+  let mut ext = TestExternalities::new_with_code_and_state(
+    code,
+    source.clone(),
+    crate::VERSION.state_version(),
+  );
+  observe_committed_intent(&mut ext, observe)
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn intent_observation_overlay_result(ext: &TestExternalities) -> Result<(), &'static str> {
+  if ext.overlayed_changes().transaction_depth() != 0 {
+    return Err("Intent snapshot observation left transaction open");
+  }
+  if !ext.overlayed_changes().is_empty() || block_auxiliary_overlay_result(ext).is_err() {
+    return Err("Intent snapshot observation wrote state");
+  }
+  Ok(())
+}
+
+// Reuse the existing committed importer outside execute_with_recorder; never dump TOP here.
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn observe_committed_intent<R>(
+  ext: &mut TestExternalities,
+  observe: impl FnOnce() -> Result<R, &'static str>,
+) -> Result<R, &'static str> {
+  intent_observation_overlay_result(ext)
+    .map_err(|_| "Intent observation requires committed state")?;
+  let result = ext.execute_with(observe);
+  intent_observation_overlay_result(ext)?;
+  result
+}
+
+/// Pure input/endpoint selection; this does not author, sign or export a block.
+#[cfg(not(feature = "runtime-benchmarks"))]
+struct IntentCleanupScript {
+  packet: [RuntimeCall; 5],
+  maturity: u32,
+  expiry: u32,
+  child: u32,
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+impl IntentCleanupScript {
+  fn new() -> Result<Self, &'static str> {
+    Self::from_periods(
+      <Runtime as pallet_governance::Config>::ProposalLeadInPeriod::get(),
+      <Runtime as pallet_governance::Config>::ProposalVotingPeriod::get(),
+      <Runtime as pallet_governance::Config>::FinalizedProposalOutcomeRetentionEpochs::get(),
+    )
+  }
+
+  fn from_periods(lead: u32, voting: u32, retention: u32) -> Result<Self, &'static str> {
+    let maturity = 1u32
+      .checked_add(lead)
+      .and_then(|n| n.checked_add(voting))
+      .ok_or("Intent cleanup calendar overflow")?;
+    let expiry = maturity
+      .checked_add(retention)
+      .ok_or("Intent cleanup calendar overflow")?;
+    let child = expiry
+      .checked_add(1)
+      .ok_or("Intent cleanup calendar overflow")?;
+    if (lead, voting, retention) != (43_200, 100_800, 16) {
+      return Err("Intent cleanup reference periods changed");
+    }
+    Ok(Self {
+      packet: super::governance_integration_tests::same_expiry_signed_intent_packet(),
+      maturity,
+      expiry,
+      child,
+    })
+  }
+
+  // The same endpoint decision must gate both full-TOP capture and export.
+  fn block(&self, number: u32) -> Result<(&[RuntimeCall], bool), &'static str> {
+    if number == 0 || number > self.child {
+      return Err("Block outside Intent cleanup horizon");
+    }
+    let calls = if number == 1 {
+      self.packet.as_slice()
+    } else {
+      &[]
+    };
+    Ok((calls, number == self.child))
+  }
+
+  // Supplied-state oracle only; the complete caller owns header linkage and signed positions.
+  fn verify_transition(
+    &self,
+    number: u32,
+    first_signed_index: Option<u32>,
+    owner: &crate::AccountId,
+    before: &Storage,
+    after: &Storage,
+  ) -> Result<IntentStateSnapshot, &'static str> {
+    self.verify_transition_mode(number, first_signed_index)?;
+    if before.top.get(well_known_keys::CODE) != after.top.get(well_known_keys::CODE) {
+      return Err("Intent transition CODE changed");
+    }
+    let pre = self.snapshot(before, number - 1, owner)?;
+    let post = self.snapshot(after, number, owner)?;
+    self.verify_observed_transition(number, first_signed_index, owner, &pre, &post)?;
+    Ok(post)
+  }
+
+  fn verify_transition_mode(&self, number: u32, first: Option<u32>) -> Result<(), &'static str> {
+    self.block(number)?;
+    if (number == 1) != first.is_some() {
+      return Err("Intent transition signed mode mismatch");
+    }
+    Ok(())
+  }
+
+  // Compact reader outputs, not full TOP snapshots; CODE/ancestry are caller-owned.
+  fn verify_observed_transition(
+    &self,
+    number: u32,
+    first_signed_index: Option<u32>,
+    owner: &crate::AccountId,
+    pre: &IntentStateSnapshot,
+    post: &IntentStateSnapshot,
+  ) -> Result<(), &'static str> {
+    self.verify_transition_mode(number, first_signed_index)?;
+    if pre.number != number - 1 || post.number != number {
+      return Err("Intent observed context mismatch");
+    }
+    if pre.nonce != if number == 1 { 0 } else { 5 } || post.nonce != 5 {
+      return Err("Intent observed nonce mismatch");
+    }
+    if let Some(first) = first_signed_index {
+      verify_intent_packet_cash(owner, first, pre.balances, post.balances, &post.events)?;
+    } else {
+      if post.events.iter().any(|r| {
+        matches!(
+          r.event,
+          RuntimeEvent::TransactionPayment(_)
+            | RuntimeEvent::Governance(
+              pallet_governance::Event::ProposalOpeningFeeCollected { .. }
+            )
+        )
+      }) {
+        return Err("Intent quiet transition has fee receipts");
+      }
+      let sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+      verify_intent_balance_ledger(
+        &[owner.clone(), sink],
+        pre.balances,
+        post.balances,
+        &post.events,
+      )?;
+    }
+    Ok(())
+  }
+
+  fn snapshot(
+    &self,
+    source: &Storage,
+    number: u32,
+    owner: &crate::AccountId,
+  ) -> Result<IntentStateSnapshot, &'static str> {
+    observe_intent_storage(source, || self.current_snapshot(number, owner))
+  }
+
+  fn bind_committed_base(
+    &self,
+    ext: &mut TestExternalities,
+    owner: &crate::AccountId,
+    expected_code: &[u8],
+  ) -> Result<IntentStateSnapshot, &'static str> {
+    if expected_code.is_empty() {
+      return Err("Intent initial CODE empty");
+    }
+    observe_committed_intent(ext, || {
+      if polkadot_sdk::sp_io::storage::get(well_known_keys::CODE).as_deref() != Some(expected_code)
+      {
+        return Err("Intent initial CODE mismatch");
+      }
+      use polkadot_sdk::frame_support::traits::fungibles::Inspect;
+      let protection = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
+      if !Assets::asset_exists(protection) {
+        return Err("Intent genesis protection asset absent");
+      }
+      if Assets::total_issuance(protection) != 0 {
+        return Err("Intent genesis protection issuance nonzero");
+      }
+      self.current_snapshot(0, owner)
+    })
+  }
+
+  fn committed_snapshot(
+    &self,
+    ext: &mut TestExternalities,
+    number: u32,
+    owner: &crate::AccountId,
+  ) -> Result<IntentStateSnapshot, &'static str> {
+    observe_committed_intent(ext, || self.current_snapshot(number, owner))
+  }
+
+  fn current_snapshot(
+    &self,
+    number: u32,
+    owner: &crate::AccountId,
+  ) -> Result<IntentStateSnapshot, &'static str> {
+    self.verify_custody(number, owner)?;
+    if number != 0 {
+      self.verify_projection(number, owner)?;
+    }
+    let nonce = System::account_nonce(owner);
+    if nonce != if number == 0 { 0 } else { 5 } {
+      return Err("Intent snapshot nonce mismatch");
+    }
+    let sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+    Ok(IntentStateSnapshot {
+      number,
+      nonce,
+      balances: [owner, &sink].map(|who| IntentNativeBalance {
+        free: Balances::free_balance(who),
+        reserved: Balances::reserved_balance(who),
+      }),
+      events: System::events(),
+    })
+  }
+
+  fn preimage_custody_terms(&self) -> Result<(crate::Hash, &[u8], crate::Balance), &'static str> {
+    let RuntimeCall::Preimage(polkadot_sdk::pallet_preimage::Call::note_preimage { bytes }) =
+      &self.packet[0]
+    else {
+      return Err("Intent custody packet mismatch");
+    };
+    let len = u32::try_from(bytes.len()).map_err(|_| "Intent custody payload length")?;
+    let byte_price = crate::configs::preimage_config::PreimageByteDeposit::get();
+    let hold = byte_price
+      .checked_mul(u128::from(len))
+      .and_then(|price| {
+        price.checked_add(crate::configs::preimage_config::PreimageBaseDeposit::get())
+      })
+      .ok_or("Intent custody hold arithmetic")?;
+    Ok((BlakeTwo256::hash(bytes), bytes.as_slice(), hold))
+  }
+
+  // Genesis0 is a fresh-custody premise, not an authored block in the script horizon.
+  fn verify_custody(&self, number: u32, owner: &crate::AccountId) -> Result<(), &'static str> {
+    use polkadot_sdk::{
+      frame_support::{storage::storage_prefix, traits::fungible::InspectHold},
+      pallet_preimage as p,
+      sp_io::storage,
+    };
+    if number > self.child {
+      return Err("Intent custody outside horizon");
+    }
+    if System::block_number() != number {
+      return Err("Intent custody block mismatch");
+    }
+    let (hash, bytes, hold) = self.preimage_custody_terms()?;
+    let len = u32::try_from(bytes.len()).map_err(|_| "Intent custody payload length")?;
+    let sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+    if owner == &sink {
+      return Err("Intent custody owner aliases sink");
+    }
+    // Reuse fresh_genesis_preimage_tickets_preserve_fee_sink's raw legacy-empty owner.
+    // Do not call QueryPreimage: its legacy update path can mutate state.
+    let legacy = storage_prefix(b"Preimage", b"StatusFor");
+    if storage::get(&legacy).is_some()
+      || storage::next_key(&legacy).is_some_and(|key| key.starts_with(&legacy))
+    {
+      return Err("Intent custody legacy residue");
+    }
+    for domain in [101, 102] {
+      if pallet_governance::PayloadAdmissionWitnesses::<Runtime>::contains_key(
+        hash,
+        (domain, pallet_governance::ProposalPayloadKind::Intent),
+      ) {
+        return Err("Intent custody witness residue");
+      }
+    }
+    if number == 0 {
+      if p::RequestStatusFor::<Runtime>::contains_key(hash)
+        || p::PreimageFor::<Runtime>::contains_key((hash, len))
+      {
+        return Err("Intent custody preimage not fresh");
+      }
+    } else {
+      match p::RequestStatusFor::<Runtime>::get(hash) {
+        Some(p::RequestStatus::Unrequested { ticket: (depositor, ticket), len: stored_len })
+          // This runtime's HoldConsideration encodes one Balance plus an empty PhantomData.
+          if depositor == *owner && stored_len == len && ticket.encode() == hold.encode() => {},
+        _ => return Err("Intent custody ticket mismatch"),
+      }
+      if p::PreimageFor::<Runtime>::get((hash, len))
+        .as_ref()
+        .map(|raw| raw.as_slice())
+        != Some(bytes)
+      {
+        return Err("Intent custody payload mismatch");
+      }
+    }
+    let expected = if number == 0 { 0 } else { hold };
+    let reason = crate::configs::preimage_config::PreimageHoldReason::get();
+    let holds = polkadot_sdk::pallet_balances::Holds::<Runtime>::get(owner);
+    if holds.len() != usize::from(number != 0)
+      || holds
+        .first()
+        .is_some_and(|item| item.id != reason || item.amount != expected)
+    {
+      return Err("Intent custody hold mismatch");
+    }
+    if Balances::reserved_balance(owner) != expected {
+      return Err("Intent custody reserve mismatch");
+    }
+    if Balances::balance_on_hold(&reason, &sink) != 0 {
+      return Err("Intent custody sink hold mismatch");
+    }
+    Ok(())
+  }
+
+  fn verify_projection(&self, number: u32, owner: &crate::AccountId) -> Result<(), &'static str> {
+    use pallet_governance as g;
+    let (_, endpoint) = self.block(number)?;
+    if System::block_number() != number {
+      return Err("Intent projection block mismatch");
+    }
+    let RuntimeCall::Governance(g::Call::submit_signed_proposal {
+      domain: 101,
+      item_id: 110,
+      cadence_mode: g::ProposalCadenceMode::Ordinary,
+      payload_kind: g::ProposalPayloadKind::Intent,
+      payload_hash,
+    }) = &self.packet[2]
+    else {
+      return Err("Intent projection packet mismatch");
+    };
+    let active = number < self.maturity;
+    let retained = !active && !endpoint;
+    let touches = [101, 102].map(|domain| g::ProposalIdentity {
+      domain,
+      item_id: 110,
+    });
+    if !g::PendingEnactments::<Runtime>::get().is_empty()
+      || g::PendingEnactmentCursor::<Runtime>::get() != 0
+    {
+      return Err("Intent projection pending ring mismatch");
+    }
+    let maturity = g::ProposalMaturityBuckets::<Runtime>::get(self.maturity);
+    if maturity.as_slice() != if active { touches.as_slice() } else { &[] }
+      || g::ProposalMaturityBuckets::<Runtime>::contains_key(self.maturity) != active
+    {
+      return Err("Intent projection maturity bucket mismatch");
+    }
+    let expiry = g::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::get(self.expiry);
+    if expiry.as_slice() != if retained { touches.as_slice() } else { &[] }
+      || g::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::contains_key(self.expiry) != retained
+    {
+      return Err("Intent projection expiry bucket mismatch");
+    }
+    let active_ids: &[u32] = if active { &[110] } else { &[] };
+    let finalized_ids: &[u32] = if retained { &[110] } else { &[] };
+    for domain in [101, 102] {
+      if crate::Governance::active_proposal(domain, 110)
+        != active.then_some(g::ActiveProposal { submitted_epoch: 1 })
+        || crate::Governance::proposal_author(domain, 110) != active.then(|| owner.clone())
+        || crate::Governance::active_proposal_ids(domain).as_slice() != active_ids
+      {
+        return Err("Intent projection active proposal mismatch");
+      }
+      let metadata = (!endpoint).then_some(g::ProposalMetadata {
+        cadence_mode: g::ProposalCadenceMode::Ordinary,
+        payload_kind: g::ProposalPayloadKind::Intent,
+        payload_hash: *payload_hash,
+      });
+      if crate::Governance::proposal_metadata(domain, 110) != metadata {
+        return Err("Intent projection metadata mismatch");
+      }
+      if g::ProposalVotesByItem::<Runtime>::contains_key(domain, 110)
+        || g::ProposalConfirmStartedAt::<Runtime>::contains_key(domain, 110)
+        || g::ProposalWinningPrimaryOptionByItem::<Runtime>::contains_key(domain, 110)
+        || g::ProposalUrgentAuthorizedAt::<Runtime>::contains_key(domain, 110)
+        || g::ProposalPendingEnactmentAt::<Runtime>::contains_key(domain, 110)
+      {
+        return Err("Intent projection auxiliary state mismatch");
+      }
+      match crate::Governance::finalized_proposal(domain, 110) {
+        Some(record)
+          if retained
+            && record.execution_detail.is_none()
+            && record.outcome
+              == g::FinalizedProposalOutcome::Rejected {
+                finalized_epoch: self.maturity,
+                reason: g::ProposalRejectionReason::NoVotes,
+              } => {}
+        None if !retained => {}
+        _ => return Err("Intent projection finalized record mismatch"),
+      }
+      if crate::Governance::finalized_proposal_ids(domain).as_slice() != finalized_ids
+        || g::FinalizedProposalIdsByDomain::<Runtime>::contains_key(domain) != retained
+      {
+        return Err("Intent projection discovery index mismatch");
+      }
+    }
+    Ok(())
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_cleanup_script_bounds_calls_and_endpoint_without_state() {
+  // No Externalities, block execution, signer, snapshot or export is installed here.
+  let script = IntentCleanupScript::new().unwrap();
+  assert_eq!(
+    (script.maturity, script.expiry, script.child),
+    (144_001, 144_017, 144_018)
+  );
+  assert!(script.block(0).is_err());
+  for (number, count, endpoint) in [
+    (1, 5, false),
+    (2, 0, false),
+    (144_017, 0, false),
+    (144_018, 0, true),
+  ] {
+    let (calls, is_endpoint) = script.block(number).unwrap();
+    assert_eq!(calls.len(), count);
+    assert_eq!(is_endpoint, endpoint);
+    if number == 1 {
+      assert_eq!(
+        calls.encode(),
+        super::governance_integration_tests::same_expiry_signed_intent_packet()
+          .as_slice()
+          .encode()
+      );
+    }
+  }
+  assert!(script.block(144_019).is_err());
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_cleanup_script_rejects_calendar_drift() {
+  for (lead, voting, retention) in [
+    (43_201, 100_799, 16),
+    (0, 144_000, 16),
+    (43_200, 100_800, 0),
+    (43_200, 100_800, 17),
+    (u32::MAX, 100_800, 16),
+    (43_200, 100_800, u32::MAX),
+  ] {
+    assert!(IntentCleanupScript::from_periods(lead, voting, retention).is_err());
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+const INTENT_MODEL_CODE: &[u8] = b"synthetic CODE: not a Wasm artifact";
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_snapshot_preserves_code_context_and_child_base() {
+  use polkadot_sdk::{
+    sp_core::storage::{ChildInfo, StorageChild},
+    sp_io::{default_child_storage, storage},
+  };
+  let child = ChildInfo::new_default(b"intent-observer-base");
+  let mut source = Storage::default();
+  source
+    .top
+    .insert(well_known_keys::CODE.to_vec(), INTENT_MODEL_CODE.to_vec());
+  source
+    .top
+    .insert(b"opaque-context".to_vec(), b"unchanged".to_vec());
+  source.children_default.insert(
+    child.storage_key().to_vec(),
+    StorageChild {
+      data: [(b"key".to_vec(), b"child-value".to_vec())].into(),
+      child_info: child.clone(),
+    },
+  );
+  let top_before = source.top.clone();
+  assert_eq!(
+    observe_intent_storage(&source, || Ok((
+      storage::get(well_known_keys::CODE).unwrap().to_vec(),
+      storage::get(b"opaque-context").unwrap().to_vec(),
+      default_child_storage::get(child.storage_key(), b"key")
+        .unwrap()
+        .to_vec(),
+    ))),
+    Ok((
+      INTENT_MODEL_CODE.to_vec(),
+      b"unchanged".to_vec(),
+      b"child-value".to_vec()
+    ))
+  );
+  assert_eq!(source.top, top_before);
+  assert_eq!(
+    source.children_default[child.storage_key()].data[b"key".as_slice()],
+    b"child-value"
+  );
+  source.top.remove(well_known_keys::CODE);
+  assert_eq!(
+    observe_intent_storage(&source, || Ok(())),
+    Err("Intent snapshot CODE absent or empty")
+  );
+  source
+    .top
+    .insert(well_known_keys::CODE.to_vec(), Vec::new());
+  assert_eq!(
+    observe_intent_storage(&source, || Ok(())),
+    Err("Intent snapshot CODE absent or empty")
+  );
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_snapshot_refuses_retained_observation_effects() {
+  use polkadot_sdk::sp_io::{default_child_storage, offchain_index, storage, transaction_index};
+  let mut source = Storage::default();
+  source
+    .top
+    .insert(well_known_keys::CODE.to_vec(), INTENT_MODEL_CODE.to_vec());
+  let writers: [fn(); 6] = [
+    || storage::set(b"observer-probe", b"value"),
+    || {
+      let code = storage::get(well_known_keys::CODE).unwrap();
+      storage::set(well_known_keys::CODE, &code);
+    },
+    || default_child_storage::set(b"observer-child", b"key", b"value"),
+    || offchain_index::set(b"key", b"value"),
+    || transaction_index::index(0, 1, [1; 32]),
+    || storage::clear(well_known_keys::CODE),
+  ];
+  for write in writers {
+    assert_eq!(
+      observe_intent_storage(&source, || {
+        write();
+        Ok(())
+      }),
+      Err("Intent snapshot observation wrote state")
+    );
+  }
+  assert_eq!(
+    observe_intent_storage(&source, || {
+      storage::start_transaction();
+      Ok(())
+    }),
+    Err("Intent snapshot observation left transaction open")
+  );
+  assert_eq!(
+    observe_intent_storage::<()>(&source, || {
+      storage::set(b"observer-probe", b"value");
+      Err("model refusal")
+    }),
+    Err("Intent snapshot observation wrote state")
+  );
+  assert_eq!(
+    observe_intent_storage::<()>(&source, || Err("model refusal")),
+    Err("model refusal")
+  );
+  assert_eq!(source.top.len(), 1);
+  assert_eq!(source.top[well_known_keys::CODE], INTENT_MODEL_CODE);
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_snapshot_captures_guarded_models_without_context_repair() {
+  let script = IntentCleanupScript::new().unwrap();
+  for number in [0, 1, script.child] {
+    let mut ext = TestExternalities::new_with_code_and_state(
+      INTENT_MODEL_CODE,
+      Storage::default(),
+      crate::VERSION.state_version(),
+    );
+    ext.execute_with(|| {
+      seed_synthetic_intent_custody(&script, number);
+      if number != 0 {
+        seed_synthetic_intent_projection(&script, number, &ALICE);
+      }
+      polkadot_sdk::frame_system::Account::<Runtime>::mutate(&ALICE, |info| {
+        info.nonce = if number == 0 { 0 } else { 5 };
+        info.data.free = 1_234;
+      });
+      let sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+      polkadot_sdk::frame_system::Account::<Runtime>::mutate(sink, |info| {
+        info.data.free = 4_321;
+      });
+      if number != 0 {
+        System::deposit_event(RuntimeEvent::TransactionPayment(
+          polkadot_sdk::pallet_transaction_payment::Event::TransactionFeePaid {
+            who: ALICE,
+            actual_fee: 1,
+            tip: 0,
+          },
+        ));
+      }
+    });
+    ext.commit_all().unwrap();
+    let source = ext.execute_with(current_top_storage);
+    let snapshot = script.snapshot(&source, number, &ALICE).unwrap();
+    assert_eq!(snapshot.nonce, if number == 0 { 0 } else { 5 });
+    assert_eq!(snapshot.balances[0].free, 1_234);
+    assert_eq!(
+      snapshot.balances[1],
+      IntentNativeBalance {
+        free: 4_321,
+        reserved: 0
+      }
+    );
+    assert_eq!(snapshot.events.len(), usize::from(number != 0));
+    assert_eq!(source.top[well_known_keys::CODE], INTENT_MODEL_CODE);
+    if number == 1 {
+      assert_eq!(
+        script.snapshot(&source, 2, &ALICE).unwrap_err(),
+        "Intent custody block mismatch"
+      );
+      ext.execute_with(|| {
+        polkadot_sdk::frame_system::Account::<Runtime>::mutate(&ALICE, |info| {
+          info.nonce = 4;
+        })
+      });
+      ext.commit_all().unwrap();
+      let partial = ext.execute_with(current_top_storage);
+      assert_eq!(
+        script.snapshot(&partial, 1, &ALICE).unwrap_err(),
+        "Intent snapshot nonce mismatch"
+      );
+    }
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_committed_observer_reuses_one_base_without_top_capture() {
+  let script = IntentCleanupScript::new().unwrap();
+  let (_, _, hold) = script.preimage_custody_terms().unwrap();
+  let balances = [
+    IntentNativeBalance {
+      free: 1_234,
+      reserved: hold,
+    },
+    IntentNativeBalance {
+      free: 4_321,
+      reserved: 0,
+    },
+  ];
+  let source = synthetic_intent_transition_storage(&script, 1, balances, &[]);
+  let mut ext = TestExternalities::new_with_code_and_state(
+    INTENT_MODEL_CODE,
+    source,
+    crate::VERSION.state_version(),
+  );
+  let before_root = *ext.backend.root();
+  let observed = script.committed_snapshot(&mut ext, 1, &ALICE).unwrap();
+  assert_eq!(observed.nonce, 5);
+  assert_eq!(observed.balances, balances);
+  assert!(observed.events.is_empty());
+  assert_eq!(*ext.backend.root(), before_root);
+  assert!(intent_observation_overlay_result(&ext).is_ok());
+  assert_eq!(
+    script.committed_snapshot(&mut ext, 2, &ALICE).unwrap_err(),
+    "Intent custody block mismatch"
+  );
+  assert_eq!(*ext.backend.root(), before_root);
+  assert!(intent_observation_overlay_result(&ext).is_ok());
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_committed_observer_refuses_dirty_base_and_leaves_refusal_visible() {
+  use polkadot_sdk::sp_io::{offchain_index, storage};
+  let mut ext = TestExternalities::new_with_code_and_state(
+    INTENT_MODEL_CODE,
+    Storage::default(),
+    crate::VERSION.state_version(),
+  );
+  let before_root = *ext.backend.root();
+  ext.execute_with(|| storage::set(b"dirty-base", b"value"));
+  let called = std::cell::Cell::new(false);
+  assert_eq!(
+    observe_committed_intent(&mut ext, || {
+      called.set(true);
+      Ok(())
+    }),
+    Err("Intent observation requires committed state")
+  );
+  assert!(!called.get());
+  assert_eq!(*ext.backend.root(), before_root);
+  assert!(!ext.overlayed_changes().is_empty());
+  // A separate independent model, not a cleanup/repair of the dirty caller.
+  let mut ext = TestExternalities::new_with_code_and_state(
+    INTENT_MODEL_CODE,
+    Storage::default(),
+    crate::VERSION.state_version(),
+  );
+  ext.execute_with(|| offchain_index::set(b"dirty-auxiliary", b"value"));
+  assert_eq!(
+    observe_committed_intent(&mut ext, || Ok(())),
+    Err("Intent observation requires committed state")
+  );
+  let mut ext = TestExternalities::new_with_code_and_state(
+    INTENT_MODEL_CODE,
+    Storage::default(),
+    crate::VERSION.state_version(),
+  );
+  let before_root = *ext.backend.root();
+  assert_eq!(
+    observe_committed_intent::<()>(&mut ext, || {
+      let code = storage::get(well_known_keys::CODE).unwrap();
+      storage::set(well_known_keys::CODE, &code);
+      Err("model refusal")
+    }),
+    Err("Intent snapshot observation wrote state")
+  );
+  assert_eq!(*ext.backend.root(), before_root);
+  assert!(!ext.overlayed_changes().is_empty());
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_compact_transition_binds_context_and_nonce_without_top() {
+  let script = IntentCleanupScript::new().unwrap();
+  let (before, after, events) = synthetic_intent_packet_cash();
+  // Observation-data models only: custody/provenance belong to the checked reader/caller.
+  let mut pre = IntentStateSnapshot {
+    number: 0,
+    nonce: 0,
+    balances: before,
+    events: Vec::new(),
+  };
+  let mut post = IntentStateSnapshot {
+    number: 1,
+    nonce: 5,
+    balances: after,
+    events,
+  };
+  assert_eq!(
+    script.verify_observed_transition(1, Some(7), &ALICE, &pre, &post),
+    Ok(())
+  );
+  pre.number = 1;
+  assert_eq!(
+    script.verify_observed_transition(1, Some(7), &ALICE, &pre, &post),
+    Err("Intent observed context mismatch")
+  );
+  pre.number = 0;
+  pre.nonce = 5;
+  assert_eq!(
+    script.verify_observed_transition(1, Some(7), &ALICE, &pre, &post),
+    Err("Intent observed nonce mismatch")
+  );
+  pre.nonce = 0;
+  post.number = 2;
+  assert_eq!(
+    script.verify_observed_transition(1, Some(7), &ALICE, &pre, &post),
+    Err("Intent observed context mismatch")
+  );
+  pre = IntentStateSnapshot {
+    number: 1,
+    nonce: 5,
+    balances: after,
+    events: post.events,
+  };
+  post = IntentStateSnapshot {
+    number: 2,
+    nonce: 5,
+    balances: after,
+    events: Vec::new(),
+  };
+  assert_eq!(
+    script.verify_observed_transition(2, None, &ALICE, &pre, &post),
+    Ok(())
+  );
+  post.nonce = 0;
+  assert_eq!(
+    script.verify_observed_transition(2, None, &ALICE, &pre, &post),
+    Err("Intent observed nonce mismatch")
+  );
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_compact_code_binding_and_surviving_write_guard() {
+  use polkadot_sdk::sp_io::storage;
+  let script = IntentCleanupScript::new().unwrap();
+  let balances = [
+    IntentNativeBalance {
+      free: 1_000,
+      reserved: 0,
+    },
+    IntentNativeBalance {
+      free: 100,
+      reserved: 0,
+    },
+  ];
+  let source = synthetic_intent_transition_storage(&script, 0, balances, &[]);
+  let mut ext = TestExternalities::new_with_code_and_state(
+    INTENT_MODEL_CODE,
+    source.clone(),
+    crate::VERSION.state_version(),
+  );
+  let before_root = *ext.backend.root();
+  assert_eq!(
+    script
+      .bind_committed_base(&mut ext, &ALICE, INTENT_MODEL_CODE)
+      .unwrap()
+      .number,
+    0
+  );
+  assert_eq!(
+    script
+      .bind_committed_base(&mut ext, &ALICE, &[])
+      .unwrap_err(),
+    "Intent initial CODE empty"
+  );
+  assert_eq!(
+    script
+      .bind_committed_base(&mut ext, &ALICE, b"another model CODE")
+      .unwrap_err(),
+    "Intent initial CODE mismatch"
+  );
+  assert_eq!(*ext.backend.root(), before_root);
+  assert_eq!(intent_code_overlay_result(&ext), Ok(()));
+  ext.execute_with(|| storage::set(b"ordinary-block-write", b"value"));
+  assert_eq!(intent_code_overlay_result(&ext), Ok(())); // Not a ban on ordinary block writes.
+  ext.execute_with(|| storage::set(well_known_keys::CODE, INTENT_MODEL_CODE));
+  assert_eq!(
+    intent_code_overlay_result(&ext),
+    Err("Intent replay CODE overlay entry")
+  );
+  assert_eq!(*ext.backend.root(), before_root);
+  let mut ext = TestExternalities::new_with_code_and_state(
+    INTENT_MODEL_CODE,
+    source,
+    crate::VERSION.state_version(),
+  );
+  ext.execute_with(|| storage::clear(well_known_keys::CODE));
+  assert_eq!(
+    intent_code_overlay_result(&ext),
+    Err("Intent replay CODE overlay entry")
+  );
+}
+
+// Minimal Assets getter model, not a token issuance or an admitted genesis preset.
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn seed_synthetic_intent_protection(issuance: crate::Balance) {
+  use polkadot_sdk::pallet_assets::{Asset, AssetDetails, AssetStatus};
+  Asset::<Runtime>::insert(
+    primitives::ecosystem::protocol_tokens::VETO_ASSET_ID,
+    AssetDetails {
+      owner: ALICE,
+      issuer: ALICE,
+      admin: ALICE,
+      freezer: ALICE,
+      supply: issuance,
+      deposit: 0,
+      min_balance: 1,
+      is_sufficient: true,
+      accounts: 0,
+      sufficients: 0,
+      approvals: 0,
+      status: AssetStatus::Live,
+    },
+  );
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_genesis_protection_refuses_absent_and_nonzero_without_lifetime_cap() {
+  use polkadot_sdk::pallet_assets::Asset;
+  let script = IntentCleanupScript::new().unwrap();
+  let (_, _, hold) = script.preimage_custody_terms().unwrap();
+  let initial = [
+    IntentNativeBalance {
+      free: 1_000,
+      reserved: 0,
+    },
+    IntentNativeBalance {
+      free: 100,
+      reserved: 0,
+    },
+  ];
+  let source = synthetic_intent_transition_storage(&script, 0, initial, &[]);
+  for (issuance, expected) in [
+    (None, Err("Intent genesis protection asset absent")),
+    (Some(1), Err("Intent genesis protection issuance nonzero")),
+    (Some(0), Ok(())),
+  ] {
+    let mut ext = TestExternalities::new_with_code_and_state(
+      INTENT_MODEL_CODE,
+      source.clone(),
+      crate::VERSION.state_version(),
+    );
+    ext.execute_with(|| match issuance {
+      None => Asset::<Runtime>::remove(primitives::ecosystem::protocol_tokens::VETO_ASSET_ID),
+      Some(value) => seed_synthetic_intent_protection(value),
+    });
+    ext.commit_all().unwrap();
+    let before_root = *ext.backend.root();
+    assert_eq!(
+      script
+        .bind_committed_base(&mut ext, &ALICE, INTENT_MODEL_CODE)
+        .map(|_| ()),
+      expected
+    );
+    assert_eq!(*ext.backend.root(), before_root);
+    assert!(intent_observation_overlay_result(&ext).is_ok());
+  }
+  let later = [
+    IntentNativeBalance {
+      free: 1_000,
+      reserved: hold,
+    },
+    initial[1],
+  ];
+  let source = synthetic_intent_transition_storage(&script, 1, later, &[]);
+  let mut ext = TestExternalities::new_with_code_and_state(
+    INTENT_MODEL_CODE,
+    source,
+    crate::VERSION.state_version(),
+  );
+  ext.execute_with(|| seed_synthetic_intent_protection(1));
+  ext.commit_all().unwrap();
+  // The initial trace premise is not a new lifetime restriction on protection issuance.
+  assert_eq!(
+    script
+      .committed_snapshot(&mut ext, 1, &ALICE)
+      .unwrap()
+      .nonce,
+    5
+  );
+  assert!(intent_observation_overlay_result(&ext).is_ok());
+}
+
+// Paired synthetic storage inputs, not linked blocks or a public history constructor.
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn synthetic_intent_transition_storage(
+  script: &IntentCleanupScript,
+  number: u32,
+  balances: [IntentNativeBalance; 2],
+  events: &[IntentFeeEventRecord],
+) -> Storage {
+  let mut ext = TestExternalities::new_with_code_and_state(
+    INTENT_MODEL_CODE,
+    Storage::default(),
+    crate::VERSION.state_version(),
+  );
+  ext.execute_with(|| {
+    seed_synthetic_intent_custody(script, number);
+    if number == 0 {
+      seed_synthetic_intent_protection(0);
+    } else {
+      seed_synthetic_intent_projection(script, number, &ALICE);
+    }
+    let sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+    for (who, balance) in [ALICE, sink].into_iter().zip(balances) {
+      polkadot_sdk::frame_system::Account::<Runtime>::mutate(&who, |info| {
+        info.nonce = if who == ALICE && number != 0 { 5 } else { 0 };
+        info.data.free = balance.free;
+        info.data.reserved = balance.reserved;
+      });
+    }
+    // System49 keeps boxed records privately; SCALE Box encoding is transparent.
+    let key = polkadot_sdk::frame_support::storage::storage_prefix(b"System", b"Events");
+    polkadot_sdk::sp_io::storage::set(&key, &events.encode());
+  });
+  ext.commit_all().unwrap();
+  ext.execute_with(current_top_storage)
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_transition_composes_packet_quiet_and_cleanup_models() {
+  use polkadot_sdk::{frame_system::Phase, pallet_balances::Event as B};
+  let script = IntentCleanupScript::new().unwrap();
+  let (_, _, hold) = script.preimage_custody_terms().unwrap();
+  let (mut before, mut after, mut events) = synthetic_intent_packet_cash();
+  before[0].free += hold;
+  after[0].reserved = hold;
+  events.insert(
+    0,
+    IntentFeeEventRecord {
+      phase: Phase::ApplyExtrinsic(7),
+      event: RuntimeEvent::Balances(B::Held {
+        reason: crate::configs::preimage_config::PreimageHoldReason::get(),
+        who: ALICE,
+        amount: hold,
+      }),
+      topics: Vec::new(),
+    },
+  );
+  let genesis = synthetic_intent_transition_storage(&script, 0, before, &[]);
+  let packet = synthetic_intent_transition_storage(&script, 1, after, &events);
+  let post = script
+    .verify_transition(1, Some(7), &ALICE, &genesis, &packet)
+    .unwrap();
+  assert_eq!(post.nonce, 5);
+  assert_eq!(post.balances, after);
+  let mut quiet_after = after;
+  quiet_after[1].free -= 5;
+  let sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+  let allocation = [IntentFeeEventRecord {
+    phase: Phase::Finalization,
+    event: RuntimeEvent::Balances(B::Transfer {
+      from: sink,
+      to: crate::AccountId::new([77; 32]),
+      amount: 5,
+    }),
+    topics: Vec::new(),
+  }];
+  let quiet = synthetic_intent_transition_storage(&script, 2, quiet_after, &allocation);
+  // Parent packet receipts must not be mistaken for child quiet-block fees.
+  assert_eq!(
+    script
+      .verify_transition(2, None, &ALICE, &packet, &quiet)
+      .unwrap()
+      .balances,
+    quiet_after
+  );
+  let parent = synthetic_intent_transition_storage(&script, script.child - 1, after, &[]);
+  let cleanup =
+    synthetic_intent_transition_storage(&script, script.child, quiet_after, &allocation);
+  assert_eq!(
+    script
+      .verify_transition(script.child, None, &ALICE, &parent, &cleanup)
+      .unwrap()
+      .balances[0]
+      .reserved,
+    hold
+  );
+  let missing_receipts = synthetic_intent_transition_storage(&script, 1, after, &[]);
+  assert_eq!(
+    script
+      .verify_transition(1, Some(7), &ALICE, &genesis, &missing_receipts)
+      .unwrap_err(),
+    "Incomplete Intent fee receipts"
+  );
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_transition_refuses_mode_code_context_and_quiet_debt() {
+  let script = IntentCleanupScript::new().unwrap();
+  let (_, _, hold) = script.preimage_custody_terms().unwrap();
+  let balances = [
+    IntentNativeBalance {
+      free: 1_000,
+      reserved: hold,
+    },
+    IntentNativeBalance {
+      free: 100,
+      reserved: 0,
+    },
+  ];
+  let parent = synthetic_intent_transition_storage(&script, 1, balances, &[]);
+  let quiet = synthetic_intent_transition_storage(&script, 2, balances, &[]);
+  assert_eq!(
+    script
+      .verify_transition(1, None, &ALICE, &parent, &quiet)
+      .unwrap_err(),
+    "Intent transition signed mode mismatch"
+  );
+  assert_eq!(
+    script
+      .verify_transition(2, Some(7), &ALICE, &parent, &quiet)
+      .unwrap_err(),
+    "Intent transition signed mode mismatch"
+  );
+  assert_eq!(
+    script
+      .verify_transition(0, None, &ALICE, &parent, &quiet)
+      .unwrap_err(),
+    "Block outside Intent cleanup horizon"
+  );
+  let mut changed_code = quiet.clone();
+  changed_code.top.insert(
+    well_known_keys::CODE.to_vec(),
+    b"another synthetic CODE".to_vec(),
+  );
+  assert_eq!(
+    script
+      .verify_transition(2, None, &ALICE, &parent, &changed_code)
+      .unwrap_err(),
+    "Intent transition CODE changed"
+  );
+  assert_eq!(
+    script
+      .verify_transition(3, None, &ALICE, &parent, &quiet)
+      .unwrap_err(),
+    "Intent custody block mismatch"
+  );
+  let receipt = [IntentFeeEventRecord {
+    phase: polkadot_sdk::frame_system::Phase::ApplyExtrinsic(7),
+    event: RuntimeEvent::TransactionPayment(
+      polkadot_sdk::pallet_transaction_payment::Event::TransactionFeePaid {
+        who: ALICE,
+        actual_fee: 1,
+        tip: 0,
+      },
+    ),
+    topics: Vec::new(),
+  }];
+  let quiet_fee = synthetic_intent_transition_storage(&script, 2, balances, &receipt);
+  assert_eq!(
+    script
+      .verify_transition(2, None, &ALICE, &parent, &quiet_fee)
+      .unwrap_err(),
+    "Intent quiet transition has fee receipts"
+  );
+  let mut changed = balances;
+  changed[1].free -= 1;
+  let unexplained = synthetic_intent_transition_storage(&script, 2, changed, &[]);
+  assert_eq!(
+    script
+      .verify_transition(2, None, &ALICE, &parent, &unexplained)
+      .unwrap_err(),
+    "Intent ledger balance mismatch"
+  );
+}
+
+// Independent storage models for custody queries; no Consideration, Currency or dispatch runs.
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn seed_synthetic_intent_custody(script: &IntentCleanupScript, number: u32) {
+  use polkadot_sdk::pallet_preimage as p;
+  System::set_block_number(number);
+  if number == 0 {
+    return;
+  }
+  let (hash, bytes, hold) = script.preimage_custody_terms().unwrap();
+  let ticket =
+    <p::TicketOf<Runtime> as codec::DecodeAll>::decode_all(&mut hold.encode().as_slice()).unwrap();
+  p::RequestStatusFor::<Runtime>::insert(
+    hash,
+    p::RequestStatus::Unrequested {
+      ticket: (ALICE, ticket),
+      len: bytes.len() as u32,
+    },
+  );
+  p::PreimageFor::<Runtime>::mutate((hash, bytes.len() as u32), |raw| {
+    *raw = Some(bytes.to_vec().try_into().unwrap());
+  });
+  polkadot_sdk::pallet_balances::Holds::<Runtime>::mutate(&ALICE, |holds| {
+    holds
+      .try_push(polkadot_sdk::frame_support::traits::tokens::IdAmount {
+        id: crate::configs::preimage_config::PreimageHoldReason::get(),
+        amount: hold,
+      })
+      .unwrap();
+  });
+  polkadot_sdk::frame_system::Account::<Runtime>::mutate(&ALICE, |info| {
+    info.data.reserved = hold;
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_custody_preserves_readonly_fresh_and_retained_models() {
+  let script = IntentCleanupScript::new().unwrap();
+  assert_eq!(
+    script.verify_custody(script.child + 1, &ALICE),
+    Err("Intent custody outside horizon")
+  );
+  for number in [0, 1, script.maturity, script.expiry, script.child] {
+    let mut ext = TestExternalities::new_empty();
+    ext.execute_with(|| seed_synthetic_intent_custody(&script, number));
+    ext.commit_all().unwrap();
+    assert_eq!(
+      ext.execute_with(|| script.verify_custody(number, &ALICE)),
+      Ok(())
+    );
+    assert!(ext.overlayed_changes().changes().next().is_none());
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_custody_refuses_wrong_reason_ticket_and_unconsumed_state_without_repair() {
+  use polkadot_sdk::{
+    frame_support::storage::storage_prefix, pallet_preimage as p, sp_io::storage,
+  };
+  let script = IntentCleanupScript::new().unwrap();
+  let cases: &[(u32, fn(&IntentCleanupScript), &str)] = &[
+    (
+      1,
+      |_| {
+        polkadot_sdk::pallet_balances::Holds::<Runtime>::mutate(&ALICE, |holds| {
+          holds[0].id =
+            crate::RuntimeHoldReason::Actors(pallet_deos_actors::HoldReason::ActorState);
+        })
+      },
+      "Intent custody hold mismatch",
+    ),
+    (
+      1,
+      |_| {
+        polkadot_sdk::frame_system::Account::<Runtime>::mutate(&ALICE, |info| {
+          info.data.reserved *= 2;
+        })
+      },
+      "Intent custody reserve mismatch",
+    ),
+    (
+      1,
+      |s| {
+        let (hash, _, hold) = s.preimage_custody_terms().unwrap();
+        p::RequestStatusFor::<Runtime>::mutate(hash, |status| {
+          let Some(p::RequestStatus::Unrequested { ticket, .. }) = status else {
+            panic!("model ticket");
+          };
+          ticket.1 = <p::TicketOf<Runtime> as codec::DecodeAll>::decode_all(
+            &mut (hold + 1).encode().as_slice(),
+          )
+          .unwrap();
+        });
+      },
+      "Intent custody ticket mismatch",
+    ),
+    (
+      1,
+      |s| {
+        let (hash, _, _) = s.preimage_custody_terms().unwrap();
+        p::RequestStatusFor::<Runtime>::mutate(hash, |status| {
+          let Some(p::RequestStatus::Unrequested { ticket, .. }) = status else {
+            panic!("model ticket");
+          };
+          ticket.0 = crate::AccountId::new([99; 32]);
+        });
+      },
+      "Intent custody ticket mismatch",
+    ),
+    (
+      1,
+      |s| {
+        let (hash, bytes, _) = s.preimage_custody_terms().unwrap();
+        p::PreimageFor::<Runtime>::mutate((hash, bytes.len() as u32), |raw| {
+          *raw = Some(vec![42; bytes.len()].try_into().unwrap());
+        });
+      },
+      "Intent custody payload mismatch",
+    ),
+    (
+      1,
+      |s| {
+        let (hash, _, _) = s.preimage_custody_terms().unwrap();
+        let key = pallet_governance::PayloadAdmissionWitnesses::<Runtime>::hashed_key_for(
+          hash,
+          (101, pallet_governance::ProposalPayloadKind::Intent),
+        );
+        storage::set(&key, &[255]); // Even undecodable residue must not look consumed.
+      },
+      "Intent custody witness residue",
+    ),
+    (
+      1,
+      |s| {
+        let (hash, _, _) = s.preimage_custody_terms().unwrap();
+        let mut key = storage_prefix(b"Preimage", b"StatusFor").to_vec();
+        key.extend(hash.encode());
+        storage::set(&key, &[255]);
+      },
+      "Intent custody legacy residue",
+    ),
+    (
+      1,
+      |_| storage::set(&storage_prefix(b"Preimage", b"StatusFor"), &[255]),
+      "Intent custody legacy residue",
+    ),
+    (
+      0,
+      |s| {
+        let (hash, _, _) = s.preimage_custody_terms().unwrap();
+        storage::set(
+          &p::RequestStatusFor::<Runtime>::hashed_key_for(hash),
+          &[255],
+        );
+      },
+      "Intent custody preimage not fresh",
+    ),
+  ];
+  for &(number, corrupt, reason) in cases {
+    let mut ext = TestExternalities::new_empty();
+    ext.execute_with(|| {
+      seed_synthetic_intent_custody(&script, number);
+      corrupt(&script);
+    });
+    ext.commit_all().unwrap();
+    assert_eq!(
+      ext.execute_with(|| script.verify_custody(number, &ALICE)),
+      Err(reason)
+    );
+    assert!(ext.overlayed_changes().changes().next().is_none());
+  }
+}
+
+// Deliberately synthetic phase models for the readonly checker, never a history source.
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn seed_synthetic_intent_projection(
+  script: &IntentCleanupScript,
+  number: u32,
+  owner: &crate::AccountId,
+) {
+  use pallet_governance as g;
+  System::set_block_number(number);
+  let active = number < script.maturity;
+  let retained = !active && number < script.child;
+  let RuntimeCall::Governance(g::Call::submit_signed_proposal { payload_hash, .. }) =
+    &script.packet[2]
+  else {
+    panic!("fixed packet must contain its submission");
+  };
+  for domain in [101, 102] {
+    // Canonical active-index removal retains an explicit empty ValueQuery entry.
+    g::ActiveProposalIdsByDomain::<Runtime>::mutate(domain, |ids| {
+      if active {
+        ids.try_push(110).unwrap();
+      }
+    });
+    if active {
+      g::ActiveProposals::<Runtime>::insert(domain, 110, g::ActiveProposal { submitted_epoch: 1 });
+      g::ProposalAuthorsByItem::<Runtime>::insert(domain, 110, owner.clone());
+      g::ProposalMaturityBuckets::<Runtime>::mutate(script.maturity, |bucket| {
+        bucket
+          .try_push(g::ProposalIdentity {
+            domain,
+            item_id: 110,
+          })
+          .unwrap();
+      });
+    }
+    if number < script.child {
+      g::ProposalMetadataByItem::<Runtime>::insert(
+        domain,
+        110,
+        g::ProposalMetadata {
+          cadence_mode: g::ProposalCadenceMode::Ordinary,
+          payload_kind: g::ProposalPayloadKind::Intent,
+          payload_hash: *payload_hash,
+        },
+      );
+    }
+    if retained {
+      g::FinalizedProposals::<Runtime>::insert(
+        domain,
+        110,
+        g::FinalizedProposalRecord {
+          outcome: g::FinalizedProposalOutcome::Rejected {
+            finalized_epoch: script.maturity,
+            reason: g::ProposalRejectionReason::NoVotes,
+          },
+          execution_detail: None,
+        },
+      );
+      g::FinalizedProposalIdsByDomain::<Runtime>::mutate(domain, |ids| {
+        ids.try_push(110).unwrap();
+      });
+      g::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::mutate(script.expiry, |bucket| {
+        bucket
+          .try_push(g::ProposalIdentity {
+            domain,
+            item_id: 110,
+          })
+          .unwrap();
+      });
+    }
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_cleanup_projection_accepts_readonly_synthetic_phases() {
+  let script = IntentCleanupScript::new().unwrap();
+  // Bounds reject before any storage access, even outside Externalities.
+  assert!(script.verify_projection(0, &ALICE).is_err());
+  assert!(script.verify_projection(script.child + 1, &ALICE).is_err());
+  for number in [
+    1,
+    script.maturity - 1,
+    script.maturity,
+    script.expiry,
+    script.child,
+  ] {
+    let mut ext = TestExternalities::new_empty();
+    ext.execute_with(|| seed_synthetic_intent_projection(&script, number, &ALICE));
+    ext.commit_all().unwrap();
+    assert_eq!(
+      ext.execute_with(|| script.verify_projection(number, &ALICE)),
+      Ok(())
+    );
+    assert!(ext.overlayed_changes().changes().next().is_none());
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_intent_cleanup_projection_rejects_corruption_without_repair() {
+  use pallet_governance as g;
+  let script = IntentCleanupScript::new().unwrap();
+  let cases: &[(u32, fn(), &str)] = &[
+    (
+      1,
+      || g::ProposalAuthorsByItem::<Runtime>::insert(101, 110, crate::AccountId::new([77; 32])),
+      "Intent projection active proposal mismatch",
+    ),
+    (
+      1,
+      || {
+        g::ProposalMetadataByItem::<Runtime>::mutate(101, 110, |metadata| {
+          metadata.as_mut().unwrap().payload_hash = H256::repeat_byte(9);
+        })
+      },
+      "Intent projection metadata mismatch",
+    ),
+    (
+      144_001,
+      || {
+        g::FinalizedProposals::<Runtime>::mutate(101, 110, |record| {
+          record.as_mut().unwrap().outcome = g::FinalizedProposalOutcome::Rejected {
+            finalized_epoch: 144_001,
+            reason: g::ProposalRejectionReason::AdminRejected,
+          };
+        })
+      },
+      "Intent projection finalized record mismatch",
+    ),
+    (
+      144_001,
+      || {
+        g::FinalizedProposalIdsByDomain::<Runtime>::mutate(101, |ids| {
+          ids.try_push(111).unwrap();
+        })
+      },
+      "Intent projection discovery index mismatch",
+    ),
+    (
+      144_017,
+      || g::ProposalMetadataByItem::<Runtime>::remove(101, 110),
+      "Intent projection metadata mismatch",
+    ),
+    (
+      144_018,
+      || g::FinalizedProposalIdsByDomain::<Runtime>::mutate(101, |_| {}),
+      "Intent projection discovery index mismatch",
+    ),
+    (
+      144_001,
+      || g::ProposalPendingEnactmentAt::<Runtime>::insert(101, 110, 187_201),
+      "Intent projection auxiliary state mismatch",
+    ),
+    (
+      144_001,
+      || {
+        g::PendingEnactments::<Runtime>::mutate(|members| {
+          members
+            .try_push(g::ProposalIdentity {
+              domain: 999,
+              item_id: 1,
+            })
+            .unwrap();
+        })
+      },
+      "Intent projection pending ring mismatch",
+    ),
+    (
+      144_001,
+      || g::ProposalUrgentAuthorizedAt::<Runtime>::insert(101, 110, 1),
+      "Intent projection auxiliary state mismatch",
+    ),
+    (
+      144_018,
+      || g::FinalizedProposalOutcomeExpiryBuckets::<Runtime>::mutate(144_017, |_| {}),
+      "Intent projection expiry bucket mismatch",
+    ),
+    (
+      1,
+      || {
+        g::ProposalMaturityBuckets::<Runtime>::mutate(144_001, |bucket| {
+          *bucket = vec![bucket[1].clone(), bucket[0].clone()]
+            .try_into()
+            .unwrap();
+        })
+      },
+      "Intent projection maturity bucket mismatch",
+    ),
+    (
+      144_017,
+      || System::set_block_number(1),
+      "Intent projection block mismatch",
+    ),
+  ];
+  for &(number, corrupt, reason) in cases {
+    let mut ext = TestExternalities::new_empty();
+    ext.execute_with(|| {
+      seed_synthetic_intent_projection(&script, number, &ALICE);
+      corrupt();
+    });
+    ext.commit_all().unwrap();
+    assert_eq!(
+      ext.execute_with(|| script.verify_projection(number, &ALICE)),
+      Err(reason)
+    );
+    assert!(ext.overlayed_changes().changes().next().is_none());
+  }
+}
+
 /// Complete native Governance chronology from the runtime-owned genesis, with fresh
 /// proof accounting and independent import for every block. Persistent backends avoid
 /// enumerating and reconstructing the whole state at every empty epoch.
@@ -5855,6 +8300,57 @@ fn replay_signed_l2_admission_from_genesis(
 }
 
 #[cfg(not(feature = "runtime-benchmarks"))]
+fn signed_admission_block_input<'a>(
+  intent: Option<&'a IntentCleanupScript>,
+  legacy_call: Option<&'a RuntimeCall>,
+  number: u32,
+  output_requested: bool,
+) -> Result<(&'a [RuntimeCall], bool), &'static str> {
+  if let Some(script) = intent {
+    let (calls, endpoint) = script.block(number)?;
+    Ok((calls, output_requested && endpoint))
+  } else {
+    Ok((
+      legacy_call.map_or(&[], std::slice::from_ref),
+      output_requested,
+    ))
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn signed_admission_input_routing_preserves_legacy_and_intent_endpoint() {
+  let legacy = RuntimeCall::System(polkadot_sdk::frame_system::Call::remark { remark: vec![1] });
+  let intent = IntentCleanupScript::new().unwrap();
+  for requested in [false, true] {
+    assert_eq!(
+      signed_admission_block_input(None, Some(&legacy), 4, requested).unwrap(),
+      (std::slice::from_ref(&legacy), requested)
+    );
+    assert_eq!(
+      signed_admission_block_input(None, None, 144_018, requested).unwrap(),
+      (&[][..], requested)
+    );
+    for (number, count, endpoint) in [
+      (1, 5, false),
+      (4, 0, false),
+      (144_017, 0, false),
+      (144_018, 0, true),
+    ] {
+      let (calls, export) =
+        signed_admission_block_input(Some(&intent), Some(&legacy), number, requested).unwrap();
+      assert_eq!(calls.len(), count);
+      assert_eq!(export, requested && endpoint);
+      if number == 1 {
+        assert_eq!(calls, intent.packet.as_slice());
+      }
+    }
+  }
+  assert!(signed_admission_block_input(Some(&intent), None, 0, true).is_err());
+  assert!(signed_admission_block_input(Some(&intent), None, 144_019, true).is_err());
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
 fn replay_signed_l2_admission_with_pvf(
   signer: &sr25519::Pair,
   preset: &polkadot_sdk::sp_genesis_builder::PresetId,
@@ -5863,10 +8359,38 @@ fn replay_signed_l2_admission_with_pvf(
   wasm: &[u8],
   pvf_output: Option<&std::path::Path>,
 ) -> (Storage, Header) {
+  replay_signed_admission_with_pvf(signer, preset, domain, end, wasm, pvf_output, None)
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn replay_signed_admission_with_pvf(
+  signer: &sr25519::Pair,
+  preset: &polkadot_sdk::sp_genesis_builder::PresetId,
+  domain: u32,
+  end: SignedAdmissionReplayEnd,
+  wasm: &[u8],
+  pvf_output: Option<&std::path::Path>,
+  intent: Option<&IntentCleanupScript>,
+) -> (Storage, Header) {
   use pallet_governance::{
     ProposalCadenceMode, ProposalEnactmentOutcome, ProposalPayloadKind, ProposalVoteKind,
   };
   assert!(pvf_output.is_none() || end == SignedAdmissionReplayEnd::SealedPreparation);
+  if intent.is_some() {
+    assert!(
+      !wasm.is_empty(),
+      "Intent bridge requires explicit source-bound default CODE"
+    );
+    assert!(end == SignedAdmissionReplayEnd::SealedPreparation);
+    assert_eq!(
+      preset.as_str(),
+      polkadot_sdk::sp_genesis_builder::DEV_RUNTIME_PRESET
+    );
+    assert_eq!(
+      crate::AccountId::from(signer.public()),
+      polkadot_sdk::sp_keyring::Sr25519Keyring::Alice.to_account_id()
+    );
+  }
   let storage = preset_genesis_storage(wasm, preset);
   assert!(
     storage.children_default.is_empty(),
@@ -5881,6 +8405,11 @@ fn replay_signed_l2_admission_with_pvf(
   let mut importer =
     TestExternalities::new_with_code_and_state(wasm, storage, crate::VERSION.state_version());
   let owner = crate::AccountId::from(signer.public());
+  let mut intent_previous = intent.map(|script| {
+    script
+      .bind_committed_base(&mut importer, &owner, wasm)
+      .unwrap()
+  });
   let payload =
     RuntimeCall::Actors(pallet_deos_actors::Call::set_user_creation_enabled { enabled: true })
       .encode();
@@ -5916,8 +8445,12 @@ fn replay_signed_l2_admission_with_pvf(
   let mut due = None;
   let mut nonce = 0;
   let mut number = 0u32;
-  let mut progress = std::env::var_os("DEOS_REPLAY_PROGRESS")
-    .map(|_| (std::time::Instant::now(), [std::time::Duration::ZERO; 4]));
+  let mut progress = if intent.is_none() {
+    std::env::var_os("DEOS_REPLAY_PROGRESS")
+      .map(|_| (std::time::Instant::now(), [std::time::Duration::ZERO; 4]))
+  } else {
+    None
+  }; // The bounded Intent profile has no timing/prefix diagnostic campaign.
   let mut hash_window: Option<CanonicalHashWindow> = None;
   loop {
     let mut phase_started = progress.as_ref().map(|_| std::time::Instant::now());
@@ -5941,6 +8474,8 @@ fn replay_signed_l2_admission_with_pvf(
     } else {
       None
     };
+    let (calls, export_this_block) =
+      signed_admission_block_input(intent, call, number, pvf_output.is_some()).unwrap();
     if let Some(window) = &hash_window {
       window.assert_parent(&mut author, &parent);
     } else {
@@ -5948,11 +8483,11 @@ fn replay_signed_l2_admission_with_pvf(
     }
     measure_phase(0);
     let data = inherent_data_for(&parent, number);
-    let pvf_pre_state = pvf_output.map(|_| author.execute_with(current_top_storage));
+    let pvf_pre_state = export_this_block.then(|| author.execute_with(current_top_storage));
     let recorder = Recorder::<polkadot_sdk::sp_core::Blake2Hasher>::default();
     let proof_size = RecordingProofSizeProvider::new(recorder.clone());
     author.register_extension(ProofSizeExt::new(proof_size.clone()));
-    let block = author.execute_with_recorder(recorder.clone(), || {
+    let (block, first_signed_index) = author.execute_with_recorder(recorder.clone(), || {
       let header = Header::new(
         number,
         Default::default(),
@@ -5973,24 +8508,44 @@ fn replay_signed_l2_admission_with_pvf(
           .unwrap()
           .unwrap();
       }
-      observe_authored_proof_prefix(&recorder, &proof_size, parent.hash(), number, "inherents");
-      if let Some(call) = call {
+      if intent.is_none() {
+        observe_authored_proof_prefix(&recorder, &proof_size, parent.hash(), number, "inherents");
+      }
+      let first_signed_index =
+        (!calls.is_empty()).then(|| u32::try_from(extrinsics.len()).unwrap());
+      for (index, call) in calls.iter().enumerate() {
         let extrinsic = actors_integration_tests::signed_extrinsic(signer, nonce, call.clone());
         Executive::apply_extrinsic(extrinsic.clone())
           .unwrap()
           .unwrap();
         extrinsics.push(extrinsic);
-        nonce += 1;
-        observe_authored_proof_prefix(&recorder, &proof_size, parent.hash(), number, "signed-0");
+        nonce = nonce.checked_add(1).unwrap();
+        if intent.is_none() {
+          observe_authored_proof_prefix(
+            &recorder,
+            &proof_size,
+            parent.hash(),
+            number,
+            &format!("signed-{index}"),
+          );
+        }
       }
-      observe_authored_proof_prefix(&recorder, &proof_size, parent.hash(), number, "before-idle");
-      Block {
-        header: Executive::finalize_block(),
-        extrinsics,
+      if intent.is_none() {
+        observe_authored_proof_prefix(&recorder, &proof_size, parent.hash(), number, "before-idle");
       }
+      (
+        Block {
+          header: Executive::finalize_block(),
+          extrinsics,
+        },
+        first_signed_index,
+      )
     });
     assert!(recorder.estimate_encoded_size() > 0);
     assert_no_auxiliary_block_overlay(&author);
+    if intent.is_some() {
+      intent_code_overlay_result(&author).unwrap();
+    }
     if let Some(window) = &mut hash_window {
       window.commit_successor(&mut author, &block.header);
     } else {
@@ -6026,11 +8581,30 @@ fn replay_signed_l2_admission_with_pvf(
     });
     assert!(recorder.estimate_encoded_size() > 0);
     assert_no_auxiliary_block_overlay(&importer);
+    if intent.is_some() {
+      intent_code_overlay_result(&importer).unwrap();
+    }
     importer.commit_all().unwrap();
     assert_eq!(author.backend.root(), importer.backend.root());
     assert_eq!(importer.backend.root(), block.header.state_root());
     measure_phase(2);
-    if let Some(output) = pvf_output {
+    if let Some(script) = intent {
+      let post = script
+        .committed_snapshot(&mut importer, number, &owner)
+        .unwrap();
+      script
+        .verify_observed_transition(
+          number,
+          first_signed_index,
+          &owner,
+          intent_previous.as_ref().unwrap(),
+          &post,
+        )
+        .unwrap();
+      intent_previous = Some(post);
+    }
+    if export_this_block {
+      let output = pvf_output.unwrap();
       let block_output = output.join(number.to_string());
       if !block_output.exists() {
         std::fs::create_dir(&block_output).unwrap();
@@ -6060,12 +8634,19 @@ fn replay_signed_l2_admission_with_pvf(
         assert_eq!(System::parent_hash(), parent.hash());
         assert_eq!(System::block_hash(number - 1), parent.hash());
       });
-      println!(
-        "Sealed governance preparation: preset={preset} block={number} parent={:?} hash={:?} state_root={:?} actual_aura_verified=true author_import_root_equal=true child_offchain_transaction_index_overlay_empty=true",
-        parent.hash(),
-        block.header.hash(),
-        block.header.state_root()
-      );
+      if intent.is_none() || export_this_block {
+        let label = if intent.is_some() {
+          "Intent cleanup"
+        } else {
+          "governance preparation"
+        };
+        println!(
+          "Sealed {label}: preset={preset} block={number} parent={:?} hash={:?} state_root={:?} actual_aura_verified=true author_import_root_equal=true child_offchain_transaction_index_overlay_empty=true",
+          parent.hash(),
+          block.header.hash(),
+          block.header.state_root()
+        );
+      }
     }
     // The test database retains dead trie nodes after commit. Bound that auxiliary
     // history without changing live storage, proof accounting or consensus execution.
@@ -6080,72 +8661,76 @@ fn replay_signed_l2_admission_with_pvf(
       assert_eq!(System::account_nonce(&owner), nonce);
       assert!(!Actors::global_circuit_breaker());
       assert_eq!(Actors::user_creation_enabled(), due == Some(number));
-      if number == prepare.len() as u32 {
-        assert_eq!(
-          crate::Governance::proposal_author(domain, 120),
-          Some(owner.clone())
-        );
-        let proposal_timing = crate::Governance::proposal_timing(domain, 120).unwrap();
-        let delay = crate::configs::governance_config::ProposalEnactmentDelay::get();
-        assert_eq!(delay, 43_200);
-        due = Some(
-          proposal_timing
-            .ordinary_primary_close_epoch
-            .checked_add(delay)
-            .unwrap(),
-        );
-        timing = Some(proposal_timing);
-      }
-      if let Some(timing) = &timing {
-        if number == timing.ordinary_primary_open_epoch {
-          assert!(
-            crate::Governance::proposal_vote_tally(domain, 120)
-              .unwrap()
-              .aye_weight
-              >= 200
+      if intent.is_none() {
+        if number == prepare.len() as u32 {
+          assert_eq!(
+            crate::Governance::proposal_author(domain, 120),
+            Some(owner.clone())
           );
+          let proposal_timing = crate::Governance::proposal_timing(domain, 120).unwrap();
+          let delay = crate::configs::governance_config::ProposalEnactmentDelay::get();
+          assert_eq!(delay, 43_200);
+          due = Some(
+            proposal_timing
+              .ordinary_primary_close_epoch
+              .checked_add(delay)
+              .unwrap(),
+          );
+          timing = Some(proposal_timing);
         }
-        if number >= timing.ordinary_primary_close_epoch && Some(number) != due {
-          assert_eq!(
-            crate::Governance::finalized_proposal_outcome(domain, 120),
-            Some(super::governance_integration_tests::approved_outcome(
-              timing.ordinary_primary_close_epoch,
-              1,
-              ProposalEnactmentOutcome::NotAttempted
-            ))
-          );
-          assert_eq!(
-            pallet_governance::ProposalPendingEnactmentAt::<Runtime>::get(domain, 120),
-            due
-          );
-          assert!(crate::Governance::finalized_proposal_outcome_expiry_bucket(number).is_empty());
-        }
-        if Some(number) == due {
-          assert_eq!(
-            crate::Governance::finalized_proposal_outcome(domain, 120),
-            Some(super::governance_integration_tests::approved_outcome(
-              timing.ordinary_primary_close_epoch,
-              1,
-              ProposalEnactmentOutcome::Enacted { epoch: number }
-            ))
-          );
-          assert!(pallet_governance::PendingEnactments::<Runtime>::get().is_empty());
-          assert!(System::events().iter().any(|record| matches!(record.event,
+        if let Some(timing) = &timing {
+          if number == timing.ordinary_primary_open_epoch {
+            assert!(
+              crate::Governance::proposal_vote_tally(domain, 120)
+                .unwrap()
+                .aye_weight
+                >= 200
+            );
+          }
+          if number >= timing.ordinary_primary_close_epoch && Some(number) != due {
+            assert_eq!(
+              crate::Governance::finalized_proposal_outcome(domain, 120),
+              Some(super::governance_integration_tests::approved_outcome(
+                timing.ordinary_primary_close_epoch,
+                1,
+                ProposalEnactmentOutcome::NotAttempted
+              ))
+            );
+            assert_eq!(
+              pallet_governance::ProposalPendingEnactmentAt::<Runtime>::get(domain, 120),
+              due
+            );
+            assert!(crate::Governance::finalized_proposal_outcome_expiry_bucket(number).is_empty());
+          }
+          if Some(number) == due {
+            assert_eq!(
+              crate::Governance::finalized_proposal_outcome(domain, 120),
+              Some(super::governance_integration_tests::approved_outcome(
+                timing.ordinary_primary_close_epoch,
+                1,
+                ProposalEnactmentOutcome::Enacted { epoch: number }
+              ))
+            );
+            assert!(pallet_governance::PendingEnactments::<Runtime>::get().is_empty());
+            assert!(System::events().iter().any(|record| matches!(record.event,
             RuntimeEvent::Governance(pallet_governance::Event::ProposalParameterChangeExecuted {
               domain: event_domain, item_id: 120,
               surface: pallet_governance::ProposalParameterChangeSurface::ActorUserCreationEnabled,
               executed_epoch, ..
             }) if event_domain == domain && executed_epoch == number)));
+          }
         }
       }
       #[cfg(feature = "try-runtime")]
       <Actors as polkadot_sdk::frame_support::traits::Hooks<u32>>::try_state(number).unwrap();
     });
     parent = block.header;
-    if matches!(
-      end,
-      SignedAdmissionReplayEnd::Preparation | SignedAdmissionReplayEnd::SealedPreparation
-    ) {
+    if intent.is_none()
+      && matches!(
+        end,
+        SignedAdmissionReplayEnd::Preparation | SignedAdmissionReplayEnd::SealedPreparation
+      )
+    {
       importer.execute_with(|| {
         use polkadot_sdk::frame_support::dispatch::DispatchClass;
         let normal = *System::block_weight().get(DispatchClass::Normal);
@@ -6189,10 +8774,12 @@ fn replay_signed_l2_admission_with_pvf(
       )
       .unwrap();
     }
-    if matches!(
-      end,
-      SignedAdmissionReplayEnd::Preparation | SignedAdmissionReplayEnd::SealedPreparation
-    ) && number == prepare.len() as u32
+    if intent.is_none()
+      && matches!(
+        end,
+        SignedAdmissionReplayEnd::Preparation | SignedAdmissionReplayEnd::SealedPreparation
+      )
+      && number == prepare.len() as u32
     {
       assert_eq!(nonce, 4);
       assert_eq!(due, Some(187_204));
@@ -6202,12 +8789,43 @@ fn replay_signed_l2_admission_with_pvf(
       assert_eq!(nonce, 5);
       break;
     }
+    if intent.is_some_and(|script| number == script.child) {
+      assert_eq!(nonce, 5);
+      break;
+    }
     if number.is_multiple_of(10_000) {
       eprintln!("signed genesis chronology: {preset} block {number}, enactment {due:?}");
     }
   }
   let storage = importer.execute_with(current_top_storage);
   (storage, parent)
+}
+
+/// Future authorized bridge execution only; compiling this test is not a construction claim.
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+#[ignore = "requires separate execution authorization and current source-bound default Wasm"]
+fn signed_intent_cleanup_exports_single_pvf_fixture() {
+  let wasm_path =
+    std::env::var("DEOS_GOVERNANCE_PVF_WASM").expect("explicit source-bound default Wasm path");
+  let wasm = std::fs::read(wasm_path).unwrap();
+  assert!(!wasm.is_empty());
+  let output = std::path::PathBuf::from(
+    std::env::var("DEOS_GOVERNANCE_PVF_OUTPUT").expect("new endpoint output directory"),
+  );
+  std::fs::create_dir(&output).expect("output directory must be new");
+  let signer = sr25519::Pair::from_string("//Alice", None).unwrap();
+  let preset = polkadot_sdk::sp_genesis_builder::DEV_RUNTIME_PRESET.into();
+  let script = IntentCleanupScript::new().unwrap();
+  replay_signed_admission_with_pvf(
+    &signer,
+    &preset,
+    0,
+    SignedAdmissionReplayEnd::SealedPreparation,
+    &wasm,
+    Some(&output),
+    Some(&script),
+  );
 }
 
 /// Export the same four signed preparation blocks with code bound at named genesis.
@@ -13101,10 +15719,14 @@ impl OneStepServiceTrace {
   }
 
   fn for_schedule(actor_ids: &[ActorId], schedule: WorkloadSchedule) -> Self {
+    Self::for_schedule_at(actor_ids, schedule, 1)
+  }
+
+  fn for_schedule_at(actor_ids: &[ActorId], schedule: WorkloadSchedule, signal_block: u32) -> Self {
     let mut trace = Self::new(actor_ids);
     for (index, actor_id) in actor_ids.iter().enumerate() {
       if schedule.uses_manual_trigger(index as u32) {
-        trace.signal(*actor_id, 1);
+        trace.signal(*actor_id, signal_block);
       }
     }
     trace
@@ -13421,6 +16043,90 @@ fn one_step_service_trace_matches_runtime_latches() {
   }
 }
 
+#[derive(Clone, Copy)]
+struct TransferCampaignWindow {
+  first_block: u32,
+  blocks: u32,
+  replay_wasm: bool,
+}
+
+/// One W1 author/import/service-trace loop shared by scoped successful economic profiles.
+/// Observer queries run only after execution and proof collection.
+fn visit_schedule_campaign(
+  wasm: &[u8],
+  fixture: &PreparedActorFixture,
+  demand: UserDemand,
+  schedule: WorkloadSchedule,
+  window: TransferCampaignWindow,
+  mut observe: impl FnMut(&AuthoredBlock, Option<&WasmProofMetrics>, &OneStepServiceTrace),
+) -> OneStepServiceTrace {
+  assert!(window.first_block > 0 && window.blocks > 0);
+  let mut state = fixture.storage.clone();
+  let mut parent = parent_header_for(state.clone(), wasm, window.first_block - 1);
+  let mut signer_nonce = 0;
+  let mut service =
+    OneStepServiceTrace::for_schedule_at(&fixture.actor_ids, schedule, window.first_block - 1);
+  for block in window.first_block..window.first_block.checked_add(window.blocks).unwrap() {
+    let authored = author_complete_block_after(
+      state,
+      wasm,
+      &parent,
+      block,
+      demand,
+      &fixture.signer,
+      signer_nonce,
+      &fixture.actor_profiles,
+    );
+    assert_eq!(
+      authored.metrics.actor_steps,
+      authored.metrics.distinct_actors
+    );
+    if fixture
+      .actor_profiles
+      .values()
+      .all(|profile| profile.task == Some(WorkloadTask::Transfer))
+    {
+      assert_successful_transfer_outcomes(&authored.metrics);
+    } else {
+      assert!(
+        fixture
+          .actor_profiles
+          .values()
+          .all(|profile| profile.task == Some(WorkloadTask::RouterSwapOut))
+      );
+      assert_eq!(
+        authored.metrics.non_successful_steps, 0,
+        "purchase evidence requires successful Tasks"
+      );
+      assert_eq!(
+        authored.metrics.actor_steps,
+        authored.metrics.swap_out_steps
+      );
+      assert_eq!(
+        authored.metrics.completed_cycles,
+        authored.metrics.swap_out_steps
+      );
+    }
+    service.observe(&authored.metrics, block);
+    assert_complete_block_replays_natively(&authored, wasm);
+    let proof = window.replay_wasm.then(|| {
+      replay_complete_block_in_wasm(
+        &authored,
+        wasm,
+        &format!("{}-campaign-{block}", demand.label()),
+      )
+    });
+    observe(&authored, proof.as_ref(), &service);
+    signer_nonce = signer_nonce
+      .checked_add(authored.metrics.user_calls)
+      .unwrap();
+    parent = authored.block.header.clone();
+    state = authored.post_state;
+  }
+  service.assert_terminal_state(wasm, state);
+  service
+}
+
 fn run_schedule_campaign(
   wasm: &[u8],
   workload: &str,
@@ -13458,11 +16164,7 @@ fn run_schedule_campaign(
   let fixture = prepare_actor_fixture(wasm, added_actor_count, workload_schedule);
   assert_eq!(fixture.actor_ids.len() as u32, added_actor_count);
 
-  let mut pre_state = fixture.storage;
-  let mut parent = parent_header_for(pre_state.clone(), wasm, 1);
-  let mut signer_nonce = 0;
   let mut total_cycles = 0u32;
-  let mut service = OneStepServiceTrace::for_schedule(&fixture.actor_ids, workload_schedule);
   let mut steps = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
   let mut control_ref_time = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
   let mut control_proof_size = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
@@ -13481,82 +16183,70 @@ fn run_schedule_campaign(
   let mut verification_storage_proof = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
   let mut verification_compact_proof = Vec::with_capacity(W1_TARGET_BLOCKS as usize);
 
-  for block_number in 2..W1_TARGET_BLOCKS.saturating_add(2) {
-    let authored = author_complete_block_after(
-      pre_state,
-      wasm,
-      &parent,
-      block_number,
-      demand,
-      &fixture.signer,
-      signer_nonce,
-      &fixture.actor_profiles,
-    );
-    match demand {
-      UserDemand::ActorOnly => {
-        assert_eq!(authored.metrics.user_calls, 0);
-        assert_eq!(authored.metrics.user_dispatch, Weight::zero());
-        assert!(authored.metrics.next_user_weight.is_none());
+  let next_control_maximum = fixture.next_control_maximum;
+  let service = visit_schedule_campaign(
+    wasm,
+    &fixture,
+    demand,
+    workload_schedule,
+    TransferCampaignWindow {
+      first_block: 2,
+      blocks: W1_TARGET_BLOCKS,
+      replay_wasm: true,
+    },
+    |authored, proof, _service| {
+      match demand {
+        UserDemand::ActorOnly => {
+          assert_eq!(authored.metrics.user_calls, 0);
+          assert_eq!(authored.metrics.user_dispatch, Weight::zero());
+          assert!(authored.metrics.next_user_weight.is_none());
+        }
+        UserDemand::ContinuousValid => {
+          assert!(authored.metrics.user_calls > 0);
+          let next_user = authored
+            .metrics
+            .next_user_weight
+            .expect("continuous demand records its first inadmissible valid call");
+          let remaining = BlockResourceBudgetValue::get()
+            .limits()
+            .user_base_turn()
+            .checked_sub(&authored.metrics.user_dispatch)
+            .unwrap_or_else(Weight::zero);
+          assert!(
+            !next_user.all_lte(remaining),
+            "continuous demand must reach the User base-turn frontier"
+          );
+          user_bound_blocks = user_bound_blocks.saturating_add(1);
+        }
+        UserDemand::RefTimeHeavy | UserDemand::ContinuousShared => {
+          unreachable!("the W1/W2 schedule campaign only prepares User-base-turn remarks")
+        }
       }
-      UserDemand::ContinuousValid => {
-        assert!(authored.metrics.user_calls > 0);
-        let next_user = authored
-          .metrics
-          .next_user_weight
-          .expect("continuous demand records its first inadmissible valid call");
-        let remaining = BlockResourceBudgetValue::get()
-          .limits()
-          .user_base_turn()
-          .checked_sub(&authored.metrics.user_dispatch)
-          .unwrap_or_else(Weight::zero);
-        assert!(
-          !next_user.all_lte(remaining),
-          "continuous demand must reach the User base-turn frontier"
-        );
-        user_bound_blocks = user_bound_blocks.saturating_add(1);
+      total_cycles = total_cycles.saturating_add(authored.metrics.completed_cycles);
+      steps.push(u64::from(authored.metrics.actor_steps));
+      control_ref_time.push(authored.metrics.actor_control.ref_time());
+      control_proof_size.push(authored.metrics.actor_control.proof_size());
+      effect_ref_time.push(authored.metrics.actor_effect.ref_time());
+      effect_proof_size.push(authored.metrics.actor_effect.proof_size());
+      user_calls.push(u64::from(authored.metrics.user_calls));
+      user_ref_time.push(authored.metrics.user_dispatch.ref_time());
+      user_proof_size.push(authored.metrics.user_dispatch.proof_size());
+      let control_remaining = actor_control_limit
+        .checked_sub(&authored.metrics.actor_control)
+        .unwrap_or_else(Weight::zero);
+      control_remaining_ref_time.push(control_remaining.ref_time());
+      control_remaining_proof_size.push(control_remaining.proof_size());
+      if !next_control_maximum.all_lte(control_remaining) {
+        control_bound_blocks = control_bound_blocks.saturating_add(1);
       }
-      UserDemand::RefTimeHeavy | UserDemand::ContinuousShared => {
-        unreachable!("the W1/W2 schedule campaign only prepares User-base-turn remarks")
-      }
-    }
-    assert_eq!(
-      authored.metrics.actor_steps,
-      authored.metrics.distinct_actors
-    );
-    assert_successful_transfer_outcomes(&authored.metrics);
-    service.observe(&authored.metrics, block_number);
-    total_cycles = total_cycles.saturating_add(authored.metrics.completed_cycles);
-    steps.push(u64::from(authored.metrics.actor_steps));
-    control_ref_time.push(authored.metrics.actor_control.ref_time());
-    control_proof_size.push(authored.metrics.actor_control.proof_size());
-    effect_ref_time.push(authored.metrics.actor_effect.ref_time());
-    effect_proof_size.push(authored.metrics.actor_effect.proof_size());
-    signer_nonce = signer_nonce.saturating_add(authored.metrics.user_calls);
-    user_calls.push(u64::from(authored.metrics.user_calls));
-    user_ref_time.push(authored.metrics.user_dispatch.ref_time());
-    user_proof_size.push(authored.metrics.user_dispatch.proof_size());
-    let control_remaining = actor_control_limit
-      .checked_sub(&authored.metrics.actor_control)
-      .unwrap_or_else(Weight::zero);
-    control_remaining_ref_time.push(control_remaining.ref_time());
-    control_remaining_proof_size.push(control_remaining.proof_size());
-    if !fixture.next_control_maximum.all_lte(control_remaining) {
-      control_bound_blocks = control_bound_blocks.saturating_add(1);
-    }
-    let proof = replay_complete_block_in_wasm(
-      &authored,
-      wasm,
-      &format!("{}-campaign-{block_number}", demand.label()),
-    );
-    execution_storage_proof.push(proof.execution_storage_proof_bytes);
-    execution_compact_proof.push(proof.execution_compact_proof_bytes);
-    verification_storage_proof.push(proof.verification_storage_proof_bytes);
-    verification_compact_proof.push(proof.verification_compact_proof_bytes);
-    parent = authored.block.header.clone();
-    pre_state = authored.post_state;
-  }
+      let proof = proof.expect("legacy campaign retains exact-Wasm proof replay");
+      execution_storage_proof.push(proof.execution_storage_proof_bytes);
+      execution_compact_proof.push(proof.execution_compact_proof_bytes);
+      verification_storage_proof.push(proof.verification_storage_proof_bytes);
+      verification_compact_proof.push(proof.verification_compact_proof_bytes);
+    },
+  );
 
-  service.assert_terminal_state(wasm, pre_state);
   let service_summary = service.summary(1, W1_TARGET_BLOCKS + 1);
   let distinct_progressed = service_summary["distinctProgressedActors"]
     .as_u64()
@@ -14271,7 +16961,192 @@ fn run_w4_heterogeneous_effect_campaign(wasm: &[u8], demand: UserDemand) {
   );
 }
 
-fn run_current_w7_deadlines(wasm: &[u8], replay_wasm: bool) {
+#[test]
+fn current_w7_public_setup_preserves_paid_block_clock_retry() {
+  for signal_block in [1, 2] {
+    check_current_w7_paid_retry(signal_block);
+  }
+}
+
+fn check_current_w7_paid_retry(signal_block: u32) {
+  let first_attempt = signal_block + 1;
+  let due = first_attempt + 3;
+  let terminal = due + 1;
+  let mut ext = TestExternalities::new(reference_genesis_storage(&[]));
+  let (id, account, profiles, signer, after_trigger, pipeline_fee, recipient_before) = ext
+    .execute_with(|| {
+      System::set_block_number(1);
+      polkadot_sdk::pallet_timestamp::Now::<Runtime>::put(crate::SLOT_DURATION);
+      assert!(!Actors::user_creation_enabled());
+      assert_ok!(Actors::set_user_creation_enabled(
+        RuntimeOrigin::root(),
+        true
+      ));
+      let signer = sr25519::Pair::from_seed(&[68; 32]);
+      let owner = crate::AccountId::from(signer.public());
+      assert_ok!(Balances::force_set_balance(
+        RuntimeOrigin::root(),
+        owner.clone().into(),
+        100_000_000 * crate::EXISTENTIAL_DEPOSIT
+      ));
+      let steps: ContractSteps<Runtime> = vec![StepOf::<Runtime> {
+        precondition: None,
+        task: Task::Transfer {
+          to: super::common::BOB,
+          asset: primitives::AssetKind::Native,
+          amount: AmountResolution::Fixed(1_000_000_000 * crate::EXISTENTIAL_DEPOSIT),
+        },
+        on_error: StepErrorPolicy::RetryLater { max_attempts: 2 },
+      }]
+      .try_into()
+      .unwrap();
+      actors_integration_tests::prefund_active_user_creation(&owner, &steps);
+      let id = Actors::next_actor_id();
+      assert_ok!(Actors::create_user_actor(
+        RuntimeOrigin::signed(owner.clone()),
+        Mutability::Mutable,
+        Some(pallet_deos_actors::ActorContract {
+          trigger: Trigger::manual(),
+          cooldown_blocks: 3,
+          window: None,
+          steps,
+          on_unfunded: pallet_deos_actors::OnUnfunded::Close,
+          close_when: None,
+          parked_balance_activation: None,
+          funding: pallet_deos_actors::FundingSourcePolicy::OwnerOnly,
+          auto_close_at_cycle_nonce: None,
+        })
+      ));
+      assert_eq!(
+        Actors::actor_identity(id)
+          .unwrap()
+          .last_control_mutation_block,
+        1
+      );
+      actors_integration_tests::fund_native(id, 10_000 * crate::EXISTENTIAL_DEPOSIT);
+      let account = Actors::actor_identity(id).unwrap().sovereign_account;
+      let quote = Actors::actor_cost_quote(id).unwrap();
+      let before = Balances::free_balance(&account);
+      System::set_block_number(signal_block);
+      polkadot_sdk::pallet_timestamp::Now::<Runtime>::put(
+        u64::from(signal_block) * crate::SLOT_DURATION,
+      );
+      assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(owner), id));
+      assert_eq!(
+        Actors::service_nodes(id).unwrap().eligible_from,
+        first_attempt
+      );
+      let after = Balances::free_balance(&account);
+      assert_eq!(before - after, quote.prospective_trigger_fee.unwrap().fee);
+      let profiles = [(
+        id,
+        WorkloadActorProfile {
+          step_count: 1,
+          opening_predicates_per_step: 0,
+          task: Some(WorkloadTask::Transfer),
+        },
+      )]
+      .into_iter()
+      .collect();
+      (
+        id,
+        account,
+        profiles,
+        signer,
+        after,
+        quote.prospective_pipeline_fee.unwrap().total_fee,
+        Balances::free_balance(super::common::BOB),
+      )
+    });
+  ext.commit_all().unwrap();
+  let mut state = ext.execute_with(current_top_storage);
+  let mut parent = parent_header_for(state.clone(), &[], signal_block);
+  let mut paid = None;
+  for block in first_attempt..=terminal {
+    let authored = author_complete_block_after(
+      state,
+      &[],
+      &parent,
+      block,
+      UserDemand::ActorOnly,
+      &signer,
+      0,
+      &profiles,
+    );
+    assert_complete_block_replays_natively(&authored, &[]);
+    assert_eq!(
+      authored.metrics.actor_steps, 0,
+      "funding refusal invokes no Task"
+    );
+    assert_eq!(authored.metrics.completed_cycles, 0);
+    TestExternalities::new(authored.post_state.clone()).execute_with(|| {
+      assert_eq!(Balances::free_balance(super::common::BOB), recipient_before);
+      assert!(
+        !System::events().iter().any(|record| matches!(record.event,
+          RuntimeEvent::Actors(Event::ActionFeeCharged { actor_id, .. }) if actor_id == id
+        )),
+        "funding refusal never invokes or charges an Action"
+      );
+      assert_eq!(
+        Balances::free_balance(&account),
+        after_trigger - pipeline_fee,
+        "only Opening charges Pipeline; sleep, return, terminal retry and close preserve custody"
+      );
+      if block < terminal {
+        let run = Actors::actor_run_state(id).unwrap();
+        assert_eq!((run.cursor, run.unsuccessful_attempts_at_cursor), (0, 1));
+        assert_eq!(
+          Actors::actor_hot(id).unwrap().cycle_state,
+          CycleState::Suspended
+        );
+        if block == first_attempt {
+          paid = Some(run.contract_authority);
+        }
+        assert_eq!(Some(run.contract_authority), paid);
+        if block < due {
+          let handle = Actors::deadline_handles(id).unwrap();
+          assert_eq!(
+            handle.key,
+            WakeupKey::Block(due),
+            "retry cooldown uses blocks, not cadence ticks"
+          );
+          assert_eq!(run.eligible_at, due);
+          assert!(Actors::service_nodes(id).is_none());
+        } else {
+          assert!(Actors::deadline_handles(id).is_none());
+          assert_eq!(Actors::service_nodes(id).unwrap().eligible_from, terminal);
+        }
+      } else {
+        assert!(Actors::actor_identity(id).is_none());
+        assert!(Actors::actor_run_state(id).is_none());
+      }
+    });
+    if block == first_attempt {
+      assert_eq!(authored.metrics.suspended_steps, vec![(id, 0)]);
+    }
+    if block == terminal {
+      assert_eq!(authored.metrics.continued_steps, vec![(id, 0)]);
+      assert_eq!(
+        authored.metrics.closed_actors,
+        vec![(id, CloseReason::RetryAttemptsExhausted)]
+      );
+    }
+    parent = authored.block.header;
+    state = authored.post_state;
+  }
+}
+
+struct PreparedRetryDeadlineFixture {
+  storage: Storage,
+  signers: Vec<sr25519::Pair>,
+  actor_ids: Vec<ActorId>,
+  actor_profiles: BTreeMap<ActorId, WorkloadActorProfile>,
+  accounts: BTreeMap<ActorId, crate::AccountId>,
+  expected_deadlines: BTreeMap<ActorId, u32>,
+  quoted_fees: BTreeMap<ActorId, (u128, u128)>,
+}
+
+fn prepare_retry_deadline_fixture(wasm: &[u8]) -> PreparedRetryDeadlineFixture {
   let mut ext = TestExternalities::new_with_code_and_state(
     wasm,
     reference_genesis_storage(wasm),
@@ -14284,74 +17159,260 @@ fn run_current_w7_deadlines(wasm: &[u8], replay_wasm: bool) {
       sr25519::Pair::from_seed(&seed)
     })
     .collect::<Vec<_>>();
-  let (actor_ids, actor_profiles, accounts, expected_deadlines) = ext.execute_with(|| {
-    System::set_block_number(1);
-    assert!(
-      CURRENT_W7_SETUP_BATCH
-        <= u32::from(<Runtime as pallet_deos_actors::Config>::MaxOwnerSlots::get())
-    );
-    for signer in &signers {
-      assert_ok!(Balances::force_set_balance(
+  let (actor_ids, actor_profiles, accounts, expected_deadlines, quoted_fees) =
+    ext.execute_with(|| {
+      System::set_block_number(1);
+      assert!(!Actors::user_creation_enabled());
+      assert_ok!(Actors::set_user_creation_enabled(
         RuntimeOrigin::root(),
-        MultiAddress::Id(crate::AccountId::from(signer.public())),
-        100_000_000 * crate::EXISTENTIAL_DEPOSIT,
+        true
       ));
-    }
-    let steps = BoundedVec::try_from(vec![StepOf::<Runtime> {
-      precondition: None,
-      task: Task::Transfer {
-        to: super::common::BOB,
-        asset: primitives::AssetKind::Native,
-        amount: AmountResolution::Fixed(1_000_000_000 * crate::EXISTENTIAL_DEPOSIT),
-      },
-      on_error: StepErrorPolicy::RetryLater { max_attempts: 2 },
-    }])
-    .expect("one real funding-unavailable retry Step fits");
-    let mut actor_ids = Vec::new();
-    let mut actor_profiles = BTreeMap::new();
-    let mut accounts = BTreeMap::new();
-    let mut expected_deadlines = BTreeMap::new();
-    for index in 0..CURRENT_W7_SLEEPERS {
-      let owner =
-        crate::AccountId::from(signers[(index / CURRENT_W7_SETUP_BATCH) as usize].public());
-      let attempt_block = 2 + index / CURRENT_W7_SETUP_BATCH;
-      let due = CURRENT_W7_FIRST_DUE_BLOCK + index / CURRENT_W7_MEMBERS_PER_KEY;
-      let mut schedule = actors_integration_tests::manual_schedule();
-      schedule.cooldown_blocks = due - attempt_block;
+
       assert!(
-        schedule.cooldown_blocks > 1,
-        "every retry must sleep off-ring"
+        CURRENT_W7_SETUP_BATCH
+          <= u32::from(<Runtime as pallet_deos_actors::Config>::MaxOwnerSlots::get())
       );
-      let actor_id =
-        actors_integration_tests::create_user(owner.clone(), schedule, None, steps.clone());
-      actors_integration_tests::fund_native(actor_id, 10_000 * crate::EXISTENTIAL_DEPOSIT);
-      if index < CURRENT_W7_SETUP_BATCH {
-        assert_ok!(Actors::manual_trigger(
-          RuntimeOrigin::signed(owner.clone()),
-          actor_id
+      for signer in &signers {
+        assert_ok!(Balances::force_set_balance(
+          RuntimeOrigin::root(),
+          MultiAddress::Id(crate::AccountId::from(signer.public())),
+          100_000_000 * crate::EXISTENTIAL_DEPOSIT,
         ));
       }
-      accounts.insert(
-        actor_id,
-        Actors::actor_identity(actor_id).unwrap().sovereign_account,
-      );
-      expected_deadlines.insert(actor_id, due);
-      actor_ids.push(actor_id);
-      actor_profiles.insert(
-        actor_id,
-        WorkloadActorProfile {
-          step_count: 1,
-          opening_predicates_per_step: 0,
-          task: Some(WorkloadTask::Transfer),
+      let steps = BoundedVec::try_from(vec![StepOf::<Runtime> {
+        precondition: None,
+        task: Task::Transfer {
+          to: super::common::BOB,
+          asset: primitives::AssetKind::Native,
+          amount: AmountResolution::Fixed(1_000_000_000 * crate::EXISTENTIAL_DEPOSIT),
         },
-      );
-    }
-    (actor_ids, actor_profiles, accounts, expected_deadlines)
-  });
+        on_error: StepErrorPolicy::RetryLater { max_attempts: 2 },
+      }])
+      .expect("one real funding-unavailable retry Step fits");
+      let mut actor_ids = Vec::new();
+      let mut actor_profiles = BTreeMap::new();
+      let mut accounts = BTreeMap::new();
+      let mut expected_deadlines = BTreeMap::new();
+      let mut quoted_fees = BTreeMap::new();
+      for index in 0..CURRENT_W7_SLEEPERS {
+        let owner =
+          crate::AccountId::from(signers[(index / CURRENT_W7_SETUP_BATCH) as usize].public());
+        let attempt_block = 2 + index / CURRENT_W7_SETUP_BATCH;
+        let due = CURRENT_W7_FIRST_DUE_BLOCK + index / CURRENT_W7_MEMBERS_PER_KEY;
+        let cooldown_blocks = due - attempt_block;
+        assert!(cooldown_blocks > 1, "every retry must sleep off-ring");
+        actors_integration_tests::prefund_active_user_creation(&owner, &steps);
+        let actor_id = Actors::next_actor_id();
+        assert_ok!(Actors::create_user_actor(
+          RuntimeOrigin::signed(owner.clone()),
+          Mutability::Mutable,
+          Some(pallet_deos_actors::ActorContract {
+            trigger: Trigger::manual(),
+            cooldown_blocks,
+            window: None,
+            steps: steps.clone(),
+            on_unfunded: pallet_deos_actors::OnUnfunded::Close,
+            close_when: None,
+            parked_balance_activation: None,
+            funding: pallet_deos_actors::FundingSourcePolicy::OwnerOnly,
+            auto_close_at_cycle_nonce: None,
+          })
+        ));
+        assert_eq!(
+          Actors::actor_identity(actor_id)
+            .unwrap()
+            .last_control_mutation_block,
+          1
+        );
+        actors_integration_tests::fund_native(actor_id, 10_000 * crate::EXISTENTIAL_DEPOSIT);
+        let quote = Actors::actor_cost_quote(actor_id).unwrap();
+        quoted_fees.insert(
+          actor_id,
+          (
+            quote.prospective_trigger_fee.unwrap().fee,
+            quote.prospective_pipeline_fee.unwrap().total_fee,
+          ),
+        );
+        if index < CURRENT_W7_SETUP_BATCH {
+          assert_ok!(Actors::manual_trigger(
+            RuntimeOrigin::signed(owner.clone()),
+            actor_id
+          ));
+        }
+        accounts.insert(
+          actor_id,
+          Actors::actor_identity(actor_id).unwrap().sovereign_account,
+        );
+        expected_deadlines.insert(actor_id, due);
+        actor_ids.push(actor_id);
+        actor_profiles.insert(
+          actor_id,
+          WorkloadActorProfile {
+            step_count: 1,
+            opening_predicates_per_step: 0,
+            task: Some(WorkloadTask::Transfer),
+          },
+        );
+      }
+      (
+        actor_ids,
+        actor_profiles,
+        accounts,
+        expected_deadlines,
+        quoted_fees,
+      )
+    });
   ext
     .commit_all()
     .expect("current W7 admitted fixture commits");
-  let mut pre_state = ext.execute_with(current_top_storage);
+  PreparedRetryDeadlineFixture {
+    storage: ext.execute_with(current_top_storage),
+    signers,
+    actor_ids,
+    actor_profiles,
+    accounts,
+    expected_deadlines,
+    quoted_fees,
+  }
+}
+
+#[test]
+fn current_w7_first_batch_uses_public_admission_and_signed_next_batch() {
+  let fixture = prepare_retry_deadline_fixture(&[]);
+  let parent = parent_header_for(fixture.storage.clone(), &[], 1);
+  let before = TestExternalities::new(fixture.storage.clone()).execute_with(|| {
+    fixture
+      .accounts
+      .iter()
+      .map(|(id, account)| (*id, Balances::free_balance(account)))
+      .collect::<BTreeMap<_, _>>()
+  });
+  let batch = CURRENT_W7_SETUP_BATCH as usize;
+  let calls = fixture.actor_ids[batch..2 * batch]
+    .iter()
+    .map(|id| RuntimeCall::Actors(pallet_deos_actors::Call::manual_trigger { actor_id: *id }))
+    .collect::<Vec<_>>();
+  let authored = author_complete_block_after_with_calls(
+    fixture.storage,
+    &[],
+    &parent,
+    2,
+    UserDemand::ActorOnly,
+    &fixture.signers[1],
+    0,
+    &fixture.actor_profiles,
+    &calls,
+  );
+  assert_complete_block_replays_natively(&authored, &[]);
+  assert_eq!(
+    authored.metrics.suspended_steps,
+    fixture.actor_ids[..batch]
+      .iter()
+      .map(|id| (*id, 0))
+      .collect::<Vec<_>>()
+  );
+  assert_eq!(authored.metrics.user_calls, CURRENT_W7_SETUP_BATCH);
+  assert_eq!(authored.metrics.actor_steps, 0);
+  assert_eq!(authored.metrics.completed_cycles, 0);
+  assert!(authored.metrics.closed_actors.is_empty());
+  let snapshot = current_w7_deadline_snapshot(&[], &authored.post_state, &fixture.actor_ids);
+  assert_eq!(
+    snapshot.handles,
+    fixture
+      .expected_deadlines
+      .iter()
+      .take(batch)
+      .map(|(id, due)| (*id, *due))
+      .collect()
+  );
+  assert_eq!(
+    snapshot.service,
+    fixture.actor_ids[batch..2 * batch]
+      .iter()
+      .copied()
+      .collect()
+  );
+  assert_eq!(
+    snapshot.suspended,
+    fixture.actor_ids[..batch].iter().copied().collect()
+  );
+  assert!(snapshot.closed.is_empty());
+  TestExternalities::new(authored.post_state).execute_with(|| {
+    for (index, id) in fixture.actor_ids.iter().enumerate() {
+      let debit = if index < batch {
+        fixture.quoted_fees[id].1
+      } else if index < 2 * batch {
+        fixture.quoted_fees[id].0
+      } else {
+        0
+      };
+      assert_eq!(
+        Balances::free_balance(&fixture.accounts[id]),
+        before[id] - debit
+      );
+      assert_eq!(
+        Actors::actor_identity(*id)
+          .unwrap()
+          .last_control_mutation_block,
+        1
+      );
+    }
+  });
+}
+
+fn run_current_w7_deadlines(wasm: &[u8], replay_wasm: bool) {
+  let final_block =
+    CURRENT_W7_FIRST_DUE_BLOCK + CURRENT_W7_ARRIVAL_BLOCKS - 1 + CURRENT_W7_DRAIN_BLOCKS;
+  let summary = run_retry_deadline_window(wasm, replay_wasm, final_block);
+  println!("CURRENT_W7_DEADLINES_V1 {summary}");
+}
+
+#[test]
+#[ignore = "Quiet 1024-member retry Deadline first sweep; separate from the original window"]
+fn current_retry_deadline_first_sweep_1024() {
+  let final_block = CURRENT_W7_FIRST_DUE_BLOCK
+    .checked_add(CURRENT_W7_SLEEPERS)
+    .unwrap();
+  let mut summary = run_retry_deadline_window(&[], false, final_block);
+  assert_eq!(summary["targetMet"], true);
+  assert_eq!(summary["returnedSleepers"], CURRENT_W7_SLEEPERS);
+  assert_eq!(summary["failedCycles"], CURRENT_W7_SLEEPERS);
+  for field in [
+    "remainingSleeping",
+    "remainingService",
+    "remainingDeadlineKeys",
+  ] {
+    assert_eq!(summary[field], 0);
+  }
+  assert_eq!(
+    summary["timeline"].as_array().unwrap().len(),
+    (CURRENT_W7_SLEEPERS + 1) as usize
+  );
+  assert_eq!(
+    summary["returnToAttemptBlocks"]["samples"],
+    CURRENT_W7_SLEEPERS
+  );
+  assert_eq!(summary["returnToAttemptBlocks"]["min"], 1);
+  assert_eq!(summary["returnToAttemptBlocks"]["max"], 1);
+  summary["profile"] = serde_json::json!("quiet-retry-deadline-first-sweep");
+  summary["originalWindowReissued"] = serde_json::json!(false);
+  println!("RETRY_DEADLINE_FIRST_SWEEP_V1 {summary}");
+}
+
+fn run_retry_deadline_window(
+  wasm: &[u8],
+  replay_wasm: bool,
+  final_block: u32,
+) -> serde_json::Value {
+  let PreparedRetryDeadlineFixture {
+    storage: mut pre_state,
+    signers,
+    actor_ids,
+    actor_profiles,
+    accounts,
+    expected_deadlines,
+    quoted_fees: _,
+  } = prepare_retry_deadline_fixture(wasm);
   let mut parent = parent_header_for(pre_state.clone(), wasm, 1);
   let mut setup_signed_calls = 0u32;
   let mut setup_control_ref_time = Vec::new();
@@ -14376,6 +17437,7 @@ fn run_current_w7_deadlines(wasm: &[u8], replay_wasm: bool) {
       &actor_profiles,
       &calls,
     );
+    assert_complete_block_replays_natively(&authored, wasm);
     let attempted_batch = ((block - 2) * CURRENT_W7_SETUP_BATCH) as usize;
     assert_eq!(
       authored.metrics.suspended_steps,
@@ -14455,7 +17517,7 @@ fn run_current_w7_deadlines(wasm: &[u8], replay_wasm: bool) {
   let mut verification_storage_proof = Vec::new();
   let mut verification_compact_proof = Vec::new();
   let arrival_end = CURRENT_W7_FIRST_DUE_BLOCK + CURRENT_W7_ARRIVAL_BLOCKS - 1;
-  let final_block = arrival_end + CURRENT_W7_DRAIN_BLOCKS;
+  assert!(final_block >= arrival_end);
   let mut timeline = Vec::new();
   for block in CURRENT_W7_FIRST_DUE_BLOCK..=final_block {
     let before_entries = actors_storage_entries(&pre_state);
@@ -14478,6 +17540,7 @@ fn run_current_w7_deadlines(wasm: &[u8], replay_wasm: bool) {
       authored.metrics.suspended_steps.is_empty(),
       "retry exhaustion cannot re-sleep"
     );
+    assert_complete_block_replays_natively(&authored, wasm);
     let current = current_w7_deadline_snapshot(wasm, &authored.post_state, &actor_ids);
     let returned = actor_ids
       .iter()
@@ -14603,47 +17666,44 @@ fn run_current_w7_deadlines(wasm: &[u8], replay_wasm: bool) {
   let target_met = previous.handles.is_empty()
     && previous.service.is_empty()
     && previous.closed.len() == CURRENT_W7_SLEEPERS as usize;
-  println!(
-    "CURRENT_W7_DEADLINES_V1 {}",
-    serde_json::json!({
-      "productionWasmReplayed": replay_wasm, "actorType": "User",
-      "sleepers": CURRENT_W7_SLEEPERS, "deadlineKeys": CURRENT_W7_DEADLINE_KEYS,
-      "membersPerKey": CURRENT_W7_MEMBERS_PER_KEY, "setupBlocks": CURRENT_W7_SETUP_BLOCKS,
-      "setupSuspensions": setup_suspensions, "setupSignedManualCalls": setup_signed_calls,
-      "owners": signers.len(), "actorsPerOwner": CURRENT_W7_SETUP_BATCH,
-      "arrivalBlocks": CURRENT_W7_ARRIVAL_BLOCKS, "drainBlocks": CURRENT_W7_DRAIN_BLOCKS,
-      "firstDueBlock": CURRENT_W7_FIRST_DUE_BLOCK, "finalBlock": final_block,
-      "successfulEffects": 0, "completedCycles": 0, "returnedSleepers": return_blocks.len(),
-      "failedCycles": retry_blocks.len(), "remainingSleeping": previous.handles.len(),
-      "remainingService": previous.service.len(), "remainingDeadlineKeys": previous.block_index_len,
-      "targetMet": target_met, "dueToReturnBlocks": observed_distribution(&due_to_return),
-      "returnToAttemptBlocks": observed_distribution(&return_to_attempt),
-      "returnedPerBlock": observed_distribution(&returned_per_block),
-      "overdueSleepersPerBlock": observed_distribution(&overdue_per_block),
-      "censoredDeadlineLatenessBlocks": observed_distribution(&censored_lateness),
-      "setupControlRefTime": observed_distribution(&setup_control_ref_time),
-      "setupControlProofSize": observed_distribution(&setup_control_proof_size),
-      "controlRefTime": observed_distribution(&control_ref_time),
-      "controlProofSize": observed_distribution(&control_proof_size),
-      "effectRefTime": observed_distribution(&effect_ref_time),
-      "effectProofSize": observed_distribution(&effect_proof_size),
-      "actorsPersistentStorage": {
-        "initialBytes": initial_storage_bytes, "finalBytes": storage_bytes.last(),
-        "minBytes": storage_bytes.iter().min(), "maxBytes": storage_bytes.iter().max(),
-      },
-      "actorsPersistentKeyMutationsPerBlock": {
-        "inserted": observed_distribution(&inserted), "removed": observed_distribution(&removed),
-        "changed": observed_distribution(&changed),
-      },
-      "exactWasmProofs": {
-        "executionStorage": observed_distribution(&execution_storage_proof),
-        "executionCompact": observed_distribution(&execution_compact_proof),
-        "verificationStorage": observed_distribution(&verification_storage_proof),
-        "verificationCompact": observed_distribution(&verification_compact_proof),
-      },
-      "timeline": timeline,
-    })
-  );
+  serde_json::json!({
+    "productionWasmReplayed": replay_wasm, "actorType": "User",
+    "sleepers": CURRENT_W7_SLEEPERS, "deadlineKeys": CURRENT_W7_DEADLINE_KEYS,
+    "membersPerKey": CURRENT_W7_MEMBERS_PER_KEY, "setupBlocks": CURRENT_W7_SETUP_BLOCKS,
+    "setupSuspensions": setup_suspensions, "setupSignedManualCalls": setup_signed_calls,
+    "owners": signers.len(), "actorsPerOwner": CURRENT_W7_SETUP_BATCH,
+    "arrivalBlocks": CURRENT_W7_ARRIVAL_BLOCKS, "drainBlocks": final_block - arrival_end,
+    "firstDueBlock": CURRENT_W7_FIRST_DUE_BLOCK, "finalBlock": final_block,
+    "successfulEffects": 0, "completedCycles": 0, "returnedSleepers": return_blocks.len(),
+    "failedCycles": retry_blocks.len(), "remainingSleeping": previous.handles.len(),
+    "remainingService": previous.service.len(), "remainingDeadlineKeys": previous.block_index_len,
+    "targetMet": target_met, "dueToReturnBlocks": observed_distribution(&due_to_return),
+    "returnToAttemptBlocks": observed_distribution(&return_to_attempt),
+    "returnedPerBlock": observed_distribution(&returned_per_block),
+    "overdueSleepersPerBlock": observed_distribution(&overdue_per_block),
+    "censoredDeadlineLatenessBlocks": observed_distribution(&censored_lateness),
+    "setupControlRefTime": observed_distribution(&setup_control_ref_time),
+    "setupControlProofSize": observed_distribution(&setup_control_proof_size),
+    "controlRefTime": observed_distribution(&control_ref_time),
+    "controlProofSize": observed_distribution(&control_proof_size),
+    "effectRefTime": observed_distribution(&effect_ref_time),
+    "effectProofSize": observed_distribution(&effect_proof_size),
+    "actorsPersistentStorage": {
+      "initialBytes": initial_storage_bytes, "finalBytes": storage_bytes.last(),
+      "minBytes": storage_bytes.iter().min(), "maxBytes": storage_bytes.iter().max(),
+    },
+    "actorsPersistentKeyMutationsPerBlock": {
+      "inserted": observed_distribution(&inserted), "removed": observed_distribution(&removed),
+      "changed": observed_distribution(&changed),
+    },
+    "exactWasmProofs": {
+      "executionStorage": observed_distribution(&execution_storage_proof),
+      "executionCompact": observed_distribution(&execution_compact_proof),
+      "verificationStorage": observed_distribution(&verification_storage_proof),
+      "verificationCompact": observed_distribution(&verification_compact_proof),
+    },
+    "timeline": timeline,
+  })
 }
 
 fn actor_lifecycle_event_label(event: &Event<Runtime>) -> Option<(ActorId, &'static str)> {
@@ -17013,6 +20073,290 @@ fn full_executive_prepass_prefix_excludes_its_provisional_reservation() {
       assert!(Actors::finalized_block_resource_telemetry().is_some());
     });
   }
+}
+
+#[test]
+fn full_executive_freeze_join_requires_authorship_finalize_owner() {
+  use polkadot_sdk::frame_support::traits::{Hooks, PalletInfoAccess};
+
+  let fixture = prepare_actor_fixture(&[], 0, WorkloadSchedule::ManualOnly);
+  let parent = parent_header_for(fixture.storage.clone(), &[], 1);
+  let pre_state = fixture.storage.clone();
+  let mut ext = TestExternalities::new(fixture.storage);
+  let block = ext.execute_with(|| {
+    let header = Header::new(
+      2,
+      Default::default(),
+      Default::default(),
+      parent.hash(),
+      Digest {
+        logs: vec![DigestItem::PreRuntime(
+          polkadot_sdk::sp_consensus_aura::AURA_ENGINE_ID,
+          2u64.encode(),
+        )],
+      },
+    );
+    Executive::initialize_block(&header);
+    let author_key = polkadot_sdk::frame_support::storage::storage_prefix(
+      <crate::Authorship as PalletInfoAccess>::name().as_bytes(),
+      b"Author",
+    );
+    let cached_author = polkadot_sdk::sp_io::storage::get(&author_key)
+      .expect("real initialization caches the consensus author");
+    let mut prefix_at_freeze = None;
+    let extrinsics = inherent_data_for(&parent, 2).create_extrinsics();
+    for extrinsic in extrinsics.iter().cloned() {
+      let prepass = matches!(
+        extrinsic.function,
+        RuntimeCall::Actors(pallet_deos_actors::Call::actor_prepass {})
+      );
+      if prepass {
+        assert!(prefix_at_freeze.is_none(), "one canonical Prepass");
+        let prefix = System::block_weight().total();
+        let info = extrinsic.get_dispatch_info();
+        assert_eq!(info.extension_weight, Weight::zero());
+        assert_eq!(info.call_weight, BlockResourceBudgetValue::get().maximum_block());
+        let overhead = crate::configs::RuntimeBlockWeights::get()
+          .get(info.class)
+          .base_extrinsic
+          .checked_add(&Weight::from_parts(0, extrinsic.encode().len() as u64))
+          .expect("bare inherent overhead fits");
+        prefix_at_freeze = Some(
+          prefix
+            .checked_add(&overhead)
+            .expect("settled prefix plus retained overhead fits"),
+        );
+      }
+      assert_ok!(Executive::apply_extrinsic(extrinsic));
+      if prepass {
+        let state = Actors::block_resource_state().expect("Prepass freezes resource authority");
+        assert_eq!(state.budget().unwrap(), BlockResourceBudgetValue::get());
+        let actual_actor = state
+          .usage()
+          .actor_control_used()
+          .checked_add(&state.usage().actor_effect_used())
+          .expect("Actor settlement fits");
+        assert_eq!(
+          System::block_weight().total(),
+          prefix_at_freeze.unwrap().checked_add(&actual_actor).unwrap(),
+          "ordinary Executive reclaims the provisional maximum, retaining prefix/overhead",
+        );
+      }
+    }
+    assert!(prefix_at_freeze.is_some());
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::get(&author_key),
+      Some(cached_author.clone()),
+      "the author cache is still live after initialization, context and Actor Prepass",
+    );
+    let before = System::block_weight();
+    let root_before = polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version());
+    // Probe the actual late hook, then roll it back before ordinary block finalization.
+    polkadot_sdk::sp_io::storage::start_transaction();
+    crate::Authorship::on_finalize(2);
+    assert!(polkadot_sdk::sp_io::storage::get(&author_key).is_none());
+    assert_eq!(System::block_weight(), before);
+    let hook_root = polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version());
+    assert_ne!(hook_root, root_before);
+    polkadot_sdk::sp_io::storage::rollback_transaction();
+    assert_eq!(polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version()), root_before);
+    assert_eq!(polkadot_sdk::sp_io::storage::get(&author_key), Some(cached_author));
+
+    // An independent one-key deletion must explain the complete hook's storage delta.
+    polkadot_sdk::sp_io::storage::start_transaction();
+    polkadot_sdk::sp_io::storage::clear(&author_key);
+    assert_eq!(polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version()), hook_root);
+    polkadot_sdk::sp_io::storage::rollback_transaction();
+    assert_eq!(polkadot_sdk::sp_io::storage::root(crate::VERSION.state_version()), root_before);
+    assert_eq!(System::block_weight(), before);
+    let pair = |weight: Weight| [weight.ref_time(), weight.proof_size()];
+    println!(
+      "FIXED_PREFIX_JOIN_EXCLUSION_V1 {}",
+      serde_json::json!({
+        "settledPrefixIncludingPrepassOverhead": pair(prefix_at_freeze.unwrap()),
+        "callbackQuoteAlreadyRegisteredDuringInitialization": pair(crate::configs::AuthorshipFixedWeight::get()),
+        "lateHookNewFrameRegistration": [0, 0],
+        "lateAuthorCacheDeletion": true,
+        "hookDeltaEqualsSingleKeyDeletion": true,
+        "scope": "prepared native full Executive block and reversible hook probe; source coverage exclusion, not numeric underpricing or a dynamic budget",
+      })
+    );
+    let header = Executive::finalize_block();
+    assert!(polkadot_sdk::sp_io::storage::get(&author_key).is_none());
+    assert!(Actors::finalized_block_resource_telemetry().is_some());
+    Block { header, extrinsics }
+  });
+  let authored_top = ext.execute_with(current_top_storage);
+  let mut imported = TestExternalities::new(pre_state);
+  imported.execute_with(|| Executive::execute_block(block.into()));
+  assert_eq!(
+    imported.execute_with(current_top_storage).top,
+    authored_top.top
+  );
+  println!("FIXED_PREFIX_JOIN_IMPORT_V1 block=2 rootAndTopStateEqual=true");
+}
+
+#[test]
+fn full_executive_authorship_accepts_foreign_pre_runtime_digest() {
+  use polkadot_sdk::{
+    cumulus_pallet_aura_ext::BlockExecutor,
+    frame_support::traits::{ExecuteBlock, PalletInfoAccess},
+    sp_consensus_aura::{digests::CompatibleDigestItem, sr25519::AuthorityPair},
+  };
+
+  let pre_state = reference_genesis_storage(&[]);
+  let parent = parent_header_for(pre_state.clone(), &[], 0);
+  let signer = AuthorityPair::from_string("//Alice", None).unwrap();
+  let header_limit =
+    polkadot_sdk::cumulus_primitives_core::relay_chain::MAX_HEAD_DATA_SIZE as usize;
+  let empty_header_bytes = Header::new(
+    1,
+    Default::default(),
+    Default::default(),
+    parent.hash(),
+    Digest::default(),
+  )
+  .encoded_size();
+  let runtime_header_limit = crate::configs::RuntimeBlockLength::get().max_header_size() as usize;
+  let mut rows = Vec::new();
+  let mut encoded_extrinsics = None;
+  for foreign in [false, true] {
+    let mut logs = Vec::new();
+    if foreign {
+      // A genuine header input, not an extrinsic or new runtime ingress interface.
+      logs.push(DigestItem::PreRuntime(*b"test", vec![7; 4_096]));
+    }
+    logs.push(DigestItem::PreRuntime(
+      polkadot_sdk::sp_consensus_aura::AURA_ENGINE_ID,
+      1u64.encode(),
+    ));
+    let digest = Digest { logs };
+    let digest_bytes = digest.encoded_size();
+    assert!(empty_header_bytes + digest_bytes <= runtime_header_limit);
+    let data = inherent_data_for(&parent, 1);
+    let mut authoring = TestExternalities::new(pre_state.clone());
+    let (block, digest_reads, initialization_weight, extrinsic_bytes, block_size) = authoring
+      .execute_with(|| {
+        let authorities = polkadot_sdk::pallet_aura::Authorities::<Runtime>::get();
+        assert_eq!(authorities.len(), 2);
+        assert_eq!(authorities[1], signer.public());
+        let validators = polkadot_sdk::pallet_session::Validators::<Runtime>::get();
+        assert_eq!(validators.len(), 2);
+        let header = Header::new(
+          1,
+          Default::default(),
+          Default::default(),
+          parent.hash(),
+          digest.clone(),
+        );
+        let trace = super::h1_storage_trace::recorded(|| {
+          let sample = super::h1_storage_trace::Sample::new();
+          sample.phase("initialize", || {
+            Executive::initialize_block(&header);
+          });
+          sample.finish().unwrap()
+        });
+        assert_eq!(System::digest(), digest);
+        let author_key = polkadot_sdk::frame_support::storage::storage_prefix(
+          <crate::Authorship as PalletInfoAccess>::name().as_bytes(),
+          b"Author",
+        );
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::get(&author_key).map(|value| value.to_vec()),
+          Some(validators[1].encode())
+        );
+        assert_eq!(trace["owners"]["Authorship.Author"]["calls"]["Put"], 1);
+        let digest_reads = trace["owners"]["System.Digest"].clone();
+        assert!(digest_reads["calls"]["Get"].as_u64().unwrap() > 0);
+        assert!(digest_reads["get_value_bytes"].as_u64().unwrap() >= digest_bytes as u64);
+        let initialization_weight = System::block_weight().total();
+        let extrinsics = data.create_extrinsics();
+        if let Some(expected) = &encoded_extrinsics {
+          assert_eq!(
+            &extrinsics.encode(),
+            expected,
+            "only the header input changes"
+          );
+        } else {
+          encoded_extrinsics = Some(extrinsics.encode());
+        }
+        for extrinsic in extrinsics.iter().cloned() {
+          assert_ok!(Executive::apply_extrinsic(extrinsic));
+        }
+        let extrinsic_bytes = extrinsics.iter().map(Encode::encoded_size).sum::<usize>();
+        let block_size = System::block_size() as usize;
+        // FRAME initializes header/digest overhead, then deposit_log adds the runtime log.
+        assert_eq!(
+          block_size,
+          extrinsic_bytes + empty_header_bytes + System::digest().encoded_size()
+        );
+        let header = Executive::finalize_block();
+        assert!(polkadot_sdk::sp_io::storage::get(&author_key).is_none());
+        (
+          Block { header, extrinsics },
+          digest_reads,
+          initialization_weight,
+          extrinsic_bytes,
+          block_size,
+        )
+      });
+    let authored_top = authoring.execute_with(current_top_storage);
+    let mut sealed = block.clone();
+    sealed.header.digest_mut().push(DigestItem::aura_seal(
+      signer.sign(block.header.hash().as_bytes()),
+    ));
+    assert!(sealed.header.encoded_size() <= header_limit);
+    assert_eq!(
+      sealed
+        .header
+        .digest()
+        .logs
+        .iter()
+        .filter(|item| item.as_pre_runtime().is_some())
+        .cloned()
+        .collect::<Vec<_>>(),
+      digest.logs
+    );
+    let mut imported = TestExternalities::new(pre_state.clone());
+    imported.execute_with(|| {
+      crate::apis::validate_context_inherent_geometry(&data).unwrap();
+      assert!(data.check_extrinsics(&sealed.clone().into()).ok());
+      <BlockExecutor<Runtime, Executive> as ExecuteBlock<Block>>::execute_block(
+        sealed.clone().into(),
+      );
+    });
+    assert_eq!(
+      imported.execute_with(current_top_storage).top,
+      authored_top.top
+    );
+    rows.push(serde_json::json!({
+      "foreignPreRuntimeDigestsBeforeAura": usize::from(foreign),
+      "preRuntimeDigestBytes": digest_bytes,
+      "sealedHeaderBytes": sealed.header.encoded_size(),
+      "sdkHeaderCeilingBytes": header_limit,
+      "runtimeHeaderCeilingBytes": runtime_header_limit,
+      "initializationHeaderOverheadBytes": empty_header_bytes + digest_bytes,
+      "blockSizeBeforeFinalizeBytes": block_size,
+      "extrinsicBytes": extrinsic_bytes,
+      "initializationDeclaredWeight": [initialization_weight.ref_time(), initialization_weight.proof_size()],
+      "initializeSystemDigest": digest_reads,
+      "nativeAuraImportTopStateMatches": true,
+    }));
+  }
+  assert_eq!(rows[0]["preRuntimeDigestBytes"], 15);
+  assert_eq!(rows[1]["preRuntimeDigestBytes"], 4_118);
+  assert_eq!(
+    rows[0]["initializationDeclaredWeight"],
+    rows[1]["initializationDeclaredWeight"]
+  );
+  assert_eq!(rows[0]["extrinsicBytes"], rows[1]["extrinsicBytes"]);
+  println!(
+    "AUTHORSHIP_DIGEST_DOMAIN_V1 {}",
+    serde_json::json!({
+      "rows": rows,
+      "scope": "native Executive/Aura imports and source header-ceiling conformance; not PVF acceptance or physical cost",
+    })
+  );
 }
 
 #[test]
