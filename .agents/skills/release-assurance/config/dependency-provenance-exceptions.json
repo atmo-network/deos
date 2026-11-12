@@ -134,21 +134,99 @@
       "id": "RUSTSEC-2026-0487",
       "expires": "2026-12-12",
       "reachability": "source-prerequisite-excluded",
-      "reason": "Hickory 0.24.4 zone/text parsing is cfg(text-parsing); the feature is absent from selected PVF and workspace graphs. This does not exclude wire-format findings 2026-0119/0491."
+      "reason": "The reviewed local Hickory0.24.4 source preserves the serialize text-parser feature gate; the all-feature reference graph lacks text-parsing. The affected text/zone decoder cannot be constructed through this gate. This excludes only this advisory's prerequisite, not DNS wire paths or package-wide safety; enabling the feature or changing the bound source invalidates the decision.",
+      "excludedFeatures": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "features": [
+            "text-parsing"
+          ],
+          "source": null
+        }
+      ],
+      "reviewedSources": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "files": [
+            {
+              "path": "template/vendor/hickory-proto/Cargo.toml",
+              "sha256": "a610d693cb19d46ed176958afe7a86de05033c291e4fd53936bb6adc59e1b9a4"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/serialize/mod.rs",
+              "sha256": "6e7c63363dc714812ab18d11e568f5cafff5192b03a4f651502550c5516254d7"
+            }
+          ]
+        }
+      ]
     },
     {
       "ecosystem": "cargo",
       "id": "RUSTSEC-2026-0489",
       "expires": "2026-12-12",
       "reachability": "source-prerequisite-excluded",
-      "reason": "Hickory 0.24.4 affected zone/text parser is gated by disabled text-parsing in serialize/mod.rs. Wire DNS remains selected and separately blocked."
+      "reason": "The reviewed local Hickory0.24.4 source preserves the serialize text-parser feature gate; the all-feature reference graph lacks text-parsing. The affected text/zone decoder cannot be constructed through this gate. This excludes only this advisory's prerequisite, not DNS wire paths or package-wide safety; enabling the feature or changing the bound source invalidates the decision.",
+      "excludedFeatures": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "features": [
+            "text-parsing"
+          ],
+          "source": null
+        }
+      ],
+      "reviewedSources": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "files": [
+            {
+              "path": "template/vendor/hickory-proto/Cargo.toml",
+              "sha256": "a610d693cb19d46ed176958afe7a86de05033c291e4fd53936bb6adc59e1b9a4"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/serialize/mod.rs",
+              "sha256": "6e7c63363dc714812ab18d11e568f5cafff5192b03a4f651502550c5516254d7"
+            }
+          ]
+        }
+      ]
     },
     {
       "ecosystem": "cargo",
       "id": "RUSTSEC-2026-0490",
       "expires": "2026-12-12",
       "reachability": "source-prerequisite-excluded",
-      "reason": "Hickory 0.24.4 affected text parser requires absent text-parsing. Re-review feature unification and new callers; binary DNS has no exemption."
+      "reason": "The reviewed local Hickory0.24.4 source preserves the serialize text-parser feature gate; the all-feature reference graph lacks text-parsing. The affected text/zone decoder cannot be constructed through this gate. This excludes only this advisory's prerequisite, not DNS wire paths or package-wide safety; enabling the feature or changing the bound source invalidates the decision.",
+      "excludedFeatures": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "features": [
+            "text-parsing"
+          ],
+          "source": null
+        }
+      ],
+      "reviewedSources": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "files": [
+            {
+              "path": "template/vendor/hickory-proto/Cargo.toml",
+              "sha256": "a610d693cb19d46ed176958afe7a86de05033c291e4fd53936bb6adc59e1b9a4"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/serialize/mod.rs",
+              "sha256": "6e7c63363dc714812ab18d11e568f5cafff5192b03a4f651502550c5516254d7"
+            }
+          ]
+        }
+      ]
     },
     {
       "ecosystem": "cargo",
@@ -261,6 +339,207 @@
       "expires": "2026-12-12",
       "reachability": "trusted-generation-only",
       "reason": "The package is reachable only through local descriptor generation, and its recursive merge input is repository-owned rather than user supplied."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0119",
+      "reachability": "source-backport-reviewed",
+      "reason": "Independent source review accepts the supported PR3613 compression mitigation adapted to local Hickory0.24.4: at most64 candidates and120 eligible compression attempts, including canonical seeding. This may reduce compression and reach existing wire limits earlier; it is not an arbitrary resource cap or a package-wide security guarantee. Exact patched source and manifest are bound below.",
+      "expires": "2026-12-12",
+      "reviewedSources": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "files": [
+            {
+              "path": "template/vendor/hickory-proto/Cargo.toml",
+              "sha256": "a610d693cb19d46ed176958afe7a86de05033c291e4fd53936bb6adc59e1b9a4"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/rr/domain/name.rs",
+              "sha256": "4ae73fed172c7bba8ba039dffda0b0e4ef6e4e9ed4680e835a5c5375f04be792"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/serialize/binary/encoder.rs",
+              "sha256": "06d0e10dd2c7da07e682a62b48d06b7d7769bf897c811ccf7bc35b4e094a5cd0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0491",
+      "reachability": "source-backport-reviewed",
+      "reason": "Independent source review accepts the upstream header-count allocation mitigation in local Hickory0.24.4: all four sections and public readers reserve at most eight initial entries and grow after successful decoding. The complete-message query path delegates to the fixed reader. This is not an eight-record limit or a universal memory ceiling; exact source and manifest are bound.",
+      "expires": "2026-12-12",
+      "reviewedSources": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "files": [
+            {
+              "path": "template/vendor/hickory-proto/Cargo.toml",
+              "sha256": "a610d693cb19d46ed176958afe7a86de05033c291e4fd53936bb6adc59e1b9a4"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/op/message.rs",
+              "sha256": "c7d0c38037dbf3e524066e1697ec989941c7cba4fdf5252a3020bad08d72001d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0381",
+      "reachability": "source-backport-reviewed",
+      "reason": "Independent source review accepts exactly the upstream-distrusted emSign ECC Root CA-G3 removal from local webpki-roots0.25.4. Other anchor bytes and the public TrustAnchor API are unchanged. This rejects chains relying solely on that root; it does not refresh the whole historical trust store, attest handshakes or fix other root packages.",
+      "expires": "2026-12-12",
+      "reviewedSources": [
+        {
+          "name": "webpki-roots",
+          "version": "0.25.4",
+          "files": [
+            {
+              "path": "template/vendor/webpki-roots/Cargo.toml",
+              "sha256": "12d8290fc5e2d4cde8998040ff7e1ad317f807b499b52bc128794db3880da90b"
+            },
+            {
+              "path": "template/vendor/webpki-roots/src/lib.rs",
+              "sha256": "dfbcd28e7b6c3e9b4e2806ae62c21f600b03cc8d57902a764cbb3843db1d9461"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0505",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "The reviewed local Hickory0.24.4 source gates the affected DNSSEC validation modules behind dnssec in rr/mod.rs and xfer/mod.rs. The all-feature reference dependency graph has no dnssec activation. This removes the advisory prerequisite, not the vulnerable source; it provides no DNSSEC validation guarantee and fails when the feature or bound source changes.",
+      "expires": "2026-12-12",
+      "excludedFeatures": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "features": [
+            "dnssec"
+          ],
+          "source": null
+        }
+      ],
+      "reviewedSources": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "files": [
+            {
+              "path": "template/vendor/hickory-proto/Cargo.toml",
+              "sha256": "a610d693cb19d46ed176958afe7a86de05033c291e4fd53936bb6adc59e1b9a4"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/rr/mod.rs",
+              "sha256": "888a2919d23db916e8b43597bec1c8b02754e0be795c0ce56d9271c333004bcd"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/xfer/mod.rs",
+              "sha256": "d143a275adcba56de8a27b77305f447f721b729218c358c34c6061058741ae95"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0511",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "The reviewed local Hickory0.24.4 source gates the affected DNSSEC validation modules behind dnssec in rr/mod.rs and xfer/mod.rs. The all-feature reference dependency graph has no dnssec activation. This removes the advisory prerequisite, not the vulnerable source; it provides no DNSSEC validation guarantee and fails when the feature or bound source changes.",
+      "expires": "2026-12-12",
+      "excludedFeatures": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "features": [
+            "dnssec"
+          ],
+          "source": null
+        }
+      ],
+      "reviewedSources": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "files": [
+            {
+              "path": "template/vendor/hickory-proto/Cargo.toml",
+              "sha256": "a610d693cb19d46ed176958afe7a86de05033c291e4fd53936bb6adc59e1b9a4"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/rr/mod.rs",
+              "sha256": "888a2919d23db916e8b43597bec1c8b02754e0be795c0ce56d9271c333004bcd"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/xfer/mod.rs",
+              "sha256": "d143a275adcba56de8a27b77305f447f721b729218c358c34c6061058741ae95"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0512",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "The reviewed local Hickory0.24.4 source gates the affected DNSSEC validation modules behind dnssec in rr/mod.rs and xfer/mod.rs. The all-feature reference dependency graph has no dnssec activation. This removes the advisory prerequisite, not the vulnerable source; it provides no DNSSEC validation guarantee and fails when the feature or bound source changes.",
+      "expires": "2026-12-12",
+      "excludedFeatures": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "features": [
+            "dnssec"
+          ],
+          "source": null
+        }
+      ],
+      "reviewedSources": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "files": [
+            {
+              "path": "template/vendor/hickory-proto/Cargo.toml",
+              "sha256": "a610d693cb19d46ed176958afe7a86de05033c291e4fd53936bb6adc59e1b9a4"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/rr/mod.rs",
+              "sha256": "888a2919d23db916e8b43597bec1c8b02754e0be795c0ce56d9271c333004bcd"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/xfer/mod.rs",
+              "sha256": "d143a275adcba56de8a27b77305f447f721b729218c358c34c6061058741ae95"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0514",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Registry hickory-resolver0.24.4 constructs the affected DnssecDnsHandle only under dnssec in async_resolver.rs; the all-feature reference graph lacks that feature. Requesting validation without it falls back to ordinary resolution with a warning, not DNSSEC security. Enabling validation features or changing the selected source/caller invalidates this prerequisite exclusion.",
+      "expires": "2026-12-12",
+      "excludedFeatures": [
+        {
+          "name": "hickory-resolver",
+          "version": "0.24.4",
+          "features": [
+            "dnssec"
+          ],
+          "source": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
     }
   ]
 }

@@ -18,6 +18,9 @@ use polkadot_sdk::frame_support::{
 use polkadot_sdk::sp_core::H256;
 use polkadot_sdk::sp_runtime::{FixedU128, Perbill};
 
+#[path = "maximum_vote_tests.rs"]
+mod maximum_vote_tests;
+
 const DEFAULT_PROPOSER: u64 = 99;
 
 fn active_proposal_count(domain: u32) -> u32 {

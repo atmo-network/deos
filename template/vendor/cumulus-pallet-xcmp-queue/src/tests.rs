@@ -81,6 +81,77 @@ fn generate_mock_xcm_page(
 }
 
 #[test]
+fn signal_decode_admission_preserves_valid_rights_and_funds_malformed_refusal() {
+	let suspend = <() as WeightInfo>::suspend_channel();
+	let resume = <() as WeightInfo>::resume_channel();
+	let malformed = suspend.max(resume);
+	assert_eq!(ChannelSignal::Suspend.encode(), vec![0]);
+	assert_eq!(ChannelSignal::Resume.encode(), vec![1]);
+
+	// Every possible one-byte tag has either its exact existing owner or a bounded
+	// malformed-decode refusal. Both one-unit frontiers preserve prior authority.
+	for tag in 0u8..=255 {
+		let required = match tag {
+			0 => suspend,
+			1 => resume,
+			_ => malformed,
+		};
+		for shortage in [Weight::from_parts(1, 0), Weight::from_parts(0, 1), Weight::zero()] {
+			new_test_ext().execute_with(|| {
+				let sender = ParaId::from(1000);
+				if tag == 1 {
+					XcmpQueue::suspend_channel(sender);
+				}
+				let prior_status = <OutboundXcmpStatus<Test>>::get();
+				let prior_root = sp_io::storage::root(sp_runtime::StateVersion::V1);
+				let page = [XcmpMessageFormat::Signals.encode(), vec![tag]].concat();
+				let allowance = required.checked_sub(&shortage).unwrap();
+				let used = XcmpQueue::handle_xcmp_messages(
+					once((sender, 1, page.as_slice())),
+					allowance,
+				);
+				assert!(used.all_lte(allowance));
+				assert!(EnqueuedMessages::get().is_empty());
+				if shortage != Weight::zero() {
+					assert_eq!(used, Weight::zero());
+					assert_eq!(<OutboundXcmpStatus<Test>>::get(), prior_status);
+					assert_eq!(
+						sp_io::storage::root(sp_runtime::StateVersion::V1),
+						prior_root
+					);
+				} else {
+					assert_eq!(used, required);
+					match tag {
+						0 => assert_eq!(
+							<OutboundXcmpStatus<Test>>::get()[0].state,
+							OutboundState::Suspended
+						),
+						1 => assert!(<OutboundXcmpStatus<Test>>::get().is_empty()),
+						_ => assert_eq!(
+							sp_io::storage::root(sp_runtime::StateVersion::V1),
+							prior_root
+						),
+					}
+				}
+			});
+		}
+	}
+
+	new_test_ext().execute_with(|| {
+		let sender = ParaId::from(1000);
+		let page = [XcmpMessageFormat::Signals.encode(), vec![0, 255, 1]].concat();
+		let allowance = suspend.saturating_add(malformed).saturating_add(resume);
+		let used = XcmpQueue::handle_xcmp_messages(once((sender, 1, &page[..])), allowance);
+		assert_eq!(used, suspend.saturating_add(malformed));
+		assert_eq!(
+			<OutboundXcmpStatus<Test>>::get()[0].state,
+			OutboundState::Suspended
+		);
+		assert!(EnqueuedMessages::get().is_empty());
+	});
+}
+
+#[test]
 fn handling_signals_works() {
 	new_test_ext().execute_with(|| {
 		fn get_channel(recipient: ParaId) -> Option<OutboundChannelDetails> {

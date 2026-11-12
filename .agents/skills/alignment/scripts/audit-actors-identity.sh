@@ -11,7 +11,7 @@ Usage: audit-actors-identity.sh [OPTIONS]
 
 Rejects retired Actors state, funding-generation, scheduler-lane, and lineage
 terminology in active package and integration documentation while
-excluding historical delivery records.
+excluding historical delivery records and third-party vendor namespaces.
 
 Options:
   --self-test  Prove accepted accumulator prose and rejected legacy fixtures
@@ -134,8 +134,11 @@ check_retired_identity() {
         -g '!target/**' \
         -g '!node_modules/**' \
         -g '!CHANGELOG.md' \
-        -g '!template/Cargo.lock' 2>/dev/null || true)"
-    path_matches="$(git -C "$PROJECT_ROOT" ls-files -co --exclude-standard | rg '[Aa]{3}' || true)"
+        -g '!template/Cargo.lock' \
+        -g '!template/vendor/**' 2>/dev/null || true)"
+    # DNS record identifiers and CA subject names are not DEOS Actor identities.
+    path_matches="$(git -C "$PROJECT_ROOT" ls-files -co --exclude-standard -- \
+        ':(exclude)template/vendor/**' | rg '[Aa]{3}' || true)"
     if [[ -n "$content_matches" || -n "$path_matches" ]]; then
         log_error "Retired actor-runtime identity remains"
         [[ -z "$path_matches" ]] || printf '%s\n' "$path_matches"

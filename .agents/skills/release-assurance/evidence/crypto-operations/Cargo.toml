@@ -1,0 +1,17 @@
+[package]
+name = "deos-0387-operations"
+version = "0.0.0"
+edition = "2021"
+[lib]
+crate-type = ["rlib"]
+[dependencies]
+crypto-bigint = { version = "=0.5.5", default-features = false, features = ["generic-array", "rand_core", "zeroize"] }
+p256 = { version = "=0.13.2", default-features = false, features = ["arithmetic"] }
+k256 = { version = "=0.13.4", default-features = false, features = ["arithmetic"] }
+zeroize = { version = "=1.9.0", default-features = false }
+generic-array = { version = "=0.14.7", default-features = false }
+cfg-if = "=1.0.4"
+[profile.release]
+opt-level = 3
+codegen-units = 1
+panic = "abort"

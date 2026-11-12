@@ -14,6 +14,7 @@ CARGO_AUDIT_VERSION="0.22.2"
 CARGO_DENY_VERSION="0.20.2"
 CARGO_JSON=""
 NPM_JSON=""
+REVIEW_DIR=""
 
 usage() {
     cat <<'EOF'
@@ -25,6 +26,7 @@ reachability exception ledger.
 
 Options:
   -h, --help        Show this help message
+  --self-test       Run isolated helper CLI regression fixtures (no network)
 
 Inputs:
   template/Cargo.lock, template/rust-toolchain.toml
@@ -34,7 +36,9 @@ Inputs:
   Existing checksum-verified ./bin bundle
 
 Outputs:
-  A concise pass/fail review; temporary audit JSON is deleted on exit.
+  A concise pass/fail review; temporary metadata, locks and audits are deleted.
+  Both the actual-source audit and a counterfactual registry-version audit are
+  required against the same RustSec DB. The latter is NOT source provenance.
 
 Side effects:
   Refreshes the local RustSec advisory database and performs npm registry reads.
@@ -49,6 +53,10 @@ parse_args() {
     fi
     case "${1:-}" in
         "") ;;
+        --self-test)
+            node "$SCRIPT_DIR/dependency-provenance.mjs" --self-test
+            exit 0
+            ;;
         -h|--help)
             usage
             exit 0
@@ -64,6 +72,7 @@ parse_args() {
 cleanup() {
     [[ -z "$CARGO_JSON" ]] || rm -f -- "$CARGO_JSON"
     [[ -z "$NPM_JSON" ]] || rm -f -- "$NPM_JSON"
+    [[ -z "$REVIEW_DIR" ]] || rm -rf -- "$REVIEW_DIR"
 }
 
 command_has_version() {
@@ -101,8 +110,11 @@ check_prerequisites() {
 
 check_locks_and_licenses() {
     phase_banner "Step 2: Locked graphs and licenses"
-    run_shell_step "Cargo locked metadata" "5" \
-        "cd '$TEMPLATE_DIR' && cargo metadata --locked --format-version 1 --no-deps >/dev/null"
+    REVIEW_DIR="$(mktemp -d "${TMPDIR:-/tmp}/deos-dependency-review.XXXXXX")"
+    run_shell_step "Cargo full locked metadata" "5" \
+        "cd '$TEMPLATE_DIR' && cargo metadata --locked --all-features --format-version 1 >'$REVIEW_DIR/metadata.json'"
+    node "$SCRIPT_DIR/dependency-provenance.mjs" --project \
+        "$TEMPLATE_DIR/Cargo.lock" "$REVIEW_DIR/metadata.json" "$REVIEW_DIR/version-view.lock"
     run_shell_step "npm locked graph" "5" \
         "cd '$PROJECT_ROOT/web-client' && npm ci --ignore-scripts --dry-run >/dev/null"
     run_shell_step "Cargo licenses and sources" "10" \
@@ -113,10 +125,16 @@ check_advisories() {
     phase_banner "Step 3: Vulnerability reachability review"
     CARGO_JSON="$(mktemp "${TMPDIR:-/tmp}/deos-cargo-audit.XXXXXX.json")"
     NPM_JSON="$(mktemp "${TMPDIR:-/tmp}/deos-npm-audit.XXXXXX.json")"
+    # cargo-audit 0.22.2 emits null DB identity with --no-fetch. Use ordinary
+    # reports for both views; reject rather than relabel if their DBs differ.
     (cd "$TEMPLATE_DIR" && cargo audit --json >"$CARGO_JSON") || true
+    (cd "$TEMPLATE_DIR" && cargo audit --file "$REVIEW_DIR/version-view.lock" \
+        --json >"$REVIEW_DIR/version-audit.json") || true
     (cd "$PROJECT_ROOT/web-client" && npm audit --json >"$NPM_JSON") || true
     node "$SCRIPT_DIR/dependency-provenance.mjs" \
-        "$CARGO_JSON" "$NPM_JSON" "$EXCEPTIONS" "$PROJECT_ROOT/web-client/package-lock.json"
+        "$CARGO_JSON" "$REVIEW_DIR/version-audit.json" "$NPM_JSON" "$EXCEPTIONS" \
+        "$PROJECT_ROOT/web-client/package-lock.json" "$TEMPLATE_DIR/Cargo.lock" \
+        "$REVIEW_DIR/metadata.json" "$REVIEW_DIR/version-view.lock" "$PROJECT_ROOT"
 }
 
 main() {

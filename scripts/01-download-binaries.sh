@@ -64,6 +64,13 @@ Outputs:
 Side effects:
   Downloads only missing or checksum-mismatched assets, verifies every pinned
   SHA-256 digest before publication, and replaces only the selected files.
+  Retains resumable, non-executable downloads under
+  ./bin/.downloads/<release>/<asset>.<expected-sha256>.part (or DEOS_BINARY_DIR).
+  An interrupted invocation can resume with the same command; cached bytes never
+  qualify a binary until the complete expected checksum matches. Corrupt or
+  oversized cache files fail closed and remain for diagnosis; remove only the
+  reported cache file to restart that asset, since resumption cannot repair an
+  already-corrupt prefix.
   Partial selection never writes a full-bundle marker or qualifies unselected
   files. --check without --only still requires the complete marked bundle.
   Names: polkadot, polkadot-omni-node, polkadot-prepare-worker,
@@ -207,7 +214,9 @@ download_bundle() {
     BINARY_STAGING_DIR="$staging_dir"
     trap cleanup_binary_staging EXIT
 
-    local index name asset destination expected
+    local index name asset destination expected cached
+    local cache_dir="$BIN_DIR/.downloads/$POLKADOT_SDK_RELEASE"
+    mkdir -p "$cache_dir"
     for index in "${SELECTED_INDICES[@]}"; do
         name="${BINARY_NAMES[$index]}"
         asset="$name$ASSET_SUFFIX"
@@ -217,9 +226,17 @@ download_bundle() {
             log_info "Reusing verified $name"
             cp "$BIN_DIR/$name" "$destination"
         else
-            log_info "Downloading $asset from $POLKADOT_SDK_RELEASE"
-            curl --fail --location --silent --show-error --retry 3 --retry-all-errors \
-                --output "$destination" "$BASE_URL/$asset"
+            cached="$cache_dir/$asset.$expected.part"
+            if ! checksum_matches "$cached" "$expected"; then
+                log_info "Downloading/resuming $asset from $POLKADOT_SDK_RELEASE"
+                curl --fail --location --silent --show-error --retry 3 --retry-all-errors \
+                    --continue-at - --output "$cached" "$BASE_URL/$asset"
+            fi
+            if ! checksum_matches "$cached" "$expected"; then
+                log_error "SHA-256 mismatch for cached $asset; retained untrusted bytes: $cached"
+                exit 1
+            fi
+            cp "$cached" "$destination"
         fi
         if ! checksum_matches "$destination" "$expected"; then
             log_error "SHA-256 mismatch for $asset"
@@ -301,7 +318,7 @@ verify_bundle() {
 }
 
 self_test() (
-    local fixture name index bad_asset=""
+    local fixture name index bad_asset="" interrupted_asset=""
     fixture="$(mktemp -d "${TMPDIR:-/tmp}/deos-binary-self-test.XXXXXX")"
     trap 'rm -rf -- "$fixture"' EXIT
     BIN_DIR="$fixture/published"
@@ -326,9 +343,13 @@ self_test() (
         exit 1
     fi
     curl() {
-        local destination="" asset=""
+        local destination="" asset="" resume=0
         while [[ $# -gt 0 ]]; do
-            if [[ "$1" == "--output" ]]; then
+            if [[ "$1" == "--continue-at" ]]; then
+                [[ "$2" == "-" ]]
+                resume=1
+                shift 2
+            elif [[ "$1" == "--output" ]]; then
                 destination="$2"
                 shift 2
             else
@@ -336,8 +357,17 @@ self_test() (
                 shift
             fi
         done
+        [[ "$resume" == "1" ]]
         printf '%s\n' "$asset" >>"$fixture/calls"
-        cp "$fixture/source/$asset" "$destination"
+        if [[ "$asset" == "$interrupted_asset" ]]; then
+            printf '#!/usr' >"$destination"
+            return 18
+        fi
+        local offset=0 size
+        [[ ! -f "$destination" ]] || offset="$(wc -c <"$destination")"
+        size="$(wc -c <"$fixture/source/$asset")"
+        (( offset <= size )) || return 33
+        tail -c "+$((offset + 1))" "$fixture/source/$asset" >>"$destination"
         [[ "$asset" != "$bad_asset" ]] || printf 'corrupt\n' >>"$destination"
     }
     select_args() {
@@ -382,11 +412,39 @@ self_test() (
     cmp "$fixture/source/frame-omni-bencher" "$BIN_DIR/frame-omni-bencher"
     [[ ! -e "$BIN_DIR/polkadot-prepare-worker" && ! -e "$BIN_DIR/.polkadot-sdk-release" ]]
     bad_asset=""
+    if (download_bundle) >/dev/null 2>&1; then
+        log_error "An oversized corrupt cache recovered without explicit removal"
+        exit 1
+    fi
+    [[ ! -e "$BIN_DIR/polkadot-prepare-worker" ]]
+    rm -- "$BIN_DIR/.downloads/$POLKADOT_SDK_RELEASE/polkadot-prepare-worker.${CHECKSUMS[2]}.part"
     select_args --only polkadot-prepare-worker --only polkadot-execute-worker
     (download_bundle)
     select_args --check --only polkadot-prepare-worker --only polkadot-execute-worker
     verify_bundle
     [[ ! -e "$BIN_DIR/.polkadot-sdk-release" && ! -e "$BIN_DIR/polkadot" ]]
+    select_args --only polkadot
+    interrupted_asset="polkadot"
+    if (download_bundle) >/dev/null 2>&1; then
+        log_error "Interrupted download was accepted"
+        exit 1
+    fi
+    local partial="$BIN_DIR/.downloads/$POLKADOT_SDK_RELEASE/polkadot.${CHECKSUMS[0]}.part"
+    [[ "$(<"$partial")" == '#!/usr' && ! -x "$partial" ]]
+    [[ ! -e "$BIN_DIR/polkadot" && ! -e "$BIN_DIR/.polkadot-sdk-release" ]]
+    interrupted_asset=""
+    (download_bundle)
+    cmp "$fixture/source/polkadot" "$BIN_DIR/polkadot"
+    [[ ! -e "$BIN_DIR/.polkadot-sdk-release" ]]
+    select_args --only polkadot-omni-node
+    local corrupt_prefix="$BIN_DIR/.downloads/$POLKADOT_SDK_RELEASE/polkadot-omni-node.${CHECKSUMS[1]}.part"
+    printf '#!/bad' >"$corrupt_prefix"
+    if (download_bundle) >/dev/null 2>&1; then
+        log_error "A corrupt prefix was overwritten or accepted during continuation"
+        exit 1
+    fi
+    [[ ! -e "$BIN_DIR/polkadot-omni-node" && ! -e "$BIN_DIR/.polkadot-sdk-release" ]]
+    rm -- "$corrupt_prefix"
     select_args --only frame-omni-bencher --only polkadot-execute-worker \
         --only polkadot-prepare-worker --only polkadot-omni-node --only polkadot
     complete_selection

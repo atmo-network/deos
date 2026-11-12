@@ -506,7 +506,9 @@ impl QueueConfigData {
 
 #[derive(PartialEq, Eq, Copy, Clone, Encode, Decode, TypeInfo)]
 pub enum ChannelSignal {
+	#[codec(index = 0)]
 	Suspend,
+	#[codec(index = 1)]
 	Resume,
 }
 
@@ -1017,27 +1019,24 @@ impl<T: Config> XcmpMessageHandler for Pallet<T> {
 					let mut signal_count = 0;
 					while !data.is_empty() && signal_count < MAX_SIGNALS_PER_PAGE {
 						signal_count += 1;
+						// Signal owners include the one-byte enum decode. Select from its explicit
+						// SCALE tag before decoding, preserving exact valid-signal admission.
+						// An unknown tag pays the existing maximum, without any status access.
+						let signal_weight = match data.first() {
+							Some(0) => T::WeightInfo::suspend_channel(),
+							Some(1) => T::WeightInfo::resume_channel(),
+							_ => T::WeightInfo::suspend_channel()
+								.max(T::WeightInfo::resume_channel()),
+						};
+						if meter.try_consume(signal_weight).is_err() {
+							tracing::debug!(target: LOG_TARGET, "Insufficient signal allowance; dropping remainder");
+							break;
+						}
 						match ChannelSignal::decode(&mut data) {
-							Ok(ChannelSignal::Suspend) => {
-								if meter.try_consume(T::WeightInfo::suspend_channel()).is_err() {
-									defensive!(
-										"Not enough weight to process suspend signal - dropping"
-									);
-									break;
-								}
-								Self::suspend_channel(sender)
-							}
-							Ok(ChannelSignal::Resume) => {
-								if meter.try_consume(T::WeightInfo::resume_channel()).is_err() {
-									defensive!(
-										"Not enough weight to process resume signal - dropping"
-									);
-									break;
-								}
-								Self::resume_channel(sender)
-							}
+							Ok(ChannelSignal::Suspend) => Self::suspend_channel(sender),
+							Ok(ChannelSignal::Resume) => Self::resume_channel(sender),
 							Err(_) => {
-								defensive!("Undecodable channel signal - dropping");
+								tracing::debug!(target: LOG_TARGET, "Undecodable channel signal; dropping remainder");
 								break;
 							}
 						}

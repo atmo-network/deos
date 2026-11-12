@@ -1377,24 +1377,56 @@ mod benches {
   fn resolve_proposal(n: Linear<1, 256>) {
     let domain = benchmark_domain_id::<T>();
     let item_id = benchmark_item_id::<T>(1);
-    let current_epoch = T::EpochProvider::current_epoch();
-    ActiveProposals::<T>::insert(
-      domain,
-      item_id,
-      ActiveProposal {
-        submitted_epoch: current_epoch,
-      },
+    let submitted_epoch: T::Epoch = 1u32.into();
+    let current_epoch = Pallet::<T>::proposal_ordinary_primary_open_epoch(submitted_epoch)
+      .expect("benchmark primary opening must be representable");
+    frame_system::Pallet::<T>::set_block_number(current_epoch_u32::<T>(current_epoch).into());
+    assert_eq!(T::EpochProvider::current_epoch(), current_epoch);
+    let maximum = T::MaxWinningVoteAccountsPerCall::get();
+    assert!(n <= maximum);
+    seed_proposal_votes::<T>(domain, item_id, submitted_epoch, 0, maximum, maximum);
+    assert_eq!(
+      Pallet::<T>::do_proposal_primary_track_family(domain, item_id),
+      Some(ProposalPrimaryTrackFamily::Binary),
     );
-    ProposalAuthorsByItem::<T>::insert(domain, item_id, account::<T::AccountId>("proposer", 0, 0));
-    ProposalMetadataByItem::<T>::insert(
-      domain,
-      item_id,
-      benchmark_proposal_metadata::<T>(ProposalPayloadKind::L2ParameterChange),
+    // A frozen-value repair fixture, not a jointly backed public voting history.
+    // Keep the complete family value present while Root infers the supplied winners.
+    let mut votes = ProposalVotesByItem::<T>::get(domain, item_id).unwrap();
+    let power = U256::from(u128::MAX) * U256::from(7u8);
+    for ballot in votes.ayes.iter_mut().chain(votes.nays.iter_mut()) {
+      ballot.vote_epoch = current_epoch;
+      ballot.weight = power;
+      ballot.raw_power = power;
+    }
+    for (label, target) in [
+      ("repair-veto", &mut votes.vetoes),
+      ("repair-pass", &mut votes.passes),
+    ] {
+      for index in 0..maximum {
+        target
+          .try_push(ProposalBallot {
+            account: account(label, index, 0),
+            vote_epoch: current_epoch,
+            weight: U256::zero(),
+            raw_power: U256::zero(),
+          })
+          .expect("benchmark protection companion must fit");
+      }
+    }
+    let winners = BoundedVec::try_from(
+      votes
+        .nays
+        .iter()
+        .skip((maximum - n) as usize)
+        .map(|ballot| ballot.account.clone())
+        .collect::<alloc::vec::Vec<_>>(),
+    )
+    .expect("benchmark winner batch must fit");
+    assert_eq!(
+      Pallet::<T>::infer_winning_primary_option_from_winners(&votes, &winners),
+      Some(ProposalPrimaryTrackOption::Nay)
     );
-    ActiveProposalIdsByDomain::<T>::insert(
-      domain,
-      BoundedVec::try_from(alloc::vec![item_id]).expect("benchmark active proposal index fits"),
-    );
+    ProposalVotesByItem::<T>::insert(domain, item_id, &votes);
     let expiry_epoch = expiry_epoch::<T>(current_epoch);
     let occupancy = T::MaxExpiringAccountsPerEpoch::get().saturating_sub(n);
     let mut bucket = BoundedVec::default();
@@ -1408,16 +1440,14 @@ mod benches {
       }
     }
     ExpiryBuckets::<T>::insert(expiry_epoch, bucket);
-    let mut winners = BoundedVec::default();
-    for index in 0..n {
-      let push_result = winners.try_push(account("winner", index, 0));
-      if push_result.is_err() {
-        panic!("benchmark proposal winner batch must fit configured max")
-      }
-    }
     #[extrinsic_call]
     resolve_proposal(RawOrigin::Root, domain, item_id, winners);
     assert!(!ActiveProposals::<T>::contains_key(domain, item_id));
+    assert!(!ProposalVotesByItem::<T>::contains_key(domain, item_id));
+    assert_eq!(
+      ProposalWinningPrimaryOptionByItem::<T>::get(domain, item_id),
+      Some(ProposalPrimaryTrackOption::Nay)
+    );
   }
 
   #[benchmark]

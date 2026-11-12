@@ -125,6 +125,32 @@ The native discovery capacity regression fills the index through the real finali
 
 The extra `service_finalized_proposal_outcomes_diverse(n)` visits n distinct domain indices, with one due entry per domain, and distributes one shared fixture population across them. Its total is selected from `MaxRecentFinalizedProposalsPerDomain` for this fixture, not asserted as a global retained-state bound. Verification preserves all non-due records/index tails and future buckets. This rejected-record profile complements, not replaces, the maximum-record/single-domain repeated-filter fixture. Native conformance does not qualify arbitrary joint populations, trie proof, RefTime or generated coefficients.
 
+### Finite vote-path resource coverage
+
+`src/maximum_vote_tests.rs` adds native complete-dispatch witnesses at N=256 for both Binary and Invoice families. Initial primary admission fills the last slot with `7 × u128::MAX`; protection replacement exercises both directions, tail-account search, full target refusal and exact transactional rollback. Initial and replacement Veto cancellation remove the full family-valid ballot value. Resolution rejects a maximum Binary tie and approves the maximum Invoice positive tie with Reduce as winner, crediting all N selected winners. These are prepared frozen snapshots with distinct accounts, not jointly backed signed histories; zero-power protection peers preserve supply normalization and maximum encoded geometry.
+
+The finite source inventory below separates executable branch evidence from numerical qualification. “Open” means no accepted complete physical bound follows from these fixtures, not that the branch has no behavioral test. DB coverage requires recorder-isolated complete-owner rows; storage-call counts or post-verification counters cannot substitute. No native unit-test duration is a RefTime price.
+
+| Complete path | Native/domain evidence | RefTime | ProofSize | DB | Wasm binding |
+| --- | --- | --- | --- | --- | --- |
+| Initial primary vote | Both families, last slot, 131-bit frozen power | Open | Geometry only | Open | Open |
+| Protection replacement | Both directions/families, full value, tail search | Open | Geometry only | Open | Open |
+| Replacement refusal | Full target, both directions/families, root unchanged | Open | Geometry only | Open | Open |
+| Cancellation retention refusal | Full expiry destination, both families, complete dispatch rollback | Open | Geometry only | Open | Open |
+| Immediate Veto cancellation | Initial/replacement, both families, N winners | Open | Geometry only | Open | Open |
+| Resolution from votes | Full Binary tie rejection; full Invoice Reduce approval | Open | Geometry only | Open | Open |
+| Root winner repair | `resolve_proposal(n)` reads full Binary companions and infers tail-selected Nay winners | Open | Binary geometry only | Open | Open |
+| Invoice execution | Host executor/settlement and failure tests | Host-owned, open | Host-owned, open | Open | Open |
+| Pending execution and failures | Full-topology seeded approvals and exact causes | Open | Original/co-read domain open | Open | Open |
+| Historical cleanup | Maximum receipt, independent full indices, hook entry phases | Open | Original/co-read domain open | Open | Open |
+| History/tally projections | Wide arithmetic and bounded discovery regressions | Open | Changed value domains open | Open | Open |
+
+Missing benchmark sources remain concrete: Invoice initial/replacement/cancellation and full-target rollback need generated v2 marked boundaries; the selected Binary `cast_vote` benchmark is not their universal maximum. The Root repair benchmark now retains full Binary primary/protection vectors, 131-bit primary values and tail-selected supplied winners; verification requires retained Nay inference and ballot removal. This closes its former absent-ballot setup gap, not Invoice repair or complete parent-history validity. Complete resolution still needs joint winner-memory, expiry/discovery capacities, failure/repair and urgent/confirm branches, not only full ballot vectors. Executor success/failure, pending service plus catch-up/cleanup and history projections retain separate complete host/phase domains. The native fixtures close only the listed dispatch/value witnesses; no WeightInfo method, production coefficient, cap or physical price changes.
+
+The arithmetic envelope is source-derived, not calibrated: with individual primary power below `2^131`, N=256 gives a Binary sum below `2^140` and a family-coherent Invoice sum below `2^141`. Even the five-vector storage envelope is below `2^142`; multiplication by the Perbill denominator stays below `2^172`. `proposal_resolution.rs` sums frozen weights with checked U256 addition and retains floor-rounded approval and lowest-scalar positive ties. These bounds assume the host's declared `7 × u128::MAX` provider envelope; generic hosts must supply their own finite power contract. Custody, protection supply normalization and ratios are unchanged.
+
+Generated annotations must derive `ProposalVotesByItem` bounds from the embedding runtime's current storage metadata, including its key geometry. Neither that metadata nor the encoded ballot value is a complete trie-proof size or physical rate. Refresh annotations and coefficients together only through the standard benchmark metadata/generator route after source/domain and measurement acceptance; hand-editing comments or coefficients does not close that obligation.
+
 ### Winning-vote window
 
 `WinningVoteWindow` stores:

@@ -90,6 +90,9 @@ sp-arithmetic = { version = "29.0.0", default-features = false }
 sp-api-proc-macro = { path = "vendor/sp-api-proc-macro" }
 # Source-bound XCMP admission repair; retains the selected stable2609 package version.
 cumulus-pallet-xcmp-queue = { path = "vendor/cumulus-pallet-xcmp-queue" }
+# API-compatible upstream security backports; see each vendor package SECURITY-BACKPORT.md.
+hickory-proto = { path = "vendor/hickory-proto" }
+webpki-roots = { path = "vendor/webpki-roots" }
 
 [profile.release]
 opt-level = 3
