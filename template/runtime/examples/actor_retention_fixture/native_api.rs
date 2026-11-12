@@ -477,6 +477,9 @@ struct NativeClient {
   finalization_close: Option<Vec<u8>>,
   state_requests: Mutex<usize>,
   recordings: Option<RecordingProofSizeProvider>,
+  // Only the explicit inherent-only path permits a late Core failure with no
+  // proof-size queries; Close callers retain their nonempty-query assertion.
+  inherent_only: bool,
 }
 
 impl CallApiAt<Block> for NativeClient {
@@ -548,7 +551,7 @@ impl CallApiAt<Block> for NativeClient {
       if let Some(recording) = &self.recordings {
         let provisional = recording.recorded_estimations().len();
         assert!(provisional >= recorded_before.unwrap());
-        if params.function != "BlockBuilder_finalize_block" {
+        if params.function != "BlockBuilder_finalize_block" && !self.inherent_only {
           assert!(provisional > recorded_before.unwrap());
         }
         println!(
@@ -616,6 +619,114 @@ impl ProvideRuntimeApi<Block> for NativeClient {
   fn runtime_api(&self) -> ApiRef<'_, Self::Api> {
     RuntimeApi::construct_runtime_api(self)
   }
+}
+
+/// Inherent-only diagnostic: deliberately has no Close/error-injection premise.
+/// Imports still exercise the shared recording/replay and late-root rollback owner.
+#[allow(
+  dead_code,
+  reason = "only the finalization example exposes genesis mode; other Close callers share this module"
+)]
+pub(super) fn assert_genesis_builder(
+  storage: Storage,
+  expected: Storage,
+  block: &Block,
+  data: InherentData,
+  wasm: Option<&[u8]>,
+) {
+  let execution = wasm.map_or(RuntimeExecution::Native, |code| {
+    RuntimeExecution::wasm(code.to_vec())
+  });
+  assert!(storage.children_default.is_empty() && expected.children_default.is_empty());
+  let mut recorded = Vec::new();
+  for provider in [ProofProvider::Plain, ProofProvider::Recording] {
+    let (proof_context, proof_extension) = ProofContext::new(provider);
+    let client = NativeClient {
+      backend: (storage.clone(), execution.version().state_version()).into(),
+      execution: execution.clone(),
+      storage: storage.clone(),
+      depths: Mutex::new(Vec::new()),
+      fail_next_close: Mutex::new(None),
+      expected_rollback: Mutex::new(None),
+      trace: None,
+      finalization_close: None,
+      state_requests: Mutex::new(0),
+      recordings: proof_context.recordings.clone(),
+      inherent_only: true,
+    };
+    let mut extensions = Extensions::new();
+    extensions.register(proof_extension);
+    let mut builder = sc_block_builder::BlockBuilderBuilder::new(&client)
+      .on_parent_block(*block.header.parent_hash())
+      .with_parent_block_number(block.header.number() - 1)
+      .with_inherent_digests(block.header.digest().clone())
+      .with_proof_recorder(proof_context.recorder.clone())
+      .with_extra_extensions(extensions)
+      .build()
+      .unwrap();
+    let inherents = builder.create_inherents(data.clone()).unwrap();
+    assert!(inherents.len() >= 3);
+    assert_eq!(inherents.encode(), block.extrinsics.encode());
+    for extrinsic in inherents {
+      builder.push(extrinsic).unwrap();
+    }
+    let built = builder.build().unwrap();
+    assert_eq!(built.block.encode(), block.encode());
+    assert!(built.storage_changes.child_storage_changes.is_empty());
+    assert_eq!(
+      built.storage_changes.transaction_storage_root,
+      *block.header.state_root()
+    );
+    let mut post = storage.clone();
+    for (key, value) in built.storage_changes.main_storage_changes {
+      match value {
+        Some(value) => {
+          post.top.insert(key, value);
+        }
+        None => {
+          post.top.remove(&key);
+        }
+      }
+    }
+    assert_eq!(post.top, expected.top);
+    assert_eq!(*client.state_requests.lock().unwrap(), 1);
+    assert!(
+      client
+        .depths
+        .lock()
+        .unwrap()
+        .iter(/* deos-bypass: bounded-iter -- one diagnostic initialize/inherent/finalize API sequence; not consensus-state iteration. */)
+        .all(|depth| *depth == (1, 1))
+    );
+    if matches!(provider, ProofProvider::Recording) {
+      // Genesis may make no proof-size host queries; an empty sequence is not
+      // Actor-service coverage. Import must still match it exactly below.
+      recorded = proof_context.recorded();
+    }
+    println!(
+      "genesis_sdk_builder execution={} proof_provider={} recorded_estimations={} close_coverage=false",
+      execution.name(),
+      provider.name(),
+      proof_context.recorded().len()
+    );
+  }
+  let imported = assert_import_with_query_contract(
+    storage.clone(),
+    expected.clone(),
+    block,
+    ProofProvider::Recording,
+    execution.clone(),
+    true,
+  );
+  assert_eq!(imported, recorded, "author/import estimation order agrees");
+  assert_import_with_query_contract(
+    storage,
+    expected,
+    block,
+    ProofProvider::Replay(&recorded),
+    execution,
+    true,
+  );
 }
 
 pub(super) fn assert_builder(
@@ -692,6 +803,7 @@ fn assert_builder_with_provider(
     finalization_close,
     state_requests: Mutex::new(0),
     recordings: proof_context.recordings.clone(),
+    inherent_only: false,
   };
   let recorder = &proof_context.recorder;
   let mut extensions = Extensions::new();
@@ -846,6 +958,7 @@ fn assert_finalization_errors(
       finalization_close: Some(close_key.clone()),
       state_requests: Mutex::new(0),
       recordings: proof_context.recordings.clone(),
+      inherent_only: false,
     };
     let recorder = &proof_context.recorder;
     let mut extensions = Extensions::new();
@@ -945,6 +1058,17 @@ fn assert_import_with_provider(
   provider: ProofProvider<'_>,
   execution: RuntimeExecution,
 ) -> Vec<usize> {
+  assert_import_with_query_contract(storage, expected, block, provider, execution, false)
+}
+
+fn assert_import_with_query_contract(
+  storage: Storage,
+  expected: Storage,
+  block: &Block,
+  provider: ProofProvider<'_>,
+  execution: RuntimeExecution,
+  inherent_only: bool,
+) -> Vec<usize> {
   assert!(storage.children_default.is_empty() && expected.children_default.is_empty());
   let mut recorded_output = Vec::new();
   println!("native API backend constructed");
@@ -962,6 +1086,7 @@ fn assert_import_with_provider(
       finalization_close: None,
       state_requests: Mutex::new(0),
       recordings: proof_context.recordings.clone(),
+      inherent_only,
     };
     println!(
       "API Core execution begins: success={succeeds} execution={}",

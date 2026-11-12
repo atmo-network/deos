@@ -256,6 +256,191 @@ fn maximum_family_cancellation_retention_refusal_restores_complete_vote_state() 
   }
 }
 
+// This captures the complete dispatch and V1 root materialization on one original
+// backend. Mock custody/lock callbacks are not production-provider evidence.
+#[test]
+fn maximum_invoice_dispatch_original_witness_survives_root_and_commit() {
+  use polkadot_sdk::sp_core::storage::StateVersion;
+  use polkadot_sdk::sp_io::storage;
+
+  for case in 0..5 {
+    let prepare_case = || {
+      let (domain, mut votes) = prepare(true);
+      let vote = if case == 0 {
+        votes.reduces.pop().unwrap();
+        ProposalVoteKind::Reduce
+      } else {
+        if case != 3 {
+          votes.vetoes.pop().unwrap();
+        }
+        if case >= 2 {
+          votes.passes.last_mut().unwrap().account = VOTER;
+        }
+        set_veto_vote_weight(VOTER, 100);
+        ProposalVoteKind::Veto
+      };
+      ProposalVotesByItem::<Test>::insert(domain, ITEM, &votes);
+      if case == 4 {
+        let retention: u32 =
+          <Test as crate::Config>::FinalizedProposalOutcomeRetentionEpochs::get();
+        let capacity: u32 = <Test as crate::Config>::MaxFinalizedProposalOutcomesPerEpoch::get();
+        crate::FinalizedProposalOutcomeExpiryBuckets::<Test>::insert(
+          1 + u64::from(retention),
+          BoundedVec::try_from(
+            (0..capacity)
+              .map(|item_id| crate::FinalizedProposalTouch {
+                domain,
+                item_id: item_id + 1000,
+              })
+              .collect::<Vec<_>>(),
+          )
+          .unwrap(),
+        );
+      }
+      (domain, vote, votes.encode())
+    };
+    let dispatch =
+      |domain, vote| Governance::cast_vote(RuntimeOrigin::signed(VOTER), domain, ITEM, vote);
+    let mut plain = new_test_ext();
+    plain.state_version = StateVersion::V1;
+    let (domain, vote, original_votes) = plain.execute_with(prepare_case);
+    plain.commit_all().unwrap();
+    let original_root = plain.execute_with(|| storage::root(StateVersion::V1));
+    let (parent, parent_root) = plain.into_raw_snapshot();
+    assert_eq!(parent_root.as_bytes(), original_root.as_slice());
+    let mut plain = polkadot_sdk::sp_io::TestExternalities::from_raw_snapshot(
+      parent.clone(),
+      parent_root,
+      StateVersion::V1,
+    );
+    let plain_result = plain.execute_with(|| dispatch(domain, vote));
+    let plain_root = plain.execute_with(|| storage::root(StateVersion::V1));
+    plain.commit_all().unwrap();
+    assert_eq!(
+      plain.execute_with(|| storage::root(StateVersion::V1)),
+      plain_root
+    );
+
+    let mut recorded = polkadot_sdk::sp_io::TestExternalities::from_raw_snapshot(
+      parent.clone(),
+      parent_root,
+      StateVersion::V1,
+    );
+    assert_eq!(
+      recorded.execute_with(|| storage::root(StateVersion::V1)),
+      original_root
+    );
+    let ((result, root), proof) = recorded.execute_and_prove(|| {
+      let result = dispatch(domain, vote);
+      let root = storage::root(StateVersion::V1);
+      (result, root)
+    });
+    assert_eq!(result, plain_result);
+    assert_eq!(root, plain_root);
+    // LayoutV1 externalizes this large value: the original full ballot bytes
+    // must be witnessed even when dispatch deletes/replaces it or rolls back.
+    assert!(proof.iter_nodes().any(|node| node == &original_votes));
+    let compact = proof
+      .to_compact_proof::<polkadot_sdk::sp_core::Blake2Hasher>(parent_root)
+      .unwrap();
+    let (decoded, decoded_root) = compact
+      .to_storage_proof::<polkadot_sdk::sp_core::Blake2Hasher>(&parent_root)
+      .unwrap();
+    assert_eq!(decoded_root, parent_root);
+    assert!(
+      compact
+        .to_storage_proof::<polkadot_sdk::sp_core::Blake2Hasher>(&H256::repeat_byte(99))
+        .is_err()
+    );
+    // Retain original trie prefixes only; every replayed node value must come
+    // from the compact-decoded witness, never an unrecorded parent value.
+    let proof_parent = parent
+      .into_iter()
+      .filter_map(|(key, (value, refs))| {
+        decoded
+          .iter_nodes()
+          .find(|node| *node == &value)
+          .map(|node| (key, (node.clone(), refs)))
+      })
+      .collect();
+    let mut replay = polkadot_sdk::sp_io::TestExternalities::from_raw_snapshot(
+      proof_parent,
+      decoded_root,
+      StateVersion::V1,
+    );
+    let replay_result = replay.execute_with(|| dispatch(domain, vote));
+    assert_eq!(replay_result, result);
+    assert_eq!(
+      replay.execute_with(|| storage::root(StateVersion::V1)),
+      root
+    );
+    replay.commit_all().unwrap();
+    assert_eq!(
+      replay.execute_with(|| storage::root(StateVersion::V1)),
+      root
+    );
+    let witness = proof.encode();
+    recorded.commit_all().unwrap();
+    assert_eq!(
+      recorded.execute_with(|| storage::root(StateVersion::V1)),
+      root
+    );
+    assert_eq!(proof.encode(), witness);
+    recorded.execute_with(|| match case {
+      0 => {
+        assert_ok!(result);
+        assert_eq!(
+          ProposalVotesByItem::<Test>::get(domain, ITEM)
+            .unwrap()
+            .reduces
+            .len(),
+          256
+        );
+        assert_eq!(
+          ParticipationTotalsByAccount::<Test>::get(domain, VOTER).total_participations,
+          1
+        );
+      }
+      1 | 2 => {
+        assert_ok!(result);
+        assert!(!ActiveProposals::<Test>::contains_key(domain, ITEM));
+        assert!(!ProposalVotesByItem::<Test>::contains_key(domain, ITEM));
+        assert_eq!(
+          ParticipationTotalsByAccount::<Test>::get(domain, VOTER).winning_participations,
+          1
+        );
+        assert_eq!(
+          ParticipationTotalsByAccount::<Test>::get(domain, VOTER).total_participations,
+          u64::from(case == 1)
+        );
+      }
+      _ => {
+        assert_eq!(
+          result,
+          Err(if case == 3 {
+            Error::<Test>::ProposalVoteSetFull.into()
+          } else {
+            Error::<Test>::FinalizedProposalOutcomeExpiryBucketFull.into()
+          })
+        );
+        assert_eq!(root, original_root);
+        assert_eq!(
+          ProposalVotesByItem::<Test>::get(domain, ITEM)
+            .unwrap()
+            .encode(),
+          original_votes
+        );
+        assert!(!crate::GovernanceLocks::<Test>::contains_key(VOTER));
+        assert_eq!(
+          ParticipationTotalsByAccount::<Test>::get(domain, VOTER).total_participations,
+          0
+        );
+        assert!(!FinalizedProposals::<Test>::contains_key(domain, ITEM));
+      }
+    });
+  }
+}
+
 #[test]
 fn maximum_family_resolution_dispatch_preserves_invoice_tie_rule_and_binary_rejection() {
   for invoice in [false, true] {

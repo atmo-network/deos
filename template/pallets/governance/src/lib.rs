@@ -326,6 +326,16 @@ pub trait BenchmarkHelper<AccountId, DomainId, Hash, LockId, Balance, Cid> {
     account: &AccountId,
   ) -> Result<(DomainId, ProposalPayloadKind, Hash), polkadot_sdk::sp_runtime::DispatchError>;
 
+  /// Selects an Invoice domain and prepares primary backing plus cancelling protection power.
+  /// This prepares real provider dependencies, not the benchmark's frozen companion history.
+  fn prepare_invoice_voter(
+    _account: &AccountId,
+  ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError> {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "GovernanceInvoiceBenchmarkHelperNotConfigured",
+    ))
+  }
+
   fn prepare_protection_voter(
     account: &AccountId,
   ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError>;

@@ -129,15 +129,19 @@ The extra `service_finalized_proposal_outcomes_diverse(n)` visits n distinct dom
 
 `src/maximum_vote_tests.rs` adds native complete-dispatch witnesses at N=256 for both Binary and Invoice families. Initial primary admission fills the last slot with `7 × u128::MAX`; protection replacement exercises both directions, tail-account search, full target refusal and exact transactional rollback. Initial and replacement Veto cancellation remove the full family-valid ballot value. Resolution rejects a maximum Binary tie and approves the maximum Invoice positive tie with Reduce as winner, crediting all N selected winners. These are prepared frozen snapshots with distinct accounts, not jointly backed signed histories; zero-power protection peers preserve supply normalization and maximum encoded geometry.
 
+`maximum_invoice_dispatch_original_witness_survives_root_and_commit` captures five complete Invoice dispatches: initial Reduce, initial Veto cancellation, tail Pass→Veto cancellation, full-target replacement refusal and late finalized-retention refusal after winner-counter updates/removal. Each uses a committed V1 parent, compares plain and recorded post-roots, retains the original full ballot value in the witness, authenticates compact decoding against the original root, rejects a wrong root and replays dispatch/root/commit using only decoded witness values with original trie-prefix hints. Refusals restore the exact parent root, ballot, lock and counters. The retained raw witness survives commit unchanged.
+
+These are semantic, conservative-overapproximation frozen-value fixtures, not reachable joint funding histories: four Invoice primary directions carry distinct-account `7 × u128::MAX` values, protection peers carry zero power and the configured mock supplies the caller. The late refusal fills only its outcome-expiry destination; it does not prove joint maxima for discovery, rolling winner windows, cleanup or all expiry owners. Mock custody is `()` and lock notification is not a production ledger callback. Recorder/proof replay establishes these original-input and rollback paths, not DB maxima, bytes-as-Weight, physical timing or reference-provider coverage. Marked Invoice benchmarks still require an Invoice-aware host preparation helper; the existing protection helper selects Binary and the mock maximum-finalized helper does not select Invoice.
+
 The finite source inventory below separates executable branch evidence from numerical qualification. “Open” means no accepted complete physical bound follows from these fixtures, not that the branch has no behavioral test. DB coverage requires recorder-isolated complete-owner rows; storage-call counts or post-verification counters cannot substitute. No native unit-test duration is a RefTime price.
 
 | Complete path | Native/domain evidence | RefTime | ProofSize | DB | Wasm binding |
 | --- | --- | --- | --- | --- | --- |
-| Initial primary vote | Both families, last slot, 131-bit frozen power | Open | Geometry only | Open | Open |
+| Initial primary vote | Both families, last slot, 131-bit frozen power | Open | Invoice original/compact replay; maximum open | Open | Open |
 | Protection replacement | Both directions/families, full value, tail search | Open | Geometry only | Open | Open |
-| Replacement refusal | Full target, both directions/families, root unchanged | Open | Geometry only | Open | Open |
-| Cancellation retention refusal | Full expiry destination, both families, complete dispatch rollback | Open | Geometry only | Open | Open |
-| Immediate Veto cancellation | Initial/replacement, both families, N winners | Open | Geometry only | Open | Open |
+| Replacement refusal | Full target, both directions/families, root unchanged | Open | Invoice original/compact replay; maximum open | Open | Open |
+| Cancellation retention refusal | Full expiry destination, both families, complete dispatch rollback | Open | Invoice original/compact replay; maximum open | Open | Open |
+| Immediate Veto cancellation | Initial/replacement, both families, N winner counters | Open | Invoice original/compact replay; maximum open | Open | Open |
 | Resolution from votes | Full Binary tie rejection; full Invoice Reduce approval | Open | Geometry only | Open | Open |
 | Root winner repair | `resolve_proposal(n)` reads full Binary companions and infers tail-selected Nay winners | Open | Binary geometry only | Open | Open |
 | Invoice execution | Host executor/settlement and failure tests | Host-owned, open | Host-owned, open | Open | Open |
@@ -919,6 +923,20 @@ The production bridge was regenerated with `frame-omni-bencher 0.22.0`, `50` ste
 `submit_signed_proposal` measures primary eligibility, compact status/witness admission, opening-fee transfer, and strategic creation with the domain index filled to `MaxActiveProposalsPerDomain - 1`; it charges `675,865,000 / 324,459` plus 138 reads and seven writes. `prepare_payload_admission_witness` measures the maximum valid 262-byte payload and charges `22,419,000 / 3,556` plus two compact-status reads and one witness write. `cast_vote` charges `1,266,312,000 / 656,094` plus 269 reads and 271 writes. `unlock_vote_power` charges `68,096,000 / 6,208` plus five reads and five writes.
 
 The runtime benchmark helper ensures the protocol governance asset and staking pool exist, funds the caller, and stakes it before measurement. Lifecycle benchmarks derive voting and maturity epochs from runtime lead-in and voting-period constants rather than mock-only block numbers.
+
+Extra `cast_vote_invoice(c)` calls the public `cast_vote` inside the FRAME marked block; it adds no `WeightInfo` coefficient. `BenchmarkHelper::prepare_invoice_voter` selects the host's Invoice domain and prepares primary backing plus cancelling protection power before recording. The pallet asserts `Invoice` for `L2TreasurySpend`; it never guesses a generic domain identifier. Existing Binary `cast_vote` remains separate and unchanged.
+
+| Case | Marked call | Verification |
+| --- | --- | --- |
+| 0 | Initial Reduce into the final free slot | Full Reduce vector retained |
+| 1 | Initial Veto into the final free slot | Immediate cancellation and terminal state |
+| 2 | Replace the last Pass with Veto | Immediate cancellation and terminal state |
+| 3 | Replace Pass into a full Veto vector | Typed `ProposalVoteSetFull`, original root and ballots |
+| 4 | Replace Pass, then refuse full terminal-retention bucket | Typed `FinalizedProposalOutcomeExpiryBucketFull`, original root and ballots |
+
+The six Invoice-compatible companion vectors use distinct accounts and full configured geometry except the selected destination gap; Aye is empty. Frozen primary companions carry legal individual `7 × u128::MAX` power, a conservative value-domain overapproximation rather than jointly funded signed history. Protection companions use the host provider and retain its separate raw/temporal normalization. The actual caller runs through configured providers, custody, locks, participation and terminal callbacks; source construction and verification roots are outside recording. `verify_invoice_vote_benchmark(c)` runs the same generated fixture for native host conformance without physical sampling.
+
+These cases do not qualify complete resolution/enactment, cleanup, signed-history reachability, independent DB/proof maxima or physical timing. They do not refresh generated weights, production Wasm or downstream identity pins. Extra metadata visibility is not production numerical acceptance; selection/registry safeguards remain an integration obligation before collection.
 
 Error narrowness is compile-enforced at the preimage adapter boundary: `ProposalPreimageAdmissionError` has one exhaustive conversion into the four validation dispatch errors, and `preimage_admission_error_core_maps_exhaustively_to_dispatch` executes every mapping. Compact witness absence and staleness remain distinct pallet-owned admission errors.
 

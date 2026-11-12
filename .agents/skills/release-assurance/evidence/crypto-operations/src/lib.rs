@@ -32,3 +32,46 @@ pub fn selected_k256_high(a: k256::Scalar) -> u8 { a.is_high().unwrap_u8() }
 #[no_mangle]
 pub fn selected_eq(a: &U256, b: &U256) -> bool { a == b }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const CONST_ZERO: U256 = U256::ZERO.neg_mod(&U256::MAX);
+    const CONST_ONE: U256 = U256::ONE.neg_mod(&U256::MAX);
+    #[test]
+    fn const_and_modular_negation_boundaries() {
+        assert_eq!(CONST_ZERO, U256::ZERO);
+        assert_eq!(CONST_ONE, U256::MAX.wrapping_sub(&U256::ONE));
+        let p = U256::MAX;
+        for a in [U256::ZERO, U256::ONE, U256::from_u64(u64::MAX), U256::ONE.shl_vartime(128), p.wrapping_sub(&U256::ONE)] {
+            let neg = a.neg_mod(&p);
+            assert_eq!(a.add_mod(&neg, &p), U256::ZERO);
+            assert_eq!(neg.neg_mod(&p), a);
+            if a != U256::ZERO { assert_eq!(neg, p.wrapping_sub(&a)); }
+        }
+    }
+    #[test]
+    fn borrow_and_carry_boundaries() {
+        for a in [0, 1, Word::MAX / 2, Word::MAX / 2 + 1, Word::MAX] {
+            for b in [0, 1, Word::MAX / 2, Word::MAX / 2 + 1, Word::MAX] {
+                for borrow in [0, Word::MAX] {
+                    let (x, b1) = a.overflowing_sub(b);
+                    let (x, b2) = x.overflowing_sub(borrow & 1);
+                    assert_eq!(selected_sbb(a, b, borrow), (Limb(x), Limb(if b1 || b2 { Word::MAX } else { 0 })));
+                }
+            }
+        }
+    }
+    #[test]
+    fn scalar_negation_and_group_boundaries() {
+        use k256::elliptic_curve::ops::LinearCombination;
+        for k in [k256::Scalar::ZERO, k256::Scalar::ONE, -k256::Scalar::ONE, k256::Scalar::from(u64::MAX)] {
+            assert_eq!(k + selected_k256_neg(k), k256::Scalar::ZERO);
+            let g = k256::ProjectivePoint::GENERATOR;
+            assert_eq!(k256::ProjectivePoint::lincomb(&g, &k, &g, &(-k)), k256::ProjectivePoint::IDENTITY);
+        }
+        for p in [p256::Scalar::ZERO, p256::Scalar::ONE, -p256::Scalar::ONE, p256::Scalar::from(u64::MAX)] {
+            assert_eq!(p + selected_p256_neg(p), p256::Scalar::ZERO);
+        }
+    }
+}
+

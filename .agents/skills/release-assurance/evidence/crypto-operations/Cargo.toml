@@ -11,7 +11,23 @@ k256 = { version = "=0.13.4", default-features = false, features = ["arithmetic"
 zeroize = { version = "=1.9.0", default-features = false }
 generic-array = { version = "=0.14.7", default-features = false }
 cfg-if = "=1.0.4"
+[features]
+std = ["p256/std", "p256/pem", "p256/pkcs8", "k256/std", "k256/serde"]
+signing = ["p256/ecdsa", "k256/ecdsa"]
+[patch.crates-io]
+crypto-bigint = { path = "../../../../../template/vendor/crypto-bigint" }
 [profile.release]
 opt-level = 3
+panic = "unwind"
+[profile.production]
+inherits = "release"
 codegen-units = 1
-panic = "abort"
+lto = true
+[[bin]]
+name = "live-native"
+path = "src/bin/native.rs"
+required-features = ["std", "signing"]
+[[bin]]
+name = "live-wasm"
+path = "src/bin/wasm.rs"
+required-features = ["signing"]

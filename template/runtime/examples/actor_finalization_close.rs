@@ -1,5 +1,5 @@
-//! Native SDK caller witness for a public terminal Close inside Executive finalization.
-//! Root admission setup is outside the encoded block; no complete resource maximum is claimed.
+//! SDK caller diagnostics: finalization Close, or explicit inherent-only genesis mode.
+//! Close setup is outside the block; neither mode claims a complete resource maximum.
 
 #[path = "actor_retention_fixture/block.rs"]
 mod actor_block_fixture;
@@ -244,16 +244,87 @@ fn run(preset: &PresetId, wasm: Option<&[u8]>, pvf_output: Option<&std::path::Pa
   );
 }
 
+// No setup mutation, User creation or admission override: only runtime-owned genesis
+// System Actors and one inherent-only block with a synthetic relay proof.
+fn run_genesis(preset: &PresetId, wasm: Option<&[u8]>, pvf_output: Option<&std::path::Path>) {
+  let code = wasm.unwrap_or_default();
+  let storage = preset_storage(preset);
+  let mut author = TestExternalities::new_with_code_and_state(
+    code,
+    storage,
+    deos_runtime::VERSION.state_version(),
+  );
+  let storage = top(&author);
+  let parent = Header::new(
+    0,
+    BlakeTwo256::ordered_trie_root(
+      Vec::new(),
+      deos_runtime::VERSION.extrinsics_root_state_version(),
+    ),
+    *author.as_backend().root(),
+    Default::default(),
+    Digest::default(),
+  );
+  let data = inherents(&parent, 1);
+  let recorder = Recorder::<Blake2Hasher>::default();
+  author.register_extension(ProofSizeExt::new(RecordingProofSizeProvider::new(
+    recorder.clone(),
+  )));
+  let block = author.execute_with_recorder(recorder, || {
+    let header = Header::new(
+      1,
+      Default::default(),
+      Default::default(),
+      parent.hash(),
+      Digest {
+        logs: vec![DigestItem::PreRuntime(
+          polkadot_sdk::sp_consensus_aura::AURA_ENGINE_ID,
+          1u64.encode(),
+        )],
+      },
+    );
+    Executive::initialize_block(&header);
+    let extrinsics = <Runtime as BlockBuilder<Block>>::inherent_extrinsics(data.clone());
+    for xt in &extrinsics {
+      Executive::apply_extrinsic(xt.clone()).unwrap().unwrap();
+    }
+    Block {
+      header: Executive::finalize_block(),
+      extrinsics,
+    }
+  });
+  author.commit_all().unwrap();
+  assert_eq!(*author.as_backend().root(), *block.header.state_root());
+  let expected = top(&author);
+  native_api::assert_genesis_builder(
+    storage.clone(),
+    expected.clone(),
+    &block,
+    data.clone(),
+    wasm,
+  );
+  if let Some(output) = pvf_output {
+    pvf_fixture::export(output, preset, (storage, expected, &parent, block, data)).unwrap();
+  }
+  println!(
+    "genesis_only preset={preset} blocks=1 synthetic_relay=true finalization_close_coverage=false retention_coverage=false lifecycle_coverage=false"
+  );
+}
+
 fn main() -> Result<(), String> {
   run_with_args(std::env::args().skip(1).collect())
 }
 
-fn run_with_args(arguments: Vec<String>) -> Result<(), String> {
+fn run_with_args(mut arguments: Vec<String>) -> Result<(), String> {
   if arguments == ["--help"] || arguments == ["-h"] {
     println!(
-      "Usage: actor_finalization_close [--sdk-wasm PATH | --pvf-fixture PATH NEW_DIR]\n\nRuns both runtime-owned presets through a finite native-prepared finalization Close witness,\nactual SDK BlockBuilder with plain/recording proof-size providers, post-Close\nexecutor/response-decode errors in push and finalization, fresh Core recording/replay\nimports, and late invalid-root rollback.\nBy default the SDK executor uses compiled Rust. --sdk-wasm selects actual Wasm execution\nfor SDK authoring/import and checks the artifact's full runtime version; preparation\nand the independent expected block/state remain native. No native fallback is allowed.\n--pvf-fixture binds the selected code in parent storage and exports proof-bound,\nAura-sealed candidate inputs after an independent native seal/state check.\nPVF worker validation is a separate caller. This does not authenticate relay history,\nrun a live node, replay public setup history or establish a resource maximum."
+      "Usage: actor_finalization_close [--genesis-only] [--sdk-wasm PATH | --pvf-fixture PATH NEW_DIR]\n\nRuns both runtime-owned presets through a finite native-prepared finalization Close witness,\nactual SDK BlockBuilder with plain/recording proof-size providers, post-Close\nexecutor/response-decode errors in push and finalization, fresh Core recording/replay\nimports, and late invalid-root rollback.\nBy default the SDK executor uses compiled Rust. --sdk-wasm selects actual Wasm execution\nfor SDK authoring/import and checks the artifact's full runtime version; preparation\nand the independent expected block/state remain native. No native fallback is allowed.\n--pvf-fixture binds the selected code in parent storage and exports proof-bound,\nAura-sealed candidate inputs after an independent native seal/state check.\n--genesis-only instead runs one inherent-only block directly from each named genesis\npreset, without setup mutations or User admission. SDK plain/recording authoring,\nCore recording/replay and late-root rollback still run. This is NOT finalization Close,\nretention or lifecycle coverage. Relay inputs are synthetic; worker validation is separate.\nNeither mode authenticates relay history, runs a live node, replays public setup history\nor establishes a resource maximum."
     );
     return Ok(());
+  }
+  let genesis_only = arguments.first().is_some_and(|arg| arg == "--genesis-only");
+  if genesis_only {
+    arguments.remove(0);
   }
   let (wasm, pvf_output) = match arguments.as_slice() {
     [] => (None, None),
@@ -273,7 +344,11 @@ fn run_with_args(arguments: Vec<String>) -> Result<(), String> {
     _ => return Err("unexpected arguments; use --help".into()),
   };
   for preset in <Runtime as GenesisBuilder<Block>>::preset_names() {
-    run(&preset, wasm.as_deref(), pvf_output.as_deref());
+    if genesis_only {
+      run_genesis(&preset, wasm.as_deref(), pvf_output.as_deref());
+    } else {
+      run(&preset, wasm.as_deref(), pvf_output.as_deref());
+    }
   }
   Ok(())
 }
@@ -291,7 +366,7 @@ fn native_fixture_requests_refuse_before_io() {
   ));
   assert!(!output.exists());
   let missing = output.join("missing.wasm").to_string_lossy().into_owned();
-  for args in [
+  for request in [
     vec!["--sdk-wasm".into(), missing.clone()],
     vec![
       "--pvf-fixture".into(),
@@ -299,12 +374,33 @@ fn native_fixture_requests_refuse_before_io() {
       output.to_string_lossy().into_owned(),
     ],
   ] {
-    let error = run_with_args(args).unwrap_err();
-    assert!(
-      error.contains("native admission fixture cannot"),
-      "wrong refusal: {error}"
-    );
-    assert!(!output.exists(), "denied request must not create output");
+    for genesis_only in [false, true] {
+      let mut args = request.clone();
+      if genesis_only {
+        args.insert(0, "--genesis-only".into());
+      }
+      let error = run_with_args(args).unwrap_err();
+      assert!(
+        error.contains("native admission fixture cannot"),
+        "wrong refusal: {error}"
+      );
+      assert!(!output.exists(), "denied request must not create output");
+    }
   }
   assert!(run_with_args(vec!["--help".into()]).is_ok());
+}
+
+#[cfg(test)]
+#[test]
+fn genesis_only_native_presets_and_argument_refusal() {
+  assert!(run_with_args(vec!["--genesis-only".into()]).is_ok());
+  for args in [
+    vec!["--genesis-only".into(), "--genesis-only".into()],
+    vec!["--genesis-only".into(), "--sdk-wasm".into()],
+  ] {
+    assert_eq!(
+      run_with_args(args).unwrap_err(),
+      "unexpected arguments; use --help"
+    );
+  }
 }

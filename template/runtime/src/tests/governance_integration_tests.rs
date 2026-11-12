@@ -2084,6 +2084,16 @@ fn l2_treasury_spend_admission_and_enactment_share_exact_decoder() {
 
 #[cfg(feature = "runtime-benchmarks")]
 #[test]
+fn invoice_vote_benchmark_executes_all_marked_cases_on_reference_host() {
+  for case in 0..=4 {
+    new_test_ext().execute_with(|| {
+      Governance::verify_invoice_vote_benchmark(case).unwrap();
+    });
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
 fn pending_benchmark_fixtures_preserve_ordinary_delay_on_reference_host() {
   for refusal in [None, Some(false), Some(true)] {
     new_test_ext().execute_with(|| {

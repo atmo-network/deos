@@ -104,6 +104,7 @@ Options:
   mandatory_prepass_deadline_control is exact/raw-only, c=0 populated/1 deep retry
   mandatory_prepass_dependency_control is exact/raw-only, c=0 empty/1 member/2 completion
   scheduler_resource_pass_control is exact/raw-only, c=0 no-Action/1 zero/2 RefTime/3 ProofSize
+                  cast_vote_invoice is exact/raw-only; c=0..4 selects Invoice paths
                   runtime_authorship is exact/raw-only; c,d are categorical
                   (pin --low C,D --high C,D for one corner); see --list
   --extrinsic NAME
@@ -447,7 +448,8 @@ parse_args() {
             || "$EXTRINSIC_PATTERN" == service_finalized_proposal_outcomes_diverse \
             || "$EXTRINSIC_PATTERN" == on_initialize_finalized_cleanup \
             || "$EXTRINSIC_PATTERN" == on_initialize_finalized_cleanup_diverse \
-            || "$EXTRINSIC_PATTERN" == on_initialize_full_index_value_classes ) \
+            || "$EXTRINSIC_PATTERN" == on_initialize_full_index_value_classes \
+            || "$EXTRINSIC_PATTERN" == cast_vote_invoice ) \
         && ( "$RAW_ONLY" != 1 || "$INCLUDE_EXTRA_BENCHMARKS" != 1 ) ]]; then
         log_error "$EXTRINSIC_PATTERN requires --extra --raw-only --json-file; unqualified topology is not a production Weight binding"
         exit 2
@@ -1828,6 +1830,13 @@ EOF
         grep -Fxq -- 'pallet_governance::on_initialize_finalized_cleanup' "$fixture/raw-args" || return 1
         grep -Fxq -- 'pallet_governance::on_initialize_finalized_cleanup_diverse' "$fixture/raw-args" || return 1
         grep -Fxq -- 'pallet_governance::on_initialize_full_index_value_classes' "$fixture/raw-args" || return 1
+        grep -Fxq -- 'pallet_governance::cast_vote_invoice' "$fixture/raw-args" || return 1
+        parse_args --skip-build --extra --raw-only --json-file "$fixture/governance.json" \
+            --extrinsic cast_vote_invoice --low 4 --high 4 pallet_governance
+        run_pallet_benchmark pallet_governance > "$fixture/governance-route-log" 2>&1 || return 1
+        grep -Fxq -- 'cast_vote_invoice' "$fixture/raw-args" || return 1
+        ! grep -Fxq -- 'pallet_governance::cast_vote_invoice' "$fixture/raw-args" || return 1
+        grep -Fxq -- 'pallet_governance::on_initialize_full_index_value_classes' "$fixture/raw-args" || return 1
         parse_args --skip-build --extra --raw-only --json-file "$fixture/governance.json" \
             --extrinsic service_finalized_proposal_outcomes_diverse pallet_governance
         run_pallet_benchmark pallet_governance > "$fixture/governance-route-log" 2>&1 || return 1
@@ -1946,6 +1955,13 @@ EOF
     assert_route 2 '' --raw-only --json-file "$fixture/samples.json" --output "$fixture/weights.rs" --extrinsic close_detach_user pallet_deos_actors
     assert_route 2 '' --raw-only --json-file "$fixture/samples.json" pallet_deos_actors
     assert_route 0 benchmark --skip-build --raw-only --json-file "$fixture/samples.json" --extrinsic close_detach_user --low 2 --high 2 pallet_deos_actors
+    assert_route 2 '' --extrinsic cast_vote_invoice --output "$fixture/focused.rs" pallet_governance
+    assert_route 2 '' --extra --extrinsic cast_vote_invoice --output "$fixture/focused.rs" pallet_governance
+    assert_route 2 '' --skip-build --raw-only --json-file "$fixture/samples.json" --extrinsic cast_vote_invoice pallet_governance
+    assert_route 2 '' --extra --merge-candidate "$fixture/slice.rs" --base "$fixture/base.rs" --extrinsic cast_vote_invoice --output "$fixture/merged.rs" pallet_governance
+    assert_route 2 '' --extra --raw-only --extrinsic cast_vote_invoice pallet_governance
+    assert_route 2 '' --extra --raw-only --json-file "$fixture/samples.json" --extrinsic 'cast_vote_invoice*' pallet_governance
+    assert_route 0 benchmark --skip-build --extra --raw-only --json-file "$fixture/samples.json" --extrinsic cast_vote_invoice --low 0 --high 4 pallet_governance
     assert_route 2 '' --extrinsic service_pending_enactments_full_topology --output "$fixture/focused.rs" pallet_governance
     assert_route 2 '' --skip-build --raw-only --json-file "$fixture/samples.json" --extrinsic service_pending_enactments_full_topology pallet_governance
     assert_route 0 benchmark --skip-build --extra --raw-only --json-file "$fixture/samples.json" --extrinsic service_pending_enactments_full_topology --low 0 --high 1 pallet_governance
@@ -2567,7 +2583,7 @@ run_pallet_benchmark() {
 
     if [[ "$pallet_name" == pallet_governance ]]; then
         local governance_diagnostic
-        for governance_diagnostic in service_pending_enactments_full_topology service_finalized_proposal_outcomes_diverse on_initialize_finalized_cleanup on_initialize_finalized_cleanup_diverse on_initialize_full_index_value_classes; do
+        for governance_diagnostic in service_pending_enactments_full_topology service_finalized_proposal_outcomes_diverse on_initialize_finalized_cleanup on_initialize_finalized_cleanup_diverse on_initialize_full_index_value_classes cast_vote_invoice; do
             if [[ "$EXTRINSIC_PATTERN" != "$governance_diagnostic" ]]; then
                 exclude_args+=(--exclude-extrinsics "pallet_governance::${governance_diagnostic}")
             fi

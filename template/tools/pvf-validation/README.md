@@ -23,7 +23,18 @@ The wrapper still performs its declared prerequisites and host build before Rust
 
 ## Running
 
-Generate candidates with the runtime-owned `actor_finalization_close --pvf-fixture WASM NEW_DIR`, current `actor_wide_close --pvf-fixture WASM NEW_DIR`, or applicable `actor_retention_close` export. Then run from the repository root:
+Generate candidates with the runtime-owned `actor_finalization_close --pvf-fixture WASM NEW_DIR`, current `actor_wide_close --pvf-fixture WASM NEW_DIR`, or applicable `actor_retention_close` export. These Close fixtures retain their User-admission prerequisites; do not enable unsupported capacity to run them.
+
+For an independent genesis-only diagnostic when User admission is unavailable, run from `template/`:
+
+```bash
+SKIP_WASM_BUILD=1 cargo run --locked --release -p deos-runtime \
+  --example actor_finalization_close -- --genesis-only --pvf-fixture /absolute/diagnostic.wasm /absolute/new-export
+```
+
+This selects both named runtime presets, directly from runtime-owned genesis with no setup mutations, and authors one inherent-only block per preset. The SDK uses actual selected Wasm (no native fallback) for plain/recording authoring and Core recording/replay imports, including complete-state late-invalid-root rollback. An empty proof-size host-query sequence is permitted and reported; it does not demonstrate Actor-service query coverage. Export uses the existing Aura seal/native state oracle and synthetic relay proof. This is **not finalization Close, retention, lifecycle, authenticated ancestry, corrected-node or resource qualification**. `--genesis-only --sdk-wasm WASM` runs the same SDK checks without export; `--genesis-only` uses compiled Rust only. Native default-production closure equivalence to the selected artifact is a caller prerequisite, not established by matching runtime versions alone. Model-only authority still refuses Wasm/PVF requests.
+
+Then run from the repository root:
 
 ```bash
 DEOS_BINARY_DIR=/absolute/pinned/binary/bundle \
@@ -33,6 +44,21 @@ DEOS_BINARY_DIR=/absolute/pinned/binary/bundle \
 The parachain ID is a caller input, not tool-owned genesis policy. The default Wasm is the canonical production-profile output; `--wasm PATH` selects another explicit artifact. The public script verifies the exact prepare/execute worker checksums through `01-download-binaries.sh --check --only`, builds this package and preserves the selected Wasm identity. No unrelated node/bencher binary or full-bundle marker is required; the host still checks both worker versions against its SDK. Its `--help` declares prerequisites and side effects.
 
 For a fresh diagnostic artifact without replacing canonical production output, use `scripts/03-build-runtime.sh --output /absolute/new.wasm`, then select that exact file in both the exporter and `pvf-assurance.sh --wasm`. This retains the production compilation profile and canonical build root but creates only a new destination; it does not update production identity pins or regenerate metadata/client artifacts. Current source/host/Wasm/input equivalence and actual worker acceptance still require evidence. A historical Wasm or successful file-publication self-test cannot supply it.
+
+## Isolated SDK-Source Diagnostic
+
+The existing direct-host entrypoint can test an explicitly selected SDK source without changing the root graph or canonical executable selection. Copy this package's source unchanged into a standalone workspace, preserve its dependency features, resolve its inherited package/lint declarations there, and select the exact SDK checkout's `umbrella` dependency. Use an independent lockfile and target directory. Record the tag's resolved commit, source/manifest/lock hashes, toolchain and build profile; equal version strings alone do not establish source compatibility.
+
+After the ordinary selected-worker checksum check, invoke that built host directly:
+
+```bash
+./scripts/01-download-binaries.sh --check \
+  --only polkadot-prepare-worker --only polkadot-execute-worker
+/absolute/isolated-target/debug/deos-pvf-validation \
+  /absolute/diagnostic.wasm /absolute/export /absolute/pinned-workers 2000
+```
+
+The worker directory must be the checksum-verified bundle. Default secure mode, both version checks, complete-result equality and the full typed-negative suite remain unchanged. This does not add a source-selector to `pvf-assurance.sh`: that wrapper still builds the root locked package. Do not spoof its project root, replace worker pins or change a version literal. The [SDK integration owner](../../../docs/deos/actors.integration.en.md#sdk-dependency-line) records the tested composition and its diagnostic-only limits.
 
 ## Optional CPU Trace
 

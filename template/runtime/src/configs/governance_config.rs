@@ -773,6 +773,65 @@ impl
     ))
   }
 
+  fn prepare_invoice_voter(
+    account: &AccountId,
+  ) -> Result<AssetId, polkadot_sdk::sp_runtime::DispatchError> {
+    use polkadot_sdk::frame_support::traits::fungibles::{Inspect, Mutate};
+    use polkadot_sdk::sp_runtime::DispatchError;
+    let domain = tactical_governance_domain();
+    assert_eq!(
+      <RuntimeProposalPrimaryTrackFamilyProvider as pallet_governance::ProposalPrimaryTrackFamilyProvider<AssetId>>::family(
+        domain,
+        pallet_governance::ProposalPayloadKind::L2TreasurySpend,
+      ),
+      pallet_governance::ProposalPrimaryTrackFamily::Invoice,
+    );
+    if !<crate::Assets as Inspect<AccountId>>::asset_exists(domain) {
+      crate::Assets::force_create(
+        RuntimeOrigin::root(),
+        domain,
+        account.clone().into(),
+        true,
+        1,
+      )?;
+    }
+    if crate::Staking::pool(domain).is_none() {
+      crate::Staking::register_staking_asset(RuntimeOrigin::root(), domain)?;
+    }
+    let amount = primitives::ecosystem::params::PRECISION * 100;
+    <crate::Assets as Mutate<AccountId>>::mint_into(domain, account, amount)?;
+    crate::Staking::stake(RuntimeOrigin::signed(account.clone()), domain, amount / 2)?;
+    // Native asset custody is the tactical protection source, not protocol $VETO.
+    // Dominate the existing eligible supply without changing its normalization policy.
+    let protection_amount = protection_track_total_issuance(domain)
+      .checked_add(amount)
+      .ok_or(DispatchError::Other("BenchmarkInvoiceProtectionOverflow"))?;
+    let native = native_staking_asset_id();
+    if !<crate::Assets as Inspect<AccountId>>::asset_exists(native) {
+      crate::Assets::force_create(
+        RuntimeOrigin::root(),
+        native,
+        account.clone().into(),
+        true,
+        1,
+      )?;
+    }
+    let funding = protection_amount
+      .checked_add(<crate::Assets as Inspect<AccountId>>::minimum_balance(
+        native,
+      ))
+      .ok_or(DispatchError::Other("BenchmarkInvoiceFundingOverflow"))?;
+    <crate::Assets as Mutate<AccountId>>::mint_into(native, account, funding)?;
+    crate::Staking::lock_native_asset_for_governance(
+      RuntimeOrigin::signed(account.clone()),
+      native,
+      protection_amount,
+    )?;
+    assert!(crate::Staking::stake_value(domain, account).unwrap_or_default() > 0);
+    assert!(protection_track_base_weight(domain, account) > 0);
+    Ok(domain)
+  }
+
   fn prepare_protection_voter(
     account: &AccountId,
   ) -> Result<AssetId, polkadot_sdk::sp_runtime::DispatchError> {

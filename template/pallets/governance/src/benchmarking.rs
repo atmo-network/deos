@@ -1352,6 +1352,190 @@ mod benches {
     assert!(!ProposalVotesByItem::<T>::contains_key(domain, item_id));
   }
 
+  // Categorical, raw-only preparation: initial primary, initial protection,
+  // replacement, full-target refusal, then late terminal-retention refusal.
+  // Wide frozen companions are a semantic overapproximation, not jointly funded history.
+  #[benchmark(extra)]
+  fn cast_vote_invoice(c: Linear<0, 4>) {
+    let voter: T::AccountId = whitelisted_caller();
+    let domain = T::BenchmarkHelper::prepare_invoice_voter(&voter)
+      .expect("host must prepare Invoice primary and protection dependencies");
+    let item_id = benchmark_item_id::<T>(1);
+    let submitted_epoch: T::Epoch = 1u32.into();
+    let current_epoch = Pallet::<T>::proposal_ordinary_primary_open_epoch(submitted_epoch)
+      .expect("Invoice primary opening must be representable");
+    frame_system::Pallet::<T>::set_block_number(current_epoch_u32::<T>(current_epoch).into());
+    assert_eq!(T::EpochProvider::current_epoch(), current_epoch);
+    let protection_close = Pallet::<T>::proposal_protection_close_epoch(submitted_epoch)
+      .expect("Invoice protection close must be representable");
+    assert!(current_epoch < protection_close);
+    ActiveProposals::<T>::insert(domain, item_id, ActiveProposal { submitted_epoch });
+    ProposalMetadataByItem::<T>::insert(
+      domain,
+      item_id,
+      benchmark_proposal_metadata::<T>(ProposalPayloadKind::L2TreasurySpend),
+    );
+    ActiveProposalIdsByDomain::<T>::insert(
+      domain,
+      BoundedVec::try_from(alloc::vec![item_id]).expect("Invoice active index fits"),
+    );
+    assert_eq!(
+      Pallet::<T>::do_proposal_primary_track_family(domain, item_id),
+      Some(ProposalPrimaryTrackFamily::Invoice),
+    );
+    let maximum = T::MaxWinningVoteAccountsPerCall::get();
+    assert!(maximum > 0);
+    let context = Pallet::<T>::proposal_vote_context(
+      item_id,
+      submitted_epoch,
+      current_epoch,
+      protection_close,
+      current_epoch,
+    );
+    let wide = U256::from(u128::MAX) * U256::from(7);
+    let mut votes = ProposalVotes {
+      ayes: BoundedVec::default(),
+      nays: BoundedVec::default(),
+      amplifies: BoundedVec::default(),
+      approves: BoundedVec::default(),
+      reduces: BoundedVec::default(),
+      vetoes: BoundedVec::default(),
+      passes: BoundedVec::default(),
+    };
+    let mut accounts = alloc::vec![voter.clone()];
+    for (label, target, protection) in [
+      ("invoice-nay", &mut votes.nays, false),
+      ("invoice-amplify", &mut votes.amplifies, false),
+      ("invoice-approve", &mut votes.approves, false),
+      ("invoice-reduce", &mut votes.reduces, false),
+      ("invoice-veto", &mut votes.vetoes, true),
+      ("invoice-pass", &mut votes.passes, true),
+    ] {
+      for index in 0..maximum {
+        let account = account::<T::AccountId>(label, index, 0);
+        assert!(!accounts.contains(&account));
+        accounts.push(account.clone());
+        let (weight, raw_power) = if protection {
+          (
+            U256::from(T::VetoVotePowerProvider::vote_weight(
+              domain, &context, &account,
+            )),
+            U256::from(T::VetoVotePowerProvider::raw_vote_weight(domain, &account)),
+          )
+        } else {
+          (wide, wide)
+        };
+        target
+          .try_push(ProposalBallot {
+            account,
+            vote_epoch: current_epoch,
+            weight,
+            raw_power,
+          })
+          .expect("Invoice companion fits");
+      }
+    }
+    let vote = if c == 0 {
+      votes.reduces.pop().expect("nonempty Reduce vector");
+      ProposalVoteKind::Reduce
+    } else {
+      if c != 3 {
+        votes.vetoes.pop().expect("nonempty Veto vector");
+      }
+      if c >= 2 {
+        // Frozen source Pass represents a previous accepted cast; its setup is not timed.
+        let prior = votes.passes.last_mut().expect("nonempty Pass vector");
+        prior.account = voter.clone();
+        prior.weight = U256::from(T::VetoVotePowerProvider::vote_weight(
+          domain, &context, &voter,
+        ));
+        prior.raw_power = U256::from(T::VetoVotePowerProvider::raw_vote_weight(domain, &voter));
+      }
+      ProposalVoteKind::Veto
+    };
+    assert!(
+      Pallet::<T>::current_veto_cancellation(domain, item_id, &votes, false)
+        .expect("valid source protection tally")
+        .is_none()
+    );
+    assert!(votes.ayes.is_empty());
+    assert_eq!(votes.amplifies.len(), maximum as usize);
+    assert_eq!(votes.approves.len(), maximum as usize);
+    assert_eq!(votes.nays.len(), maximum as usize);
+    ProposalVotesByItem::<T>::insert(domain, item_id, &votes);
+    if c == 4 {
+      let retention: T::Epoch = current_epoch_u32::<T>(current_epoch)
+        .checked_add(T::FinalizedProposalOutcomeRetentionEpochs::get())
+        .expect("Invoice retention epoch fits")
+        .into();
+      let mut bucket = BoundedVec::default();
+      for index in 0..T::MaxFinalizedProposalOutcomesPerEpoch::get() {
+        bucket
+          .try_push(FinalizedProposalTouch {
+            domain,
+            item_id: benchmark_item_id::<T>(10_000 + index),
+          })
+          .expect("full retention fixture fits");
+      }
+      FinalizedProposalOutcomeExpiryBuckets::<T>::insert(retention, bucket);
+    }
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let result;
+    #[block]
+    {
+      result = Pallet::<T>::cast_vote(
+        RawOrigin::Signed(voter.clone()).into(),
+        domain,
+        item_id,
+        vote,
+      );
+    }
+    if c >= 3 {
+      assert_eq!(
+        result,
+        Err(if c == 3 {
+          Error::<T>::ProposalVoteSetFull.into()
+        } else {
+          Error::<T>::FinalizedProposalOutcomeExpiryBucketFull.into()
+        })
+      );
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        root_before,
+      );
+      assert_eq!(
+        ProposalVotesByItem::<T>::get(domain, item_id)
+          .unwrap()
+          .encode(),
+        votes.encode()
+      );
+    } else {
+      assert_eq!(result, Ok(()));
+      assert!(GovernanceLocks::<T>::contains_key(&voter));
+      let participation = ParticipationTotalsByAccount::<T>::get(domain, &voter);
+      assert_eq!(participation.total_participations, u64::from(c != 2));
+      assert_eq!(participation.winning_participations, u64::from(c != 0));
+      if c == 0 {
+        let after = ProposalVotesByItem::<T>::get(domain, item_id).unwrap();
+        assert_eq!(after.reduces.len(), maximum as usize);
+        let ballot = after.reduces.last().unwrap();
+        assert_eq!(ballot.account, voter);
+        assert!(ballot.weight > U256::zero());
+        assert_eq!(ballot.weight, ballot.raw_power);
+      } else {
+        assert!(!ActiveProposals::<T>::contains_key(domain, item_id));
+        assert!(!ProposalVotesByItem::<T>::contains_key(domain, item_id));
+        assert!(matches!(
+          FinalizedProposals::<T>::get(domain, item_id)
+            .unwrap()
+            .outcome,
+          FinalizedProposalOutcome::VetoCancelled { .. }
+        ));
+      }
+    }
+  }
+
   #[benchmark]
   fn unlock_vote_power() {
     let caller: T::AccountId = whitelisted_caller();
@@ -1809,6 +1993,18 @@ mod benches {
       seed_maximum_finalized_outcomes::<T>(T::MaxFinalizedProposalOutcomesPerBlock::get())
     }
 
+    /// Execute the actual marked Invoice fixture with verification and no physical sampling.
+    pub fn verify_invoice_vote_benchmark(c: u32) -> Result<(), BenchmarkError> {
+      use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, BenchmarkingSetup};
+      if c > 4 {
+        return Err(BenchmarkError::Skip);
+      }
+      <cast_vote_invoice as BenchmarkingSetup<T>>::unit_test_instance(
+        &cast_vote_invoice,
+        &[(BenchmarkParameter::c, c)],
+      )
+    }
+
     /// Verify the full hook's finite empty-pending source without collecting physical samples.
     pub fn verify_complete_finalized_cleanup_benchmark(
       n: u32,
@@ -2069,6 +2265,15 @@ mod benches {
     use crate::mock::{Test, new_test_ext};
     use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, BenchmarkingSetup, Recording};
     use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[test]
+    fn invoice_vote_benchmark_executes_all_marked_cases() {
+      for case in 0..=4 {
+        new_test_ext().execute_with(|| {
+          Pallet::<Test>::verify_invoice_vote_benchmark(case).unwrap();
+        });
+      }
+    }
 
     #[derive(Default)]
     struct FaultAfterStop {

@@ -458,6 +458,222 @@ fn replay(authored: &AuthoredBlock, block: Block, proof: &StorageProof) -> bool 
 }
 
 #[test]
+fn opaque_cold_ingress_survives_complete_import_and_replays_late_refusal() {
+  use codec::DecodeAll;
+  use cumulus_primitives_parachain_inherent::MessageQueueChain;
+  use polkadot_sdk::{
+    cumulus_pallet_parachain_system::{
+      HrmpWatermark, LastHrmpMqcHeads, ReservedXcmpWeightOverride,
+    },
+    cumulus_pallet_xcmp_queue::{OutboundState, WeightInfoExt},
+    cumulus_primitives_core::{
+      AggregateMessageOrigin, InboundHrmpMessage, ParaId, XcmpMessageFormat,
+    },
+    frame_support::{storage::storage_prefix, traits::QueueFootprintQuery},
+    staging_xcm::{
+      VersionedXcm,
+      latest::{Instruction::ClearOrigin, Xcm},
+    },
+  };
+  type W = <Runtime as polkadot_sdk::cumulus_pallet_xcmp_queue::Config>::WeightInfo;
+  let storage = preset_genesis_storage(
+    &[],
+    &polkadot_sdk::sp_genesis_builder::DEV_RUNTIME_PRESET.into(),
+  );
+  let parent = parent_header_for(storage.clone(), &[], 0);
+  let sender = ParaId::from(1000u32);
+  let payload = VersionedXcm::from(Xcm::<RuntimeCall>(vec![ClearOrigin])).encode();
+  let mut wire = XcmpMessageFormat::ConcatenatedOpaqueVersionedXcm.encode();
+  wire.extend(payload.encode());
+  let message = InboundHrmpMessage {
+    sent_at: 1,
+    data: wire.clone(),
+  };
+  let mut chain = MessageQueueChain::default();
+  chain.extend_hrmp(&message);
+  let mut builder = RelayStateSproofBuilder {
+    para_id: crate::PARACHAIN_ID.into(),
+    current_slot: 1u64.into(),
+    included_para_head: Some(HeadData(parent.encode())),
+    ..Default::default()
+  };
+  builder.upsert_inbound_channel(sender).mqc_head = Some(chain.head());
+  builder.upsert_inbound_channel(sender).max_message_size = 65_536;
+  // Finalization must retain the negotiated status, not prune a closed outbound channel.
+  builder.upsert_outbound_channel(sender);
+  let (relay_parent_storage_root, relay_chain_state) = builder.into_state_root_and_proof();
+  let mut inherents = inherent_data_for(&parent, 1);
+  inherents.replace_data(
+    INHERENT_IDENTIFIER,
+    &ParachainInherentData {
+      validation_data: PersistedValidationData {
+        parent_head: HeadData(parent.encode()),
+        relay_parent_number: 1,
+        relay_parent_storage_root,
+        max_pov_size: crate::MAXIMUM_BLOCK_WEIGHT.proof_size().try_into().unwrap(),
+      },
+      relay_chain_state,
+      horizontal_messages: BTreeMap::from([(sender, vec![message])]),
+      downward_messages: Default::default(),
+      relay_parent_descendants: Vec::new(),
+      collator_peer_id: None,
+    },
+  );
+  let status_key = storage_prefix(b"XcmpQueue", b"OutboundXcmpStatus").to_vec();
+  let book_key = polkadot_sdk::pallet_message_queue::BookStateFor::<Runtime>::hashed_key_for(
+    AggregateMessageOrigin::Sibling(sender),
+  );
+  assert!(!storage.top.contains_key(&status_key));
+  assert!(!storage.top.contains_key(&book_key));
+  let signer = sr25519::Pair::from_string("//Alice", None).unwrap();
+  let authored = author_complete_block_after_with_expected_dispatch(
+    storage,
+    &[],
+    &parent,
+    1,
+    UserDemand::ActorOnly,
+    &signer,
+    0,
+    &BTreeMap::new(),
+    &[],
+    inherents,
+    None,
+  );
+  // Import-time API validation is a separate semantic preflight, not donated to the recorder.
+  TestExternalities::new(authored.pre_state.clone()).execute_with(|| {
+    use polkadot_sdk::sp_block_builder::runtime_decl_for_block_builder::BlockBuilder;
+    let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+    assert_ok!(crate::apis::validate_context_inherent_geometry(
+      &authored.inherent_data
+    ));
+    assert!(
+      <Runtime as BlockBuilder<Block>>::check_inherents(
+        authored.block.clone().into(),
+        authored.inherent_data.clone(),
+      )
+      .ok()
+    );
+    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
+  });
+  let limit = crate::configs::ReservedXcmpWeight::get();
+  assert_eq!(limit.proof_size(), 0);
+  assert!(W::uncached_enqueue_xcmp_messages().proof_size() > limit.proof_size());
+  assert_eq!(
+    crate::MAXIMUM_BLOCK_WEIGHT / 4,
+    Weight::from_parts(500_000_000_000, 2_621_440)
+  );
+  // Private status fields are checked via their exact public SCALE layout, not mutated.
+  type Status = (ParaId, OutboundState, bool, u16, u16, u32, u32);
+  let statuses =
+    Vec::<Status>::decode_all(&mut authored.post_state.top[&status_key].as_slice()).unwrap();
+  assert_eq!(
+    statuses,
+    vec![(sender, OutboundState::Ok, false, 0, 0, 1, 0)]
+  );
+  assert!(!authored.post_state.top.contains_key(&book_key));
+  TestExternalities::new(authored.post_state.clone()).execute_with(|| {
+    assert_eq!(
+      crate::MessageQueue::footprint(AggregateMessageOrigin::Sibling(sender))
+        .storage
+        .count,
+      0
+    );
+    assert_eq!(HrmpWatermark::<Runtime>::get(), 1);
+    assert_eq!(
+      LastHrmpMqcHeads::<Runtime>::get()[&sender].head(),
+      chain.head()
+    );
+    assert!(ReservedXcmpWeightOverride::<Runtime>::get().is_none());
+  });
+  for valid in [true, false] {
+    let mut block = authored.block.clone();
+    if !valid {
+      block.header.set_state_root(H256::repeat_byte(0xa5));
+    }
+    // No clock observer is installed. The same complete native consumer owns root/commit.
+    let plain = capture(
+      &authored.pre_state,
+      &authored.post_state,
+      block.clone(),
+      false,
+      false,
+    );
+    let observed = capture(
+      &authored.pre_state,
+      &authored.post_state,
+      block.clone(),
+      true,
+      false,
+    );
+    assert_eq!(plain.accepted, valid);
+    assert_eq!(observed.accepted, valid);
+    assert_eq!(plain.top, observed.top);
+    assert_eq!(
+      plain.proof, observed.proof,
+      "passive cuts cannot donate witness inputs"
+    );
+    assert_eq!(plain.before_commit, observed.before_commit);
+    assert_eq!(plain.after_commit, observed.after_commit);
+    assert_eq!(replay(&authored, block, &observed.proof), valid);
+    assert_eq!(
+      observed.top.get(&status_key),
+      if valid {
+        authored.post_state.top.get(&status_key)
+      } else {
+        authored.pre_state.top.get(&status_key)
+      }
+    );
+    // A zero handler return does not imply no status access, no incurred work or no proof.
+    assert!(!observed.proof.is_empty());
+    assert!(observed.before_commit.0 > 0);
+    for method in ["Get", "Put", "StorageRoot"] {
+      assert!(observed.calls.get(method).copied().unwrap_or(0) > 0);
+    }
+    let mut previous_nodes = BTreeSet::new();
+    let boundaries = observed
+      .boundaries
+      .iter()
+      .map(|cut| {
+        let nodes = cut.proof.iter_nodes().cloned().collect::<BTreeSet<_>>();
+        assert!(
+          previous_nodes.is_subset(&nodes),
+          "root/refusal retains original inputs"
+        );
+        let added = nodes.difference(&previous_nodes).count();
+        let retained = previous_nodes.intersection(&nodes).count();
+        previous_nodes = nodes;
+        serde_json::json!({
+          "name": cut.name, "rawProofBytes": cut.proof.encoded_size(),
+          "nodes": cut.proof.len(), "addedNodes": added, "retainedNodes": retained,
+          "sdkDb": cut.db,
+        })
+      })
+      .collect::<Vec<_>>();
+    assert_eq!(previous_nodes.len(), observed.proof.len());
+    println!(
+      "OPAQUE_COMPLETE_COLD_INGRESS_V1 {}",
+      serde_json::json!({
+        "accepted": valid, "sender": 1000, "fullPackets": 1, "hashedPackets": 0,
+        "wireBytes": wire.len(), "payloadBytes": payload.len(),
+        "allowance": [limit.ref_time(), limit.proof_size()], "sourceImpliedHandlerReturn": [0, 0],
+        "bootstrap": [W::uncached_enqueue_xcmp_messages().ref_time(), W::uncached_enqueue_xcmp_messages().proof_size()],
+        "quarter": [500_000_000_000u64, 2_621_440],
+        "statusCommitted": valid, "coldBookCreated": false,
+        "sdkBeforeCommit": observed.before_commit, "sdkAfterCommit": observed.after_commit,
+        "rawProofBytes": observed.proof.encoded_size(), "boundaries": boundaries,
+        "logicalCalls": observed.calls,
+        "logicalCallsAreMethodTotalsNotPerKeyOrPhysicalIo": true,
+        "proofOnlyReplay": true, "passiveObserverNoninterference": true,
+        "checkInherentsPassedOutsideRecorder": true,
+        "fixtureRole": "coherent prepared relay proof plus real genesis/Executive; no authenticated relay ancestry",
+        "priceQualified": false, "physicalTimingsCollected": false,
+        "scope": "complete native Executive/import transaction/root/SDK commit; not Wasm, PVF or maximum-domain pricing",
+      })
+    );
+  }
+}
+
+#[test]
 fn complete_fixed_obligation_caller_preserves_success_and_late_refusal() {
   let storage = preset_genesis_storage(
     &[],

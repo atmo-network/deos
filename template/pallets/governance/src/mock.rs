@@ -305,6 +305,26 @@ impl
     ))
   }
 
+  fn prepare_invoice_voter(
+    account: &AccountId,
+  ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError> {
+    let domain = 43;
+    assert_eq!(
+      <MockProposalPrimaryTrackFamilyProvider as pallet_governance::ProposalPrimaryTrackFamilyProvider<DomainId>>::family(
+        domain,
+        pallet_governance::ProposalPayloadKind::L2TreasurySpend,
+      ),
+      pallet_governance::ProposalPrimaryTrackFamily::Invoice,
+    );
+    set_vote_weight(
+      *account,
+      crate::U256::from(u128::MAX) * crate::U256::from(7),
+    );
+    set_veto_vote_weight(*account, 100);
+    set_veto_total_issuance(100);
+    Ok(domain)
+  }
+
   fn prepare_protection_voter(
     account: &AccountId,
   ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError> {
