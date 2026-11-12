@@ -3,8 +3,8 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-# stable2609-2 is source-only; retain the last published executable bundle.
-POLKADOT_SDK_RELEASE="polkadot-stable2609-1"
+# Pin the published executable bundle independently of source/worker qualification.
+POLKADOT_SDK_RELEASE="polkadot-stable2609-2"
 REPOSITORY="paritytech/polkadot-sdk"
 BASE_URL="https://github.com/$REPOSITORY/releases/download/$POLKADOT_SDK_RELEASE"
 BINARY_NAMES=(
@@ -46,8 +46,8 @@ Inputs:
   bundle is absent or checksum-mismatched, plus a supported host platform.
 
 Authority:
-  GitHub release: paritytech/polkadot-sdk polkadot-stable2609-1
-  Workspace source: polkadot-stable2609-2 (no upstream binaries published)
+  GitHub release: paritytech/polkadot-sdk polkadot-stable2609-2
+  Workspace source: polkadot-stable2609-2; local corrections remain separate
   Compatibility: DEOS workspace Polkadot SDK 2609 package line; worker/node
   qualification is separate from download/checksum verification
   Supported hosts: Linux x86_64 and macOS arm64 (checksum-pinned release assets)
@@ -138,11 +138,11 @@ resolve_platform() {
             require_commands sha256sum
             CHECKSUM_COMMAND=(sha256sum)
             CHECKSUMS=(
-                82b213417be8b2e241c6d8a940df131bde195835260afe16e69b8bad694eb1c1
-                a30cc63c7794eec8c22d92bbb103c6757b8dcab6c6f550eb480bec0edd5716cb
-                92c253a46b77330c15c119804f40a12da8025b1cc289bceb406f7f3e887134cb
-                d2c86604d6e39a3cd833778985491c72e55c9544bf2e0dc3741b2cfd22585933
-                e60103d0880f973fdb7701b8a2afc9c23423daee1bfab0513b8239671dd3955c
+                7c21c5831eb0c093e3b91e23857cfaecf30ba15b4d14256c13f942a43542c21b
+                2066854bdaf9a2cdfb4a331f9684953e4a8000a1aa96bb684e112f50fbc91c4e
+                b33b8a288b386ff5d1bbd28eb6a3ee70e0ada968e93c369888ee0cf67303e771
+                16ecbd306afa6562d911a8d533e976e194c6d5e3f404321ea83ec4171f7fe5f6
+                2c78e5105272a6e23f1def5dd4003080358df15845530736a65a82415aea7c28
             )
             ;;
         Darwin:arm64)
@@ -150,11 +150,11 @@ resolve_platform() {
             CHECKSUM_COMMAND=(shasum -a 256)
             ASSET_SUFFIX="-aarch64-apple-darwin"
             CHECKSUMS=(
-                2ede75fba3334b09a89160410d381f7f13093da4a1f08c07965dc17d0595228d
-                2cd1ddb414bc6bba46be19052ff8f4b95172761ff8b465d8c5a506e9c9b4f0ce
-                1ca4cfd088aaf05075917d3044cd2390bd62126da0855594566fb1402bdb17f8
-                19887e1d0b4019c408254d1c58027649a3eea42d96e8568e5cc4b974b47489d2
-                82714edd9d2d9731d42fcfb85f161dd3f252383d915d1e8bd54f9b9a16db9c50
+                2d556b07a703010ee139732763f6e367865c589928a1c91bb681a0b075c88fba
+                abb5b18beb1fdf148c117dcf7564336a3d80b3e83b19b9e6fe16060854ee4d41
+                29dd86a180e2eea20b4faff9626bf7153b8904caa9651a9658c63041b20c6167
+                76d21993ef47e942f25a1137dd6160f767634247de677d00691686e910ccb683
+                0b37b9835a9580c555489e787f8b4449d710118464d2433396181edb4a88a416
             )
             ;;
         *)
@@ -174,9 +174,20 @@ check_prerequisites() {
             exit 1
         }
         checksum_matches "$OMNI_NODE_PATH" "$OMNI_NODE_SHA256" || { log_error "Supplied Omni checksum mismatch"; exit 1; }
-        [[ "$OMNI_NODE_SHA256" != "${CHECKSUMS[1]}" ]] || { log_error "The release Omni lacks the transaction-depth fix; select an independently qualified source build"; exit 1; }
+        if is_unqualified_omni_checksum "$OMNI_NODE_SHA256"; then
+            log_error "Published Omni artifacts are not qualified DEOS selections; select an independently qualified source build"
+            exit 1
+        fi
     fi
     log_success "Pinned binary prerequisites checked"
+}
+
+# Keep known prior-release Omni artifacts excluded when the current pin advances.
+is_unqualified_omni_checksum() {
+    case "$1" in
+        "${CHECKSUMS[1]}"|a30cc63c7794eec8c22d92bbb103c6757b8dcab6c6f550eb480bec0edd5716cb|2cd1ddb414bc6bba46be19052ff8f4b95172761ff8b465d8c5a506e9c9b4f0ce) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 checksum_matches() {
@@ -303,6 +314,17 @@ self_test() (
         printf '#!/usr/bin/env bash\nprintf "fixture %s\\n"\n' "$name" >"$fixture/source/$name"
         CHECKSUMS+=("$(sha256sum "$fixture/source/$name" | cut -d ' ' -f 1)")
     done
+    local checksum
+    for checksum in "${CHECKSUMS[1]}" a30cc63c7794eec8c22d92bbb103c6757b8dcab6c6f550eb480bec0edd5716cb 2cd1ddb414bc6bba46be19052ff8f4b95172761ff8b465d8c5a506e9c9b4f0ce; do
+        if ! is_unqualified_omni_checksum "$checksum"; then
+            log_error "Published Omni checksum escaped corrected-node refusal"
+            exit 1
+        fi
+    done
+    if is_unqualified_omni_checksum "${CHECKSUMS[0]}"; then
+        log_error "Omni refusal incorrectly classified a distinct artifact"
+        exit 1
+    fi
     curl() {
         local destination="" asset=""
         while [[ $# -gt 0 ]]; do
@@ -375,6 +397,12 @@ self_test() (
         checksum_matches "$BIN_DIR/${BINARY_NAMES[$index]}" "${CHECKSUMS[$index]}"
     done
     [[ "$(<"$BIN_DIR/.polkadot-sdk-release")" == "$POLKADOT_SDK_RELEASE" ]]
+    printf 'other-release\n' >"$BIN_DIR/.polkadot-sdk-release"
+    if (verify_bundle) >/dev/null 2>&1; then
+        log_error "A stale release marker qualified the current bundle"
+        exit 1
+    fi
+    printf '%s\n' "$POLKADOT_SDK_RELEASE" >"$BIN_DIR/.polkadot-sdk-release"
     printf 'corrupt\n' >>"$BIN_DIR/frame-omni-bencher"
     if (select_args --check --only frame-omni-bencher; verify_bundle) >/dev/null 2>&1; then
         log_error "Partial verification accepted corrupted published bytes"

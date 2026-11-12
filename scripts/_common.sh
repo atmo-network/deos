@@ -117,7 +117,7 @@ verify_deos_omni_node() {
     selected="$(jq -er '.selected_sha256 | select(type == "string")' "$receipt")" || return 1
     upstream="$(jq -er '.upstream_omni_sha256 | select(type == "string")' "$receipt")" || return 1
     [[ "$release" == "$(<"$BIN_DIR/.polkadot-sdk-release")" && "$selected" =~ ^[a-f0-9]{64}$ && "$upstream" =~ ^[a-f0-9]{64}$ && "$selected" != "$upstream" ]] || {
-        log_error "Selected Omni receipt does not match the SDK bundle or identifies its unpatched upstream artifact"
+        log_error "Selected Omni receipt does not match the SDK bundle or identifies its unqualified upstream artifact"
         return 1
     }
     actual="$(deos_sha256_file "$node_path")" || return 1

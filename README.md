@@ -50,7 +50,7 @@ DEOS_OMNI_NODE_SHA256="${QUALIFIED_OMNI_SHA256:?Set the independently verified a
 ./scripts/bootstrap-local-network.sh
 ```
 
-The workflow verifies/selects that node before building the runtime, prepares the chain specification, and starts local Zombienet using `polkadot-omni-node-deos`. A previously installed selection can be reused with `--skip-download`; it still must pass its receipt/digest checks. Downloading the retained `stable2609-1` bundle does not qualify the source-only `stable2609-2` graph, workers or resource bounds. No downstream production launch is supported before DEOS `1.0`.
+The workflow verifies/selects that node before building the runtime, prepares the chain specification, and starts local Zombienet using `polkadot-omni-node-deos`. A previously installed selection can be reused with `--skip-download`; it still must pass its receipt/digest checks. Downloading the pinned `stable2609-2` bundle establishes distribution identity, not qualification of the locally corrected source graph, workers or resource bounds. No downstream production launch is supported before DEOS `1.0`.
 
 ### Start the reference client
 

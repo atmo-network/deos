@@ -18,7 +18,7 @@ It does **not** carry a custom node crate in this repository snapshot; deploymen
 
 ## Selected SDK Source Patches
 
-The workspace selects the source-only `polkadot-stable2609-2` release through exact umbrella `2609.3.0`. The [SDK integration owner](../docs/deos/actors.integration.en.md#sdk-dependency-line) records source provenance, native validation and artifact limits. Upstream publishes no executable bundle for this patch; the downloader retains checksum-pinned `stable2609-1` tools, not newly qualified workers or a corrected node. Retained production Wasm/metadata/client evidence belongs to its earlier graph, not this source update.
+The workspace selects `polkadot-stable2609-2` through exact umbrella `2609.3.0`. The [SDK integration owner](../docs/deos/actors.integration.en.md#sdk-dependency-line) records source provenance, native validation and artifact limits. The downloader pins the published `stable2609-2` executable bundle; checksum identity does not qualify workers or a corrected node. Retained production Wasm/metadata/client evidence belongs to its earlier graph, not this source update.
 
 The root Cargo manifest applies the existing client transaction-depth backport and the [XCMP admission backport](vendor/cumulus-pallet-xcmp-queue/README.md) without changing their SDK package versions. XCMP's new host page-position bound is the existing MQ HeapSize, not the outbound HRMP page limit. The root lock changes only the selected XCMP registry source to that local package. Source-level repair does not reissue production Wasm/metadata or qualify physical prices and the system quarter; the integration and assurance owners retain those gates.
 
@@ -417,9 +417,9 @@ These are not part of the production runtime contract.
 
 ## Current Architecture Notes
 
-Workspace dependencies select final `polkadot-stable2609-1`: exact umbrella `polkadot-sdk =2609.2.0`, Parachain System `=0.32.0`, Wasm builder `=35.0.0` and the compatible FRAME/API/Arithmetic graph in `Cargo.lock`. The client transaction-depth correction remains locally patched because this tag still contains the defect. Selected default/ordinary-benchmark checks and regressions, package and workspace all-target/all-feature Clippy pass; default-only tests remain a distinct evidence class. The [SDK dependency owner](../docs/deos/actors.integration.en.md#sdk-dependency-line) owns exact source/publication identities, changed pool/ledger behavior, selected validation and remaining gates.
+The [SDK dependency owner](../docs/deos/actors.integration.en.md#sdk-dependency-line) binds the selected package graph, published executable pins, local client-depth/XCMP corrections, native preparation and exact evidence scopes. Default-provider and benchmark/all-feature checks remain distinct; downloading the matching upstream release is not qualification of the corrected DEOS source composition.
 
-The selected graph has an issued default production-profile Wasm, actual-Wasm/native v16 metadata equality and coherent generated client bindings/vectors. The two scoped reference-block/proof and funded-User-Action replay profiles pass, with independent approval limited to artifact coherence and those finite profiles. This is not production safety or complete runtime/host acceptance. Earlier secure PVF, worker and corrected-node liveness observations retain their original graph/artifact identities and do not transfer automatically. Complete owner/resource, physical pricing and release acceptance remain open. The inactive precompile byte tariff remains unqualified; ordinary XCM uses its separate instruction owner.
+Current production-Wasm equality, complete owner/resource pricing and release acceptance remain open. Captured earlier-graph Wasm/metadata equality, finite replay approvals, secure PVF, worker and corrected-node liveness observations retain their original identities rather than transferring to the selected graph. The inactive precompile byte tariff remains unqualified; ordinary XCM uses its separate instruction owner.
 
 The most relevant implementation docs live in `../docs/deos/`:
 
