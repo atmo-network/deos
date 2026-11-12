@@ -5,13 +5,13 @@ use pallet_deos_actors::{
   TriggerFamily,
 };
 use polkadot_sdk::{
-  frame_support::{traits::Currency, BoundedVec},
+  frame_support::{BoundedVec, traits::Currency},
   polkadot_runtime_common::BuildStorage,
-  sp_io::hashing::sha2_256,
   sp_io::TestExternalities,
+  sp_io::hashing::sha2_256,
 };
 use primitives::AssetKind;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{env, fs, path::Path, process};
 
 const FORMAT: &str = "deos.actor.cost-vectors";
@@ -344,9 +344,11 @@ mod tests {
   #[test]
   fn cost_vector_profile_matrix_requires_standalone_model_capacity() {
     for (scaffolding, benchmarks) in [(false, false), (false, true), (true, true)] {
-      assert!(ensure_profile(scaffolding, benchmarks)
-        .unwrap_err()
-        .contains("unsupported"));
+      assert!(
+        ensure_profile(scaffolding, benchmarks)
+          .unwrap_err()
+          .contains("unsupported")
+      );
     }
     assert_eq!(ensure_profile(true, false), Ok(()));
   }
@@ -357,9 +359,11 @@ mod tests {
   )))]
   #[test]
   fn cost_vectors_refuse_unsupported_profile_before_fixture_preparation() {
-    assert!(manifest()
-      .unwrap_err()
-      .contains("unsupported Actor cost vector profile"));
+    assert!(
+      manifest()
+        .unwrap_err()
+        .contains("unsupported Actor cost vector profile")
+    );
   }
 
   #[cfg(all(

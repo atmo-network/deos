@@ -7632,6 +7632,219 @@ fn production_primary_power_full_range_resolves_normal_urgent_and_invoice() {
   }
 }
 
+#[test]
+fn governance_wide_ballot_resource_domain_has_exact_codec_and_trie_coordinates() {
+  use pallet_governance::{ProposalBallot, ProposalVotes, U256};
+  use polkadot_sdk::{
+    frame_support::BoundedVec,
+    sp_core::{Blake2Hasher, H256},
+    sp_trie::{
+      LayoutV1, MemoryDB, Recorder, StorageProof, Trie, TrieDBBuilder, TrieDBMutBuilder, TrieMut,
+    },
+  };
+  type Ballot = ProposalBallot<crate::AccountId, u32>;
+  type Votes = ProposalVotes<
+    crate::AccountId,
+    u32,
+    <Runtime as pallet_governance::Config>::MaxWinningVoteAccountsPerCall,
+  >;
+  type Layout = LayoutV1<Blake2Hasher>;
+  let limit = <Runtime as pallet_governance::Config>::MaxWinningVoteAccountsPerCall::get();
+  assert_eq!(limit, 256);
+  let weight = U256::from(u128::MAX) * U256::from(7);
+  assert_eq!(weight.bits(), 131);
+  let ballots = |direction: u32| {
+    BoundedVec::try_from(
+      (0..limit)
+        .map(|index| {
+          let mut account = [0u8; 32];
+          account[..4].copy_from_slice(&direction.to_le_bytes());
+          account[4..8].copy_from_slice(&index.to_le_bytes());
+          Ballot {
+            account: account.into(),
+            vote_epoch: 1,
+            weight,
+            raw_power: weight,
+          }
+        })
+        .collect::<Vec<_>>(),
+    )
+    .unwrap()
+  };
+  let typed = Votes {
+    ayes: ballots(0),
+    nays: ballots(1),
+    amplifies: ballots(2),
+    approves: ballots(3),
+    reduces: ballots(4),
+    vetoes: ballots(5),
+    passes: ballots(6),
+  };
+  assert_eq!(Ballot::max_encoded_len(), 100);
+  assert_eq!(typed.ayes[0].encoded_size(), Ballot::max_encoded_len());
+  assert_eq!(codec::Compact(limit).encoded_size(), 2);
+  assert_eq!(typed.encoded_size(), 7 * (2 + 256 * 100));
+  assert_eq!(typed.encoded_size(), Votes::max_encoded_len());
+  assert_eq!(typed.encoded_size(), 179_214);
+  // Family-coherent vector geometry, not jointly funded public history. Protection's
+  // provider normalization is unchanged; fixed-width encoding does not need wide vetoes.
+  let mut binary = Votes::decode(&mut &typed.encode()[..]).unwrap();
+  binary.amplifies.clear();
+  binary.approves.clear();
+  binary.reduces.clear();
+  let mut invoice = Votes::decode(&mut &typed.encode()[..]).unwrap();
+  invoice.ayes.clear();
+  for votes in [&mut binary, &mut invoice] {
+    for ballot in votes.vetoes.iter_mut().chain(votes.passes.iter_mut()) {
+      ballot.weight = U256::one();
+      ballot.raw_power = U256::one();
+    }
+  }
+  assert_eq!(binary.encoded_size(), 102_411);
+  assert_eq!(invoice.encoded_size(), 153_613);
+  for (domain, votes, primary_directions, kind) in [
+    (
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      &binary,
+      2,
+      pallet_governance::ProposalPayloadKind::L1RootAction,
+    ),
+    (
+      TACTICAL_GOVERNANCE_DOMAIN,
+      &invoice,
+      4,
+      pallet_governance::ProposalPayloadKind::L2TreasurySpend,
+    ),
+  ] {
+    new_test_ext().execute_with(|| {
+      // Prepared snapshots isolate value-domain consumers, not public ballot ancestry.
+      assert_ok!(Governance::submit_proposal(
+        RuntimeOrigin::root(),
+        domain,
+        128,
+        ALICE,
+        pallet_governance::ProposalCadenceMode::Ordinary,
+        kind,
+        crate::Hash::default()
+      ));
+      pallet_governance::ProposalVotesByItem::<Runtime>::insert(domain, 128, votes);
+      let tally = Governance::proposal_vote_tally(domain, 128).unwrap();
+      assert_eq!(
+        tally.turnout_weight,
+        weight * U256::from(limit) * U256::from(primary_directions)
+      );
+      assert_eq!(tally.veto_turnout_weight, U256::from(2 * limit));
+      assert_eq!(tally.encoded_size(), 316);
+      let primary = Governance::proposal_primary_track_tally(domain, 128).unwrap();
+      assert!(matches!(
+        (kind, primary),
+        (
+          pallet_governance::ProposalPayloadKind::L1RootAction,
+          pallet_governance::ProposalPrimaryTrackTally::Binary { .. }
+        ) | (
+          pallet_governance::ProposalPayloadKind::L2TreasurySpend,
+          pallet_governance::ProposalPrimaryTrackTally::Invoice { .. }
+        )
+      ));
+      assert_ok!(Governance::reject_proposal(
+        RuntimeOrigin::root(),
+        domain,
+        128
+      ));
+      assert!(!pallet_governance::ProposalVotesByItem::<Runtime>::contains_key(domain, 128));
+      assert!(Governance::proposal_vote_tally(domain, 128).is_none());
+      assert!(Governance::finalized_proposal_outcome(domain, 128).is_some());
+    });
+  }
+  assert_eq!(
+    pallet_governance::ProposalVoteTally::max_encoded_len(),
+    7 * 4 + 9 * 32
+  );
+  assert_eq!(
+    pallet_governance::ProposalFrozenBallot::<u32>::max_encoded_len(),
+    69
+  );
+  assert_eq!(
+    pallet_governance::FinalizedProposalOutcome::<u32>::max_encoded_len(),
+    37
+  );
+  type Record = pallet_governance::FinalizedProposalRecord<
+    crate::AccountId,
+    u32,
+    crate::Hash,
+    u32,
+    pallet_governance::CidBytesOf<Runtime>,
+  >;
+  assert_eq!(Record::max_encoded_len(), 257);
+  let storage_info =
+    <Governance as polkadot_sdk::frame_support::traits::StorageInfoTrait>::storage_info();
+  let max_size = |name: &[u8]| {
+    storage_info
+      .iter()
+      .find(|info| info.storage_name == name)
+      .unwrap()
+      .max_size
+      .unwrap()
+  };
+  assert_eq!(max_size(b"ProposalVotesByItem"), 179_254);
+  assert_eq!(max_size(b"FinalizedProposals"), 297);
+  let key = pallet_governance::ProposalVotesByItem::<Runtime>::hashed_key_for(0, 128);
+  assert_eq!(key.len(), 72); // Pallet/item prefix32 plus two Blake2_128Concat(u32) keys20.
+  let values = [binary.encode(), invoice.encode(), typed.encode()];
+  for value in values {
+    let mut db = MemoryDB::<Blake2Hasher>::default();
+    let mut root = H256::default();
+    TrieDBMutBuilder::<Layout>::new(&mut db, &mut root)
+      .build()
+      .insert(&key, &value)
+      .unwrap();
+    let mut recorder = Recorder::<Layout>::new();
+    assert_eq!(
+      TrieDBBuilder::<Layout>::new(&db, &root)
+        .with_recorder(&mut recorder)
+        .build()
+        .get(&key)
+        .unwrap(),
+      Some(value.clone())
+    );
+    let proof = StorageProof::new(recorder.drain().into_iter().map(|node| node.data));
+    assert_eq!(proof.iter_nodes().filter(|node| **node == value).count(), 1);
+    let compact = proof.to_compact_proof::<Blake2Hasher>(root).unwrap();
+    assert_eq!(
+      compact
+        .encoded_nodes
+        .iter()
+        .filter(|node| **node == value)
+        .count(),
+      1
+    );
+    let (replay, replay_root) = compact.to_memory_db::<Blake2Hasher>(&root).unwrap();
+    assert_eq!(replay_root, root);
+    let bytes = TrieDBBuilder::<Layout>::new(&replay, &replay_root)
+      .build()
+      .get(&key)
+      .unwrap()
+      .unwrap();
+    assert_eq!(Votes::decode(&mut &bytes[..]).unwrap().encode(), value);
+    let incomplete = StorageProof::new(proof.iter_nodes().filter(|node| **node != value).cloned())
+      .into_memory_db::<Blake2Hasher>();
+    assert!(
+      TrieDBBuilder::<Layout>::new(&incomplete, &root)
+        .build()
+        .get(&key)
+        .is_err()
+    );
+    println!(
+      "GOVERNANCE_WIDE_BALLOT_RESOURCE_DOMAIN {}",
+      serde_json::json!({
+        "valueBytes": value.len(), "rawProofBytes": proof.encoded_size(),
+        "compactProofBytes": compact.encoded_size(), "keyBytes": key.len(),
+        "layout": "LayoutV1<Blake2Hasher>", "singleKeyReadOnlyNotCompleteProofOrRefTime": true
+      })
+    );
+  }
+}
+
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
 fn governance_boundary_witness_production_backing_near_u128_max_has_131_bit_power() {

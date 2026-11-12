@@ -1,6 +1,72 @@
 #!/usr/bin/env node
 
-import { readFile } from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// Source exclusions require independently reviewed advisory prerequisites, not just
+// membership in a native graph. The ledger/reference retain their exact limits.
+const reachabilityClasses = new Set([
+  'lockfile-only',
+  'native-observability-only',
+  'trusted-generation-only',
+  'source-prerequisite-excluded',
+]);
+
+if (process.argv[2] === '--self-test') {
+  assert.equal(process.argv.length, 3);
+  const directory = await mkdtemp(join(tmpdir(), 'deos-dependency-self-test.'));
+  const date = new Date().toISOString().slice(0, 10);
+  const advisory = 'RUSTSEC-SELFTEST-0001';
+  const exception = {
+    ecosystem: 'cargo', id: advisory, expires: date,
+    reachability: 'source-prerequisite-excluded',
+    reason: 'Fixture-only source prerequisite exclusion; no package safety assertion.',
+  };
+  const base = {
+    cargo: { vulnerabilities: { list: [{ advisory: { id: advisory } }] },
+      database: { 'last-commit': 'fixture', 'last-updated': date } },
+    npm: { metadata: { vulnerabilities: { critical: 0 } } },
+    ledger: { formatVersion: 1, reviewedAt: date, exceptions: [exception], licenseExceptions: [] },
+    lock: { packages: {} },
+  };
+  const invoke = async (data) => {
+    const paths = ['cargo', 'npm', 'ledger', 'lock'].map(name => join(directory, `${name}.json`));
+    await Promise.all(paths.map((path, index) => writeFile(path,
+      JSON.stringify(data[['cargo', 'npm', 'ledger', 'lock'][index]]))));
+    return spawnSync(process.execPath, [process.argv[1], ...paths], { encoding: 'utf8' });
+  };
+  try {
+    assert.equal((await invoke(base)).status, 0);
+    const unreviewed = structuredClone(base);
+    unreviewed.cargo.vulnerabilities.list.push({ advisory: { id: 'RUSTSEC-SELFTEST-0002' } });
+    const refused = await invoke(unreviewed);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /unreviewed material dependency finding/);
+    const unknown = structuredClone(base);
+    unknown.ledger.exceptions[0].reachability = 'native-only';
+    const invalid = await invoke(unknown);
+    assert.equal(invalid.status, 1);
+    assert.match(invalid.stderr, /unknown reachability classification/);
+    const critical = structuredClone(base);
+    critical.npm.metadata.vulnerabilities.critical = 1;
+    critical.npm.vulnerabilities = { fixture: { severity: 'critical' } };
+    critical.ledger.exceptions.push({ ...exception, ecosystem: 'npm', id: 'fixture' });
+    const blocked = await invoke(critical);
+    assert.equal(blocked.status, 1);
+    assert.match(blocked.stderr, /npm critical advisory remains present even if listed/);
+    critical.npm.metadata.vulnerabilities.critical = 0;
+    const inconsistent = await invoke(critical);
+    assert.equal(inconsistent.status, 1);
+    assert.match(inconsistent.stderr, /npm critical advisory remains present even if listed/);
+    console.log('[SUCCESS] Dependency source-exclusion, unknown, unreviewed and critical refusal self-test passed');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+  process.exit(0);
+}
 
 function fail(message) {
   console.error(`[ERROR] ${message}`);
@@ -21,7 +87,7 @@ async function readJson(path) {
 const [cargoPath, npmPath, exceptionPath, packageLockPath] = process.argv.slice(2);
 if (!cargoPath || !npmPath || !exceptionPath || !packageLockPath) {
   console.error(
-    'Usage: dependency-provenance.mjs CARGO_AUDIT_JSON NPM_AUDIT_JSON EXCEPTIONS_JSON PACKAGE_LOCK',
+    'Usage: dependency-provenance.mjs CARGO_AUDIT_JSON NPM_AUDIT_JSON EXCEPTIONS_JSON PACKAGE_LOCK | --self-test',
   );
   process.exit(2);
 }
@@ -61,7 +127,7 @@ const exceptions = new Map();
 for (const entry of ledger.exceptions) {
   const key = `${entry.ecosystem}:${entry.id}`;
   if (exceptions.has(key)) fail(`duplicate exception ${key}`);
-  if (!['lockfile-only', 'native-observability-only', 'trusted-generation-only'].includes(entry.reachability)) {
+  if (!reachabilityClasses.has(entry.reachability)) {
     fail(`${key} has unknown reachability classification`);
   }
   validateExpiry(entry, key);
@@ -76,6 +142,7 @@ for (const finding of cargo.warnings?.unsound ?? []) {
   findings.add(`cargo:${finding.advisory.id}`);
 }
 for (const [name, finding] of Object.entries(npm.vulnerabilities ?? {})) {
+  if (finding.severity === 'critical') fail('npm critical advisory remains present even if listed');
   if (finding.severity === 'high' || finding.severity === 'critical') {
     findings.add(`npm:${name}`);
   }

@@ -1689,10 +1689,10 @@ The [reference key/namespace and codec guard](../../../../docs/deos/actors.integ
 | --- | --- | --- | --- | --- |
 | User `D` | 640 | 17 | 299 | 438,132 |
 | System `D` | 593 | 15 | 185 | 404,900 |
-| User `F` | 645 | 18 | 13,116 | 455,483 |
-| System `F` | 598 | 16 | 13,002 | 422,251 |
-| User `F`, optional companions | 805 | 24 | 13,746 | 567,817 |
-| System `F`, optional companions | 705 | 20 | 13,299 | 497,234 |
+| User `F` | 645 | 18 | 11,736 | 454,103 |
+| System `F` | 598 | 16 | 11,622 | 420,871 |
+| User `F`, optional companions | 805 | 24 | 12,366 | 566,437 |
+| System `F`, optional companions | 705 | 20 | 11,919 | 495,854 |
 
 These are package proof-union bounds under the declared foreign-key, namespace, typed-value and complete-tail contracts. They exclude host configuration/callbacks, currency, FRAME events/transaction bookkeeping, loading/detachment and all residence owners outside `F`; they are not complete `D/F` Weight or public Close maxima. The linked reference integration qualifies ordinary key producers from its named fresh presets; other host/raw-state domains and complete RefTime remain separate obligations. Package value bytes, read/net-root witnesses and full host commit work retain separate owners; no generated binding, budget increase or public policy/wait enablement follows from this table.
 
@@ -1708,14 +1708,14 @@ The current native input guard supplies these additional package proof ceilings.
 
 | Package branch | `M` | `X` | Encoded payload ceiling `V` | Encoded read/net-root bound |
 | --- | --- | --- | --- | --- |
-| `L`, Service/Disabled | 650 | 13 | 13,209 | 452,406 |
-| `L`, primary Deadline | 753 | 14 | 13,793 | 521,224 |
-| `L`, Parked validation | 859 | 16 | 14,098 | 592,997 |
-| `L`, policy/monitor nonfinancial superset | 965 | 18 | 14,395 | 665,412 |
-| User `L`, waiting Service plus policy/monitor | 810 | 16 | 13,839 | 560,888 |
-| User `L`, waiting Deadline plus policy/monitor | 913 | 17 | 14,423 | 629,706 |
+| `L`, Service/Disabled | 650 | 13 | 11,829 | 451,026 |
+| `L`, primary Deadline | 753 | 14 | 12,413 | 519,844 |
+| `L`, Parked validation | 859 | 16 | 12,535 | 591,434 |
+| `L`, policy/monitor nonfinancial superset | 966 | 18 | 12,832 | 663,849 |
+| User `L`, waiting Service plus policy/monitor | 810 | 16 | 12,459 | 559,508 |
+| User `L`, waiting Deadline plus policy/monitor | 913 | 17 | 13,043 | 628,326 |
 | `S`, Serving | 314 | 8 | 239 | 214,616 |
-| User `S`, waiting plus policy/monitor | 746 | 15 | 13,906 | 518,071 |
+| User `S`, waiting plus policy/monitor | 746 | 15 | 12,526 | 516,691 |
 
 These bounds may be conservatively added to separately justified `T/B/P/F` bounds; shared reads must not be subtracted from recorded observations. They still exclude host callbacks, transaction/event/currency work and complete RefTime. The following Deadline inputs cover index repair; Parked source/registration cleanup retains its own proof owner. These input guards alone do not qualify the aggregate or a generated coefficient.
 
@@ -1756,34 +1756,34 @@ The [reference integration](../../../../docs/deos/actors.integration.en.md#actor
 
 Coherent committed registration topology further bounds the source's hole population. With `N` registrations and `P` retained C32 pages, every page is nonempty, hence `P <= N` and tracked holes are at most `32P - N <= 31N`. Unallocated tail slots can only reduce that count. Empty-page retirement inserts its newly vacant slot before reclaiming the page, so the transient dense-offset domain also includes offset `31N`. At the reference cap `N <= 10,000`, offsets `0..=310,000` cover all committed reads and that one provisional insertion. The append guard's broader 320,000-offset input remains valid for its declared domain.
 
-The reference hash-image guard exhausts this narrower 310,001-offset domain and maximizes the shared branch union over up to 63 queried paths. It gives 104,430 branch bytes, a 106,887-byte source read input including leaves/partial keys, and 156,669 bytes per source including typed deletion siblings and prefix-loss allowance. The following four-source arithmetic and four-watch composition tables retain their historical input domain; they are not current one-watch ceilings. Shared global ancestors give a four-source forward-table input of 629,931 bytes; the broader input remains 632,159. This is a conditional source/trie bound, not measured physical cost, history/repetition proof or a complete Parked Close certificate. The reverse table retains its separate arbitrary page-ID domain.
+The reference hash-image guard exhausts this narrower 310,001-offset domain and maximizes the shared branch union over up to 63 queried paths. It gives 104,430 branch bytes, a 106,887-byte source read input including leaves/partial keys, and 156,669 bytes per source including typed deletion siblings and prefix-loss allowance. The four-source arithmetic in this paragraph retains its historical input domain; the package composition tables below use the guard's current one-watch configuration. Shared global ancestors give a four-source forward-table input of 629,931 bytes; the broader input remains 632,159. This is a conditional source/trie bound, not measured physical cost, history/repetition proof or a complete Parked Close certificate. The reverse table retains its separate arbitrary page-ID domain.
 
 The reverse table cannot inherit that dense-offset domain, but its complete source prefix contains only fixed 81-byte keys and inline 8-byte values. Its 25-byte suffix permits at most 50 branch nodes per selected path, with no branch values. Each branch contributes at most `7 + 16*33 = 535` bytes before partial-key bytes; that allowance includes header, bitmap, SCALE-vector overhead and odd-nibble rounding. Partial bytes sum to at most 25 per path, and one inline terminal leaf adds at most 14 other bytes, including rounding. Thus 63 paths have a source read term bounded by `63*(50*535 + 25 + 14) = 1,687,707` bytes, without assumptions about page-ID density or hash distribution.
 
-At most 31 deletion-collapse siblings remain inside that typed prefix, each bounded by `2 + 25 + 2 + 16*33 + 2 = 559` encoded bytes. Prefix loss can add one foreign node of at most 1,284 bytes; an absent pre-state source prefix also needs only one such mismatch. The guard composes shared source ancestors once: `(G + 48w)*650 + w*(1,687,707 + 31*559 + 1,284) + 5`. With native `G=5`, `w=4`, this gives `6,953,335` bytes for the partial reverse table. The native paired-map trie primitive preserves dense forward/reverse agreement through 31 tail relocations and replays the exact net root from recorded nodes; it is not full Actor topology or a maximum-proof witness. Complete-prefix and retained-page alternatives retain their separate bounds.
+At most 31 deletion-collapse siblings remain inside that typed prefix, each bounded by `2 + 25 + 2 + 16*33 + 2 = 559` encoded bytes. Prefix loss can add one foreign node of at most 1,284 bytes; an absent pre-state source prefix also needs only one such mismatch. The guard composes shared source ancestors once: `(G + 48w)*650 + w*(1,687,707 + 31*559 + 1,284) + 5`. With native `G=5`, historical `w=4` gives `6,953,335` bytes for the partial reverse table. The native paired-map trie primitive preserves dense forward/reverse agreement through 31 tail relocations and replays the exact net root from recorded nodes; it is not full Actor topology or a maximum-proof witness. Complete-prefix and retained-page alternatives retain their separate bounds.
 
-The native guard composes these hole inputs with full typed plan, episode, registration/page/header, asset/source, revision and scan-ring values at four watches. Ordinary `M/X/V` use the established point proof model; the separate hole term includes its own conservative collection overhead. `B` is excluded from this table and must be added once when a review handle exists. Rows cover categorical alternatives and do not claim joint attainment of every charged typed maximum.
+The native guard composes these hole inputs with full typed plan, episode, registration/page/header, asset/source, revision and scan-ring values at one watch. Ordinary `M/X/V` use the established point proof model; the separate hole term includes its own conservative collection overhead. `B` is excluded from this table and must be added once when a review handle exists. Rows cover categorical alternatives and do not claim joint attainment of every charged typed maximum.
 
 | Parked suffix branch | Ordinary `q/d` | Ordinary `M/X` | Ordinary payload `V` | Ordinary bound | Hole bound | Suffix sum |
 | --- | --- | --- | --- | --- | --- | --- |
-| Retained registration pages | 32/14 | 2,159/46 | 5,681 | 1,468,100 | 521,177 | 1,989,277 |
-| Empty interior pages, sources retained | 44/18 | 3,124/62 | 14,437 | 2,124,650 | 7,585,494 | 9,710,144 |
-| Last registration of each source, scan retirement superset | 49/38 | 2,942/87 | 6,039 | 2,030,052 | 593,982 | 2,624,034 |
-| Mixed-source multiplicity superset | 57/38 | 3,710/95 | 14,655 | 2,548,140 | 7,585,494 | 10,133,634 |
+| Retained registration pages | 14/8 | 881/22 | 1,976 | 602,879 | 135,173 | 738,052 |
+| Empty interior pages, sources retained | 17/9 | 1,126/26 | 4,165 | 769,454 | 1,901,256 | 2,670,710 |
+| Last registration of each source, scan retirement superset | 19/14 | 1,088/33 | 2,076 | 751,653 | 153,378 | 905,031 |
+| Mixed-source multiplicity superset | 21/14 | 1,280/35 | 4,230 | 881,175 | 1,901,256 | 2,782,431 |
 
-The mixed-source row takes each owner multiplicity's maximum, including three pages and three scan nodes per source plus the partial-hole bound; it bounds arbitrary mixtures without claiming simultaneous reachability. These coarse source-qualified uppers exceed the guaranteed Control proof allowance and do not establish admission or complete Close containment. Excess of an upper bound is not a lower-bound counterexample. Qualification still needs a sufficiently tight aggregate proof for the configured budget, full host costs and RefTime; raw samples or the SDK's per-prefix maximum cannot replace that proof. These four-watch input bounds do not establish physical costs or authorize a budget or generated-binding change.
+The mixed-source row takes each owner multiplicity's maximum, including three pages and three scan nodes per source plus the partial-hole bound; it bounds arbitrary mixtures without claiming simultaneous reachability. These coarse source-qualified uppers exceed the guaranteed Control proof allowance and do not establish admission or complete Close containment. Excess of an upper bound is not a lower-bound counterexample. Qualification still needs a sufficiently tight aggregate proof for the configured budget, full host costs and RefTime; raw samples or the SDK's per-prefix maximum cannot replace that proof. These one-watch input bounds do not establish physical costs or authorize a budget or generated-binding change.
 
 The reference input guard now composes these justified read/net-root uppers through the Close partition, conservatively retaining repeated keys. Each row includes the shared FRAME key bound; User adds the two-key native currency bound. Nonfinancial Active rows include independent Trigger removal. Parked adds its primary review exactly once to the suffix and uses no-policy finalization. The optional nonfinancial row bounds Service, primary Deadline and Disabled through their maximum; financial waiting is User-only and has no independent Trigger. These are conditional proof unions, not joint maximum-state witnesses.
 
 | Complete partition composition | User bytes | System bytes |
 | --- | ---: | ---: |
 | Dormant | 592,258 | 426,296 |
-| Service or Disabled superset | 2,792,884 | 2,626,922 |
-| Primary Deadline | 4,162,969 | 3,997,007 |
-| Parked, mixed-source superset | 14,475,671 | 14,309,709 |
-| Optional policy/monitor, nonfinancial superset | 4,419,491 | 4,216,178 |
-| Financial waiting in Service, policy/monitor superset | 1,800,902 | Forbidden |
-| Financial waiting on Deadline, policy/monitor superset | 2,867,532 | Forbidden |
+| Service or Disabled superset | 2,790,124 | 2,624,162 |
+| Primary Deadline | 4,160,209 | 3,994,247 |
+| Parked, mixed-source superset | 7,121,525 | 6,955,563 |
+| Optional policy/monitor, nonfinancial superset | 4,416,548 | 4,213,235 |
+| Financial waiting in Service, policy/monitor superset | 1,796,762 | Forbidden |
+| Financial waiting on Deadline, policy/monitor superset | 2,864,772 | Forbidden |
 
 The largest composed input is the coarse Parked upper, not an observed cost or a proof of budget failure. These rows retain the ordinary namespace, coherent typed state, complete-tail, reset/append and native currency conditions of their component owners. They exclude caller-owned signed extensions, callback reads outside those inventories, event-buffer growth/materialization, overlay/backend commit CPU and all RefTime. The [reference integration](../../../../docs/deos/actors.integration.en.md#actor-state-holds-and-capacity) owns the guard and its validation. Tight containment, finite construction/repetition proof and complete physical/tariff qualification remain open.
 
@@ -1791,8 +1791,8 @@ The same guard additionally qualifies a shared proof union for canonical no-poli
 
 | Canonical no-policy Service union | Queried key roles | Payload ceiling | Read/net-root bound with qualified native host keys |
 | --- | ---: | ---: | ---: |
-| User | 62 | 19,434 | 2,239,397 |
-| System | 62 | 19,320 | 2,073,435 |
+| User | 62 | 18,054 | 2,238,017 |
+| System | 62 | 17,940 | 2,072,055 |
 
 The payload counts the shared body/semantic/Run once and the Service target node/process once, conservatively retaining other repeated payload allowances. User includes the exact currency input; both include the shared FRAME key input. This narrows the component-sum proof upper only for this canonical Service path. Disabled, primary Deadline, Parked, optional policy/wait, caller extensions, additional host callbacks and physical RefTime retain their separate scopes. No Control containment certificate or production Weight follows from the smaller input alone.
 
@@ -1800,10 +1800,10 @@ The guard also shares the optional Actor-keyed policy/monitor/financial pre-stat
 
 | Canonical optional Service union | Queried key roles | Payload ceiling | Read/net-root bound |
 | --- | ---: | ---: | ---: |
-| User, policy/monitor, nonfinancial | 64 | 19,731 | 2,314,380 |
-| System, policy/monitor, nonfinancial | 64 | 19,617 | 2,148,418 |
-| User, Serving AwaitFunding with policy/monitor | 65 | 19,731 | 2,351,398 |
-| User, AwaitingFunding with policy/monitor | 26 | 14,080 | 978,851 |
+| User, policy/monitor, nonfinancial | 64 | 18,351 | 2,313,000 |
+| System, policy/monitor, nonfinancial | 64 | 18,237 | 2,147,038 |
+| User, Serving AwaitFunding with policy/monitor | 65 | 18,351 | 2,350,018 |
+| User, AwaitingFunding with policy/monitor | 26 | 12,700 | 977,471 |
 
 These rows use generic head/chunk `MaxEncodedLen`, including the 36-byte Step resource schema; they do not import the narrower 20-byte admitted no-policy envelope or assert joint attainment. Policy/monitor and financial value ceilings are 177/116/331 bytes before blob lengths. These geometry rows do not establish complete optional-state physical qualification; financial waiting remains publicly unavailable. Other residences, signed/caller extensions, callback/event-buffer/transaction CPU, physical RefTime and Creation/tariff sufficiency retain their independent gates. The [reference integration](../../../../docs/deos/actors.integration.en.md#actor-state-holds-and-capacity) binds the source/codec guard and validation; no resource coefficients or public execution prices follow from this composition.
 
@@ -1811,11 +1811,11 @@ Ordinary primary Deadline Close joins `L Deadline + T + B + F` without equating 
 
 | Ordinary Deadline union | Key roles, surviving/last | Payload, surviving/last | Surviving primary key bound | Last primary member bound |
 | --- | ---: | ---: | ---: | ---: |
-| User, no policy | 75/98 | 24,576/25,221 | 2,746,765 | 3,517,894 |
-| System, no policy | 75/98 | 24,462/25,107 | 2,580,803 | 3,351,932 |
-| User, policy/monitor, on_unfunded=Close | 77/100 | 24,873/25,518 | 2,821,748 | 3,592,877 |
-| System, policy/monitor | 77/100 | 24,759/25,404 | 2,655,786 | 3,426,915 |
-| User, Serving AwaitFunding with policy/monitor | 78/101 | 24,873/25,518 | 2,858,766 | 3,629,895 |
+| User, no policy | 75/98 | 23,196/23,841 | 2,745,385 | 3,516,514 |
+| System, no policy | 75/98 | 23,082/23,727 | 2,579,423 | 3,350,552 |
+| User, policy/monitor, on_unfunded=Close | 77/100 | 23,493/24,138 | 2,820,368 | 3,591,497 |
+| System, policy/monitor | 77/100 | 23,379/24,024 | 2,654,406 | 3,425,535 |
+| User, Serving AwaitFunding with policy/monitor | 78/101 | 23,493/24,138 | 2,857,386 | 3,628,515 |
 
 These conditional read/net-root inputs retain complete generic head/three-tail geometry, qualified FRAME/native-currency keys and every component deletion allowance. The independent prefix groups add 54,600 bytes compared with incorrectly sharing one group. Policy/monitor adds 74,983 bytes; a Serving AwaitFunding Contract adds the absent financial key and conservative deletion allowance, 37,018 bytes with no episode payload. No Service removal or Parked-review fallback is included. Repeated execution/decoding/mutation CPU is not shared by proof identity. The earlier component sums remain valid conservative bounds. Upper inputs above a Control allowance prove neither physical excess nor impossibility; joint attainment, tighter containment, caller/host work, RefTime and tariff backing remain separate gates.
 
@@ -1823,8 +1823,8 @@ AwaitingFunding on its primary Tick Deadline likewise shares the Actor's full bo
 
 | User AwaitingFunding Deadline union | Queried key roles | Payload ceiling | Read/net-root bound |
 | --- | ---: | ---: | ---: |
-| Surviving Deadline key | 39 | 19,257 | 1,509,654 |
-| Last member of Deadline key | 62 | 19,902 | 2,280,783 |
+| Surviving Deadline key | 39 | 17,877 | 1,508,274 |
+| Last member of Deadline key | 62 | 18,522 | 2,279,403 |
 
 The larger joined input retains all eighteen index-page and sixteen index-position roles; it is not evidence of joint maximum attainment or physical Control containment. The earlier component sum remains a valid conservative bound. These rows cover only the specified Close source partition, not caller-owned due selection, time/solvency inspection or recovery/Action execution.
 
@@ -1832,19 +1832,19 @@ Disabled System Close joins source loading, independent Trigger extraction and f
 
 | Disabled System union | Key roles | Payload ceiling | Read/net-root bound |
 | --- | ---: | ---: | ---: |
-| No policy | 59 | 19,158 | 2,002,487 |
-| Policy/monitor | 61 | 19,455 | 2,077,470 |
+| No policy | 59 | 17,778 | 2,001,107 |
+| Policy/monitor | 61 | 18,075 | 2,076,090 |
 
-Parked Close joins source loading, independent Trigger, primary Block review, categorical registration/hole release and finalization. Only same-Actor common records share identity; every source/registration/page/scan role keeps its multiplicity. The primary member page is shared with loading. Both Deadline owners retain two independent prefix groups, all key/clock metadata and the larger extraction inputs. A missing Trigger or primary review can only reduce this superset. Coherent Park retains no Run, so its absence query and conservative deletion allowance remain while its 194-byte generic blob is omitted. Complete head/three-tail geometry, four watches, all registration/deletion allowances and the qualified FRAME/native currency input remain charged. The separate hole-map inputs are reused unchanged.
+Parked Close joins source loading, independent Trigger, primary Block review, categorical registration/hole release and finalization. Only same-Actor common records share identity; every source/registration/page/scan role keeps its multiplicity. The primary member page is shared with loading. Both Deadline owners retain two independent prefix groups, all key/clock metadata and the larger extraction inputs. A missing Trigger or primary review can only reduce this superset. Coherent Park retains no Run, so its absence query and conservative deletion allowance remain while its 216-byte generic blob is omitted. Complete head/three-tail geometry, one watch, all registration/deletion allowances and the qualified FRAME/native currency input remain charged. The separate hole-map inputs are reused unchanged.
 
-| Four-watch Parked branch | Key roles, Close/AwaitFunding | User payload | User Close bound | System Close bound | User Serving AwaitFunding bound |
+| One-watch Parked branch | Key roles, Close/AwaitFunding | User payload | User Close bound | System Close bound | User Serving AwaitFunding bound |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Retained registration pages | 127/128 | 30,586 | 5,399,648 | 5,233,686 | 5,436,666 |
-| Empty interior pages, sources retained | 139/140 | 39,342 | 13,120,515 | 12,954,553 | 13,157,533 |
-| Last source, scan-retirement superset | 144/145 | 30,944 | 6,034,405 | 5,868,443 | 6,071,423 |
-| Mixed-source multiplicity superset | 152/153 | 39,560 | 13,544,005 | 13,378,043 | 13,581,023 |
+| Retained registration pages | 109/110 | 25,479 | 4,147,021 | 3,981,059 | 4,184,039 |
+| Empty interior pages, sources retained | 112/113 | 27,668 | 6,079,679 | 5,913,717 | 6,116,697 |
+| Last source, scan-retirement superset | 114/115 | 25,579 | 4,314,000 | 4,148,038 | 4,351,018 |
+| Mixed-source multiplicity superset | 116/117 | 27,733 | 6,191,400 | 6,025,438 | 6,228,418 |
 
-System payloads are 114 bytes smaller; the class/host proof difference is 165,962 bytes. Park forbids `close_when` but may retain `on_unfunded=AwaitFunding` for User. This Serving corner has no episode; destruction clears its absent financial key, adding 37,018 bytes and one role without value payload. It is separate from financial-wait residence and does not admit public AwaitFunding. The conditional Close-corner mixed-source sum narrows by 931,666 bytes; the earlier component sum remains conservative for that corner. These coarse uppers still require tighter containment and complete physical qualification. They establish no budget failure, joint maximum, RefTime, caller/backend cost or tariff sufficiency.
+System payloads are 114 bytes smaller; the class/host proof difference is 165,962 bytes. Park forbids `close_when` but may retain `on_unfunded=AwaitFunding` for User. This Serving corner has no episode; destruction clears its absent financial key, adding 37,018 bytes and one role without value payload. It is separate from financial-wait residence and does not admit public AwaitFunding. The conditional Close-corner mixed-source sum narrows by 930,125 bytes; the earlier component sum remains conservative for that corner. These coarse uppers still require tighter containment and complete physical qualification. They establish no budget failure, joint maximum, RefTime, caller/backend cost or tariff sufficiency.
 
 Dormant retains its already-qualified point-owner composition of 592,258/426,296 User/System bytes; it has no Contract or scheduler detachment to join. The source-input inventory now separately covers the supported Dormant, Disabled, Service, primary Deadline, Parked and financial-wait partitions. This does not close their public caller, conditional-state/population, host/resource/economic or production-binding gates. The [reference integration](../../../../docs/deos/actors.integration.en.md#actor-state-holds-and-capacity) binds these scoped guards and their validation.
 
@@ -1859,10 +1859,10 @@ The guard constructs all 313 actual 24-byte Concat suffixes for both 49-byte clo
 | Ordinary/policy/Serving AwaitFunding Deadline, last primary member | `18 + 18` | 1,146,610 |
 | AwaitingFunding Deadline, primary key survives | `4` | 125,460 |
 | AwaitingFunding Deadline, last primary member | `18` | 573,305 |
-| Every four-watch Parked category | `18 + 18` | 1,146,610 |
+| Every one-watch Parked category | `18 + 18` | 1,146,610 |
 | AwaitingFunding Service; Dormant | None | 0 |
 
-Every earlier coarse row remains conservative. The finite-domain corollary gives no-policy Service User/System inputs of 1,666,092/1,500,130 bytes, ordinary last-member Deadline 2,371,284/2,205,322, Disabled System 1,429,182 (1,504,165 with policy/monitor), and mixed-source Parked User/System 12,397,395/12,231,433. All other typed values, member pages, reverse positions, independent clock groups, complete body/tails, hole inputs, class/FRAME/native currency and net-deletion allowances stay unchanged. The reference integration binds scalar readback for all 32 source rows; 31 narrow and the waiting-Service row is unchanged. Full/sparse/empty typed V1 primitives validate recording and exact net-root replay, not admitted Actor-state reachability. These remain conditional source inputs, without joint attainment, Control containment, physical RefTime/host costs, tariffs, public optional admission or production binding.
+Every earlier coarse row remains conservative. The finite-domain corollary gives no-policy Service User/System inputs of 1,664,712/1,498,750 bytes, ordinary last-member Deadline 2,369,904/2,203,942, Disabled System 1,427,802 (1,502,785 with policy/monitor), and mixed-source Parked User/System 5,044,790/4,878,828. All other typed values, member pages, reverse positions, independent clock groups, complete body/tails, hole inputs, class/FRAME/native currency and net-deletion allowances stay unchanged. The reference integration binds scalar readback for all 32 source rows; 31 narrow and the waiting-Service row is unchanged. Full/sparse/empty typed V1 primitives validate recording and exact net-root replay, not admitted Actor-state reachability. These remain conditional source inputs, without joint attainment, Control containment, physical RefTime/host costs, tariffs, public optional admission or production binding.
 
 The typed-key guard further qualifies single-query fixed-length map paths below their own 32-byte storage namespace. Native metadata proves constant key length recursively for primitives, fixed arrays/composites/tuples and equal-width enum alternatives; Compact, sequence, bit-sequence, recursive and unequal-width enum keys are excluded unless the hasher's complete output has constant length independently. In particular, variable Block/Tick `WakeupKey` is excluded. Only namespaces with exactly one queried role and no shared-prefix group are refined; grouped member/index pages and complete tail prefixes keep their existing owners.
 
@@ -1872,13 +1872,13 @@ Scalar composition combines these disjoint point-read reductions with the finite
 
 | Combined conditional Close input | User | System |
 | --- | ---: | ---: |
-| No-policy Service | 1,580,277 | 1,419,811 |
-| Policy/monitor Service | 1,644,342 | 1,483,876 |
-| Ordinary no-policy Deadline, last primary member | 2,283,866 | 2,123,400 |
-| Disabled, no policy | Unsupported | 1,343,404 |
-| Mixed-source four-watch Parked, Close corner | 12,282,682 | 12,122,216 |
-| AwaitingFunding Service | 880,515 | Forbidden |
-| AwaitingFunding Deadline, last primary member | 1,599,827 | Forbidden |
+| No-policy Service | 1,578,897 | 1,418,431 |
+| Policy/monitor Service | 1,642,962 | 1,482,496 |
+| Ordinary no-policy Deadline, last primary member | 2,282,486 | 2,122,020 |
+| Disabled, no policy | Unsupported | 1,342,024 |
+| Mixed-source one-watch Parked, Close corner | 4,891,790 | 4,731,324 |
+| AwaitingFunding Service | 879,135 | Forbidden |
+| AwaitingFunding Deadline, last primary member | 1,598,447 | Forbidden |
 | Dormant | 526,676 | 366,210 |
 
 Canonical typed namespace ownership and every earlier source/heap/population premise remain conditions. Arbitrary raw/shorter/corrupt keys, initial-state or full-history preservation, joint maxima, public caller costs, Control containment, physical host/RefTime, tariffs and production binding are not established. These are source-proof inputs, not generated Weight or enabled public optional semantics.

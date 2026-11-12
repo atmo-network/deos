@@ -1249,6 +1249,35 @@ fn opaque_notification_respects_channel_capacity() {
 }
 
 #[test]
+fn opaque_capability_notice_precedes_unfunded_enqueue_refusal() {
+	let header_only = generate_mock_xcm_page(0, 0, XcmEncoding::Double);
+	let valid_message = generate_mock_xcm_page(0, 1, XcmEncoding::Double);
+	let mut malformed_length = header_only.clone();
+	malformed_length.push(0xff);
+	for page in [header_only, valid_message, malformed_length] {
+		new_test_ext().execute_with(|| {
+			let sender = ParaId::from(1000);
+			assert!(<OutboundXcmpStatus<Test>>::get().is_empty());
+			assert!(EnqueuedMessages::get().is_empty());
+			let used = XcmpQueue::handle_xcmp_messages(
+				once((sender, 1, page.as_slice())),
+				Weight::zero(),
+			);
+			assert_eq!(used, Weight::zero());
+			assert!(EnqueuedMessages::get().is_empty());
+			let statuses = <OutboundXcmpStatus<Test>>::get();
+			assert_eq!(statuses.len(), 1);
+			assert_eq!(statuses[0].recipient, sender);
+			assert!(statuses[0].flags.has_concatenated_opaque_versioned_xcm_support());
+			// Refused enqueue is not a no-op: an enclosing owner must cover negotiation.
+			let mut expected = OutboundChannelDetails::new(sender);
+			expected.flags.notice_concatenated_opaque_versioned_xcm_support();
+			assert_eq!(statuses.as_slice(), &[expected]);
+		});
+	}
+}
+
+#[test]
 fn concatenated_opaque_version_xcm_negotiation_works() {
 	new_test_ext().execute_with(|| {
 		let sibling_para_id = ParaId::from(1000);

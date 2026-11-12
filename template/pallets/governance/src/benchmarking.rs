@@ -1198,8 +1198,16 @@ mod benches {
       .expect("benchmark helper must prepare a protection voter");
     let item_id = benchmark_item_id::<T>(1);
     let submitted_epoch: T::Epoch = 1u32.into();
-    frame_system::Pallet::<T>::set_block_number(1u32.into());
-    let current_epoch: T::Epoch = 1u32.into();
+    let current_epoch = Pallet::<T>::proposal_ordinary_primary_open_epoch(submitted_epoch)
+      .expect("benchmark primary opening must be representable");
+    frame_system::Pallet::<T>::set_block_number(current_epoch_u32::<T>(current_epoch).into());
+    assert_eq!(T::EpochProvider::current_epoch(), current_epoch);
+    let protection_close = Pallet::<T>::proposal_protection_close_epoch(submitted_epoch)
+      .expect("benchmark protection close must be representable");
+    assert!(
+      current_epoch < protection_close,
+      "benchmark requires overlapping voting windows"
+    );
     ActiveProposals::<T>::insert(domain, item_id, ActiveProposal { submitted_epoch });
     ProposalMetadataByItem::<T>::insert(
       domain,
@@ -1219,18 +1227,101 @@ mod benches {
       vetoes: BoundedVec::default(),
       passes: BoundedVec::default(),
     };
-    for index in 0..T::MaxWinningVoteAccountsPerCall::get().saturating_sub(1) {
-      votes
-        .vetoes
-        .try_push(ProposalBallot {
-          account: account("prior-veto", index, 0),
-          vote_epoch: current_epoch,
-          weight: crate::U256::from(1u128),
-          raw_power: crate::U256::from(1u128),
-        })
-        .expect("benchmark veto set must fit configured maximum");
+    assert_eq!(
+      Pallet::<T>::do_proposal_primary_track_family(domain, item_id),
+      Some(ProposalPrimaryTrackFamily::Binary),
+      "protection helper must select the Binary fixture family",
+    );
+    let maximum = T::MaxWinningVoteAccountsPerCall::get();
+    assert!(maximum > 0);
+    let primary_close =
+      Pallet::<T>::proposal_effective_primary_close_epoch(domain, item_id, submitted_epoch)
+        .expect("benchmark primary close must be representable");
+    let primary_context = Pallet::<T>::proposal_vote_context(
+      item_id,
+      current_epoch,
+      current_epoch,
+      primary_close,
+      current_epoch,
+    );
+    let protection_context = Pallet::<T>::proposal_vote_context(
+      item_id,
+      submitted_epoch,
+      current_epoch,
+      protection_close,
+      current_epoch,
+    );
+    let mut accounts = alloc::vec![voter.clone()];
+    // Seed provider-priced ballots, not a claimed signed/custodied public history.
+    // Unfunded protection peers may have zero power; unit raw veto seeds would
+    // already exceed the helper's 100-unit supply before this call at N = 256.
+    for (label, count, target, protection) in [
+      ("prior-aye", maximum, &mut votes.ayes, false),
+      ("prior-nay", maximum, &mut votes.nays, false),
+      ("prior-veto", maximum - 1, &mut votes.vetoes, true),
+      ("prior-pass", maximum, &mut votes.passes, true),
+    ] {
+      for index in 0..count {
+        let account = account::<T::AccountId>(label, index, 0);
+        assert!(
+          !accounts.contains(&account),
+          "benchmark accounts must be distinct"
+        );
+        accounts.push(account.clone());
+        let (weight, raw_power) = if protection {
+          (
+            U256::from(T::VetoVotePowerProvider::vote_weight(
+              domain,
+              &protection_context,
+              &account,
+            )),
+            U256::from(T::VetoVotePowerProvider::raw_vote_weight(domain, &account)),
+          )
+        } else {
+          let weight =
+            T::ProposalVoteWeightProvider::vote_weight(domain, &primary_context, &account);
+          (weight, weight)
+        };
+        target
+          .try_push(ProposalBallot {
+            account,
+            vote_epoch: current_epoch,
+            weight,
+            raw_power,
+          })
+          .expect("benchmark companion vector must fit configured maximum");
+      }
     }
-    ProposalVotesByItem::<T>::insert(domain, item_id, votes);
+    assert_eq!(votes.ayes.len(), maximum as usize);
+    assert_eq!(votes.nays.len(), maximum as usize);
+    assert_eq!(votes.vetoes.len(), (maximum - 1) as usize);
+    assert_eq!(votes.passes.len(), maximum as usize);
+    assert!(votes.amplifies.is_empty() && votes.approves.is_empty() && votes.reduces.is_empty());
+    assert!(
+      Pallet::<T>::current_veto_cancellation(domain, item_id, &votes, false)
+        .expect("benchmark protection tally must be valid")
+        .is_none()
+    );
+    let ballot_width = ProposalBallot {
+      account: voter.clone(),
+      vote_epoch: current_epoch,
+      weight: U256::zero(),
+      raw_power: U256::zero(),
+    }
+    .encoded_size();
+    let expected_bytes = 3
+      * (frame::deps::codec::Compact(maximum).encoded_size() + maximum as usize * ballot_width)
+      + frame::deps::codec::Compact(maximum - 1).encoded_size()
+      + (maximum - 1) as usize * ballot_width
+      + 3;
+    assert_eq!(votes.encoded_size(), expected_bytes);
+    ProposalVotesByItem::<T>::insert(domain, item_id, &votes);
+    assert_eq!(
+      ProposalVotesByItem::<T>::get(domain, item_id)
+        .unwrap()
+        .encoded_size(),
+      expected_bytes
+    );
     let retention_epoch: T::Epoch = current_epoch_u32::<T>(current_epoch)
       .saturating_add(T::FinalizedProposalOutcomeRetentionEpochs::get())
       .into();
@@ -1254,7 +1345,11 @@ mod benches {
       ProposalVoteKind::Veto,
     );
     assert!(!ActiveProposals::<T>::contains_key(domain, item_id));
-    assert!(FinalizedProposals::<T>::contains_key(domain, item_id));
+    assert!(matches!(
+      FinalizedProposals::<T>::get(domain, item_id).unwrap().outcome,
+      FinalizedProposalOutcome::VetoCancelled { finalized_epoch, .. } if finalized_epoch == current_epoch
+    ));
+    assert!(!ProposalVotesByItem::<T>::contains_key(domain, item_id));
   }
 
   #[benchmark]

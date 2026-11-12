@@ -1,131 +1,264 @@
 {
   "formatVersion": 1,
-  "reviewedAt": "2026-09-11",
+  "reviewedAt": "2026-11-12",
   "licenseExceptions": [
     {
       "ecosystem": "npm",
       "id": "svelte-toolbelt@0.10.6",
-      "expires": "2026-09-30",
-      "reason": "The published package omits its license field; the pinned upstream source contains an MIT LICENSE file. Replace or re-verify when the package changes."
+      "expires": "2026-12-12",
+      "reason": "The 0.10.6 registry tarball matches locked SHA512 integrity and contains an MIT LICENSE (SHA256 8914f144af4333312a07b30438dc6b75dd8da7a665c3ae9fa751f229eb615e8b); only its manifest license field is absent. Re-verify on identity change."
     }
   ],
   "exceptions": [
     {
       "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0418",
+      "expires": "2026-12-12",
+      "reachability": "lockfile-only",
+      "reason": "libz-sys 1.1.29 is absent from the freshly resolved locked all-feature, all-target workspace normal/build graph. The affected build script cannot run from the selected graph. Re-review on graph or advisory identity change."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0338",
+      "expires": "2026-12-12",
+      "reachability": "lockfile-only",
+      "reason": "quinn-proto 0.11.16 is absent from the freshly resolved locked all-feature, all-target workspace normal/build graph. No selected DEOS workspace input reaches this QUIC implementation. Re-review on graph or advisory identity change."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0339",
+      "expires": "2026-12-12",
+      "reachability": "lockfile-only",
+      "reason": "quinn-proto 0.11.16 is absent from the freshly resolved locked all-feature, all-target workspace normal/build graph. No selected DEOS workspace input reaches this QUIC implementation. Re-review on graph or advisory identity change."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0340",
+      "expires": "2026-12-12",
+      "reachability": "lockfile-only",
+      "reason": "quinn-proto 0.11.16 is absent from the freshly resolved locked all-feature, all-target workspace normal/build graph. No selected DEOS workspace input reaches this QUIC implementation. Re-review on graph or advisory identity change."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0341",
+      "expires": "2026-12-12",
+      "reachability": "lockfile-only",
+      "reason": "quinn-proto 0.11.16 is absent from the freshly resolved locked all-feature, all-target workspace normal/build graph. No selected DEOS workspace input reaches this QUIC implementation. Re-review on graph or advisory identity change."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0342",
+      "expires": "2026-12-12",
+      "reachability": "lockfile-only",
+      "reason": "quinn-proto 0.11.16 is absent from the freshly resolved locked all-feature, all-target workspace normal/build graph. No selected DEOS workspace input reaches this QUIC implementation. Re-review on graph or advisory identity change."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0344",
+      "expires": "2026-12-12",
+      "reachability": "lockfile-only",
+      "reason": "ruzstd 0.8.3 is absent from the freshly resolved locked all-feature, all-target workspace normal/build graph. No selected DEOS workspace decompression path reaches this implementation. Re-review on graph or advisory identity change."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0383",
+      "expires": "2026-12-12",
+      "reachability": "lockfile-only",
+      "reason": "webpki-root-certs 1.0.8 is absent from the freshly resolved locked all-feature, all-target workspace normal/build graph. Do not extend this finding disposition to the separately reachable webpki-roots 0.25.4 advisory. Re-review on graph or advisory identity change."
+    },
+    {
+      "ecosystem": "cargo",
       "id": "RUSTSEC-2026-0258",
-      "expires": "2026-09-30",
+      "expires": "2026-12-12",
       "reachability": "lockfile-only",
       "reason": "The vulnerable h2 0.3 line is not reachable from any workspace package under all features and all targets; the reachable h2 line was updated to 0.4.16. Remove with the next Polkadot SDK lock refresh."
     },
     {
       "ecosystem": "cargo",
-      "id": "RUSTSEC-2026-0119",
-      "expires": "2026-09-30",
-      "reachability": "lockfile-only",
-      "reason": "Both reported hickory-proto versions are absent from the all-feature, all-target workspace graph and cannot process runtime or release-build input."
-    },
-    {
-      "ecosystem": "cargo",
-      "id": "RUSTSEC-2026-0118",
-      "expires": "2026-09-30",
-      "reachability": "lockfile-only",
-      "reason": "The reported hickory-proto version is absent from the all-feature, all-target workspace graph and DEOS owns no DNS resolver surface."
-    },
-    {
-      "ecosystem": "cargo",
       "id": "RUSTSEC-2025-0009",
-      "expires": "2026-09-30",
+      "expires": "2026-12-12",
       "reachability": "lockfile-only",
       "reason": "ring 0.16.20 is absent from the all-feature, all-target workspace graph; consensus runtime cryptography does not reach this implementation."
     },
     {
       "ecosystem": "cargo",
       "id": "RUSTSEC-2026-0220",
-      "expires": "2026-09-30",
+      "expires": "2026-12-12",
       "reachability": "lockfile-only",
       "reason": "ruint 1.19.0 is absent from the all-feature, all-target workspace graph; DEOS authoritative arithmetic uses checked U256 from the active SDK graph."
     },
     {
       "ecosystem": "cargo",
       "id": "RUSTSEC-2026-0098",
-      "expires": "2026-09-30",
+      "expires": "2026-12-12",
       "reachability": "lockfile-only",
       "reason": "rustls-webpki 0.101.7 is absent from the all-feature, all-target workspace graph and cannot validate DEOS transport certificates."
     },
     {
       "ecosystem": "cargo",
       "id": "RUSTSEC-2026-0099",
-      "expires": "2026-09-30",
+      "expires": "2026-12-12",
       "reachability": "lockfile-only",
       "reason": "rustls-webpki 0.101.7 is absent from the all-feature, all-target workspace graph and cannot validate DEOS transport certificates."
     },
     {
       "ecosystem": "cargo",
       "id": "RUSTSEC-2026-0104",
-      "expires": "2026-09-30",
+      "expires": "2026-12-12",
       "reachability": "lockfile-only",
       "reason": "rustls-webpki 0.101.7 is absent from the all-feature, all-target workspace graph and cannot parse DEOS certificate revocation lists."
     },
     {
       "ecosystem": "cargo",
       "id": "RUSTSEC-2025-0055",
-      "expires": "2026-09-30",
+      "expires": "2026-12-12",
       "reachability": "native-observability-only",
-      "reason": "tracing-subscriber 0.3.19 is constrained exactly by Polkadot SDK sc-tracing and excluded from no-std runtime Wasm; DEOS does not own a node or expose these developer logs as an authoritative parser input. The 0.2 line is lockfile-only."
+      "reason": "tracing-subscriber 0.3.19 is selected by native sp-tracing/sc-tracing and directly by the offline deos-pvf-validation tool; 0.2.25 is lock-only. Fresh no-default wasm32v1-none normal/build graph excludes both. ANSI log injection remains a native operator/log-consumer risk, not an authoritative DEOS parser; do not treat untrusted terminal logs as commands or trusted evidence."
     },
     {
       "ecosystem": "cargo",
       "id": "RUSTSEC-2026-0221",
-      "expires": "2026-09-30",
+      "expires": "2026-12-12",
       "reachability": "lockfile-only",
       "reason": "event-listener 5.4.1 is absent from the all-feature, all-target workspace graph."
     },
     {
       "ecosystem": "cargo",
-      "id": "RUSTSEC-2026-0253",
-      "expires": "2026-09-30",
+      "id": "RUSTSEC-2026-0382",
+      "expires": "2026-12-12",
       "reachability": "lockfile-only",
-      "reason": "Both reported lru versions are absent from the all-feature, all-target workspace graph."
+      "reason": "The affected rustls-webpki 0.101.7 line is absent from the current all-feature/all-target normal/build graph; selected 0.103.16 is fixed. Re-review graph/advisory changes; this does not exclude webpki-roots 0.25.4."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0487",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Hickory 0.24.4 zone/text parsing is cfg(text-parsing); the feature is absent from selected PVF and workspace graphs. This does not exclude wire-format findings 2026-0119/0491."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0489",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Hickory 0.24.4 affected zone/text parser is gated by disabled text-parsing in serialize/mod.rs. Wire DNS remains selected and separately blocked."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0490",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Hickory 0.24.4 affected text parser requires absent text-parsing. Re-review feature unification and new callers; binary DNS has no exemption."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0395",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Affected zstd-safe 6.0.6 experimental API is not compiled: experimental is absent from the selected old-line feature graph. Fixed 7.4.0 is not an affected record."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0399",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "The affected zstd-safe 6.0.6 dictionary-context initialization API is gated by experimental, absent in the selected graph. Re-review features and direct callers."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0402",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Affected zstd-safe 6.0.6 experimental context APIs are excluded by the selected feature graph; no package-wide soundness claim follows."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0404",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Affected zstd-safe 6.0.6 context-cloning APIs require absent experimental. Re-review unified features or new direct callers."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0401",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "zstd-safe 6.0.6 train_from_buffer is cfg(zdict_builder), absent from selected features. This excludes dictionary-training activation only."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0406",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "The selected zstd-sys graph lacks zstdmt, excluding the advisory's unfinished multithreaded-frame prerequisite. NbWorkers remains an API; do not claim that API is compiled out."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0403",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Selected zstd sys legacy support is disabled, and sp-maybe-compressed-blob 11.1.0 uses the advisory-excluded read decoder. Re-review legacy activation or write-decoder callers."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0397",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Selected zstd 0.12.4 wrappers use OutBuffer::around, with no around_pos call. The affected safe-6 API remains available; this is only the pinned SDK blob/primitives caller exclusion."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0400",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "sp-maybe-compressed-blob 11.1.0 creates fresh decoder/encoder stream contexts per operation; selected zstd 0.12.4 wrappers do not mix unfinished streams and one-shot dictionary operations. Re-review context sharing or new direct calls."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0253",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Selected lru 0.7.8 tracing-log keys are Copy integer fields; selected lru 0.12.5 PeerId/Arc<Vec<u8>> Multiaddr keys lack panicking custom Drop. The advisory requires key-destructor panic, unwind and recovery. Alternative lru 0.16.4 is graph-absent."
     },
     {
       "ecosystem": "cargo",
       "id": "RUSTSEC-2026-0002",
-      "expires": "2026-09-30",
-      "reachability": "lockfile-only",
-      "reason": "lru 0.12.5 is absent from the all-feature, all-target workspace graph."
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "The selected lru 0.12.5 PeerAddresses cache uses shared iter(), not affected IterMut; Identify delegates to that cache. Re-review actual cache callers, not unrelated collection iter_mut uses."
     },
     {
       "ecosystem": "cargo",
       "id": "RUSTSEC-2026-0186",
-      "expires": "2026-09-30",
-      "reachability": "lockfile-only",
-      "reason": "memmap2 0.5.10 is absent from the all-feature, all-target workspace graph."
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Sole selected memmap2 0.5.10 consumer parity-db 0.4.13 flushes META_SIZE..map.len() after successful size/mapping checks. Actual range is bounded, unlike advisory's arbitrary invalid ranges; no guarantee for externally truncated files or arbitrary mmap APIs."
     },
     {
       "ecosystem": "npm",
       "id": "@polkadot-api/cli",
-      "expires": "2026-09-30",
+      "expires": "2026-12-12",
       "reachability": "trusted-generation-only",
       "reason": "The high aggregate resolves exclusively to GHSA-ggr8-5vv4-36mx through write-package; the CLI consumes repository-owned metadata during descriptor generation and is not shipped in the browser bundle."
     },
     {
       "ecosystem": "npm",
       "id": "deepmerge-ts",
-      "expires": "2026-09-30",
+      "expires": "2026-12-12",
       "reachability": "trusted-generation-only",
       "reason": "GHSA-ggr8-5vv4-36mx requires a recursive attacker-controlled object graph; descriptor generation consumes locally exported runtime metadata and bounded repository configuration."
     },
     {
       "ecosystem": "npm",
       "id": "polkadot-api",
-      "expires": "2026-09-30",
+      "expires": "2026-12-12",
       "reachability": "trusted-generation-only",
       "reason": "The high aggregate is inherited from the package's CLI generation dependency; browser runtime imports do not invoke write-package or deepmerge-ts."
     },
     {
       "ecosystem": "npm",
       "id": "write-package",
-      "expires": "2026-09-30",
+      "expires": "2026-12-12",
       "reachability": "trusted-generation-only",
       "reason": "The package is reachable only through local descriptor generation, and its recursive merge input is repository-owned rather than user supplied."
     }

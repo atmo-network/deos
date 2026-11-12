@@ -94,6 +94,7 @@ check_prerequisites() {
         log_error "Node/npm do not match web-client/package.json"
         exit 1
     }
+    node "$SCRIPT_DIR/dependency-provenance.mjs" --self-test
     "$PROJECT_ROOT/scripts/01-download-binaries.sh" --check
     log_success "Toolchain and binary identities verified"
 }
