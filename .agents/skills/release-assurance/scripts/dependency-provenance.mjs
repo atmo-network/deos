@@ -139,6 +139,20 @@ if (process.argv[2] === '--self-test') {
     await rm(projectionPath);
     expect(await invoke(base), 1, /ENOENT/);
     expect(cli(['--project', actualLock, metadataPath, actualLock]), 1, /cannot overwrite/);
+    const externalProjection = join(directory, 'external.lock');
+    expect(cli(['--project-external-workspace', actualLock, metadataPath, externalProjection]), 0);
+    assert.equal((await readFile(externalProjection, 'utf8')).match(/^source = /gm).length, 2);
+    assert.equal((await readFile(externalProjection, 'utf8')).replace(/^source = "[^"]+"\n/gm, ''), lock);
+    await writeFile(projectionPath, await readFile(externalProjection, 'utf8'));
+    const files = ['cargo', 'projected', 'npm', 'ledger', 'lock'].map(name => join(directory, name + '.json'));
+    await invoke(base); // Restore genuine fixture reports, retaining the broader view.
+    expect(cli([...files, actualLock, metadataPath, projectionPath, directory]), 1, /projection graph\/version proof failed/);
+    expect(cli([...files, actualLock, metadataPath, projectionPath, directory, '--external-workspace']), 0);
+    await writeFile(files[1], JSON.stringify(audit([finding, {
+      advisory: { id: 'RUSTSEC-SELFTEST-EXTERNAL' }, package: { name: 'workspace', version: '1.0.0' },
+    }])));
+    expect(cli([...files, actualLock, metadataPath, projectionPath, directory, '--external-workspace']), 1,
+      /unreviewed material dependency finding cargo:RUSTSEC-SELFTEST-EXTERNAL/);
     expect(cli(['one', 'two', 'three', 'four']), 2, /Usage/);
     assert.equal(await readFile(actualLock, 'utf8'), lock);
     console.log('[SUCCESS] Dependency CLI self-test: ' + positives + ' positive, ' + negatives +
@@ -168,7 +182,7 @@ async function readJson(path) {
 // Only Cargo-generated lock syntax is supported. Reconstructing exactly the same
 // bytes except inserted source lines proves names, versions and edges unchanged.
 const registrySource = 'registry+https://github.com/rust-lang/crates.io-index';
-function projectLock(lock, metadata) {
+function projectLock(lock, metadata, externalWorkspace = false) {
   assert.ok(Array.isArray(metadata.packages) && Array.isArray(metadata.workspace_members) &&
     Array.isArray(metadata.resolve?.nodes), 'full locked Cargo metadata is required');
   const members = new Set(metadata.workspace_members);
@@ -176,7 +190,10 @@ function projectLock(lock, metadata) {
   assert.ok(metadata.packages.every(pkg => resolved.has(pkg.id)), 'incomplete resolved Cargo metadata');
   const sourceNull = new Set(metadata.packages.filter(pkg => pkg.source === null)
     .map(pkg => `${pkg.name}@${pkg.version}`));
-  const locals = metadata.packages.filter(pkg => pkg.source === null && !members.has(pkg.id));
+  // An isolated upstream SDK workspace is third-party source too. This explicit
+  // mode only broadens the registry-equivalent view; it never excludes findings.
+  const locals = metadata.packages.filter(pkg => pkg.source === null &&
+    (externalWorkspace || !members.has(pkg.id)));
   const keys = new Set(locals.map(pkg => `${pkg.name}@${pkg.version}`));
   assert.equal(keys.size, locals.length, 'ambiguous local package identity');
   const seen = new Set();
@@ -199,20 +216,24 @@ function projectLock(lock, metadata) {
   return { projected, locals };
 }
 
-if (process.argv[2] === '--project') {
-  assert.equal(process.argv.length, 6, 'Usage: --project ACTUAL_LOCK FULL_METADATA_JSON TEMP_LOCK');
+if (['--project', '--project-external-workspace'].includes(process.argv[2])) {
+  assert.equal(process.argv.length, 6, 'Usage: --project or --project-external-workspace ACTUAL_LOCK FULL_METADATA_JSON TEMP_LOCK');
   const [, , , lockPath, metadataPath, output] = process.argv;
   assert.notEqual(resolve(lockPath), resolve(output), 'projection cannot overwrite actual lock');
-  const { projected, locals } = projectLock(await readFile(lockPath, 'utf8'), await readJson(metadataPath));
+  const { projected, locals } = projectLock(await readFile(lockPath, 'utf8'), await readJson(metadataPath),
+    process.argv[2] === '--project-external-workspace');
   await writeFile(output, projected, { flag: 'wx' });
   console.log(`[INFO] Counterfactual version view: ${locals.length} local third-party packages; not source provenance`);
   process.exit(0);
 }
 
+const arguments_ = process.argv.slice(2);
+const externalWorkspace = arguments_.at(-1) === '--external-workspace';
+if (externalWorkspace) arguments_.pop();
 const [cargoPath, projectedAuditPath, npmPath, exceptionPath, packageLockPath,
-  lockPath, metadataPath, projectedLockPath, repoRoot] = process.argv.slice(2);
-if (process.argv.length !== 11) {
-  console.error('Usage: dependency-provenance.mjs ACTUAL_AUDIT PROJECTED_AUDIT NPM_AUDIT EXCEPTIONS PACKAGE_LOCK ACTUAL_LOCK FULL_METADATA PROJECTED_LOCK REPO_ROOT | --project ACTUAL_LOCK FULL_METADATA TEMP_LOCK | --self-test');
+  lockPath, metadataPath, projectedLockPath, repoRoot] = arguments_;
+if (arguments_.length !== 9) {
+  console.error('Usage: dependency-provenance.mjs ACTUAL_AUDIT PROJECTED_AUDIT NPM_AUDIT EXCEPTIONS PACKAGE_LOCK ACTUAL_LOCK FULL_METADATA PROJECTED_LOCK REPO_ROOT [--external-workspace] | --project ACTUAL_LOCK FULL_METADATA TEMP_LOCK | --project-external-workspace ACTUAL_LOCK FULL_METADATA TEMP_LOCK | --self-test');
   process.exit(2);
 }
 const [cargo, projectedAudit, npm, ledger, packageLock, lock, metadata, projectedLock] = await Promise.all([
@@ -220,7 +241,7 @@ const [cargo, projectedAudit, npm, ledger, packageLock, lock, metadata, projecte
   readJson(packageLockPath), readFile(lockPath, 'utf8'), readJson(metadataPath), readFile(projectedLockPath, 'utf8'),
 ]);
 assert.notEqual(await realpath(cargoPath), await realpath(projectedAuditPath), 'both distinct audit files are required');
-const { projected, locals } = projectLock(lock, metadata);
+const { projected, locals } = projectLock(lock, metadata, externalWorkspace);
 assert.equal(projectedLock, projected, 'projection graph/version proof failed');
 for (const audit of [cargo, projectedAudit]) {
   assert.ok(audit.database?.['last-commit'] && audit.database?.['last-updated'], 'cargo advisory database identity is missing');

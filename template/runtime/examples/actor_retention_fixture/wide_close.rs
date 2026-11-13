@@ -5,6 +5,7 @@
 mod actor_block_fixture;
 #[path = "native_api.rs"]
 mod native_api;
+pub(crate) use actor_block_fixture::preset_storage;
 pub(crate) use native_api::ensure_artifact_profile;
 #[path = "pvf.rs"]
 mod pvf_fixture;
@@ -12,9 +13,7 @@ mod pvf_fixture;
 mod wide_contract;
 use deos_runtime as pvf_runtime;
 
-use actor_block_fixture::{
-  contract, create_user, inherents, native_transfer, preset_storage, signed_lifecycle,
-};
+use actor_block_fixture::{contract, create_user, inherents, native_transfer, signed_lifecycle};
 use codec::Encode;
 use deos_runtime::{
   AccountId, Actors, AllPalletsWithSystem, AssetConversion, Assets, Balances, Block, DeosRouter,

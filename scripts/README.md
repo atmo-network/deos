@@ -73,6 +73,8 @@ Each numbered command is independently callable by a human or CI from any workin
 
 ## Deterministic Compositions
 
+- [build-corrected-node.sh](./build-corrected-node.sh)
+  Build-only Linux x86_64 diagnostic from an explicitly supplied exact stable2609-2 SDK checkout. `--prepare --sdk-source SDK --work-dir NEW` creates an isolated user-cache workspace, applies the client-depth and native-relevant security patches at its own Cargo root, records the real Omni normal/build graph and freezes inputs. Separate `--build --work-dir PREPARED` uses Rust1.94.1, SDK production fat-LTO/one-CGU and runtime-benchmarks with normal SDK Wasm construction, retaining complete compiler/tool/environment logs. Each workspace permits one build attempt; failed logs remain evidence, not acceptance. `--self-test` covers structural/CLI/freeze guards without compiling SDK code. No canonical installation, selection, worker-pin or main runtime change; script01 remains the selection owner. Source preparation and successful compilation alone do not qualify native cryptography, node execution or complete dependency security.
 - [setup-environment.sh](./setup-environment.sh)
   Prepare the repository-pinned Rust environment, or clear generated SvelteKit state and install the pinned Node/npm client from its lockfile; full mode prepares both environments. Wiki projection and OKF tooling remain owned and prepared by the `wiki-sync` Skill rather than project validation.
 
