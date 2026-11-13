@@ -77,6 +77,7 @@ prepare_pinned_environment() {
 run_fast_checks() {
     phase_banner "Step 3: Fast profile"
     run_script_step "Pinned binary selection self-test" "01-download-binaries.sh" --self-test
+    run_script_step "Operator tool selection self-test" "02-install-tools.sh" --self-test
     run_script_step "Local CI argument/command self-test" "ci-local.sh" --self-test
     run_script_step "Runtime output self-test" "03-build-runtime.sh" --self-test
     run_script_step "Corrected-node build contract self-test" "build-corrected-node.sh" --self-test

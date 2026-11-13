@@ -52,6 +52,8 @@ DEOS_OMNI_NODE_SHA256="${QUALIFIED_OMNI_SHA256:?Set the independently verified a
 
 The workflow verifies/selects that node before building the runtime, prepares the chain specification, and starts local Zombienet using `polkadot-omni-node-deos`. A previously installed selection can be reused with `--skip-download`; it still must pass its receipt/digest checks. Downloading the pinned `stable2609-2` bundle establishes distribution identity, not qualification of the locally corrected source graph, workers or resource bounds. No downstream production launch is supported before DEOS `1.0`.
 
+For controlled experiments with already-prepared artifacts, `network-assurance-local.sh --prepared-diagnostic` provides a separate hash/version-bound private-loopback route without installing a canonical Omni selection. It verifies real relay inclusion, fixed-checkpoint peer state and fresh-peer/restart behavior, not production capacity or whole-security acceptance. Inputs, isolation guards and teardown are documented in the [scripts entrypoint](./scripts/README.md#deterministic-compositions).
+
 ### Start the reference client
 
 ```bash

@@ -21,8 +21,10 @@ Build-only diagnostic corrected Omni route; never installs or selects a node.
   DEOS_NODE_CACHE_DIR (default: $XDG_CACHE_HOME/deos-native-convergence or
   $HOME/.cache/deos-native-convergence); offline copies SDK stable2609-2,
   applies the reviewed checked-decrement correction and workspace-root Crypto,
-  Hickory and roots patches, resolves the actual normal/build Omni graph, and
-  freezes source, isolated lock, graph evidence and script hashes. No compile.
+  Hickory and roots patches plus coupled Wasmtime 36.0.20/Cranelift 0.123.20,
+  retains nine exact compatible SDK dependency-parent selections, verifies
+  the accepted graph modulo the coupled compiler patches, and freezes source,
+  isolated lock, graph evidence and script hashes. No compile.
   Cargo may fetch missing required dependencies. No broad SDK update is made;
   prepared.json exposes intersecting versions for separate security review.
 --build validates the frozen workspace then runs ONE Cargo build with Rust
@@ -142,6 +144,8 @@ prepare() {
     logged "$WORK/resolve.log" cargo +1.94.1 update -p crypto-bigint@0.5.2 --precise 0.5.5
     logged "$WORK/resolve-hickory.log" cargo +1.94.1 update -p hickory-proto@0.24.1 --precise 0.24.4
     logged "$WORK/resolve-roots.log" cargo +1.94.1 update -p webpki-roots@0.25.2 --precise 0.25.4
+    logged "$WORK/resolve-wasmtime.log" cargo +1.94.1 update -p wasmtime@36.0.7 --precise 36.0.20
+    node "$LEAF" retain-parents "$WORK"
     cargo_graph candidate
     cp Cargo.lock "$WORK/candidate-before-sync.lock"
     logged "$WORK/offline-sync.log" cargo +1.94.1 update --workspace --offline

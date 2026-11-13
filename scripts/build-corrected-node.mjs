@@ -12,6 +12,83 @@ const macro = 'substrate/primitives/api/proc-macro/src/impl_runtime_apis.rs';
 const original = '5466016552eef8393ba2b15a51c5f23fadd6c5c5f874f2e5439f05bebd9758a8';
 const corrected = 'c2d2f02bd4372b402fb15c2bc43046131d2e9a8f6b84ac91789e6507e557be3d';
 const patches = ['crypto-bigint', 'hickory-proto', 'webpki-roots'];
+const registry = 'registry+https://github.com/rust-lang/crates.io-index';
+// Exact SDK parent blocks bound both the original selection and the retained edge.
+// These multi-range requirements admit both choices; a package-wide Cargo update
+// cannot select a dependency version for just one parent.
+const parentSelections = [
+  ['errno', '0.3.10', 'windows-sys', '0.52.0', '0.59.0', '>=0.52, <=0.59', '56b1f6f858154916dfb5c69bac8f628aac7de0522ba0102e509b84a3a0170481', '9772464afdbbc19798d5184d8552db3bced0f22a12909dd2f9253e0c8aa7e640'],
+  ['quinn-udp', '0.6.1', 'windows-sys', '0.52.0', '0.60.2', '>=0.52, <=0.61', '0086ad9916a21cd8bdb06ccae168be5724878e97785d2cef59a06d7f264e6c3d', 'ea049c3379391db3cba4a11b33829d76ac14b04d36492ad5c6cadde19048f0d4'],
+  ['rustix', '0.38.42', 'windows-sys', '0.52.0', '0.59.0', '>=0.52, <=0.59', '4fd94bf407cce113db412b9e0eee8e6e33d400c39f7d5370cc23c7324e61b5bd', '55dc6f221e30640706981f5aaf91c254b1c9d230825e8a2de54b963de55b1b7a'],
+  ['rustix', '1.0.8', 'windows-sys', '0.52.0', '0.60.2', '>=0.52, <0.61', 'f1afe8469831ac2e1cca59a8cf40c68873868c7441ae126bf45989bc1e374714', 'b74c9ee20fd040a2ac1aa11c58941ccc4f8210202da828cc524a312195448dd2'],
+  ['rustls-platform-verifier', '0.5.3', 'windows-sys', '0.52.0', '0.59.0', '>=0.52.0, <0.60.0', 'cde5be71a878b885ac25917c4c010e11a07e75a307599707cb98bccc8b097ecc', '845b1455c4c2fb5022fe3ecd2af84cceeebfc47c0b57c40515ed053c379f2616'],
+  ['rustls-platform-verifier', '0.6.2', 'windows-sys', '0.52.0', '0.60.2', '>=0.52.0, <0.62.0', '14fc2dee142520406e9bbfe3209e7a357c6fea211002bde6ed21cec60e761a66', '45c19c702a306af711931d9faa03b1eda7af777b94f26fd43be1b37c4b0ffab1'],
+  ['tempfile', '3.14.0', 'windows-sys', '0.52.0', '0.59.0', '>=0.52, <=0.59', 'ab327a3bd811085edb00240774fbf3a31bba683859700848ee26b6a946a1792e', '1dfa443ee037b59ec5366c12dd5c37d3cb77281fff54ba8834a392c7ccc8d0c2'],
+  ['prost-build', '0.13.2', 'heck', '0.4.1', '0.5.0', '>=0.4, <=0.5', '0e41d16cc6b22e63af0675cc265942423a436f1a338c85e86afdb082fdcfbb08', 'fac096ef2f539b034e7eed299b67d0d6ab71fff36bb01ca10dd117bb312f30de'],
+  ['prost-build', '0.14.1', 'heck', '0.4.1', '0.5.0', '>=0.4, <=0.5', '71988fc9a129a04f2741f26bc60445493f9cd0f589ad9d11daa9750fec1aa3b1', '7bcf6221bb72c40165a85791d9e820c073b47726f4c4aa80d25f7741be9478db'],
+];
+
+function retainedParentLock(text, metadata, selections = parentSelections) {
+  const blocks = text.split('[[package]]');
+  const field = (block, name) => new RegExp(`^${name} = "([^"]+)"`, 'm').exec(block)?.[1];
+  const find = (name, version) => blocks.map((block, index) => ({ block, index })).filter(({ block }) =>
+    field(block, 'name') === name && field(block, 'version') === version);
+  for (const [name, version, dependency, from, to, requirement, beforeHash, afterHash] of selections) {
+    const parents = find(name, version);
+    assert.equal(parents.length, 1, `Missing or ambiguous retained parent: ${name}@${version}`);
+    const { block, index } = parents[0];
+    assert.equal(field(block, 'source'), registry, `Changed parent source: ${name}`);
+    assert.equal(hash(block), beforeHash, `Changed parent block: ${name}@${version}`);
+    const packages = metadata.packages.filter(pkg => pkg.name === name && pkg.version === version && pkg.source === registry);
+    assert.equal(packages.length, 1, `Missing retained parent manifest: ${name}@${version}`);
+    const deps = packages[0].dependencies.filter(dep => dep.name === dependency);
+    assert.equal(deps.length, 1, `Changed parent requirement: ${name}`);
+    assert.equal(deps[0].source, registry);
+    assert.equal(deps[0].req, requirement, `Changed parent requirement: ${name}`);
+    assert.equal(deps[0].kind, null);
+    assert.equal(deps[0].target, dependency === 'windows-sys' ? 'cfg(windows)' : null);
+    for (const selected of [from, to]) {
+      const targets = find(dependency, selected);
+      assert.equal(targets.length, 1, `Missing or ambiguous dependency: ${dependency}@${selected}`);
+      assert.equal(field(targets[0].block, 'source'), registry, `Changed dependency source: ${dependency}`);
+    }
+    const edge = `\n "${dependency} ${from}",\n`;
+    assert.equal(block.split(edge).length, 2, `Missing or duplicate retained edge: ${name}`);
+    const retained = block.replace(edge, `\n "${dependency} ${to}",\n`);
+    assert.equal(hash(retained), afterHash, `Changed retained block: ${name}@${version}`);
+    blocks[index] = retained;
+  }
+  return blocks.join('[[package]]');
+}
+
+function retainParents(work) {
+  const file = path.join(work, 'sdk/Cargo.lock');
+  const before = fs.readFileSync(file, 'utf8');
+  const after = retainedParentLock(before, read(path.join(work, 'baseline-metadata.json')));
+  // Complete lock identity binds every compiler checksum and necessary dependency
+  // edge as well as the unchanged remainder of this exact SDK construction.
+  assert.equal(hash(after), '14c26cf10b721dfe0c4f78add53e3815b38daccdbb76fe425e647336301f8e03', 'Unexpected coupled compiler lock delta');
+  fs.writeFileSync(file + '.retained', after, { flag: 'wx' });
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'Lock changed during retention');
+  fs.renameSync(file + '.retained', file);
+  save(path.join(work, 'retained-parents.json'), parentSelections.map(([name, version, dependency, from, to, requirement]) =>
+    ({ name, version, dependency, from, to, requirement })));
+}
+
+function assertRetainedGraph(work, metadata, selected) {
+  const normalize = value => JSON.parse(JSON.stringify(value).replaceAll(work, '$WORK')
+    .replaceAll('36.0.7', '36.0.20').replaceAll('0.123.7', '0.123.20'));
+  const packages = normalize(selected).map(pkg => ({ ...pkg, parents: [...pkg.parents].sort() }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const nodes = normalize(metadata.resolve.nodes).map(node => ({ ...node,
+    deps: [...node.deps].sort((a, b) => a.name.localeCompare(b.name)),
+    dependencies: [...node.dependencies].sort(), features: [...node.features].sort(),
+  })).sort((a, b) => a.id.localeCompare(b.id));
+  // Fingerprints of the accepted graph, normalizing only the coupled patch IDs.
+  // The full host closure includes all 49 crypto callers; nodes include Windows.
+  assert.equal(hash(JSON.stringify(packages)), '8a899936f6b8fc5d814483a01a4b3ec498b009ba00ac701a383ac4ab162b8c13', 'Unrelated host graph delta');
+  assert.equal(hash(JSON.stringify(nodes)), 'eef045cd637936faa23490361b7d86aa7ec07b1ab37762d417d9ca27b6a7177f', 'Unrelated workspace graph delta');
+}
 
 function inventory(root, prefix = '') {
   return fs.readdirSync(path.join(root, prefix)).sort().flatMap(name => {
@@ -92,6 +169,17 @@ function treeClosure(metadata, text) {
   return { nodes, reached, packages: metadata.packages.filter(pkg => reached.has(pkg.id)) };
 }
 
+function assertCompilerProfile(selected) {
+  for (const [family, version] of [[/^wasmtime(?:-|$)/, '36.0.20'], [/^cranelift-/, '0.123.20']]) {
+    const members = selected.filter(pkg => family.test(pkg.name));
+    assert(members.length > 0, `Missing compiler family: ${family}`);
+    for (const pkg of members) assert.equal(pkg.version, version, `Uncorrected compiler: ${pkg.name}`);
+  }
+  const root = selected.filter(pkg => pkg.name === 'polkadot-omni-node');
+  assert.equal(root.length, 1, 'Ambiguous Omni root');
+  assert(root[0].features.includes('runtime-benchmarks'), 'Missing Omni runtime-benchmarks');
+}
+
 function graph(work, label) {
   const metadata = read(path.join(work, `${label}-metadata.json`));
   const { nodes, reached, packages } = treeClosure(metadata, fs.readFileSync(path.join(work, `${label}-tree.txt`), 'utf8'));
@@ -102,6 +190,8 @@ function graph(work, label) {
       dep.dep_kinds.some(kind => kind.kind === null || kind.kind === 'build'))).map(parent => parent.id),
   })).sort((a, b) => a.id.localeCompare(b.id));
   if (label === 'candidate') {
+    assertCompilerProfile(selected);
+    assertRetainedGraph(work, metadata, selected);
     const cryptos = selected.filter(pkg => pkg.name === 'crypto-bigint');
     assert(cryptos.length > 0, 'Missing Crypto in Omni closure');
     for (const pkg of cryptos) {
@@ -159,7 +249,7 @@ function freeze(work, script, common) {
     changes: { removed: baseline.filter(a => !candidate.some(b => a.id === b.id)), added: candidate.filter(a => !baseline.some(b => a.id === b.id)) },
     scripts: [script, common, process.argv[1]].map(file => [fs.realpathSync(file), digest(file)]),
     inputs: ['sdk', 'vendor'].map(dir => [dir, inventory(path.join(work, dir))]),
-    proofs: ['git-refs.txt', 'lock-delta.patch', 'baseline.lock', 'baseline-metadata.json', 'candidate-metadata.json', 'baseline-closure.json', 'candidate-closure.json', 'candidate-tree.txt', 'baseline-tree.txt'].map(file => [file, digest(path.join(work, file))]),
+    proofs: ['git-refs.txt', 'retained-parents.json', 'lock-delta.patch', 'baseline.lock', 'baseline-metadata.json', 'candidate-metadata.json', 'baseline-closure.json', 'candidate-closure.json', 'candidate-tree.txt', 'baseline-tree.txt'].map(file => [file, digest(path.join(work, file))]),
   });
 }
 
@@ -174,7 +264,8 @@ function verify(work) {
 function environment(work) {
   const names = ['PATH', 'PROTOC', 'PERL5LIB', 'LD_LIBRARY_PATH', 'LIBCLANG_PATH',
     'CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS', 'CARGO_TARGET_DIR',
-    'WASM_BUILD_WORKSPACE_HINT', 'WASM_BUILD_TOOLCHAIN', 'CARGO_BUILD_JOBS'];
+    'WASM_BUILD_WORKSPACE_HINT', 'WASM_BUILD_TOOLCHAIN', 'CARGO_BUILD_JOBS',
+    'BINDGEN_EXTRA_CLANG_ARGS'];
   const cargoHome = process.env.CARGO_HOME || path.join(os.homedir(), '.cargo');
   save(path.join(work, 'build-environment.json'), {
     target: 'Linux x86_64 host; exact Rust host and versions in build-tools.txt',
@@ -193,6 +284,46 @@ function selfTest() {
   ] } };
   assert.deepEqual([...closure(meta).reached], ['root', 'a']);
   assert.notEqual(hash('before'), hash('after'));
+  const compiler = [
+    { name: 'polkadot-omni-node', features: ['runtime-benchmarks'] },
+    { name: 'wasmtime', version: '36.0.20' },
+    { name: 'wasmtime-internal-cranelift', version: '36.0.20' },
+    { name: 'cranelift-codegen', version: '0.123.20' },
+  ];
+  assertCompilerProfile(compiler);
+  for (const [index, version] of [[1, '36.0.7'], [2, '36.0.7'], [3, '0.123.7'], [3, '0.123.19']]) {
+    assert.throws(() => assertCompilerProfile(compiler.map((pkg, i) => i === index ? { ...pkg, version } : pkg)), /Uncorrected compiler/);
+  }
+  assert.throws(() => assertCompilerProfile(compiler.slice(0, 3)), /Missing compiler family/);
+  assert.throws(() => assertCompilerProfile(compiler.map((pkg, i) => i ? pkg : { ...pkg, features: [] })), /Missing Omni runtime-benchmarks/);
+  assert.equal(parentSelections.length, 9);
+  const parent = `\nname = "prost-build"\nversion = "0.13.2"\nsource = "${registry}"\nchecksum = "fixture"\ndependencies = [\n "heck 0.4.1",\n]\n\n`;
+  const retained = parent.replace('heck 0.4.1', 'heck 0.5.0');
+  const target = version => `[[package]]\nname = "heck"\nversion = "${version}"\nsource = "${registry}"\n\n`;
+  const lock = 'version = 4\n\n[[package]]' + parent + target('0.4.1') + target('0.5.0');
+  const manifest = { packages: [{ name: 'prost-build', version: '0.13.2', source: registry,
+    dependencies: [{ name: 'heck', source: registry, req: '>=0.4, <=0.5', kind: null, target: null }] }] };
+  const selection = [['prost-build', '0.13.2', 'heck', '0.4.1', '0.5.0', '>=0.4, <=0.5', hash(parent), hash(retained)]];
+  const retain = (text, meta = manifest, rules = selection) => retainedParentLock(text, meta, rules);
+  assert.equal(retain(lock), lock.replace(parent, retained));
+  for (const bad of [lock.replace('prost-build', 'changed'), lock.replace('0.13.2', '0.13.3'),
+    lock.replace(registry, 'registry+unreviewed'), lock.replace('checksum = "fixture"', 'checksum = "changed"'),
+    lock.replace(' "heck 0.4.1",', ''), lock.replace(parent, parent + '[[package]]' + parent),
+    lock.replace(target('0.5.0'), ''), lock.replace(target('0.5.0'), target('0.5.0').replace(registry, 'registry+unreviewed'))]) {
+    assert.throws(() => retain(bad));
+  }
+  // Even a self-consistent old block fingerprint cannot authorize a missing edge.
+  const missing = parent.replace(' "heck 0.4.1",', '');
+  assert.throws(() => retain(lock.replace(parent, missing), manifest,
+    [[...selection[0].slice(0, 6), hash(missing), hash(retained)]]), /Missing or duplicate retained edge/);
+  assert.throws(() => retain(lock, { packages: [] }), /Missing retained parent manifest/);
+  for (const field of ['req', 'source', 'kind', 'target']) {
+    const changed = structuredClone(manifest);
+    changed.packages[0].dependencies[0][field] = 'changed';
+    assert.throws(() => retain(lock, changed));
+  }
+  assert.throws(() => retain(lock, manifest, [[...selection[0].slice(0, 7), hash('changed')]]), /Changed retained block/);
+  assert.throws(() => assertRetainedGraph('/fixture', { resolve: { nodes: [] } }, []), /Unrelated host graph delta/);
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'deos-corrected-node-test-'));
   try {
     const sdk = path.join(fixture, 'sdk');
@@ -205,7 +336,7 @@ function selfTest() {
     fs.mkdirSync(path.join(sdk, path.dirname(macro)), { recursive: true });
     fs.writeFileSync(path.join(sdk, macro), 'wrong source');
     assert.throws(() => patch(sdk, vendor), /Unexpected SDK macro/);
-    for (const file of ['git-refs.txt', 'lock-delta.patch', 'baseline-metadata.json', 'candidate-metadata.json', 'baseline-tree.txt', 'candidate-tree.txt', 'baseline.lock']) fs.writeFileSync(path.join(fixture, file), '{}');
+    for (const file of ['git-refs.txt', 'retained-parents.json', 'lock-delta.patch', 'baseline-metadata.json', 'candidate-metadata.json', 'baseline-tree.txt', 'candidate-tree.txt', 'baseline.lock']) fs.writeFileSync(path.join(fixture, file), '{}');
     for (const label of ['baseline', 'candidate']) save(path.join(fixture, `${label}-closure.json`), { packages: [] });
     freeze(fixture, script, script);
     verify(fixture);
@@ -226,11 +357,12 @@ function selfTest() {
     assert.deepEqual(actual.nodes.get('a').features, ['x', 'y']);
     assert.equal(actual.nodes.get('root').deps[0].pkg, 'a');
   } finally { fs.rmSync(fixture, { recursive: true, force: true }); }
-  console.log('Source precondition, tree/features, freeze and script/source/graph invalidation self-tests passed');
+  console.log('Source precondition, exact parent retention/requirements, tree/features, freeze and script/source/graph invalidation self-tests passed');
 }
 
 const [mode, ...args] = process.argv.slice(2);
 if (mode === 'patch') patch(...args);
+else if (mode === 'retain-parents') retainParents(...args);
 else if (mode === 'graph') graph(...args);
 else if (mode === 'freeze') freeze(...args);
 else if (mode === 'verify') verify(...args);

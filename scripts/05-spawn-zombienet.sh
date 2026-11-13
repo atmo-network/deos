@@ -21,6 +21,10 @@ Environment:
   ZOMBIENET_CONFIG=<NETWORK_WORK_DIR>/zombienet.toml
   CHAIN_SPEC_PATH=<NETWORK_WORK_DIR>/chain_spec.json
   DEOS_BINARY_DIR=<repository>/bin  SDK bundle and selected Omni receipt
+  DEOS_NETWORK_DIAGNOSTIC=1  Explicit non-promoting prepared diagnostic only
+  DEOS_DIAGNOSTIC_OMNI_PATH, DEOS_DIAGNOSTIC_OMNI_SHA256,
+  DEOS_DIAGNOSTIC_OMNI_VERSION  Exact caller-selected candidate identity
+  DEOS_NETWORK_EVIDENCE_DIR  Required diagnostic preflight/evidence directory
 
 Inputs:
   Existing Zombienet config and matching raw-storage chain spec in the selected network work
@@ -57,7 +61,7 @@ check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     hydrate_local_tool_paths
     require_commands polkadot zombienet jq
-    verify_deos_omni_node "$(command -v polkadot-omni-node-deos || true)"
+    verify_network_omni_node "$(command -v polkadot-omni-node-deos || true)"
     log_success "Zombienet spawn prerequisites checked"
 }
 
@@ -84,6 +88,14 @@ verify_prerequisites() {
         exit 1
     fi
 
+    if [[ "${DEOS_NETWORK_DIAGNOSTIC:-0}" == "1" ]]; then
+        require_commands node
+        [[ -n "${DEOS_NETWORK_EVIDENCE_DIR:-}" && -f "$DEOS_NETWORK_EVIDENCE_DIR/ACCEPTANCE.md" ]] || {
+            log_error "Diagnostic requires a predeclared ACCEPTANCE.md in DEOS_NETWORK_EVIDENCE_DIR"
+            return 1
+        }
+        node "$SCRIPT_DIR/network-assurance.mjs" preflight "$(command -v zombienet)" "$DEOS_NETWORK_EVIDENCE_DIR" "$ZOMBIENET_CONFIG"
+    fi
     log_info "Prerequisites verified"
 }
 

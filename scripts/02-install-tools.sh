@@ -6,6 +6,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 ZOMBIENET_VERSION="1.3.138"
 ZOMBIENET_INTEGRITY="sha512-hZ3n7y4SOwSP2C6sBL880b7qSK+EbSt39R2d/23fu90+VvH4bu3fkYRZb2sk6hio7zgIyBwQHpzqhhLL7DOJ1Q=="
 CHAIN_SPEC_BUILDER_VERSION="19.0.0"
+ONLY=""
+SELF_TEST=0
 TRY_RUNTIME_VERSION="0.10.1"
 TRY_RUNTIME_REVISION="6e1c4e95e76c7deee7a19bc05ae2496dda0ee0be"
 usage() {
@@ -15,7 +17,9 @@ Usage: 02-install-tools.sh [OPTIONS]
 Installs the exact repository-pinned operator tools.
 
 Options:
-  -h, --help  Show this help message
+  --only zombienet  Install only the pinned npm tool (no Cargo prerequisites/builds)
+  --self-test       Test narrow/default routing and option refusal without installation
+  -h, --help        Show this help message
 
 Tools:
   @zombienet/cli 1.3.138
@@ -37,6 +41,12 @@ EOF
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --self-test) SELF_TEST=1 ;;
+            --only)
+                [[ "${2:-}" == "zombienet" ]] || { log_error "--only supports zombienet"; return 1; }
+                ONLY="$2"
+                shift
+                ;;
             -h|--help)
                 usage
                 exit 0
@@ -55,7 +65,8 @@ check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     activate_pinned_node
     hydrate_local_tool_paths
-    require_commands cargo npm
+    require_commands npm
+    [[ "$ONLY" == "zombienet" ]] || require_commands cargo
     log_success "Pinned tool installation prerequisites checked"
 }
 
@@ -66,8 +77,10 @@ command_has_version() {
 }
 
 zombienet_has_version() {
-    command -v zombienet &>/dev/null \
-        && zombienet version 2>&1 | grep -Fq "$ZOMBIENET_VERSION"
+    local executable="zombienet"
+    if [[ -n "${NPM_CONFIG_PREFIX:-}" ]]; then executable="$NPM_CONFIG_PREFIX/bin/zombienet"; fi
+    command -v "$executable" &>/dev/null \
+        && "$executable" version 2>&1 | grep -Fq "$ZOMBIENET_VERSION"
 }
 
 install_cargo_version() {
@@ -119,8 +132,28 @@ install_try_runtime() {
 install_tools() {
     phase_banner "Step 2: Install exact tools"
     install_zombienet
-    install_cargo_version chain-spec-builder staging-chain-spec-builder "$CHAIN_SPEC_BUILDER_VERSION"
-    install_try_runtime
+    if [[ "$ONLY" != "zombienet" ]]; then
+        install_cargo_version chain-spec-builder staging-chain-spec-builder "$CHAIN_SPEC_BUILDER_VERSION"
+        install_try_runtime
+    fi
+}
+
+run_self_tests() {
+    (
+        local calls=""
+        phase_banner() { :; }
+        install_zombienet() { calls+="zombienet "; }
+        install_cargo_version() { calls+="cargo "; }
+        install_try_runtime() { calls+="try-runtime "; }
+        ONLY=zombienet install_tools
+        [[ "$calls" == "zombienet " ]] || exit 1
+        calls=""
+        ONLY="" install_tools
+        [[ "$calls" == "zombienet cargo try-runtime " ]] || exit 1
+        if (parse_args --only invalid) >/dev/null 2>&1; then exit 1; fi
+        if (parse_args --only) >/dev/null 2>&1; then exit 1; fi
+    ) || { log_error "Tool selection self-test failed"; return 1; }
+    log_success "Narrow/default tool installation routing and option refusal passed"
 }
 
 print_summary() {
@@ -130,6 +163,7 @@ print_summary() {
 
 main() {
     parse_args "$@"
+    if [[ "$SELF_TEST" == "1" ]]; then run_self_tests; return; fi
     phase_banner "DEOS pinned tool installation"
     check_prerequisites
     install_tools

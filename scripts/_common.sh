@@ -125,6 +125,30 @@ verify_deos_omni_node() {
     log_success "Selected Omni artifact verified: $node_path ($selected)"
 }
 
+# Prepared diagnostics establish only caller-selected executable identity, never qualification.
+verify_network_omni_node() {
+    local selected="${1:-}"
+    if [[ "${DEOS_NETWORK_DIAGNOSTIC:-0}" != "1" ]]; then
+        verify_deos_omni_node "$selected"
+        return
+    fi
+    require_commands readlink
+    local candidate="${DEOS_DIAGNOSTIC_OMNI_PATH:-}" expected="${DEOS_DIAGNOSTIC_OMNI_SHA256:-}" version="${DEOS_DIAGNOSTIC_OMNI_VERSION:-}"
+    [[ "$candidate" == /* && -x "$candidate" && "$expected" =~ ^[a-f0-9]{64}$ && -n "$version" ]] || {
+        log_error "Diagnostic selection requires an absolute executable path, SHA256 and exact version"
+        return 1
+    }
+    [[ -n "$selected" && "$(readlink -f "$selected")" == "$(readlink -f "$candidate")" ]] || {
+        log_error "Diagnostic PATH command differs from the explicitly selected executable"
+        return 1
+    }
+    [[ "$(deos_sha256_file "$candidate")" == "$expected" && "$("$candidate" --version)" == "$version" ]] || {
+        log_error "Diagnostic executable hash/version mismatch"
+        return 1
+    }
+    log_warning "NON-PROMOTING DIAGNOSTIC: $candidate ($expected); no canonical receipt or qualification asserted"
+}
+
 activate_pinned_node() {
     local package_json="$PROJECT_ROOT/web-client/package.json"
     [[ -f "$package_json" ]] || { log_error "Node version authority not found: $package_json"; exit 1; }

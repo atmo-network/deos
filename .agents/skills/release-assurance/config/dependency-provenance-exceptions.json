@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "reviewedAt": "2026-11-12",
+  "reviewedAt": "2026-11-13",
   "licenseExceptions": [
     {
       "ecosystem": "npm",
@@ -10,6 +10,80 @@
     }
   ],
   "exceptions": [
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0530",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "The reviewed local Hickory0.24.4 source gates the affected DNSSEC validation modules behind dnssec in rr/mod.rs and xfer/mod.rs. The all-feature reference dependency graph has no dnssec activation. This removes the advisory prerequisite, not the vulnerable source; it provides no DNSSEC validation guarantee and fails when the feature or bound source changes. Accepted independent review7933af4740a4040abdfff32861ae33e945fcbdc64ca79fb79c9f89d91e5fa455; root-normal-build-tree.stdout (1066 packages), /tmp/deos-0387-closure-root-metadata.json and exact reviewedSources below; root only, not SDK or macOS clearance.",
+      "expires": "2026-12-12",
+      "excludedFeatures": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "features": [
+            "dnssec"
+          ],
+          "source": null
+        }
+      ],
+      "reviewedSources": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "files": [
+            {
+              "path": "template/vendor/hickory-proto/Cargo.toml",
+              "sha256": "a610d693cb19d46ed176958afe7a86de05033c291e4fd53936bb6adc59e1b9a4"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/rr/mod.rs",
+              "sha256": "888a2919d23db916e8b43597bec1c8b02754e0be795c0ce56d9271c333004bcd"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/xfer/mod.rs",
+              "sha256": "d143a275adcba56de8a27b77305f447f721b729218c358c34c6061058741ae95"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0531",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "The reviewed local Hickory0.24.4 source gates the affected DNSSEC validation modules behind dnssec in rr/mod.rs and xfer/mod.rs. The all-feature reference dependency graph has no dnssec activation. This removes the advisory prerequisite, not the vulnerable source; it provides no DNSSEC validation guarantee and fails when the feature or bound source changes. Accepted independent review7933af4740a4040abdfff32861ae33e945fcbdc64ca79fb79c9f89d91e5fa455; root-normal-build-tree.stdout (1066 packages), /tmp/deos-0387-closure-root-metadata.json and exact reviewedSources below; root only, not SDK or macOS clearance.",
+      "expires": "2026-12-12",
+      "excludedFeatures": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "features": [
+            "dnssec"
+          ],
+          "source": null
+        }
+      ],
+      "reviewedSources": [
+        {
+          "name": "hickory-proto",
+          "version": "0.24.4",
+          "files": [
+            {
+              "path": "template/vendor/hickory-proto/Cargo.toml",
+              "sha256": "a610d693cb19d46ed176958afe7a86de05033c291e4fd53936bb6adc59e1b9a4"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/rr/mod.rs",
+              "sha256": "888a2919d23db916e8b43597bec1c8b02754e0be795c0ce56d9271c333004bcd"
+            },
+            {
+              "path": "template/vendor/hickory-proto/src/xfer/mod.rs",
+              "sha256": "d143a275adcba56de8a27b77305f447f721b729218c358c34c6061058741ae95"
+            }
+          ]
+        }
+      ]
+    },
     {
       "ecosystem": "cargo",
       "id": "RUSTSEC-2026-0418",

@@ -16,6 +16,8 @@ export DEOS_BINARY_DIR
 BIN_DIR="$DEOS_BINARY_DIR"
 ZOMBIENET_PID=""
 RESTARTED_SECONDARY_PID=""
+SECONDARY_COMMAND=""
+SECONDARY_LOG=""
 PAUSED_PRIMARY_PID=""
 NETWORK_DIR=""
 declare -a OWNED_PIDS=()
@@ -32,7 +34,10 @@ Options:
                     Always clean up owned processes; reject optional mutation modes.
   --prepared-recovery  Reuse prepared inputs; add owned primary pause/secondary restart.
                        Compare complete historical TOP/header; never submit extrinsics.
-  --self-test       Test routing/guards and snapshot parsing with jq; no network/state mutation.
+  --prepared-diagnostic  Explicit non-promoting candidate; prove real relay inclusion,
+                         post-checkpoint fresh-database late join, fixed historical
+                         TOP convergence and persisted restart; no signed calls.
+  --self-test       Test routing/guards and snapshot parsing; no network/state mutation.
   --keep-network    Leave the owned Zombienet process running after full validation.
   -h, --help        Show this help message.
 
@@ -46,6 +51,9 @@ Environment:
   COMPOSED_PATH=0|1 (set 1 for the mutating Router/Oracle/Burn Actor proof)
   BLOCK_TARGET=100 and other 06-network-smoke.sh environment controls
   NETWORK_WORK_DIR, ZOMBIENET_CONFIG, CHAIN_SPEC_PATH select prepared inputs
+  Diagnostic only: DEOS_DIAGNOSTIC_OMNI_PATH/SHA256/VERSION bind exact candidate;
+  DEOS_NETWORK_EVIDENCE_DIR must contain predeclared ACCEPTANCE.md. No receipt,
+  canonical selection, security acceptance or production promotion is asserted.
   SESSION_TIMEOUT_SEC=28800 and other 08-session-transition.sh controls
 
 Inputs:
@@ -63,8 +71,18 @@ Side effects:
   proofs. Starts/stops only its temporary network; runtime genesis is not patched.
   --prepared-recovery: additionally pauses/resumes the owned primary, SIGKILLs and
   restarts the owned secondary at its existing base path, and captures historical TOP
-  snapshots under the Zombienet directory. Prepared modes are mutually exclusive.
-  These are finite liveness/recovery points, not transaction, sandbox or release acceptance.
+  snapshots under the Zombienet directory.
+  --prepared-diagnostic: selects only the explicitly named/hash/version-bound Omni,
+  requires a JSON native/loopback topology and predeclared acceptance, and records
+  current-metadata CandidateIncluded/Paras.Heads relay-finalized checkpoints plus
+  independent peer TOP equality. Only after that accepted checkpoint, replace the
+  secondary with a new non-authoring instance at absent parachain/embedded-relay
+  base paths; require exact fixed historical genesis/header/TOP convergence, then
+  restart this new persisted database and require later relay-finalized inclusion.
+  Existing databases are retained, never copied/purged. It does not require both
+  peers to author, pause the primary, or submit transactions.
+  Prepared modes are mutually exclusive. These are finite liveness/recovery points,
+  not transaction, security/sandbox qualification or release acceptance.
 EOF
 }
 
@@ -72,7 +90,7 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --keep-network) KEEP_NETWORK=1 ;;
-            --prepared-smoke|--prepared-recovery)
+            --prepared-smoke|--prepared-recovery|--prepared-diagnostic)
                 local requested="${1#--prepared-}"
                 [[ -z "$PREPARED_MODE" || "$PREPARED_MODE" == "$requested" ]] || { log_error "Select one prepared mode"; return 1; }
                 PREPARED_MODE="$requested"
@@ -86,6 +104,10 @@ parse_args() {
 }
 
 validate_mode() {
+    if [[ "${DEOS_NETWORK_DIAGNOSTIC:-0}" == "1" && "$PREPARED_MODE" != "diagnostic" ]]; then
+        log_error "Diagnostic override requires --prepared-diagnostic"
+        return 1
+    fi
     if [[ -n "$PREPARED_MODE" && ( "$KEEP_NETWORK" != "0" || "$SESSION_TRANSITION" != "0" || "$COMPOSED_PATH" != "0" ) ]]; then
         log_error "Prepared modes require cleanup and exclude session/composed proofs"
         return 1
@@ -228,16 +250,22 @@ snapshot_top_at() {
 }
 
 restart_secondary_with_persisted_state() {
-    local network_dir="$1"
+    local network_dir="$1" retained_hash="${2:-}"
     local recorded_hash recorded_header restored_header before after secondary_pid secondary_command deadline
     recorded_hash="$(curl -fsS -H 'Content-Type: application/json' -d '{"id":1,"jsonrpc":"2.0","method":"chain_getFinalizedHead","params":[]}' 'http://127.0.0.1:9999' | jq -er '.result | select(type == "string" and test("^0x[0-9a-fA-F]{64}$"))')"
+    [[ -z "$retained_hash" ]] || recorded_hash="$retained_hash"
     recorded_header="$(curl -fsS -H 'Content-Type: application/json' -d "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"chain_getHeader\",\"params\":[\"$recorded_hash\"]}" 'http://127.0.0.1:9999' | jq -cSe '.result | select(type == "object")')"
     before="$(jq -er '.number | select(type == "string" and test("^0x[0-9a-fA-F]+$"))' <<< "$recorded_header")"
     before=$((16#${before#0x}))
     snapshot_top_at "$recorded_hash" "$network_dir/bob-1-before-restart.top.json"
     printf '%s\n' "$recorded_header" > "$network_dir/bob-1-before-restart.header.json"
-    secondary_pid="$(jq -er '.client.processMap["bob-1"].pid' "$network_dir/zombie.json")"
-    secondary_command="$(jq -er '.client.processMap["bob-1"].cmd[0]' "$network_dir/zombie.json")"
+    secondary_pid="${RESTARTED_SECONDARY_PID:-$(jq -er '.client.processMap["bob-1"].pid' "$network_dir/zombie.json")}"
+    secondary_command="${SECONDARY_COMMAND:-$(jq -er '.client.processMap["bob-1"].cmd[0]' "$network_dir/zombie.json")}"
+    local secondary_log="${SECONDARY_LOG:-$network_dir/bob-1.log}"
+    if [[ "$PREPARED_MODE" == "diagnostic" ]]; then
+        node "$SCRIPT_DIR/network-assurance.mjs" command-preflight "$secondary_command"
+    fi
+    refresh_owned_pids
     kill -9 "$secondary_pid"
     local attempt
     for attempt in {1..30}; do
@@ -245,9 +273,10 @@ restart_secondary_with_persisted_state() {
         sleep 1
     done
     kill -0 "$secondary_pid" 2>/dev/null && { log_error "Secondary collator process did not stop"; exit 1; }
-    bash -c "$secondary_command" >> "$network_dir/bob-1.log" 2>&1 &
+    wait "$secondary_pid" 2>/dev/null || true
+    bash -c "$secondary_command" >> "$secondary_log" 2>&1 &
     RESTARTED_SECONDARY_PID="$!"
-    wait_for_chain_rpc "http://127.0.0.1:9999" "$RPC_READY_TIMEOUT_SEC" "Restarted secondary collator RPC" "$RESTARTED_SECONDARY_PID" "$network_dir/bob-1.log"
+    wait_for_chain_rpc "http://127.0.0.1:9999" "$RPC_READY_TIMEOUT_SEC" "Restarted secondary collator RPC" "$RESTARTED_SECONDARY_PID" "$secondary_log"
     restored_header="$(curl -fsS -H 'Content-Type: application/json' -d "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"chain_getHeader\",\"params\":[\"$recorded_hash\"]}" 'http://127.0.0.1:9999' | jq -cSe '.result | select(type == "object")')"
     [[ "$restored_header" == "$recorded_header" ]] || { log_error "Restarted secondary header differs at retained finalized hash"; exit 1; }
     snapshot_top_at "$recorded_hash" "$network_dir/bob-1-after-restart.top.json"
@@ -261,14 +290,44 @@ restart_secondary_with_persisted_state() {
         after="$(finalized_block_number 'http://127.0.0.1:9999')"
     done
     local database_lines database_paths
-    database_lines="$(rg -c 'Database: RocksDb at ' "$network_dir/bob-1.log")"
-    database_paths="$(rg 'Database: RocksDb at ' "$network_dir/bob-1.log" | sed -E 's/.*Database: RocksDb at ([^ ]+).*/\1/' | sort -u | wc -l | tr -d ' ')"
+    database_lines="$(rg -c 'Database: RocksDb at ' "$secondary_log")"
+    database_paths="$(rg 'Database: RocksDb at ' "$secondary_log" | sed -E 's/.*Database: RocksDb at ([^ ]+).*/\1/' | sort -u | wc -l | tr -d ' ')"
     (( database_lines >= 2 && database_paths == 1 )) || { log_error "Secondary collator did not reopen one stable database path"; exit 1; }
-    if rg -qi 'database[^[:cntrl:]]*(corrupt|repair|purge|reset)|state[^[:cntrl:]]*loss' "$network_dir/bob-1.log"; then
+    if rg -qi 'database[^[:cntrl:]]*(corrupt|repair|purge|reset)|state[^[:cntrl:]]*loss' "$secondary_log"; then
         log_error "Secondary collator restart log reports database repair/reset/corruption"
         exit 1
     fi
     log_success "Secondary collator reopened persisted state at $recorded_hash and finality advanced from $before to $after"
+}
+
+start_fresh_secondary() {
+    node "$SCRIPT_DIR/network-assurance.mjs" fresh-command "$(command -v zombienet)" "$DEOS_NETWORK_EVIDENCE_DIR" "$NETWORK_DIR"
+    local base_path secondary_pid attempt
+    base_path="$(jq -er .basePath "$DEOS_NETWORK_EVIDENCE_DIR/fresh-instance.json")"
+    SECONDARY_COMMAND="$(jq -er .command "$DEOS_NETWORK_EVIDENCE_DIR/fresh-instance.json")"
+    SECONDARY_LOG="$NETWORK_DIR/bob-1-fresh.log"
+    node "$SCRIPT_DIR/network-assurance.mjs" command-preflight "$SECONDARY_COMMAND"
+    secondary_pid="$(jq -er '.client.processMap["bob-1"].pid' "$NETWORK_DIR/zombie.json")"
+    refresh_owned_pids
+    kill -TERM "$secondary_pid"
+    for attempt in {1..30}; do
+        kill -0 "$secondary_pid" 2>/dev/null || break
+        sleep 1
+    done
+    if kill -0 "$secondary_pid" 2>/dev/null; then
+        kill -KILL "$secondary_pid"
+        sleep 1
+    fi
+    kill -0 "$secondary_pid" 2>/dev/null && { log_error "Initial secondary did not stop"; return 1; }
+    [[ ! -e "$base_path" && ! -L "$base_path" ]] || { log_error "Fresh base path already exists"; return 1; }
+    mkdir "$base_path"
+    [[ -z "$(ls -A "$base_path")" ]] || { log_error "Fresh base path is not empty"; return 1; }
+    date -u +%Y-%m-%dT%H:%M:%S.%NZ > "$DEOS_NETWORK_EVIDENCE_DIR/fresh-launch.time"
+    bash -c "$SECONDARY_COMMAND" >> "$SECONDARY_LOG" 2>&1 &
+    RESTARTED_SECONDARY_PID="$!"
+    printf '%s\n' "$RESTARTED_SECONDARY_PID" > "$DEOS_NETWORK_EVIDENCE_DIR/fresh.pid"
+    wait_for_chain_rpc "http://127.0.0.1:9999" "$RPC_READY_TIMEOUT_SEC" "Fresh secondary RPC" "$RESTARTED_SECONDARY_PID" "$SECONDARY_LOG"
+    timeout 330s node "$SCRIPT_DIR/network-assurance.mjs" fixed-history "$(command -v zombienet)" "$DEOS_NETWORK_EVIDENCE_DIR" "$NETWORK_DIR" late-join
 }
 
 verify_collator_participation() {
@@ -290,6 +349,21 @@ run_network_proofs() {
     wait_for_chain_rpc "http://127.0.0.1:9988" "$RPC_READY_TIMEOUT_SEC" "Primary collator RPC" "$ZOMBIENET_PID" "$ZOMBIENET_LOG"
     wait_for_chain_rpc "http://127.0.0.1:9999" "$RPC_READY_TIMEOUT_SEC" "Secondary collator RPC" "$ZOMBIENET_PID" "$ZOMBIENET_LOG"
     wait_for_chain_rpc "http://127.0.0.1:9944" "$RPC_READY_TIMEOUT_SEC" "Relay RPC" "$ZOMBIENET_PID" "$ZOMBIENET_LOG"
+    if [[ "$PREPARED_MODE" == "diagnostic" ]]; then
+        NETWORK_DIR="$(rg -m1 -o "${TMPDIR:-/tmp}/zombie-[^ /]+" "$ZOMBIENET_LOG")"
+        [[ -f "$NETWORK_DIR/zombie.json" ]] || { log_error "Diagnostic process map missing"; return 1; }
+        refresh_owned_pids
+        cp "$NETWORK_DIR/zombie.json" "$DEOS_NETWORK_EVIDENCE_DIR/actual-network.json"
+        timeout 330s node "$SCRIPT_DIR/network-assurance.mjs" checkpoint "$(command -v zombienet)" "$DEOS_NETWORK_EVIDENCE_DIR" "$NETWORK_DIR"
+        local retained_hash
+        retained_hash="$(jq -er .paraHash "$DEOS_NETWORK_EVIDENCE_DIR/checkpoint.json")"
+        start_fresh_secondary
+        restart_secondary_with_persisted_state "$NETWORK_DIR" "$retained_hash"
+        printf '%s\n' "$RESTARTED_SECONDARY_PID" > "$DEOS_NETWORK_EVIDENCE_DIR/restarted-fresh.pid"
+        timeout 330s node "$SCRIPT_DIR/network-assurance.mjs" fixed-history "$(command -v zombienet)" "$DEOS_NETWORK_EVIDENCE_DIR" "$NETWORK_DIR" persisted-history
+        timeout 330s node "$SCRIPT_DIR/network-assurance.mjs" checkpoint "$(command -v zombienet)" "$DEOS_NETWORK_EVIDENCE_DIR" "$NETWORK_DIR" after-restart
+        return
+    fi
     run_script_step "Finalized network smoke" "06-network-smoke.sh"
     verify_collator_participation
     if [[ "$PREPARED_MODE" == "smoke" ]]; then
@@ -315,6 +389,7 @@ run_network_proofs() {
 run_self_tests() {
     (
         local calls=""
+        DEOS_NETWORK_DIAGNOSTIC=0
         phase_banner() { :; }
         start_background_script() { calls+="spawn "; }
         wait_for_chain_rpc() { :; }
@@ -334,7 +409,7 @@ run_self_tests() {
         run_network_proofs
         [[ "$calls" == "spawn 06-network-smoke.sh participation 08-session-transition.sh participation failover 07-network-e2e.sh restart 07-network-e2e.sh 09-composed-economic-path.sh " ]] || exit 1
         local mode
-        for mode in smoke recovery; do
+        for mode in smoke recovery diagnostic; do
             PREPARED_MODE="$mode" SESSION_TRANSITION=0 COMPOSED_PATH=0 KEEP_NETWORK=1
             if validate_mode >/dev/null 2>&1; then exit 1; fi
             KEEP_NETWORK=0 SESSION_TRANSITION=1
@@ -342,10 +417,39 @@ run_self_tests() {
             SESSION_TRANSITION=0 COMPOSED_PATH=1
             if validate_mode >/dev/null 2>&1; then exit 1; fi
         done
+        PREPARED_MODE="" DEOS_NETWORK_DIAGNOSTIC=1
+        if validate_mode >/dev/null 2>&1; then exit 1; fi
+        PREPARED_MODE=smoke
+        if validate_mode >/dev/null 2>&1; then exit 1; fi
+        PREPARED_MODE=diagnostic KEEP_NETWORK=0 COMPOSED_PATH=0 SESSION_TRANSITION=0
+        validate_mode
+        DEOS_NETWORK_DIAGNOSTIC=0 PREPARED_MODE=""
+        if (parse_args --prepared-diagnostic --prepared-recovery) >/dev/null 2>&1; then exit 1; fi
         PREPARED_MODE=""
         if (parse_args --prepared-smoke --prepared-recovery) >/dev/null 2>&1; then exit 1; fi
         PREPARED_MODE=""
         if (parse_args --prepared-recovery --prepared-smoke) >/dev/null 2>&1; then exit 1; fi
+        # Candidate identity checks cannot weaken the ordinary receipt route.
+        (
+            verify_deos_omni_node() { [[ "$1" == "ordinary-selected-node" ]]; }
+            DEOS_NETWORK_DIAGNOSTIC=0 verify_network_omni_node ordinary-selected-node
+        ) || exit 1
+        local fixture
+        fixture="$(mktemp -d)"
+        trap 'rm -rf "$fixture"' EXIT
+        printf '#!/usr/bin/env bash\nprintf "candidate-v1\\n"\n' > "$fixture/node"
+        chmod +x "$fixture/node"
+        ln -s "$fixture/node" "$fixture/selected"
+        DEOS_NETWORK_DIAGNOSTIC=1 DEOS_DIAGNOSTIC_OMNI_PATH="$fixture/node"
+        DEOS_DIAGNOSTIC_OMNI_SHA256="$(deos_sha256_file "$fixture/node")" DEOS_DIAGNOSTIC_OMNI_VERSION=candidate-v1
+        verify_network_omni_node "$fixture/selected" >/dev/null || exit 1
+        if verify_network_omni_node /wrong/path >/dev/null 2>&1; then exit 1; fi
+        DEOS_DIAGNOSTIC_OMNI_VERSION=wrong
+        if verify_network_omni_node "$fixture/selected" >/dev/null 2>&1; then exit 1; fi
+        DEOS_DIAGNOSTIC_OMNI_VERSION=candidate-v1 DEOS_DIAGNOSTIC_OMNI_SHA256="$(printf '%064d' 0)"
+        if verify_network_omni_node "$fixture/selected" >/dev/null 2>&1; then exit 1; fi
+        DEOS_DIAGNOSTIC_OMNI_PATH=""
+        if verify_network_omni_node "$fixture/selected" >/dev/null 2>&1; then exit 1; fi
         local sorted invalid
         sorted="$(canonical_top_pairs <<< '{"result":[["0x3a636f6465","0xab"],["0x01","0x"]]}')"
         [[ "$sorted" == '[["0x01","0x"],["0x3a636f6465","0xab"]]' ]] || exit 1
@@ -353,18 +457,27 @@ run_self_tests() {
             if canonical_top_pairs <<< "$invalid" >/dev/null 2>&1; then exit 1; fi
         done
     ) || { log_error "Network assurance mode self-test failed"; return 1; }
-    log_success "Smoke/recovery/full routing, excluded-mode guards and complete TOP parsing passed"
+    log_success "Smoke/recovery/full routing, diagnostic isolation/identity guards and complete TOP parsing passed"
 }
 
 main() {
     parse_args "$@"
-    if [[ "$SELF_TEST" == "1" ]]; then require_commands jq; run_self_tests; return; fi
+    if [[ "$SELF_TEST" == "1" ]]; then
+        require_commands jq node
+        run_self_tests
+        node "$SCRIPT_DIR/network-assurance.mjs" self-test
+        return
+    fi
+    if [[ "$PREPARED_MODE" == "diagnostic" ]]; then
+        export DEOS_NETWORK_DIAGNOSTIC=1
+        [[ -n "${DEOS_NETWORK_EVIDENCE_DIR:-}" && -f "$DEOS_NETWORK_EVIDENCE_DIR/ACCEPTANCE.md" ]] || { log_error "Predeclare diagnostic ACCEPTANCE.md"; return 1; }
+    fi
     check_prerequisites
     trap failure_cleanup EXIT
     if [[ -n "$PREPARED_MODE" ]]; then
         hydrate_local_tool_paths
         require_commands polkadot zombienet
-        verify_deos_omni_node "$(command -v polkadot-omni-node-deos || true)"
+        verify_network_omni_node "$(command -v polkadot-omni-node-deos || true)"
     else
         prepare
     fi
