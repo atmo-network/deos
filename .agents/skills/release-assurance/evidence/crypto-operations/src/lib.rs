@@ -53,9 +53,10 @@ mod tests {
     fn borrow_and_carry_boundaries() {
         for a in [0, 1, Word::MAX / 2, Word::MAX / 2 + 1, Word::MAX] {
             for b in [0, 1, Word::MAX / 2, Word::MAX / 2 + 1, Word::MAX] {
-                for borrow in [0, Word::MAX] {
+                for borrow in [0, 1, Word::MAX / 2, Word::MAX / 2 + 1, Word::MAX - 1, Word::MAX] {
                     let (x, b1) = a.overflowing_sub(b);
-                    let (x, b2) = x.overflowing_sub(borrow & 1);
+                    // The public API consumes only the incoming mask's most significant bit.
+                    let (x, b2) = x.overflowing_sub(borrow >> (Word::BITS - 1));
                     assert_eq!(selected_sbb(a, b, borrow), (Limb(x), Limb(if b1 || b2 { Word::MAX } else { 0 })));
                 }
             }

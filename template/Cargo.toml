@@ -93,6 +93,8 @@ cumulus-pallet-xcmp-queue = { path = "vendor/cumulus-pallet-xcmp-queue" }
 # API-compatible upstream security backports; see each vendor package SECURITY-BACKPORT.md.
 hickory-proto = { path = "vendor/hickory-proto" }
 webpki-roots = { path = "vendor/webpki-roots" }
+# Compatible maintained-primitive security backport; package notes bind advisory scope.
+crypto-bigint = { path = "vendor/crypto-bigint" }
 
 [profile.release]
 opt-level = 3

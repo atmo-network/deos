@@ -71,14 +71,13 @@ pub const fn reciprocal(d: Word) -> Word {
 /// Returns `u32::MAX` if `a < b` and `0` otherwise.
 #[inline]
 const fn ct_lt(a: u32, b: u32) -> u32 {
-    let bit = (((!a) & b) | (((!a) | b) & (a.wrapping_sub(b)))) >> (u32::BITS - 1);
-    bit.wrapping_neg()
+    ctutils::Choice::from_u32_lt(a, b).to_u32_mask()
 }
 
 /// Returns `a` if `c == 0` and `b` if `c == u32::MAX`.
 #[inline(always)]
 const fn ct_select(a: u32, b: u32, c: u32) -> u32 {
-    a ^ (c & (a ^ b))
+    ctutils::Choice::from_u32_lsb(c & 1).select_u32(a, b)
 }
 
 /// Calculates `dividend / divisor`, given `dividend` and `divisor`
@@ -175,8 +174,7 @@ impl Reciprocal {
     /// and can be passed to functions here without causing them to panic,
     /// but the results are naturally not to be used.
     pub const fn ct_new(divisor: Limb) -> (Self, CtChoice) {
-        // Assuming this is constant-time for primitive types.
-        let shift = divisor.0.leading_zeros();
+        let shift = divisor.leading_zeros() as u32;
 
         #[allow(trivial_numeric_casts)]
         let is_some = Limb((Word::BITS - shift) as Word).ct_is_nonzero();

@@ -11,7 +11,7 @@
 
 [package]
 edition = "2021"
-rust-version = "1.86"
+rust-version = "1.87"
 name = "crypto-bigint"
 version = "0.5.5"
 authors = ["RustCrypto Developers"]
@@ -71,6 +71,10 @@ default-features = false
 [dependencies.serdect]
 version = "0.2"
 optional = true
+default-features = false
+
+[dependencies.ctutils]
+version = "=0.4.8"
 default-features = false
 
 [dependencies.subtle]
