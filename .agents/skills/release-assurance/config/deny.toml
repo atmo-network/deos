@@ -30,6 +30,14 @@ allow = [
   "Zlib",
 ]
 
+# Exact archive: 301abaae475aa91687eb82514b328ab47a211a533026cb25fc3e519b86adfc3c.
+# Policy admission is not shipping: future bundles must accompany the binary
+# with notices/unicode-ident-1.0.11 and verify its checksums.
+[[licenses.exceptions]]
+name = "unicode-ident"
+version = "=1.0.11"
+allow = ["Unicode-DFS-2016"]
+
 [bans]
 multiple-versions = "allow"
 # Internal path/workspace dependencies have no registry version by design.

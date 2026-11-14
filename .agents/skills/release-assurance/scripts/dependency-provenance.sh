@@ -26,7 +26,7 @@ reachability exception ledger.
 
 Options:
   -h, --help        Show this help message
-  --self-test       Run isolated helper CLI regression fixtures (no network)
+  --self-test       Run isolated helper/Cargo selection fixtures (offline; no build)
 
 Inputs:
   template/Cargo.lock, template/rust-toolchain.toml
@@ -39,6 +39,11 @@ Outputs:
   A concise pass/fail review; temporary metadata, locks and audits are deleted.
   Both the actual-source audit and a counterfactual registry-version audit are
   required against the same RustSec DB. The latter is NOT source provenance.
+  Root normal/build absence decisions additionally require fresh locked/offline
+  Cargo metadata and a workspace/all-feature/all-target normal,build tree. Exact
+  source inputs and parent feature/tree identity are bound by the ledger; stale
+  supplied metadata is rejected. This source-role proof does not qualify dev/test,
+  separately selected SDK graphs, binaries, or arbitrary node configurations.
 
 Side effects:
   Refreshes the local RustSec advisory database and performs npm registry reads.

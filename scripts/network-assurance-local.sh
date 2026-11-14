@@ -52,7 +52,12 @@ Environment:
   BLOCK_TARGET=100 and other 06-network-smoke.sh environment controls
   NETWORK_WORK_DIR, ZOMBIENET_CONFIG, CHAIN_SPEC_PATH select prepared inputs
   Diagnostic only: DEOS_DIAGNOSTIC_OMNI_PATH/SHA256/VERSION bind exact candidate;
-  DEOS_NETWORK_EVIDENCE_DIR must contain predeclared ACCEPTANCE.md. No receipt,
+  Linux x86_64, reviewed Node 22.22.0 and the exact installed CLI 1.3.138 tree
+  are required (source review expires 2026-12-12; advisory changes invalidate it).
+  Only the reviewed JSON Alice/Bob native route is admitted; work/spec paths may
+  vary. Injection/alternate service environments are refused. Inputs are frozen
+  in diagnostic-inputs.json and rechecked before each recorded launch.
+  DEOS_NETWORK_EVIDENCE_DIR must contain predeclared ACCEPTANCE.md. No promotion receipt,
   canonical selection, security acceptance or production promotion is asserted.
   SESSION_TIMEOUT_SEC=28800 and other 08-session-transition.sh controls
 
@@ -112,6 +117,27 @@ validate_mode() {
         log_error "Prepared modes require cleanup and exclude session/composed proofs"
         return 1
     fi
+}
+
+diagnostic_environment() {
+    local key
+    for key in NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS NODE_REPL_EXTERNAL_MODULE LD_PRELOAD LD_LIBRARY_PATH DYLD_INSERT_LIBRARIES BASH_ENV ENV ZOMBIENET_IMAGE RUN_IN_CONTAINER PUSHGATEWAY_URL ${!ZOMBIE_@}; do
+        [[ -z "${!key:-}" ]] || { log_error "Diagnostic injection environment: $key" >&2; return 1; }
+    done
+    if env | grep '^BASH_FUNC_' >/dev/null; then log_error "Diagnostic inherited shell function" >&2; return 1; fi
+    [[ "$(sha256sum "$(command -v node)" | cut -d ' ' -f1)" == "1bec56ef7cfa9a76f3e0b7c0a87f220eb73f23102b9c0b4c7529a3f7c3ce7c31" ]] || {
+        log_error "Diagnostic requires the reviewed Node 22.22.0 executable" >&2; return 1;
+    }
+}
+
+verify_diagnostic_launch() (
+    # The atom owns frozen-input admission for startup and later node launches.
+    source "$SCRIPT_DIR/05-spawn-zombienet.sh"
+    verify_diagnostic_launch
+)
+
+launch_diagnostic_network() {
+    bash "$SCRIPT_DIR/05-spawn-zombienet.sh"
 }
 
 check_prerequisites() {
@@ -250,6 +276,7 @@ snapshot_top_at() {
 }
 
 restart_secondary_with_persisted_state() {
+    if [[ "$PREPARED_MODE" == "diagnostic" ]]; then verify_diagnostic_launch; fi
     local network_dir="$1" retained_hash="${2:-}"
     local recorded_hash recorded_header restored_header before after secondary_pid secondary_command deadline
     recorded_hash="$(curl -fsS -H 'Content-Type: application/json' -d '{"id":1,"jsonrpc":"2.0","method":"chain_getFinalizedHead","params":[]}' 'http://127.0.0.1:9999' | jq -er '.result | select(type == "string" and test("^0x[0-9a-fA-F]{64}$"))')"
@@ -274,6 +301,7 @@ restart_secondary_with_persisted_state() {
     done
     kill -0 "$secondary_pid" 2>/dev/null && { log_error "Secondary collator process did not stop"; exit 1; }
     wait "$secondary_pid" 2>/dev/null || true
+    if [[ "$PREPARED_MODE" == "diagnostic" ]]; then verify_diagnostic_launch; fi
     bash -c "$secondary_command" >> "$secondary_log" 2>&1 &
     RESTARTED_SECONDARY_PID="$!"
     wait_for_chain_rpc "http://127.0.0.1:9999" "$RPC_READY_TIMEOUT_SEC" "Restarted secondary collator RPC" "$RESTARTED_SECONDARY_PID" "$secondary_log"
@@ -301,6 +329,7 @@ restart_secondary_with_persisted_state() {
 }
 
 start_fresh_secondary() {
+    verify_diagnostic_launch
     node "$SCRIPT_DIR/network-assurance.mjs" fresh-command "$(command -v zombienet)" "$DEOS_NETWORK_EVIDENCE_DIR" "$NETWORK_DIR"
     local base_path secondary_pid attempt
     base_path="$(jq -er .basePath "$DEOS_NETWORK_EVIDENCE_DIR/fresh-instance.json")"
@@ -323,6 +352,7 @@ start_fresh_secondary() {
     mkdir "$base_path"
     [[ -z "$(ls -A "$base_path")" ]] || { log_error "Fresh base path is not empty"; return 1; }
     date -u +%Y-%m-%dT%H:%M:%S.%NZ > "$DEOS_NETWORK_EVIDENCE_DIR/fresh-launch.time"
+    verify_diagnostic_launch
     bash -c "$SECONDARY_COMMAND" >> "$SECONDARY_LOG" 2>&1 &
     RESTARTED_SECONDARY_PID="$!"
     printf '%s\n' "$RESTARTED_SECONDARY_PID" > "$DEOS_NETWORK_EVIDENCE_DIR/fresh.pid"
@@ -345,7 +375,12 @@ verify_collator_participation() {
 
 run_network_proofs() {
     phase_banner "Step 3: Local network proofs"
-    start_background_script "zombienet" "05-spawn-zombienet.sh" "$ZOMBIENET_LOG" ZOMBIENET_PID
+    if [[ "$PREPARED_MODE" == "diagnostic" ]]; then
+        launch_diagnostic_network >"$ZOMBIENET_LOG" 2>&1 &
+        ZOMBIENET_PID="$!"
+    else
+        start_background_script "zombienet" "05-spawn-zombienet.sh" "$ZOMBIENET_LOG" ZOMBIENET_PID
+    fi
     wait_for_chain_rpc "http://127.0.0.1:9988" "$RPC_READY_TIMEOUT_SEC" "Primary collator RPC" "$ZOMBIENET_PID" "$ZOMBIENET_LOG"
     wait_for_chain_rpc "http://127.0.0.1:9999" "$RPC_READY_TIMEOUT_SEC" "Secondary collator RPC" "$ZOMBIENET_PID" "$ZOMBIENET_LOG"
     wait_for_chain_rpc "http://127.0.0.1:9944" "$RPC_READY_TIMEOUT_SEC" "Relay RPC" "$ZOMBIENET_PID" "$ZOMBIENET_LOG"
@@ -462,6 +497,9 @@ run_self_tests() {
 
 main() {
     parse_args "$@"
+    if [[ "$PREPARED_MODE" == "diagnostic" || "${DEOS_NETWORK_DIAGNOSTIC:-0}" == "1" ]]; then
+        diagnostic_environment || return 1
+    fi
     if [[ "$SELF_TEST" == "1" ]]; then
         require_commands jq node
         run_self_tests
@@ -470,6 +508,9 @@ main() {
     fi
     if [[ "$PREPARED_MODE" == "diagnostic" ]]; then
         export DEOS_NETWORK_DIAGNOSTIC=1
+        diagnostic_environment || return 1
+        export NETWORK_WORK_DIR="${NETWORK_WORK_DIR:-$TEMPLATE_DIR}"
+        export ZOMBIENET_CONFIG="${ZOMBIENET_CONFIG:-$NETWORK_WORK_DIR/zombienet.json}"
         [[ -n "${DEOS_NETWORK_EVIDENCE_DIR:-}" && -f "$DEOS_NETWORK_EVIDENCE_DIR/ACCEPTANCE.md" ]] || { log_error "Predeclare diagnostic ACCEPTANCE.md"; return 1; }
     fi
     check_prerequisites

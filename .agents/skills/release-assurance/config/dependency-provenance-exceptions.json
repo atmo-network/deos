@@ -9,7 +9,76 @@
       "reason": "The 0.10.6 registry tarball matches locked SHA512 integrity and contains an MIT LICENSE (SHA256 8914f144af4333312a07b30438dc6b75dd8da7a665c3ae9fa751f229eb615e8b); only its manifest license field is absent. Re-verify on identity change."
     }
   ],
+  "rootNormalBuildProof": {
+    "role": "root-workspace-normal-build",
+    "features": "all",
+    "target": "all",
+    "edges": "normal,build",
+    "treeSha256": "779518d57f143c9a450bda6b6a7292ec2a659ec974a718698c1f181b272bff69",
+    "inputs": [
+      {
+        "path": "template/Cargo.lock",
+        "sha256": "6b987eadec11a98cb96f1801ef1099a1efcf8bd4099f2659499e94bc76198ccc"
+      },
+      {
+        "path": "template/Cargo.toml",
+        "sha256": "ecf504d7587f7d02c816f10fec07d712ec3d49638cdee95395c31a0b7c4c4f4d"
+      },
+      {
+        "path": "template/rust-toolchain.toml",
+        "sha256": "65c209bb7f6bb23e50e17220955aa8f818e55973436ea7dc93e1cb7ec5afe37e"
+      }
+    ]
+  },
   "exceptions": [
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0523",
+      "reachability": "root-normal-build-absent",
+      "reason": "Registry quinn-proto0.11.16 is absent from the freshly generated root workspace all-feature/all-target normal/build Cargo selection. Thus neither client nor server accept_bi can consume its post-handshake MAX_STREAM_DATA implicit-open path in this source role. The exact source inputs and complete parent feature/tree identity are enforced. No SDK/native artifact, dev/test or arbitrary direct execution clearance follows; listener absence is not the prerequisite.",
+      "expires": "2026-12-12",
+      "absentFromRootNormalBuild": {
+        "name": "quinn-proto",
+        "version": "0.11.16",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0524",
+      "reachability": "root-normal-build-absent",
+      "reason": "Registry quinn-proto0.11.16 is absent from the freshly generated root workspace all-feature/all-target normal/build Cargo selection. Its outgoing-client Retry-token path is therefore absent in this source role, not excused by lack of listeners. Exact source inputs and complete parent feature/tree identity are enforced. No SDK/native artifact, dev/test or arbitrary direct execution clearance follows; malicious servers and Initial observers remain relevant wherever the affected client is selected.",
+      "expires": "2026-12-12",
+      "absentFromRootNormalBuild": {
+        "name": "quinn-proto",
+        "version": "0.11.16",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0525",
+      "reachability": "root-normal-build-absent",
+      "reason": "Registry libp2p-quic0.11.1 is absent from the freshly generated root workspace all-feature/all-target normal/build Cargo selection. Its post-handshake expired-certificate expect path cannot run in this source role. Exact source inputs and complete parent feature/tree identity are enforced. No SDK/native artifact, dev/test or arbitrary direct execution clearance follows; this does not assert that every supported node configuration has no QUIC listener.",
+      "expires": "2026-12-12",
+      "absentFromRootNormalBuild": {
+        "name": "libp2p-quic",
+        "version": "0.11.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0538",
+      "reachability": "root-normal-build-absent",
+      "reason": "Registry quinn-udp0.5.15 is absent from the freshly generated root workspace all-feature/all-target normal/build Cargo selection, including Apple targets. Exact source inputs and complete parent feature/tree identity are enforced. This excludes its truncated-recvmsg stale-header loop only in that source role, not a general UDP or macOS artifact guarantee. Linux/Windows use other receive paths; Apple without fast-apple-datapath and listed Unix targets require separate qualification if this instance becomes selected. SDK/native and dev/test roles are not covered.",
+      "expires": "2026-12-12",
+      "absentFromRootNormalBuild": {
+        "name": "quinn-udp",
+        "version": "0.5.15",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      }
+    },
     {
       "ecosystem": "cargo",
       "id": "RUSTSEC-2026-0530",

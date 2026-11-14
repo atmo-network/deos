@@ -25,6 +25,9 @@ Environment:
   DEOS_DIAGNOSTIC_OMNI_PATH, DEOS_DIAGNOSTIC_OMNI_SHA256,
   DEOS_DIAGNOSTIC_OMNI_VERSION  Exact caller-selected candidate identity
   DEOS_NETWORK_EVIDENCE_DIR  Required diagnostic preflight/evidence directory
+  Diagnostic only: reviewed Linux x86_64 Node 22.22.0 / CLI 1.3.138 tree,
+  JSON native topology and frozen input checks before preflight and final exec.
+  Injection environments are refused before Node; OS/Bash startup is trusted.
 
 Inputs:
   Existing Zombienet config and matching raw-storage chain spec in the selected network work
@@ -57,7 +60,27 @@ parse_args() {
     done
 }
 
+diagnostic_environment() {
+    # This admission runs before Node, not before OS loader or Bash startup.
+    local key
+    for key in NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS NODE_REPL_EXTERNAL_MODULE LD_PRELOAD LD_LIBRARY_PATH DYLD_INSERT_LIBRARIES BASH_ENV ENV ZOMBIENET_IMAGE RUN_IN_CONTAINER PUSHGATEWAY_URL ${!ZOMBIE_@}; do
+        [[ -z "${!key:-}" ]] || { log_error "Diagnostic injection environment: $key" >&2; return 1; }
+    done
+    if env | grep '^BASH_FUNC_' >/dev/null; then log_error "Diagnostic inherited shell function" >&2; return 1; fi
+    [[ "$(sha256sum "$(command -v node)" | cut -d ' ' -f1)" == "1bec56ef7cfa9a76f3e0b7c0a87f220eb73f23102b9c0b4c7529a3f7c3ce7c31" ]] || {
+        log_error "Diagnostic requires the reviewed Node 22.22.0 executable" >&2; return 1;
+    }
+}
+
+verify_diagnostic_launch() {
+    diagnostic_environment || return 1
+    "$(command -v node)" "$SCRIPT_DIR/network-assurance.mjs" launch-check "$(command -v zombienet)" "$DEOS_NETWORK_EVIDENCE_DIR" "$ZOMBIENET_CONFIG" spawn --provider native || return 1
+    [[ "$(realpath "$(command -v polkadot)")" == "$(jq -er '.binaries.polkadot.path' "$DEOS_NETWORK_EVIDENCE_DIR/diagnostic-inputs.json")" ]] || { log_error "Selected relay path drift" >&2; return 1; }
+    [[ "$(realpath "$(command -v polkadot-omni-node-deos)")" == "$(realpath "$DEOS_DIAGNOSTIC_OMNI_PATH")" ]] || { log_error "Selected candidate path drift" >&2; return 1; }
+}
+
 check_prerequisites() {
+    if [[ "${DEOS_NETWORK_DIAGNOSTIC:-0}" == "1" ]]; then diagnostic_environment || return 1; fi
     phase_banner "Step 1: Prerequisites"
     hydrate_local_tool_paths
     require_commands polkadot zombienet jq
@@ -89,6 +112,7 @@ verify_prerequisites() {
     fi
 
     if [[ "${DEOS_NETWORK_DIAGNOSTIC:-0}" == "1" ]]; then
+        diagnostic_environment
         require_commands node
         [[ -n "${DEOS_NETWORK_EVIDENCE_DIR:-}" && -f "$DEOS_NETWORK_EVIDENCE_DIR/ACCEPTANCE.md" ]] || {
             log_error "Diagnostic requires a predeclared ACCEPTANCE.md in DEOS_NETWORK_EVIDENCE_DIR"
@@ -114,6 +138,12 @@ spawn_network() {
     echo ""
 
     cd "$NETWORK_WORK_DIR"
+    if [[ "${DEOS_NETWORK_DIAGNOSTIC:-0}" == "1" ]]; then
+        # Revalidate the frozen preflight without regenerating wx evidence. Keep
+        # this check at the sole CLI startup boundary, including direct 05 use.
+        verify_diagnostic_launch || return 1
+        exec "$(command -v node)" "$(jq -er .cli "$DEOS_NETWORK_EVIDENCE_DIR/diagnostic-inputs.json")" --provider native spawn "$ZOMBIENET_CONFIG"
+    fi
     exec zombienet --provider native spawn "$ZOMBIENET_CONFIG"
 }
 
