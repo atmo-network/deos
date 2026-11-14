@@ -332,7 +332,7 @@ async function enforceNativeSources(entries, cargoFindings, metadata, repoRoot, 
 // caller-selected hash or the historical prepared/build receipt contract.
 // This proposal binds reviewed sources; final producer refresh and independent
 // implementation/policy admission remain required before installation.
-const nativePreparationProofSha256 = 'afb0a94d7e09ac0efd0911ac00577772203a9c2ae41211701fe816bfd59fa382';
+const nativePreparationProofSha256 = 'e0861ad5b0b2ea4b3362b092ff3bea3bab86feddba283b89a279b53eaa01b9e5';
 const nativePreparationStage = 'SOURCEPREPARATION';
 const nativePreparationProofFiles = ['git-refs.txt', 'source-tools.txt', 'composed-metadata.json',
   'composed-tree.txt', 'composed-closure.json', 'source-consumers.json'];
@@ -464,9 +464,15 @@ function assertNativePreparationInstances(entries, rows, findings, metadata, sel
     assert.deepEqual(covered.sort(), actual, 'Native disjoint actual/counterfactual instance coverage mismatch');
   }
 }
+function nativePreparationAuditIdentity(audit) {
+  assert.ok(Array.isArray(audit?.vulnerabilities?.list), 'Native audit vulnerability list required');
+  // Only finding order is representational; complete content and multiplicity remain bound.
+  const list = audit.vulnerabilities.list.map(finding => canonical(finding)).sort().map(value => JSON.parse(value));
+  return sha256(canonical({ ...audit, vulnerabilities: { ...audit.vulnerabilities, list } }));
+}
 function assertNativePreparationAudits(proof, audits) {
-  assert.deepEqual(proof.audits, { actual: sha256(canonical(audits.cargo)),
-    registryEquivalent: sha256(canonical(audits.projectedAudit)), versionLock: sha256(audits.projectedLock) },
+  assert.deepEqual(proof.audits, { actual: nativePreparationAuditIdentity(audits.cargo),
+    registryEquivalent: nativePreparationAuditIdentity(audits.projectedAudit), versionLock: sha256(audits.projectedLock) },
   'Native reviewed paired audit/database/settings identity drift');
 }
 async function loadNativePreparationProof(reference, exceptionPath) {
@@ -1198,15 +1204,57 @@ async function selfTestNativePreparation(directory) {
     audits: { actual: 'fixture', registryEquivalent: 'fixture', versionLock: 'fixture' },
     review: { composition: 'fixture', dnsMisc: 'fixture', io: 'fixture', provider: 'fixture', scope: 'fixture' }, rows: [row] };
   validateNativePreparationProof(proof, true, sha256(canonical(proof))); positives++;
-  const audits = { cargo: { database: 'fixed', settings: [] }, projectedAudit: { database: 'fixed', settings: [] }, projectedLock: 'fixed' };
-  const auditProof = { audits: { actual: sha256(canonical(audits.cargo)),
-    registryEquivalent: sha256(canonical(audits.projectedAudit)), versionLock: sha256(audits.projectedLock) } };
+  const auditFixture = () => ({ database: { 'last-commit': 'fixed', 'last-updated': 'fixed', 'advisory-count': 2 },
+    settings: { ignore: [], informational_warnings: ['unmaintained', 'unsound'] }, lockfile: { 'dependency-count': 2 },
+    vulnerabilities: { count: 2, found: true, list: [
+      { advisory: { id: 'RUSTSEC-2026-0001', title: 'first' },
+        package: { name: 'first', version: '1.0.0', source: registrySource, checksum: 'first' },
+        versions: { patched: ['>=1.1.0', '<2.0.0'], unaffected: [] }, parents: ['a', 'b'] },
+      { advisory: { id: 'RUSTSEC-2026-0002', title: 'second' },
+        package: { name: 'second', version: '2.0.0', source: registrySource, checksum: 'second' },
+        versions: { patched: ['>=2.1.0'], unaffected: [] }, parents: ['b'] },
+    ] }, warnings: { unsound: [{ advisory: { id: 'warning-a' } }, { advisory: { id: 'warning-b' } }] } });
+  const audits = { cargo: auditFixture(), projectedAudit: auditFixture(), projectedLock: 'fixed' };
+  audits.projectedAudit.vulnerabilities.list[0].package.source = null;
+  const auditProof = { audits: { actual: nativePreparationAuditIdentity(audits.cargo),
+    registryEquivalent: nativePreparationAuditIdentity(audits.projectedAudit), versionLock: sha256(audits.projectedLock) } };
+  const unchangedAudits = structuredClone(audits);
   assertNativePreparationAudits(auditProof, audits); positives++;
-  for (const change of [a => { a.cargo.database = 'new'; }, a => { a.projectedAudit.settings = ['ignore']; },
-    a => { a.projectedLock = 'new'; }]) {
-    const a = structuredClone(audits); change(a);
-    reject(() => assertNativePreparationAudits(auditProof, a), /audit\/database\/settings identity drift/);
+  assert.deepEqual(audits, unchangedAudits);
+  for (const role of ['cargo', 'projectedAudit']) {
+    const reordered = structuredClone(audits);
+    reordered[role].vulnerabilities.list.reverse();
+    assertNativePreparationAudits(auditProof, reordered); positives++;
+    for (const change of [a => { a.database['last-commit'] = 'new'; },
+      a => { a.database['last-updated'] = 'new'; }, a => { a.database['advisory-count']++; },
+      a => { a.settings.ignore.push('ignore'); }, a => { a.settings.informational_warnings.reverse(); },
+      a => { a.lockfile['dependency-count']++; }, a => { a.vulnerabilities.count++; },
+      a => { a.vulnerabilities.found = false; }, a => { a.extra = true; },
+      a => { a.vulnerabilities.extra = true; }, a => { a.warnings.unsound.reverse(); },
+      a => { a.vulnerabilities.list[0].package.name = 'changed'; },
+      a => { a.vulnerabilities.list[0].package.version = 'changed'; },
+      a => { a.vulnerabilities.list[0].package.source = 'changed'; },
+      a => { a.vulnerabilities.list[0].package.checksum = 'changed'; },
+      a => { a.vulnerabilities.list[0].advisory.id = 'changed'; },
+      a => { a.vulnerabilities.list[0].advisory.title = 'changed'; },
+      a => { a.vulnerabilities.list[0].versions.patched[0] = 'changed'; },
+      a => { a.vulnerabilities.list[0].versions.patched.reverse(); },
+      a => { a.vulnerabilities.list[0].parents.reverse(); },
+      a => { a.vulnerabilities.list.pop(); },
+      a => { a.vulnerabilities.list.push(structuredClone(a.vulnerabilities.list[0])); a.vulnerabilities.count++; },
+      a => { a.vulnerabilities.list[1] = structuredClone(a.vulnerabilities.list[0]); },
+      a => { a.vulnerabilities.list[0].extra = true; }]) {
+      const a = structuredClone(audits); change(a[role]);
+      reject(() => assertNativePreparationAudits(auditProof, a), /audit\/database\/settings identity drift/);
+    }
+    for (const list of [undefined, null, {}]) {
+      const a = structuredClone(audits); a[role].vulnerabilities.list = list;
+      reject(() => assertNativePreparationAudits(auditProof, a), /vulnerability list required/);
+    }
   }
+  const swapped = { ...audits, cargo: audits.projectedAudit, projectedAudit: audits.cargo };
+  reject(() => assertNativePreparationAudits(auditProof, swapped), /audit\/database\/settings identity drift/);
+  reject(() => assertNativePreparationAudits(auditProof, { ...audits, projectedLock: 'new' }), /audit\/database\/settings identity drift/);
   await rejectAsync(() => boundFile(root, { path: 'source-tools.txt', sha256: '0'.repeat(64) }), /ENOENT/);
   await writeFile(join(root, 'source-tools.txt'), 'compiler and default cfg');
   const toolProof = { path: 'source-tools.txt', sha256: sha256('compiler and default cfg') };

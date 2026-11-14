@@ -51,6 +51,9 @@ Environment:
   COMPOSED_PATH=0|1 (set 1 for the mutating Router/Oracle/Burn Actor proof)
   BLOCK_TARGET=100 and other 06-network-smoke.sh environment controls
   NETWORK_WORK_DIR, ZOMBIENET_CONFIG, CHAIN_SPEC_PATH select prepared inputs
+  NETWORK_WORK_DIR must be plain absolute, canonical, owned and non-symlinked.
+  Its zombienet-network child must be absent; CLI --dir binds all map/log/DB paths.
+  Human console paths never authorize discovery or cleanup.
   Diagnostic only: DEOS_DIAGNOSTIC_OMNI_PATH/SHA256/VERSION bind exact candidate;
   Linux x86_64, reviewed Node 22.22.0 and the exact installed CLI 1.3.138 tree
   are required (source review expires 2026-12-12; advisory changes invalidate it).
@@ -162,16 +165,20 @@ collect_descendant_pids() {
 }
 
 refresh_owned_pids() {
-    local pid
-    if [[ -z "$NETWORK_DIR" && -f "$ZOMBIENET_LOG" ]]; then
-        NETWORK_DIR="$(rg -m1 -o "${TMPDIR:-/tmp}/zombie-[^ /]+" "$ZOMBIENET_LOG" || true)"
-    fi
+    # Only live descendants of our launched owners authorize cleanup signals.
+    # A stored process map is evidence, never independent PID ownership.
     if [[ -n "$ZOMBIENET_PID" ]]; then OWNED_PIDS+=("$ZOMBIENET_PID"); collect_descendant_pids "$ZOMBIENET_PID"; fi
     if [[ -n "$RESTARTED_SECONDARY_PID" ]]; then OWNED_PIDS+=("$RESTARTED_SECONDARY_PID"); collect_descendant_pids "$RESTARTED_SECONDARY_PID"; fi
-    if [[ -n "$NETWORK_DIR" && -f "$NETWORK_DIR/zombie.json" ]]; then
-        while IFS= read -r pid; do [[ "$pid" =~ ^[1-9][0-9]*$ ]] && OWNED_PIDS+=("$pid"); done < <(jq -r '.. | objects | .pid? // empty' "$NETWORK_DIR/zombie.json")
-    fi
 }
+
+require_owned_process() (
+    local requested="$1" pid
+    OWNED_PIDS=()
+    refresh_owned_pids
+    for pid in "${OWNED_PIDS[@]}"; do [[ "$pid" == "$requested" ]] && return 0; done
+    log_error "Process map PID is not a live descendant of this invocation: $requested" >&2
+    return 1
+)
 
 cleanup_owned_processes() {
     if [[ "$KEEP_NETWORK" == "1" ]]; then
@@ -237,6 +244,7 @@ finalized_block_number() {
 verify_collator_failover() {
     local primary_pid
     primary_pid="$(jq -er '.client.processMap["alice-1"].pid' "$NETWORK_DIR/zombie.json")"
+    require_owned_process "$primary_pid" || return 1
     kill -0 "$primary_pid" 2>/dev/null || { log_error "Primary collator process not found"; exit 1; }
     local before after deadline preparations_before preparations_after
     preparations_before="$(rg -c 'Prepared block for proposing' "$NETWORK_DIR/bob-1.log")"
@@ -292,6 +300,7 @@ restart_secondary_with_persisted_state() {
     if [[ "$PREPARED_MODE" == "diagnostic" ]]; then
         node "$SCRIPT_DIR/network-assurance.mjs" command-preflight "$secondary_command"
     fi
+    require_owned_process "$secondary_pid" || return 1
     refresh_owned_pids
     kill -9 "$secondary_pid"
     local attempt
@@ -337,6 +346,7 @@ start_fresh_secondary() {
     SECONDARY_LOG="$NETWORK_DIR/bob-1-fresh.log"
     node "$SCRIPT_DIR/network-assurance.mjs" command-preflight "$SECONDARY_COMMAND"
     secondary_pid="$(jq -er '.client.processMap["bob-1"].pid' "$NETWORK_DIR/zombie.json")"
+    require_owned_process "$secondary_pid" || return 1
     refresh_owned_pids
     kill -TERM "$secondary_pid"
     for attempt in {1..30}; do
@@ -360,9 +370,12 @@ start_fresh_secondary() {
     timeout 330s node "$SCRIPT_DIR/network-assurance.mjs" fixed-history "$(command -v zombienet)" "$DEOS_NETWORK_EVIDENCE_DIR" "$NETWORK_DIR" late-join
 }
 
+verify_network_map() {
+    node "$SCRIPT_DIR/network-assurance.mjs" network-map "$NETWORK_DIR"
+}
+
 verify_collator_participation() {
-    NETWORK_DIR="$(rg -m1 -o "${TMPDIR:-/tmp}/zombie-[^ /]+" "$ZOMBIENET_LOG")"
-    [[ -n "$NETWORK_DIR" && -d "$NETWORK_DIR" ]] || { log_error "Zombienet node-log directory not found"; exit 1; }
+    verify_network_map || return 1
     local collator
     for collator in alice-1 bob-1; do
         local log_path="$NETWORK_DIR/$collator.log"
@@ -375,6 +388,7 @@ verify_collator_participation() {
 
 run_network_proofs() {
     phase_banner "Step 3: Local network proofs"
+    NETWORK_DIR="$(source "$SCRIPT_DIR/05-spawn-zombienet.sh"; network_output_directory)" || return 1
     if [[ "$PREPARED_MODE" == "diagnostic" ]]; then
         launch_diagnostic_network >"$ZOMBIENET_LOG" 2>&1 &
         ZOMBIENET_PID="$!"
@@ -385,8 +399,7 @@ run_network_proofs() {
     wait_for_chain_rpc "http://127.0.0.1:9999" "$RPC_READY_TIMEOUT_SEC" "Secondary collator RPC" "$ZOMBIENET_PID" "$ZOMBIENET_LOG"
     wait_for_chain_rpc "http://127.0.0.1:9944" "$RPC_READY_TIMEOUT_SEC" "Relay RPC" "$ZOMBIENET_PID" "$ZOMBIENET_LOG"
     if [[ "$PREPARED_MODE" == "diagnostic" ]]; then
-        NETWORK_DIR="$(rg -m1 -o "${TMPDIR:-/tmp}/zombie-[^ /]+" "$ZOMBIENET_LOG")"
-        [[ -f "$NETWORK_DIR/zombie.json" ]] || { log_error "Diagnostic process map missing"; return 1; }
+        verify_network_map || return 1
         refresh_owned_pids
         cp "$NETWORK_DIR/zombie.json" "$DEOS_NETWORK_EVIDENCE_DIR/actual-network.json"
         timeout 330s node "$SCRIPT_DIR/network-assurance.mjs" checkpoint "$(command -v zombienet)" "$DEOS_NETWORK_EVIDENCE_DIR" "$NETWORK_DIR"
@@ -424,6 +437,7 @@ run_network_proofs() {
 run_self_tests() {
     (
         local calls=""
+        NETWORK_WORK_DIR="$TEMPLATE_DIR"
         DEOS_NETWORK_DIAGNOSTIC=0
         phase_banner() { :; }
         start_background_script() { calls+="spawn "; }
@@ -472,6 +486,19 @@ run_self_tests() {
         local fixture
         fixture="$(mktemp -d)"
         trap 'rm -rf "$fixture"' EXIT
+        (
+            NETWORK_DIR="$fixture/network" ZOMBIENET_PID=123 RESTARTED_SECONDARY_PID=""
+            mkdir "$NETWORK_DIR"
+            printf '{"client":{"processMap":{"decoy":{"pid":999}}}}\n' > "$NETWORK_DIR/zombie.json"
+            collect_descendant_pids() { [[ "$1" == 123 ]] && OWNED_PIDS+=(456); }
+            OWNED_PIDS=()
+            refresh_owned_pids
+            [[ "${OWNED_PIDS[*]}" == "123 456" ]] || exit 1
+            require_owned_process 456 || exit 1
+            if require_owned_process 999 >/dev/null 2>&1; then exit 1; fi
+            NETWORK_DIR="$fixture/missing"
+            require_owned_process 456 || exit 1
+        ) || exit 1
         printf '#!/usr/bin/env bash\nprintf "candidate-v1\\n"\n' > "$fixture/node"
         chmod +x "$fixture/node"
         ln -s "$fixture/node" "$fixture/selected"

@@ -962,8 +962,8 @@
     "scope": "SOURCEPREPARATION only, not prepared/build receipts or ELF. Full SDK/vendor and ALL selected external package inputs, including transitive consumers, reexports, macros, build scripts and non-Rust generator inputs, must be recomputed before and after; no known-caller whitelist. Compiler default cfg is NOT a package-effective transcript. Actual fresh normal role + exact source/profile/configuration + cfg-injection refusal bound source applicability, never machine-code assurance. Native0387 B, arbitrary CLI/tool/delivery/platform and release acceptance are excluded. New proof/policy/helper need independent final review after A2 producer refresh."
   },
   "audits": {
-    "actual": "134d0ad1836742626959818af90646827240c688820a796200b75a7fe67ae14b",
-    "registryEquivalent": "bad0e5abbe97faf047c7b70f9fe7dba73b0277de64b0c17d84c3bafc9caec37a",
+    "actual": "843c6754bbe35fc24bdeacffeca10e14b880da32246f2818dfd2faca8d2c6273",
+    "registryEquivalent": "eed87751bab4a7680cf6d6591e1422d1d52d8334f17aaf2146148e9ee30596e5",
     "versionLock": "82c37dd79d2e27ee23e325ba663d82b971a8360c240c4315dae18a6d44476240"
   }
 }

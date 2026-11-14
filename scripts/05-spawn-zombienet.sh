@@ -3,7 +3,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-NETWORK_WORK_DIR="${NETWORK_WORK_DIR:-$TEMPLATE_DIR}"
+export NETWORK_WORK_DIR="${NETWORK_WORK_DIR:-$TEMPLATE_DIR}"
 ZOMBIENET_CONFIG="${ZOMBIENET_CONFIG:-$NETWORK_WORK_DIR/zombienet.toml}"
 CHAIN_SPEC_PATH="${CHAIN_SPEC_PATH:-$NETWORK_WORK_DIR/chain_spec.json}"
 
@@ -37,6 +37,9 @@ Inputs:
 
 Outputs:
   Foreground local Zombienet process and its runtime logs.
+  <NETWORK_WORK_DIR>/zombienet-network is the authoritative machine output path.
+  Work directory must be plain absolute, canonical, owned and non-symlinked;
+  the output path must not exist (including old databases or dangling symlinks).
 
 Side effects:
   Starts local relay/parachain processes and creates Zombienet temporary state.
@@ -72,9 +75,22 @@ diagnostic_environment() {
     }
 }
 
+network_output_directory() {
+    local work="${NETWORK_WORK_DIR:-$TEMPLATE_DIR}"
+    node "$SCRIPT_DIR/network-assurance.mjs" network-output "$work"
+}
+
+require_absent_network_output() {
+    local output
+    output="$(network_output_directory)" || return 1
+    [[ ! -e "$output" && ! -L "$output" ]] || {
+        log_error "Network output already exists; select a fresh owned work directory: $output" >&2; return 1;
+    }
+}
+
 verify_diagnostic_launch() {
     diagnostic_environment || return 1
-    "$(command -v node)" "$SCRIPT_DIR/network-assurance.mjs" launch-check "$(command -v zombienet)" "$DEOS_NETWORK_EVIDENCE_DIR" "$ZOMBIENET_CONFIG" spawn --provider native || return 1
+    "$(command -v node)" "$SCRIPT_DIR/network-assurance.mjs" launch-check "$(command -v zombienet)" "$DEOS_NETWORK_EVIDENCE_DIR" "$ZOMBIENET_CONFIG" --provider native --dir "$(network_output_directory)" spawn "$ZOMBIENET_CONFIG" || return 1
     [[ "$(realpath "$(command -v polkadot)")" == "$(jq -er '.binaries.polkadot.path' "$DEOS_NETWORK_EVIDENCE_DIR/diagnostic-inputs.json")" ]] || { log_error "Selected relay path drift" >&2; return 1; }
     [[ "$(realpath "$(command -v polkadot-omni-node-deos)")" == "$(realpath "$DEOS_DIAGNOSTIC_OMNI_PATH")" ]] || { log_error "Selected candidate path drift" >&2; return 1; }
 }
@@ -83,7 +99,7 @@ check_prerequisites() {
     if [[ "${DEOS_NETWORK_DIAGNOSTIC:-0}" == "1" ]]; then diagnostic_environment || return 1; fi
     phase_banner "Step 1: Prerequisites"
     hydrate_local_tool_paths
-    require_commands polkadot zombienet jq
+    require_commands polkadot zombienet jq node
     verify_network_omni_node "$(command -v polkadot-omni-node-deos || true)"
     log_success "Zombienet spawn prerequisites checked"
 }
@@ -111,6 +127,7 @@ verify_prerequisites() {
         exit 1
     fi
 
+    require_absent_network_output || return 1
     if [[ "${DEOS_NETWORK_DIAGNOSTIC:-0}" == "1" ]]; then
         diagnostic_environment
         require_commands node
@@ -137,14 +154,19 @@ spawn_network() {
     log_info "Starting network (Ctrl+C to stop)..."
     echo ""
 
+    if [[ "${DEOS_NETWORK_DIAGNOSTIC:-0}" == "1" ]]; then diagnostic_environment || return 1; fi
+    local output
+    output="$(network_output_directory)" || return 1
+    require_absent_network_output || return 1
+    umask 077
     cd "$NETWORK_WORK_DIR"
     if [[ "${DEOS_NETWORK_DIAGNOSTIC:-0}" == "1" ]]; then
         # Revalidate the frozen preflight without regenerating wx evidence. Keep
         # this check at the sole CLI startup boundary, including direct 05 use.
         verify_diagnostic_launch || return 1
-        exec "$(command -v node)" "$(jq -er .cli "$DEOS_NETWORK_EVIDENCE_DIR/diagnostic-inputs.json")" --provider native spawn "$ZOMBIENET_CONFIG"
+        exec "$(command -v node)" "$(jq -er .cli "$DEOS_NETWORK_EVIDENCE_DIR/diagnostic-inputs.json")" --provider native --dir "$output" spawn "$ZOMBIENET_CONFIG"
     fi
-    exec zombienet --provider native spawn "$ZOMBIENET_CONFIG"
+    exec zombienet --provider native --dir "$output" spawn "$ZOMBIENET_CONFIG"
 }
 
 main() {

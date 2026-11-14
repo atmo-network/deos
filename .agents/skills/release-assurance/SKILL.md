@@ -68,7 +68,7 @@ This Skill may read project truth and invoke public project operations. Its priv
 
 ## Dependency Review Contract
 
-- Every material Cargo or npm finding must be fixed or appear exactly once in `config/dependency-provenance-exceptions.json`.
+- Every material Cargo or npm finding must be fixed or appear exactly once in the policy for its actual reviewed role. `config/dependency-provenance-exceptions.json` owns Root/client decisions; `config/native-source-preparation/exceptions.json` and its single shared proof own the finite selected Native source role through the same validator. Neither policy transfers authority into another role, a new ELF or unrestricted CLI.
 - Each retained finding names reachability, a material rationale, and an expiry no more than 90 days after review.
 - New, duplicate, stale, expired, fixed-but-retained, or graph-absent exceptions fail.
 - npm critical findings cannot be excepted.

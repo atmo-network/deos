@@ -22,7 +22,7 @@ const diagnosticProfile = Object.freeze({
     'polkadot-execute-worker': '16ecbd306afa6562d911a8d533e976e194c6d5e3f404321ea83ec4171f7fe5f6',
   },
 });
-const reviewedTopology = {"settings":{"provider":"native","timeout":300,"bootnode":false,"node_verifier":"None","telemetry":false,"enable_tracing":false},"relaychain":{"default_command":"polkadot","chain":"rococo-local","default_substrate_cli_args_version":3,"default_args":["-:--insecure-validator-i-know-what-i-do","-:--prometheus-external","--no-prometheus","--listen-addr","/ip4/127.0.0.1/tcp/30333/ws","--workers-path","$WORKERS","--log","info,parachain::pvf=trace,parachain::candidate-validation=debug,parachain::candidate-backing=debug,parachain::collator-protocol=debug"],"genesis":{"runtimeGenesis":{"patch":{"configuration":{"config":{"scheduler_params":{"max_validators_per_core":2}}}}}},"nodes":[{"name":"alice","validator":true,"rpc_port":9944,"p2p_port":30334},{"name":"bob","validator":true,"rpc_port":9955,"p2p_port":30335}]},"parachains":[{"id":2000,"chain_spec_path":"$SPEC","onboard_as_parachain":true,"collators":[{"name":"alice","rpc_port":9988,"p2p_port":30336,"command":"polkadot-omni-node-deos","substrate_cli_args_version":3,"args":["--force-authoring","-:--prometheus-external","--no-prometheus","--no-mdns","--no-telemetry","--log","info,cumulus-consensus=debug,parachain::collator-protocol=debug","--","--no-mdns","--no-telemetry","--no-prometheus","--listen-addr=/ip4/127.0.0.1/tcp/0/ws","-:--port"]},{"name":"bob","rpc_port":9999,"p2p_port":30337,"command":"polkadot-omni-node-deos","substrate_cli_args_version":3,"args":["--force-authoring","-:--prometheus-external","--no-prometheus","--no-mdns","--no-telemetry","--log","info,cumulus-consensus=debug,parachain::collator-protocol=debug","--","--no-mdns","--no-telemetry","--no-prometheus","--listen-addr=/ip4/127.0.0.1/tcp/0/ws","-:--port"]}]}]};
+const reviewedTopology = {"settings":{"provider":"native","timeout":300,"bootnode":false,"node_verifier":"None","telemetry":false,"enable_tracing":false},"relaychain":{"default_command":"polkadot","chain":"rococo-local","default_substrate_cli_args_version":3,"default_args":["--no-hardware-benchmarks","-:--insecure-validator-i-know-what-i-do","-:--prometheus-external","--no-prometheus","--listen-addr","/ip4/127.0.0.1/tcp/30333/ws","--workers-path","$WORKERS","--log","info,parachain::pvf=trace,parachain::candidate-validation=debug,parachain::candidate-backing=debug,parachain::collator-protocol=debug"],"genesis":{"runtimeGenesis":{"patch":{"configuration":{"config":{"scheduler_params":{"max_validators_per_core":2}}}}}},"nodes":[{"name":"alice","validator":true,"rpc_port":9944,"p2p_port":30334},{"name":"bob","validator":true,"rpc_port":9955,"p2p_port":30335}]},"parachains":[{"id":2000,"chain_spec_path":"$SPEC","onboard_as_parachain":true,"collators":[{"name":"alice","rpc_port":9988,"p2p_port":30336,"command":"polkadot-omni-node-deos","substrate_cli_args_version":3,"args":["--no-hardware-benchmarks","--force-authoring","-:--prometheus-external","--no-prometheus","--no-mdns","--no-telemetry","--log","info,cumulus-consensus=debug,parachain::collator-protocol=debug","--","--no-hardware-benchmarks","--no-mdns","--no-telemetry","--no-prometheus","--listen-addr=/ip4/127.0.0.1/tcp/0/ws","-:--port"]},{"name":"bob","rpc_port":9999,"p2p_port":30337,"command":"polkadot-omni-node-deos","substrate_cli_args_version":3,"args":["--no-hardware-benchmarks","--force-authoring","-:--prometheus-external","--no-prometheus","--no-mdns","--no-telemetry","--log","info,cumulus-consensus=debug,parachain::collator-protocol=debug","--","--no-hardware-benchmarks","--no-mdns","--no-telemetry","--no-prometheus","--listen-addr=/ip4/127.0.0.1/tcp/0/ws","-:--port"]}]}]};
 const digest = value => createHash('sha256').update(value).digest('hex');
 const fileDigest = file => digest(fs.readFileSync(file));
 function treeDigest(root) {
@@ -89,6 +89,29 @@ function diagnosticBinaries(workers, accepted = diagnosticProfile.binaries) {
   }
   return binaries;
 }
+function networkOutput(work = process.env.NETWORK_WORK_DIR) {
+  assert(typeof work === 'string' && /^\/[a-z0-9_./-]+$/i.test(work), 'Plain absolute network work directory required');
+  assert.equal(fs.realpathSync(work), work, 'Canonical non-symlink network work directory required');
+  const stat = fs.lstatSync(work);
+  assert(stat.isDirectory() && stat.uid === process.getuid() && !(stat.mode & 0o022), 'Exclusive owned network work directory required');
+  const output = path.join(work, 'zombienet-network');
+  if (fs.existsSync(output)) {
+    const root = fs.lstatSync(output);
+    assert(root.isDirectory() && !root.isSymbolicLink() && root.uid === stat.uid && !(root.mode & 0o022), 'Owned non-symlink network output required');
+  } else assert.throws(() => fs.lstatSync(output), { code: 'ENOENT' });
+  return { path: output, parent: { dev: stat.dev, ino: stat.ino, uid: stat.uid } };
+}
+function networkMap(output) {
+  assert.equal(output, networkOutput(path.dirname(output)).path, 'Unexpected network map directory');
+  const file = path.join(output, 'zombie.json');
+  const stat = fs.lstatSync(file);
+  assert(stat.isFile() && !stat.isSymbolicLink() && stat.uid === process.getuid(), 'Owned regular network map required');
+  const network = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(network.tmpDir, output, 'Network map output binding differs');
+  assert.equal(network.client?.tmpDir, output, 'Network client output binding differs');
+  assert(network.client.processMap && typeof network.client.processMap === 'object', 'Network process map missing');
+  return network;
+}
 function diagnosticIdentity(file) {
   const cli = fs.realpathSync(executable), root = path.dirname(path.dirname(cli));
   assert.equal(cli, path.join(root, 'dist/cli.js'), 'Exact CLI entry required');
@@ -107,7 +130,7 @@ function diagnosticIdentity(file) {
   assert(binaries.omni.version, 'Explicit candidate version required');
   const specSha256 = fileDigest(reviewed.spec);
   if (process.env.CHAIN_SPEC_PATH) assert.equal(fileDigest(process.env.CHAIN_SPEC_PATH), specSha256, 'Selected raw spec differs');
-  return { cli, root, runtime: fs.realpathSync(process.execPath), tree: diagnosticProfile.tree, node: diagnosticProfile.node, expires: diagnosticProfile.expires, config: fs.realpathSync(file), configSha256: reviewed.configSha256, spec: fs.realpathSync(reviewed.spec), specSha256, binaries };
+  return { networkOutput: networkOutput(), cli, root, runtime: fs.realpathSync(process.execPath), tree: diagnosticProfile.tree, node: diagnosticProfile.node, expires: diagnosticProfile.expires, config: fs.realpathSync(file), configSha256: reviewed.configSha256, spec: fs.realpathSync(reviewed.spec), specSha256, binaries };
 }
 function verifyFrozenDiagnostic(file = input, evidenceDir = directory, identify = diagnosticIdentity) {
   const frozen = JSON.parse(fs.readFileSync(path.join(evidenceDir, 'diagnostic-inputs.json')));
@@ -166,6 +189,10 @@ function safeCommand(command) {
 }
 function diagnosticCommand(command) {
   safeCommand(command);
+  for (const part of command.split(' -- ')) {
+    assert.equal(part.split(/\s+/).filter(token => token === '--no-hardware-benchmarks').length, 1, 'Exactly one startup benchmark opt-out required per node/embedded relay');
+    assert(!/--no-hardware-benchmarks=/.test(part), 'Startup benchmark opt-out accepts no value');
+  }
   assert(['polkadot', 'polkadot-omni-node-deos'].includes(command.split(/\s+/)[0]), 'Unknown diagnostic executable');
 }
 function diagnosticConfig(config) {
@@ -187,6 +214,7 @@ function diagnosticConfig(config) {
 }
 async function preflight() {
   const identity = diagnosticIdentity(input);
+  assert.throws(() => fs.lstatSync(identity.networkOutput.path), { code: 'ENOENT' });
   const { config } = reviewedInput(input);
   const spec = JSON.parse(fs.readFileSync(config.parachains[0].chain_spec_path, 'utf8'));
   assert.equal(spec.extensions?.para_id ?? spec.para_id, 2000);
@@ -333,8 +361,8 @@ async function checkpoint() {
     await Promise.allSettled(apis.map(api => api.disconnect()));
   }
 }
-function diagnosticLaunchArguments(args) {
-  assert.deepEqual(args, ['spawn', '--provider', 'native'], 'Only fixed native spawn route accepted');
+function diagnosticLaunchArguments(args, output = networkOutput().path, config = input) {
+  assert.deepEqual(args, ['--provider', 'native', '--dir', output, 'spawn', config], 'Only fixed native spawn/config/output route accepted');
 }
 function profileSelfTest() {
   const fixture = fs.mkdtempSync('/tmp/deos-tool-profile-test-');
@@ -418,15 +446,24 @@ function profileSelfTest() {
       value => { value.parachains[0].collators[0].args.push('--rpc-external'); },
       value => { value.relaychain.default_args.push('--workers-path', '/other'); },
       value => { value.parachains[0].id = 2001; },
+      value => { value.relaychain.default_args.shift(); },
+      value => { value.parachains[0].collators[0].args.shift(); },
+      value => { const args = value.parachains[0].collators[0].args; args.splice(args.indexOf('--') + 1, 1); },
+      value => { value.parachains[0].collators[1].args.push('--no-hardware-benchmarks=false'); },
     ]) {
       const changed = structuredClone(config); mutate(changed); write(changed);
       assert.throws(() => reviewedInput(file));
     }
     write(config);
     reviewedInput(file);
-    diagnosticLaunchArguments(['spawn', '--provider', 'native']);
-    for (const command of ['custom.js', 'bash', '/unknown/polkadot']) assert.throws(() => diagnosticCommand(`${command} --no-mdns --no-telemetry --no-prometheus --listen-addr /ip4/127.0.0.1/tcp/30333`), /Unknown diagnostic executable/);
-    for (const args of [['test', '--provider', 'native'], ['spawn', '--provider', 'native', '--provider', 'podman'], ['setup'], ['spawn', '--provider', 'native', '--unknown']]) assert.throws(() => diagnosticLaunchArguments(args));
+    const argv = ['--provider', 'native', '--dir', '/owned/zombienet-network', 'spawn', file];
+    diagnosticLaunchArguments(argv, '/owned/zombienet-network', file);
+    for (const index of [0, 1, 2, 3, 4, 5]) {
+      const changed = [...argv]; changed[index] += '-drift';
+      assert.throws(() => diagnosticLaunchArguments(changed, '/owned/zombienet-network', file));
+    }
+    for (const command of ['custom.js', 'bash', '/unknown/polkadot']) assert.throws(() => diagnosticCommand(`${command} --no-hardware-benchmarks --no-mdns --no-telemetry --no-prometheus --listen-addr /ip4/127.0.0.1/tcp/30333`), /Unknown diagnostic executable/);
+    for (const args of [['test', '--provider', 'native'], ['spawn', '--provider', 'native', '--provider', 'podman'], ['setup'], [...argv, '--unknown']]) assert.throws(() => diagnosticLaunchArguments(args, '/owned/zombienet-network', file));
     assert.throws(() => verifyFrozenDiagnostic(file, fixture), /ENOENT/);
     const spec = path.join(fixture, 'spec.json'), binary = path.join(fixture, 'relay');
     fs.writeFileSync(spec, 'reviewed spec');
@@ -463,7 +500,7 @@ function launchBoundarySelfTest() {
     const result = spawnSync('bash', ['-c', `
       source "$1/05-spawn-zombienet.sh"
       diagnostic_environment() { :; }
-      node() { [[ "$2" != launch-check ]]; }
+      node() { if [[ "$2" == network-output ]]; then printf '%s/zombienet-network\\n' "$3"; else [[ "$2" != launch-check ]]; fi; }
       exec() { echo unexpected > "$DEOS_NETWORK_EVIDENCE_DIR/unexpected-final-exec"; }
       export DEOS_NETWORK_DIAGNOSTIC=1 DEOS_NETWORK_EVIDENCE_DIR="$2"
       NETWORK_WORK_DIR="$2" ZOMBIENET_CONFIG="$2/config.json"
@@ -471,10 +508,119 @@ function launchBoundarySelfTest() {
     `, 'boundary-test', scripts, fixture], { encoding: 'utf8', timeout: 10000 });
     assert.equal(result.status, 1, result.stderr);
     assert(!fs.existsSync(path.join(fixture, 'unexpected-final-exec')));
+    fs.writeFileSync(path.join(fixture, 'diagnostic-inputs.json'), JSON.stringify({ cli: '/reviewed/dist/cli.js' }));
+    const captured = spawnSync('bash', ['-c', `
+      source "$1/05-spawn-zombienet.sh"
+      diagnostic_environment() { :; }
+      verify_diagnostic_launch() { :; }
+      exec() { printf '%s\\n' "$@" > "$DEOS_NETWORK_EVIDENCE_DIR/fixture-argv.txt"; exit 0; }
+      export DEOS_NETWORK_DIAGNOSTIC=1 DEOS_NETWORK_EVIDENCE_DIR="$2"
+      NETWORK_WORK_DIR="$2" ZOMBIENET_CONFIG="$2/config.json"
+      spawn_network
+    `, 'argv-test', scripts, fixture], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(captured.status, 0, captured.stderr);
+    const argv = fs.readFileSync(path.join(fixture, 'fixture-argv.txt'), 'utf8').trim().split('\n');
+    assert.equal(argv[1], '/reviewed/dist/cli.js', JSON.stringify(argv));
+    diagnosticLaunchArguments(argv.slice(2), `${fixture}/zombienet-network`, `${fixture}/config.json`);
   } finally { fs.rmSync(fixture, { recursive: true }); }
   console.log('Direct/wrapper pre-Node refusal and sole startup boundary self-tests passed');
 }
-function selfTest() {
+function networkPathSelfTest() {
+  const fixture = fs.mkdtempSync('/tmp/deos-network-output-test-');
+  try {
+    const work = path.join(fixture, 'long-owned-path-'.repeat(8));
+    fs.mkdirSync(work);
+    const output = networkOutput(work).path;
+    assert.equal(output, `${work}/zombienet-network`);
+    const before = networkOutput(work);
+    for (const bad of [work + '/', work + '/..', work + '/missing', work + '/space path', 'relative', work + '\n']) assert.throws(() => networkOutput(bad));
+    fs.symlinkSync(work, path.join(fixture, 'alias'));
+    assert.throws(() => networkOutput(path.join(fixture, 'alias')), /Canonical/);
+    fs.chmodSync(work, 0o777);
+    assert.throws(() => networkOutput(work), /Exclusive/);
+    fs.chmodSync(work, 0o755);
+    fs.symlinkSync('/missing-network-output', output);
+    assert.throws(() => networkOutput(work));
+    fs.unlinkSync(output);
+    fs.mkdirSync(output);
+    assert.deepEqual(networkOutput(work), before);
+    assert.throws(() => networkMap(output), /ENOENT/);
+    const map = path.join(output, 'zombie.json');
+    fs.mkdirSync(map);
+    assert.throws(() => networkMap(output), /regular/);
+    fs.rmdirSync(map);
+    const write = value => fs.writeFileSync(map, JSON.stringify(value));
+    const binding = { tmpDir: output, client: { tmpDir: output, processMap: {} }, fixtureOnly: true };
+    write(binding);
+    assert.deepEqual(networkMap(output), binding);
+    for (const mutate of [value => { value.tmpDir += '-decoy'; }, value => { value.client.tmpDir += '-decoy'; }, value => { delete value.client.processMap; }]) {
+      const changed = structuredClone(binding); mutate(changed); write(changed);
+      assert.throws(() => networkMap(output));
+    }
+    fs.unlinkSync(map);
+    fs.symlinkSync(path.join(fixture, 'decoy.json'), map);
+    fs.writeFileSync(path.join(fixture, 'decoy.json'), JSON.stringify(binding));
+    assert.throws(() => networkMap(output), /regular/);
+    // Console output, including a truncated lookalike and a valid decoy, is not an input.
+    fs.writeFileSync(path.join(fixture, 'console.log'), `${work.slice(0, 60)}…\n${fixture}/zombie-decoy\n`);
+    assert.deepEqual(networkOutput(work), before);
+    const scripts = path.dirname(fileURLToPath(import.meta.url));
+    const check = spawnSync('bash', ['-c', 'source "$1/05-spawn-zombienet.sh"; NETWORK_WORK_DIR="$2"; require_absent_network_output', 'output-test', scripts, work], { encoding: 'utf8' });
+    assert.equal(check.status, 1, check.stderr);
+    assert.match(check.stderr, /already exists/);
+    const identify = () => networkOutput(work);
+    fs.writeFileSync(path.join(fixture, 'diagnostic-inputs.json'), JSON.stringify(identify()));
+    verifyFrozenDiagnostic('fixture', fixture, identify);
+    fs.renameSync(work, work + '-old');
+    fs.mkdirSync(work);
+    assert.throws(() => verifyFrozenDiagnostic('fixture', fixture, identify), /Frozen diagnostic input drift/);
+  } finally { fs.rmSync(fixture, { recursive: true }); }
+  console.log('Owned machine output/map binding, long path, alias, decoy and overwrite refusals passed (fixtures only)');
+}
+async function installedCliSelfTest(cli) {
+  const root = path.dirname(path.dirname(fs.realpathSync(cli)));
+  installedProfile(root, process.execPath);
+  const req = createRequire(fs.realpathSync(cli));
+  const { Command, Option } = req('commander');
+  const source = fs.readFileSync(cli, 'utf8');
+  const parser = new Command('zombienet');
+  // Read the maintained CLI's root option declarations, without importing its lifecycle.
+  for (const name of ['provider', 'dir']) {
+    const match = source.match(new RegExp(`new commander_1.Option\\("([^"]*--${name} <[^>]+>)", "([^"]*)"\\)`));
+    assert(match, `Installed CLI lacks supported --${name}`);
+    parser.addOption(new Option(match[1], match[2]));
+  }
+  const config = structuredClone(reviewedTopology);
+  config.relaychain.default_args[config.relaychain.default_args.indexOf('--workers-path') + 1] = '/owned/workers';
+  const fixture = fs.mkdtempSync('/tmp/deos-cli-generator-test-');
+  try {
+    config.parachains[0].chain_spec_path = path.join(fixture, 'fixture.raw.json');
+    fs.writeFileSync(config.parachains[0].chain_spec_path, '{}');
+    config.configBasePath = fixture;
+    const argv = ['--provider', 'native', '--dir', '/owned/zombienet-network', 'spawn', '/owned/config.json'];
+    let parsed;
+    parser.command('spawn').argument('<networkConfig>').action((file, _options, command) => { parsed = { file, ...command.parent.opts() }; });
+    parser.parse(argv, { from: 'user' });
+    assert.deepEqual(parsed, { provider: 'native', dir: '/owned/zombienet-network', file: '/owned/config.json' });
+    diagnosticLaunchArguments(argv, parsed.dir, parsed.file);
+    const { generateNetworkSpec } = req('@zombienet/orchestrator/dist/configGenerator.js');
+    const { genCmd, genCumulusCollatorCmd } = req('@zombienet/orchestrator/dist/cmdGenerator.js');
+    const network = await generateNetworkSpec(config);
+    const commands = [];
+    for (const node of network.relaychain.nodes) commands.push(...await genCmd(node, '/local/cfg', '/local/data', false));
+    for (const node of network.parachains[0].collators) commands.push(...await genCumulusCollatorCmd(node, '/local/cfg', '/local/data', '/local/relay-data', false));
+    assert.equal(commands.length, 4);
+    commands.forEach(diagnosticCommand);
+    assert.equal(commands.reduce((n, command) => n + command.split(/\s+/).filter(token => token === '--no-hardware-benchmarks').length, 0), 6);
+    for (const command of commands) {
+      assert.throws(() => diagnosticCommand(command.replace('--no-hardware-benchmarks', '')), /opt-out/);
+      assert.throws(() => diagnosticCommand(command.replace('--no-hardware-benchmarks', '--no-hardware-benchmarks --no-hardware-benchmarks')), /opt-out/);
+    }
+    console.log('Pinned installed CLI Commander --dir argv and four generated commands/six startup opt-outs passed offline');
+  } finally { fs.rmSync(fixture, { recursive: true }); }
+}
+async function selfTest() {
+  networkPathSelfTest();
   profileSelfTest();
   launchBoundarySelfTest();
   assert.deepEqual(topPairs([['0x3a636f6465', '0xff'], ['0x01', '0x']]), [['0x01', '0x'], ['0x3a636f6465', '0xff']]);
@@ -516,16 +662,19 @@ function selfTest() {
     assert.equal(fs.readFileSync(output, 'utf8'), 'preserve');
   } finally { fs.rmSync(fixture, { recursive: true }); }
   console.log('Network structural leaf self-test passed');
+  if (executable) await installedCliSelfTest(executable);
 }
 if (['preflight', 'profile-check'].includes(mode)) assert.equal(process.argv.length, 6, 'Unexpected diagnostic arguments');
 if (mode === 'preflight') await preflight();
 else if (mode === 'profile-check') console.log(JSON.stringify(diagnosticIdentity(input), null, 2));
 else if (mode === 'launch-check') {
-  diagnosticLaunchArguments(process.argv.slice(6));
-  verifyFrozenDiagnostic();
+  const frozen = verifyFrozenDiagnostic();
+  diagnosticLaunchArguments(process.argv.slice(6), frozen.networkOutput.path, frozen.config);
 }
+else if (mode === 'network-output') console.log(networkOutput(executable).path);
+else if (mode === 'network-map') networkMap(executable);
 else if (mode === 'checkpoint') await checkpoint();
-else if (mode === 'self-test') selfTest();
+else if (mode === 'self-test') await selfTest();
 else if (mode === 'command-preflight') {
   if (process.env.DEOS_NETWORK_DIAGNOSTIC === '1') diagnosticCommand(executable);
   else safeCommand(executable);
@@ -534,7 +683,7 @@ else if (mode === 'fixed-history') await fixedHistory();
 else if (mode === 'fresh-command') {
   const checkpoint = JSON.parse(fs.readFileSync(path.join(directory, 'checkpoint.json'), 'utf8'));
   assert(BigInt(checkpoint.paraNumber) > 0n && checkpoint.acceptedAt, 'Accepted checkpoint must precede fresh database');
-  const network = JSON.parse(fs.readFileSync(path.join(input, 'zombie.json'), 'utf8'));
+  const network = networkMap(input);
   save('fresh-instance.json', { ...freshCommand(network.client.processMap['bob-1'].cmd[0], input), checkpoint });
 }
 else throw new Error(`Unknown structural mode: ${mode}`);
