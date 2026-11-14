@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { lstat, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -116,14 +116,20 @@ function exactKeys(value, keys, label) {
   assert.ok(value && typeof value === 'object' && !Array.isArray(value), `${label} required`);
   assert.deepEqual(Object.keys(value).sort(), [...keys].sort(), `unknown or missing ${label} setting`);
 }
+async function regularOwnerFile(root, filePath) {
+  assert.ok(typeof filePath === 'string' && filePath.length > 0, 'Native file path required');
+  const path = resolve(root, filePath);
+  assert.equal(relative(root, path), filePath, 'Native file must be canonical owner-relative');
+  assert.ok(!filePath.startsWith('../'), 'Native file outside owner');
+  const stat = await lstat(path);
+  assert.ok(stat.isFile() && !stat.isSymbolicLink(), 'Native source symlink/path substitution or nonregular file');
+  assert.equal(await realpath(path), path, 'Native source symlink/path substitution');
+  return path;
+}
 async function boundFile(root, file) {
   exactKeys(file, ['path', 'sha256'], 'Native file');
-  assert.ok(typeof file.path === 'string' && file.path.length > 0, 'Native file path required');
   assert.match(file.sha256, /^[a-f0-9]{64}$/, 'invalid Native source digest');
-  const path = resolve(root, file.path);
-  assert.equal(relative(root, path), file.path, 'Native file must be canonical owner-relative');
-  assert.ok(!file.path.startsWith('../'), 'Native file outside owner');
-  assert.equal(await realpath(path), path, 'Native source symlink/path substitution');
+  const path = await regularOwnerFile(root, file.path);
   assert.equal(sha256(await readFile(path)), file.sha256, `Native source hash drift: ${file.path}`);
 }
 async function sourceInventory(root, prefix = 'src') {
@@ -322,6 +328,469 @@ async function enforceNativeSources(entries, cargoFindings, metadata, repoRoot, 
   }
 }
 
+// A separate source-preparation case: one shared, fixed identity, never a
+// caller-selected hash or the historical prepared/build receipt contract.
+// This proposal binds reviewed sources; final producer refresh and independent
+// implementation/policy admission remain required before installation.
+const nativePreparationProofSha256 = 'afb0a94d7e09ac0efd0911ac00577772203a9c2ae41211701fe816bfd59fa382';
+const nativePreparationStage = 'SOURCEPREPARATION';
+const nativePreparationProofFiles = ['git-refs.txt', 'source-tools.txt', 'composed-metadata.json',
+  'composed-tree.txt', 'composed-closure.json', 'source-consumers.json'];
+function checkNativePreparationEnvironment(env = process.env) {
+  checkNativeEnvironment(env);
+  for (const key of Object.keys(env)) assert.ok(
+    !/^(RUST|WASM_|SKIP_WASM_BUILD|SUBSTRATE_)/.test(key) || ['RUSTUP_HOME', 'RUSTUP_TOOLCHAIN'].includes(key),
+    `unsupported Native SOURCEPREPARATION override: ${key}`);
+}
+function validateNativePreparationProof(proof, externalWorkspace, expected = nativePreparationProofSha256) {
+  assert.equal(externalWorkspace, true, 'Native SOURCEPREPARATION cannot transfer to Root');
+  exactKeys(proof, ['schema', 'stage', 'preflight', 'review', 'audits', 'rows'], 'Native SOURCEPREPARATION proof');
+  assert.equal(proof.schema, 1, 'unknown Native SOURCEPREPARATION schema');
+  assert.equal(proof.stage, nativePreparationStage, 'unknown Native SOURCEPREPARATION stage');
+  exactKeys(proof.review, ['composition', 'dnsMisc', 'io', 'provider', 'scope'], 'Native operation review');
+  exactKeys(proof.audits, ['actual', 'registryEquivalent', 'versionLock'], 'Native paired audits');
+  assert.equal(sha256(canonical(proof)), expected, 'unreviewed Native SOURCEPREPARATION proof identity');
+  const p = proof.preflight;
+  exactKeys(p, ['schema', 'stage', 'capturedAt', 'qualification', 'sourceRoot', 'workspaceRoot', 'evidenceRoot',
+    'identity', 'role', 'configuration', 'sharedCaches', 'producers', 'proofs'], 'Native source preflight');
+  assert.equal(p.schema, 1, 'unknown source preflight schema');
+  assert.equal(p.stage, 'accepted-composition-source-preflight', 'unknown source preflight stage');
+  assert.deepEqual(p.role, { package: nativeRole.package, features: [nativeRole.features], target: nativeRole.target,
+    edges: nativeRole.edges, toolchain: nativeRole.toolchain, profile: nativeRole.profile }, 'Native preparation role mismatch');
+  assert.deepEqual(p.configuration, { home: nativeHome, cargoHome: join(nativeHome, '.cargo'),
+    rustupHome: join(nativeHome, '.rustup'), configs: [[join(p.workspaceRoot, '.cargo/config.toml'), nativeCargoConfigSha256]] },
+  'Native preparation configuration mismatch');
+  assert.deepEqual(p.proofs.map(([path]) => path).sort(), [...nativePreparationProofFiles].sort(), 'Native preparation proof coverage');
+  assert.ok(Array.isArray(proof.rows) && proof.rows.length > 0, 'Native preparation instances required');
+  for (const row of proof.rows) {
+    exactKeys(row, ['id', 'packageId', 'name', 'version', 'source', 'rawSources', 'decision'], 'Native preparation instance');
+    assert.notEqual(row.id, 'RUSTSEC-2026-0387', 'Native0387 requires separate B approval');
+    assert.ok(['selected-prerequisite', 'selected-backport', 'normal-absent'].includes(row.decision), 'unknown Native instance decision');
+    assert.ok(Array.isArray(row.rawSources) && row.rawSources.length > 0 && new Set(row.rawSources).size === row.rawSources.length,
+      'Native instance raw sources required exactly once');
+  }
+}
+// Match the public acquisition inventory, including existing in-owner symlinks.
+// Every regular file is sealed, not just Rust or a known caller list.
+async function nativePreparationInventory(root, prefix = '') {
+  assert.equal(await realpath(root), root, 'Native preparation inventory owner substitution');
+  const files = [];
+  for (const name of (await readdir(join(root, prefix))).sort()) {
+    if (!prefix && name === '.git') continue;
+    const path = prefix ? `${prefix}/${name}` : name;
+    const absolute = join(root, path);
+    const stat = await lstat(absolute);
+    if (stat.isSymbolicLink()) {
+      assert.ok((await realpath(absolute)).startsWith(`${root}/`), 'Native preparation external symlink');
+      files.push([path, 'symlink', await readlink(absolute)]);
+    } else if (stat.isDirectory()) files.push(...await nativePreparationInventory(root, path));
+    else {
+      assert.ok(stat.isFile(), 'Native preparation unsupported source type');
+      files.push([path, sha256(await readFile(absolute)), stat.mode & 0o111]);
+    }
+  }
+  return files;
+}
+async function checkNativePreparationSeal(seal, metadata, selected) {
+  exactKeys(seal, ['sourceRoot', 'sourceInventories', 'consumers'], 'Native source seal');
+  exactKeys(seal.sourceInventories, ['sdk', 'vendor'], 'Native source inventories');
+  for (const owner of ['sdk', 'vendor']) assert.deepEqual(
+    await nativePreparationInventory(join(seal.sourceRoot, owner)), seal.sourceInventories[owner],
+    `Native preparation complete ${owner} source drift`);
+  assert.deepEqual(seal.consumers.map(c => c.id).sort(), [...selected.keys()].sort(), 'Native complete consumer coverage drift');
+  for (const consumer of seal.consumers) {
+    exactKeys(consumer, ['id', 'root', 'owner', 'files'], 'Native consumer');
+    const pkg = metadata.packages.find(p => p.id === consumer.id);
+    assert.ok(pkg, 'Native consumer metadata identity missing');
+    assert.equal(consumer.root, dirname(pkg.manifest_path), 'Native consumer manifest owner mismatch');
+    assert.equal(await realpath(consumer.root), consumer.root, 'Native consumer owner substitution');
+    const owner = ['sdk', 'vendor'].find(o => consumer.root.startsWith(`${join(seal.sourceRoot, o)}/`)) ?? null;
+    assert.equal(consumer.owner, owner, 'Native consumer seal ownership mismatch');
+    if (owner) assert.equal(consumer.files, null, 'duplicate Native consumer inventory');
+    else assert.deepEqual(await nativePreparationInventory(consumer.root), consumer.files, 'Native complete external consumer source drift');
+  }
+}
+function nativePreparationSelection(metadata, tree) {
+  const selected = new Map();
+  for (const line of tree.trimEnd().split('\n')) {
+    const match = /^(\d+)([^\s]+) v(\S+)(?: \(proc-macro\))?(?: \(([^)]+)\))?\|([^|]*)$/.exec(line);
+    assert.ok(match, 'unsupported Native preparation tree');
+    const [, , name, version, source, features] = match;
+    const packages = metadata.packages.filter(p => p.name === name && p.version === version &&
+      (source?.startsWith('/') ? dirname(p.manifest_path) === source : p.source === registrySource));
+    assert.equal(packages.length, 1, 'ambiguous Native preparation selected identity');
+    const pkg = packages[0];
+    const current = features ? features.split(',').sort() : [];
+    // Host/build contexts may carry different features for the same package ID.
+    selected.set(pkg.id, [...new Set([...(selected.get(pkg.id) ?? []), ...current])].sort());
+    const forbidden = name.startsWith('hickory-') && version.startsWith('0.24.') ? /dnssec|text-parsing/i :
+      name === 'keccak' && version === '0.1.4' ? /^asm$/ : name === 'rand' && ['0.8.5', '0.9.0'].includes(version) ? /^log$/ :
+      (name === 'zstd' && version === '0.12.4') || (name === 'zstd-safe' && version === '6.0.6') || name === 'zstd-sys'
+        ? /^(experimental|zstdmt|zdict_builder|legacy)$/ : null;
+    if (forbidden) assert.ok(!current.some(f => forbidden.test(f)), `Native source prerequisite activated: ${name}`);
+  }
+  assert.ok(selected.size > 0, 'empty Native selection');
+  return selected;
+}
+function assertNativePreparationInstances(entries, rows, findings, metadata, selected) {
+  const ids = [...new Set(rows.map(r => r.id))].sort();
+  assert.deepEqual(entries.map(e => e.id).sort(), ids, 'Native preparation exact advisory coverage');
+  for (const entry of entries) {
+    exactKeys(entry.sourceCallerNative, ['stage', 'proof'], 'Native preparation reference');
+    assert.equal(entry.sourceCallerNative.stage, nativePreparationStage, 'unknown Native reference stage');
+    assert.equal(entry.sourceCallerNative.proof, 'nativeSourcePreparationProof', 'unknown Native shared proof owner');
+    assert.equal(entry.ecosystem, 'cargo', 'Native preparation requires Cargo');
+    assert.equal(entry.sourceCallerRoot, undefined, 'Native/Root proof conflict');
+    assert.equal(entry.reviewedSources, undefined, 'Native preparation uses shared source owner');
+    assert.equal(entry.excludedFeatures, undefined, 'Native preparation uses exact fresh role features');
+    const instances = rows.filter(r => r.id === entry.id);
+    assert.equal(entry.reachability, instances.some(r => r.decision === 'selected-backport') ?
+      'source-backport-reviewed' : 'source-prerequisite-excluded', 'Native instance classification mismatch');
+    const actual = [...new Set(findings.filter(f => f.advisory.id === entry.id).map(f => canonical({
+      name: f.package.name, version: f.package.version, source: f.package.source })))].sort();
+    const covered = [];
+    const seen = new Set();
+    for (const row of instances) {
+      assert.ok(!seen.has(row.packageId), 'duplicate or overlapping Native package instance');
+      seen.add(row.packageId);
+      const pkg = metadata.packages.find(p => p.id === row.packageId);
+      assert.ok(pkg, 'Native actual role package ID missing');
+      assert.deepEqual({ name: pkg.name, version: pkg.version, source: pkg.source },
+        { name: row.name, version: row.version, source: row.source }, 'Native actual package/source mismatch');
+      assert.equal(selected.has(pkg.id), row.decision !== 'normal-absent', 'Native selected/normal-absent instance mismatch');
+      if (row.decision === 'selected-backport') assert.equal(pkg.source, null, 'Native backport requires actual local source');
+      covered.push(...row.rawSources.map(source => canonical({ name: row.name, version: row.version, source })));
+    }
+    assert.deepEqual(covered.sort(), actual, 'Native disjoint actual/counterfactual instance coverage mismatch');
+  }
+}
+function assertNativePreparationAudits(proof, audits) {
+  assert.deepEqual(proof.audits, { actual: sha256(canonical(audits.cargo)),
+    registryEquivalent: sha256(canonical(audits.projectedAudit)), versionLock: sha256(audits.projectedLock) },
+  'Native reviewed paired audit/database/settings identity drift');
+}
+async function loadNativePreparationProof(reference, exceptionPath) {
+  exactKeys(reference, ['path'], 'Native shared proof file owner');
+  const proofRoot = dirname(await realpath(exceptionPath));
+  const path = await regularOwnerFile(proofRoot, reference.path);
+  const bytes = await readFile(path);
+  return { proofRoot, proof: JSON.parse(bytes.toString('utf8')), fileSha256: sha256(bytes) };
+}
+async function enforceNativePreparation(entries, reference, findings, metadata, repoRoot, lockPath, lock, externalWorkspace, exceptionPath, audits) {
+  const { proofRoot, proof, fileSha256 } = await loadNativePreparationProof(reference, exceptionPath);
+  validateNativePreparationProof(proof, externalWorkspace);
+  assertNativePreparationAudits(proof, audits);
+  const p = proof.preflight;
+  checkNativePreparationEnvironment();
+  assert.equal(process.platform, 'linux', 'Native source preparation requires Linux');
+  assert.equal(process.arch, 'x64', 'Native source preparation requires x86_64');
+  const workspace = await realpath(p.workspaceRoot);
+  assert.equal(workspace, p.workspaceRoot, 'Native preparation workspace substitution');
+  assert.equal(workspace, join(p.sourceRoot, 'sdk'), 'Native preparation source owner mismatch');
+  assert.equal(await realpath(lockPath), join(workspace, 'Cargo.lock'), 'Native preparation lock role mismatch');
+  assert.equal(metadata.workspace_root, workspace, 'Native preparation metadata role mismatch');
+  const repo = await realpath(repoRoot);
+  assert.deepEqual(p.producers.map(([path]) => path).sort(), nativeProducers.map(path => join(repo, path)).sort(),
+    'Native preparation public producer coverage mismatch');
+  const checkInputs = async () => {
+    await boundFile(proofRoot, { path: reference.path, sha256: fileSha256 });
+    checkNativePreparationEnvironment();
+    await checkNativeConfiguration(workspace);
+    for (const [path, digest] of p.producers) await boundFile(repo, { path: relative(repo, path), sha256: digest });
+    for (const [path, digest] of p.proofs) await boundFile(p.evidenceRoot, { path, sha256: digest });
+    assert.equal(await realpath(p.sourceRoot), p.sourceRoot, 'Native source root substitution');
+    assert.equal(await realpath(p.evidenceRoot), p.evidenceRoot, 'Native source evidence substitution');
+    assert.equal(sha256(await readFile(join(workspace, 'Cargo.toml'))), p.identity.manifest, 'Native source manifest drift');
+    assert.equal(sha256(await readFile(lockPath)), p.identity.lock, 'Native source lock drift');
+    assert.equal(await readFile(lockPath, 'utf8'), lock, 'Native source lock changed during review');
+  };
+  // Reject stale producer pins before executing any acquisition code.
+  await checkInputs();
+  const recorded = await readJson(join(p.evidenceRoot, 'composed-metadata.json'));
+  const seal = await readJson(join(p.evidenceRoot, 'source-consumers.json'));
+  assert.equal(seal.sourceRoot, p.sourceRoot, 'Native source seal owner mismatch');
+  for (const owner of ['sdk', 'vendor']) assert.equal(sha256(JSON.stringify(seal.sourceInventories[owner])), p.identity[owner],
+    'Native accepted composition inventory identity mismatch');
+  const toolBin = join(nativeHome, '.rustup/toolchains/1.94.1-x86_64-unknown-linux-gnu/bin');
+  for (const tool of ['rustc', 'cargo']) assert.equal(await realpath(join(toolBin, tool)), join(toolBin, tool), 'Native fixed source tool substitution');
+  const temporary = await mkdtemp(join(tmpdir(), 'deos-native-preparation.'));
+  try {
+    const run = (command, args) => {
+      const result = spawnSync(command, args, { cwd: workspace, encoding: 'utf8', maxBuffer: 128 * 1024 * 1024,
+        env: { ...process.env, RUSTC: join(toolBin, 'rustc'), CARGO_TARGET_DIR: temporary,
+          CARGO_TERM_COLOR: 'never', CARGO_NET_OFFLINE: 'true', GIT_ALLOW_PROTOCOL: '', GIT_TERMINAL_PROMPT: '0' } });
+      assert.equal(result.status, 0, `Native preparation acquisition failed: ${result.error ?? result.stderr}`);
+      return result.stdout;
+    };
+    const acquire = async () => {
+      const compiler = run(join(toolBin, 'rustc'), ['-vV']);
+      assert.match(compiler, /^release: 1\.94\.1$/m);
+      assert.match(compiler, /^commit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1$/m);
+      assert.match(compiler, /^LLVM version: 21\.1\.8$/m);
+      const tools = compiler + run(join(toolBin, 'cargo'), ['-V']) +
+        run(join(toolBin, 'rustc'), ['--print', 'cfg', '--target', nativeRole.target]);
+      assert.equal(tools, await readFile(join(p.evidenceRoot, 'source-tools.txt'), 'utf8'), 'Native source compiler/default cfg drift');
+      const current = JSON.parse(run(join(toolBin, 'cargo'), ['metadata', '--locked', '--offline', '--features',
+        'polkadot-omni-node/runtime-benchmarks', '--format-version', '1']));
+      const graph = v => canonical({ packages: v.packages, resolve: v.resolve, workspace_root: v.workspace_root, workspace_members: v.workspace_members });
+      assert.equal(graph(current), graph(recorded), 'Native current full metadata drift');
+      assert.equal(graph(current), graph(metadata), 'Native supplied metadata drift');
+      const tree = run(join(toolBin, 'cargo'), ['tree', '--locked', '--offline', '-p', nativeRole.package, '--features',
+        nativeRole.features, '--target', nativeRole.target, '--edges', nativeRole.edges, '--prefix', 'depth', '--format', '{p}|{f}']);
+      assert.equal(tree, await readFile(join(p.evidenceRoot, 'composed-tree.txt'), 'utf8'), 'Native fresh normal tree drift');
+      assert.equal(run('git', ['-c', 'protocol.allow=never', '--no-optional-locks', 'show-ref']),
+        await readFile(join(p.evidenceRoot, 'git-refs.txt'), 'utf8'), 'Native actual source refs drift');
+      const selected = nativePreparationSelection(current, tree);
+      await checkNativePreparationSeal(seal, current, selected);
+      assertNativePreparationInstances(entries, proof.rows, findings, current, selected);
+      await checkInputs();
+    };
+    // Both passes re-acquire the role AND every input. An unchanged dependency
+    // graph cannot hide a new direct/transitive/macro/generator operation.
+    await acquire();
+    await acquire();
+    console.log('[INFO] Native SOURCEPREPARATION source/operation prerequisites enforced; no ELF, B0387, Root, general CLI or build admission');
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+}
+
+// A finite public-input/initialization source case, never package-wide crypto or
+// Native artifact clearance. Updating this reviewed identity requires a new review;
+// neither a caller-supplied digest nor an environment override can bless a snapshot.
+const rootCallerProofSha256 = '59010df2e6c94ec9e55f8aabd26d30761671a56025ebab0ebc90131aee5daca8';
+const rootCallerRole = { ...rootRole, purpose: 'finite-public-operand-source-case', toolchain: '1.94.1',
+  profile: 'release: opt3, unwind; production: fat LTO, codegen-units 1',
+  support: 'Root source roles; both Wasm targets; native runtime and offline PVF; macOS acquisition retained; no native binary clearance' };
+const rootCallerRoots = ['crypto-bigint@0.5.5', 'ctutils@0.4.8', 'cmov@0.5.4',
+  'elliptic-curve@0.13.8', 'k256@0.13.4', 'p256@0.13.2', 'ecdsa@0.16.9', 'primeorder@0.13.6',
+  'sp-core@43.0.0', 'sp-runtime@49.0.0', 'sp-io@49.0.0', 'frame-support@49.1.0',
+  'sc-network@0.60.0', 'sc-chain-spec@53.0.0', 'polkadot-node-metrics@34.0.0',
+  'polkadot-node-core-pvf@36.0.0', 'polkadot-node-core-pvf-common@29.0.0', 'substrate-wasm-builder@35.0.0'];
+const rootCallerInputs = ['template/Cargo.toml', 'template/Cargo.lock', 'template/rust-toolchain.toml',
+  'scripts/03-build-runtime.sh', 'scripts/_common.sh', 'scripts/ci-local.sh'];
+const rootCallerTrees = ['all', 'wasm-v1-normal', 'wasm-v1-extended', 'wasm-unknown-normal',
+  'wasm-unknown-extended', 'native-runtime', 'pvf-host'];
+function rootCallerTreeArgs(role) {
+  assert.ok(rootCallerTrees.includes(role), 'unsupported Root tree role');
+  if (role === 'all') return rootTreeArgs.slice(1);
+  const base = ['tree', '--locked', '--offline', '-p', role === 'pvf-host' ? 'deos-pvf-validation' : 'deos-runtime'];
+  if (role.startsWith('wasm-')) {
+    base.push('--no-default-features', '--target', role.startsWith('wasm-v1-') ? 'wasm32v1-none' : 'wasm32-unknown-unknown');
+    if (role.endsWith('-extended')) base.push('--features', 'runtime-benchmarks,try-runtime');
+  } else base.push('--target', 'x86_64-unknown-linux-gnu');
+  return [...base, '--edges', role.startsWith('wasm-') ? 'normal' : 'normal,build', '--prefix', 'depth', '--format', '{p}|{f}'];
+}
+function checkRootCallerEnvironment(env = process.env) {
+  for (const key of Object.keys(env)) {
+    assert.ok(!(key.startsWith('CARGO_') && !/^(CARGO_BUILD_JOBS|CARGO_TARGET_DIR|CARGO_NET_OFFLINE|CARGO_TERM_[A-Z_]+|CARGO_HOME)$/.test(key)) &&
+      !(/^(RUST|WASM_|SKIP_WASM_BUILD|SUBSTRATE_)/.test(key) && !['RUSTUP_HOME', 'RUSTUP_TOOLCHAIN'].includes(key)),
+    `unsupported Root compiler/configuration override: ${key}`);
+  }
+  assert.equal(env.HOME ?? nativeHome, nativeHome, 'unsupported Root HOME');
+  assert.equal(env.CARGO_HOME ?? join(nativeHome, '.cargo'), join(nativeHome, '.cargo'), 'unsupported Root CARGO_HOME');
+  assert.equal(env.RUSTUP_HOME ?? join(nativeHome, '.rustup'), join(nativeHome, '.rustup'), 'unsupported Root RUSTUP_HOME');
+  if (env.RUSTUP_TOOLCHAIN !== undefined) assert.equal(env.RUSTUP_TOOLCHAIN, '1.94.1', 'unsupported Root RUSTUP_TOOLCHAIN');
+}
+async function checkRootCallerConfiguration(workspace, cargoHome = join(nativeHome, '.cargo')) {
+  checkRootCallerEnvironment();
+  const paths = new Set();
+  for (let cwd = workspace; ; cwd = dirname(cwd)) {
+    for (const name of ['config', 'config.toml']) paths.add(join(cwd, '.cargo', name));
+    if (dirname(cwd) === cwd) break;
+  }
+  for (const name of ['config', 'config.toml']) paths.add(join(cargoHome, name));
+  for (const path of paths) {
+    const stat = await lstat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    assert.equal(stat, null, `unreviewed Root Cargo configuration: ${path}`);
+  }
+}
+// Workspace Rust files include unconventional target paths; source/test/example
+// and fixture trees also bind non-Rust inputs. Package build outputs are excluded.
+// Dependency packages are complete: build scripts/macros may consume non-Rust
+// inputs outside src. No symbol scan or conventional-directory guess is a boundary.
+async function rootCallerInventory(root, workspace = false, prefix = '') {
+  const files = [];
+  for (const name of (await readdir(join(root, prefix))).sort()) {
+    if (['target', '.git'].includes(name) && (prefix === '' ||
+      (workspace && (await readdir(join(root, prefix))).includes('Cargo.toml')))) continue;
+    const path = prefix ? `${prefix}/${name}` : name;
+    const stat = await lstat(join(root, path));
+    assert.ok(!stat.isSymbolicLink(), `Root inventory symlink substitution: ${path}`);
+    if (stat.isDirectory()) files.push(...await rootCallerInventory(root, workspace, path));
+    else {
+      assert.ok(stat.isFile(), 'unsupported Root inventory file type');
+      if (!workspace || path.endsWith('.rs') || name === 'Cargo.toml' ||
+        /(?:^|\/)(?:src|tests|examples|fixtures)\//.test(path)) files.push(path);
+    }
+  }
+  return files.sort();
+}
+async function checkRootCallerFiles(root, files, paths) {
+  assert.deepEqual(files.map(f => f.path).sort(), paths, 'Root complete source/manifest inventory drift');
+  for (const file of files) await boundFile(root, file);
+}
+function validateRootCallerProof(proof, externalWorkspace) {
+  assert.equal(externalWorkspace, false, 'Root source proof cannot transfer to external Native workspace');
+  exactKeys(proof, [...Object.keys(rootCallerRole), 'workspaceRoot', 'compilerSha256', 'advisory',
+    'inputs', 'packages', 'trees'], 'Root caller proof');
+  for (const [key, value] of Object.entries(rootCallerRole)) assert.equal(proof[key], value, `unsupported Root caller ${key}`);
+  assert.deepEqual(Object.keys(proof.trees).sort(), [...rootCallerTrees].sort(), 'Root exact separate feature trees required');
+  assert.equal(sha256(canonical(proof)), rootCallerProofSha256, 'unreviewed Root caller proof identity');
+}
+function assertRootCallerFindings(entry, findings, metadata) {
+  assert.equal(entry.ecosystem, 'cargo', 'Root source case requires Cargo');
+  assert.equal(entry.id, 'RUSTSEC-2026-0387', 'unsupported Root source advisory');
+  assert.equal(entry.reachability, 'source-prerequisite-excluded', 'Root source case is not package-wide backport or absence');
+  assert.equal(entry.sourceCallerNative, undefined, 'Root/Native source case conflict');
+  const affected = findings.filter(f => f.advisory.id === entry.id);
+  assert.ok(affected.length > 0 && affected.every(f => f.package.name === 'crypto-bigint' && f.package.version === '0.5.5' &&
+    (f.package.source === undefined || f.package.source === null || f.package.source === registrySource)), 'Root affected package/source mismatch');
+  const packages = metadata.packages.filter(p => p.name === 'crypto-bigint' && p.version === '0.5.5');
+  assert.equal(packages.length, 1, 'Root actual bigint instance mismatch');
+  assert.equal(packages[0].source, null, 'Root requires actual local maintained bigint');
+}
+function assertRootCallerTree(role, tree, proof, root) {
+  assert.equal(sha256(tree.replaceAll(root, '$REPO')), proof.trees[role], `Root ${role} source/parent/feature tree drift`);
+  assert.ok(tree.trim().length > 0, 'empty Root caller tree');
+  for (const line of tree.trimEnd().split('\n').filter(Boolean)) assert.match(line, /^\d+[^ |]+ v[^ |]+(?: .*?)?\|[^|]*$/, 'unsupported Root caller tree');
+  // Do not join/drop all-tree rows against unified metadata: cxxbridge-cmd is
+  // unrelated and absent there. The entire raw tree identity still binds it.
+  if (role.startsWith('wasm-')) {
+    assert.ok(!/^\d+(?:p256|sc-network) v/m.test(tree), 'Root guest selected secret network role');
+    const core = tree.split('\n').filter(line => /^\d+sp-core v/.test(line));
+    assert.ok(core.length > 0 && core.every(line => !/(?:^|[,|])(?:std|full_crypto)(?:,| |$)/.test(line)), 'Root guest std/full_crypto activated');
+  }
+}
+function rootCallerSelection(metadata, trees) {
+  const selected = new Set();
+  for (const tree of Object.values(trees)) {
+    for (const line of tree.trimEnd().split('\n').filter(Boolean)) {
+      const match = /^\d+([^\s]+) v(\S+)(?: \(proc-macro\))?(?: \(([^)]+)\))?\|[^|]*$/.exec(line);
+      assert.ok(match, 'unsupported Root selection tree');
+      const [, name, version, source] = match;
+      const matches = metadata.packages.filter(p => p.name === name && p.version === version &&
+        (source?.startsWith('/') ? dirname(p.manifest_path) === source : p.source === registrySource));
+      // This unrelated Cargo-internal tool is absent from metadata. It remains
+      // whole-tree bound, never silently joined to a different package/source.
+      if (name === 'cxxbridge-cmd' && version === '1.0.196' && source === undefined && matches.length === 0) continue;
+      assert.equal(matches.length, 1, `Root selected package/source identity mismatch: ${name}@${version}`);
+      selected.add(matches[0].id);
+    }
+  }
+  return selected;
+}
+function rootCallerBoundary(metadata, selected, roots = rootCallerRoots) {
+  const packages = new Map(metadata.packages.map(p => [p.id, p]));
+  const nodes = new Map(metadata.resolve.nodes.map(n => [n.id, n]));
+  const normalBuild = d => d.dep_kinds.some(k => k.kind === null || k.kind === 'build');
+  const deps = id => {
+    assert.ok(packages.has(id) && nodes.has(id), 'Root boundary package/node missing');
+    return nodes.get(id).deps.filter(d => selected.has(d.pkg) && normalBuild(d));
+  };
+  const consumers = new Set(roots.map(key => {
+    const matches = metadata.packages.filter(p => `${p.name}@${p.version}` === key && selected.has(p.id));
+    assert.equal(matches.length, 1, `Root caller package identity mismatch: ${key}`);
+    return matches[0].id;
+  }));
+  // Induced normal/build metadata edges deliberately overapproximate role/target
+  // unification. Reexports and arbitrarily long public API routes need no names.
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const id of selected) if (!consumers.has(id) && deps(id).some(d => consumers.has(d.pkg))) {
+      consumers.add(id); changed = true;
+    }
+  }
+  const required = new Set([...consumers, ...metadata.workspace_members]);
+  // Proc macros/build scripts AND ordinary reexported macro_rules providers can
+  // emit caller tokens without importing crypto themselves. Bind the forward
+  // implementation closure, not just packages labelled proc-macro. On this graph
+  // the workspace umbrella reaches every metadata-joined selected package.
+  for (const id of required) for (const d of deps(id)) required.add(d.pkg);
+  return required;
+}
+function assertRootCallerCoverage(proof, required) {
+  assert.deepEqual(proof.packages.map(p => p.id).sort(), [...required].sort(), 'Root complete caller package coverage required');
+}
+async function checkRootCallerPackages(proof, metadata, root, selected) {
+  assertRootCallerCoverage(proof, rootCallerBoundary(metadata, selected));
+  for (const review of proof.packages) {
+    exactKeys(review, ['id', 'name', 'version', 'source', 'manifest', 'files'], 'Root caller package');
+    const pkg = metadata.packages.find(p => p.id === review.id);
+    assert.ok(pkg, 'Root package ID missing');
+    assert.deepEqual([pkg.name, pkg.version, pkg.source, pkg.manifest_path],
+      [review.name, review.version, review.source, review.manifest], 'Root caller source/manifest substitution');
+    const owner = dirname(review.manifest);
+    assert.equal(await realpath(owner), owner, 'Root caller owner substitution');
+    if (metadata.workspace_members.includes(pkg.id)) assert.ok(owner.startsWith(`${root}/template/`), 'Root workspace caller outside owner');
+    else if (pkg.name === 'crypto-bigint') assert.equal(owner, join(root, 'template/vendor/crypto-bigint'), 'Root maintained source substitution');
+    else if (pkg.source === null) assert.ok(owner.startsWith(`${root}/template/vendor/`), 'Root local dependency outside vendor owner');
+    else assert.equal(pkg.source, registrySource, 'Root registry caller replacement');
+    await checkRootCallerFiles(owner, review.files, await rootCallerInventory(owner, metadata.workspace_members.includes(pkg.id)));
+  }
+}
+async function enforceRootCaller(entry, findings, metadata, repoRoot, lockPath, lock, externalWorkspace) {
+  const proof = entry.sourceCallerRoot;
+  validateRootCallerProof(proof, externalWorkspace);
+  assertRootCallerFindings(entry, findings, metadata);
+  checkRootCallerEnvironment();
+  const root = await realpath(repoRoot);
+  assert.equal(root, resolve(repoRoot), 'Root repository path substitution');
+  const workspace = join(root, 'template');
+  assert.equal(await realpath(workspace), workspace, 'Root workspace symlink substitution');
+  assert.equal(proof.workspaceRoot, workspace, 'Root caller workspace mismatch');
+  assert.equal(metadata.workspace_root, workspace, 'Root caller metadata role mismatch');
+  assert.equal(resolve(lockPath), join(workspace, 'Cargo.lock'), 'Root caller lock role mismatch');
+  assert.equal(await realpath(lockPath), resolve(lockPath), 'Root caller lock substitution');
+  const check = async (selected) => {
+    await checkRootCallerConfiguration(workspace);
+    await checkRootCallerFiles(root, proof.inputs, [...rootCallerInputs].sort());
+    await boundFile(join(nativeHome, '.cargo/advisory-db'), proof.advisory);
+    assert.equal(proof.advisory.path, 'crates/crypto-bigint/RUSTSEC-2026-0387.md', 'Root primary advisory owner mismatch');
+    await checkRootCallerPackages(proof, metadata, root, selected);
+    assert.equal(await readFile(lockPath, 'utf8'), lock, 'Root lock changed during caller review');
+  };
+  await checkRootCallerConfiguration(workspace);
+  await checkRootCallerFiles(root, proof.inputs, [...rootCallerInputs].sort());
+  const paths = {};
+  for (const executable of ['cargo', 'rustc']) {
+    const selected = spawnSync('rustup', ['which', '--toolchain', '1.94.1', executable], { encoding: 'utf8' });
+    assert.equal(selected.status, 0, 'Root fixed toolchain unavailable');
+    paths[executable] = selected.stdout.trim();
+    assert.equal(await realpath(paths[executable]), paths[executable], 'Root fixed toolchain substitution');
+    assert.ok(paths[executable].startsWith(join(nativeHome, '.rustup/toolchains/1.94.1-')), 'Root toolchain home substitution');
+  }
+  const compiler = spawnSync(paths.rustc, ['-vV'], { encoding: 'utf8' });
+  assert.equal(compiler.status, 0, 'Root compiler unavailable');
+  assert.match(compiler.stdout, /^release: 1\.94\.1$/m, 'Root compiler release drift');
+  assert.match(compiler.stdout, /^LLVM version: 21\.1\.8$/m, 'Root compiler LLVM drift');
+  assert.equal(sha256(compiler.stdout), proof.compilerSha256, 'Root compiler support identity drift');
+  const temporary = await mkdtemp(join(tmpdir(), 'deos-root-caller.'));
+  try {
+    const run = args => {
+      const result = spawnSync(paths.cargo, args, { cwd: workspace, encoding: 'utf8', maxBuffer: 128 * 1024 * 1024,
+        env: { ...process.env, RUSTC: paths.rustc, CARGO_TARGET_DIR: temporary, CARGO_TERM_COLOR: 'never',
+          CARGO_NET_OFFLINE: 'true', GIT_ALLOW_PROTOCOL: '', GIT_TERMINAL_PROMPT: '0' } });
+      assert.equal(result.status, 0, `current Root caller Cargo proof failed: ${result.error ?? result.stderr}`);
+      return result.stdout;
+    };
+    const beforeTree = run(rootCallerTreeArgs('all'));
+    assertRootCallerTree('all', beforeTree, proof, root);
+    await check(rootCallerSelection(metadata, { all: beforeTree }));
+    const current = JSON.parse(run(['metadata', '--locked', '--offline', '--all-features', '--format-version', '1']));
+    const graph = value => ({ packages: value.packages, workspace_members: value.workspace_members,
+      resolve: value.resolve, workspace_root: value.workspace_root });
+    assert.equal(canonical(graph(current)), canonical(graph(metadata)), 'Root stale full metadata/source graph');
+    const trees = Object.fromEntries(rootCallerTrees.map(role => [role, run(rootCallerTreeArgs(role))]));
+    for (const role of rootCallerTrees) assertRootCallerTree(role, trees[role], proof, root);
+    const selected = rootCallerSelection(current, trees);
+    await check(selected);
+    console.log('[INFO] Current Root0387 finite caller/public-operand source case enforced; no Native, package-wide constant-time, binary or launch clearance');
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+}
+
 function selfTestNativeInstances() {
   const selectedPackage = { name: 'quinn-udp', version: '0.6.1', source: registrySource };
   const absentPackage = { ...selectedPackage, version: '0.5.4' };
@@ -428,11 +897,433 @@ async function selfTestNativeConfiguration(directory) {
     (Object.keys(overrides).length + 12) + ' unchanged-policy negatives; additions/deletions and repeated drift checks');
 }
 
+async function selfTestRootCaller(directory, proofPath) {
+  const { mkdir, rename, symlink } = await import('node:fs/promises');
+  const root = join(directory, 'root-caller');
+  const workspace = join(root, 'template');
+  await mkdir(join(workspace, 'runtime/src'), { recursive: true });
+  await mkdir(join(workspace, 'pvf/src'), { recursive: true });
+  await mkdir(join(workspace, 'core/src'), { recursive: true });
+  const manifest = '[workspace]\nmembers=["runtime","pvf","core"]\nresolver="2"\n';
+  await writeFile(join(workspace, 'Cargo.toml'), manifest);
+  await writeFile(join(workspace, 'runtime/Cargo.toml'), '[package]\nname="deos-runtime"\nversion="0.0.0"\n[dependencies]\nsp-core={path="../core",default-features=false}\n[features]\ndefault=["sp-core/std"]\nruntime-benchmarks=[]\ntry-runtime=[]\n');
+  await writeFile(join(workspace, 'pvf/Cargo.toml'), '[package]\nname="deos-pvf-validation"\nversion="0.0.0"\n');
+  await writeFile(join(workspace, 'core/Cargo.toml'), '[package]\nname="sp-core"\nversion="43.0.0"\n[features]\nstd=[]\nfull_crypto=[]\n');
+  const source = join(workspace, 'runtime/src/lib.rs');
+  await writeFile(source, 'pub fn public_recover() {}\n');
+  await writeFile(join(workspace, 'core/src/lib.rs'), '');
+  await writeFile(join(workspace, 'pvf/src/main.rs'), 'fn main() {}\n');
+  let positives = 0, negatives = 0;
+  const rejected = async (fn, pattern) => { await assert.rejects(fn, pattern); negatives++; };
+  const run = args => {
+    const r = spawnSync('cargo', ['+1.94.1', ...args], { cwd: workspace, encoding: 'utf8',
+      env: { ...process.env, CARGO_TARGET_DIR: join(root, 'target'), CARGO_TERM_COLOR: 'never' } });
+    assert.equal(r.status, 0, r.stderr); return r.stdout;
+  };
+  run(['generate-lockfile', '--offline']);
+  const metadataArgs = ['metadata', '--locked', '--offline', '--all-features', '--format-version', '1'];
+  const graph = run(metadataArgs);
+  const inventory = await rootCallerInventory(join(workspace, 'runtime'), true);
+  const files = await Promise.all(inventory.map(async path => ({ path, sha256: sha256(await readFile(join(workspace, 'runtime', path))) })));
+  const checkFiles = async () => checkRootCallerFiles(join(workspace, 'runtime'), files,
+    await rootCallerInventory(join(workspace, 'runtime'), true));
+  await checkFiles(); positives++;
+  const trees = Object.fromEntries(rootCallerTrees.map(role => [role, run(rootCallerTreeArgs(role))]));
+  const proof = { trees: Object.fromEntries(Object.entries(trees).map(([role, tree]) => [role, sha256(tree.replaceAll(root, '$REPO'))])) };
+  for (const role of rootCallerTrees) { assertRootCallerTree(role, trees[role], proof, root); positives++; }
+  // These change a real caller without changing the graph or no-full_crypto.
+  for (const text of ['pub fn private_seed() { EcdsaPair::from_seed_slice(secret()); }',
+    'pub fn network() { NetworkWorker::new(secret()); }',
+    'pub fn network() { Litep2pNetworkBackend::new(secret()); }',
+    'pub fn extensions() { extensions.register(KeystoreExt::new(keys)); }']) {
+    await writeFile(source, text);
+    assert.equal(run(metadataArgs), graph, 'source-only counterfactual must preserve Cargo graph');
+    assert.equal(run(rootCallerTreeArgs('wasm-v1-normal')), trees['wasm-v1-normal']);
+    await rejected(checkFiles, /source hash drift/);
+  }
+  await writeFile(source, 'pub fn public_recover() {}\n');
+  await writeFile(join(workspace, 'runtime/src/new.rs'), 'fn secret() {}');
+  await rejected(checkFiles, /inventory drift/);
+  await rm(join(workspace, 'runtime/src/new.rs'));
+  await rename(source, source + '.renamed.rs');
+  await rejected(checkFiles, /inventory drift/);
+  await rename(source + '.renamed.rs', source);
+  const original = await readFile(source);
+  await rm(source);
+  await rejected(checkFiles, /inventory drift/);
+  await writeFile(source, original);
+  await writeFile(join(workspace, 'runtime/Cargo.toml'), '[package]\nname="substitution"\nversion="0.0.0"\n');
+  await rejected(checkFiles, /source hash drift/);
+  await writeFile(join(workspace, 'runtime/Cargo.toml'), '[package]\nname="deos-runtime"\nversion="0.0.0"\n[dependencies]\nsp-core={path="../core",default-features=false}\n[features]\ndefault=["sp-core/std"]\nruntime-benchmarks=[]\ntry-runtime=[]\n');
+  await rename(source, source + '.saved');
+  await symlink(source + '.saved', source);
+  await rejected(checkFiles, /symlink substitution/);
+  await rm(source);
+  await rename(source + '.saved', source);
+  for (const role of rootCallerTrees) {
+    const stale = structuredClone(proof); stale.trees[role] = '0'.repeat(64);
+    assert.throws(() => assertRootCallerTree(role, trees[role], stale, root), /tree drift/); negatives++;
+  }
+  // Even a matching metadata-derived hash cannot make a std guest a guest proof.
+  const stdTree = trees['native-runtime'];
+  await rejected(async () => assertRootCallerTree('wasm-v1-normal', stdTree,
+    { trees: { 'wasm-v1-normal': sha256(stdTree.replaceAll(root, '$REPO')) } }, root), /guest std/);
+  await rejected(async () => rootCallerTreeArgs('arbitrary-target'), /unsupported Root tree/);
+  checkRootCallerEnvironment({ HOME: nativeHome }); positives++;
+  const overrides = { RUSTFLAGS: '--cfg feature="dimpl"', CARGO_ENCODED_RUSTFLAGS: '--cfg\x1ffeature="dimpl"',
+    CARGO_PROFILE_PRODUCTION_LTO: 'off', CARGO_PROFILE_PRODUCTION_CODEGEN_UNITS: '8',
+    CARGO_BUILD_TARGET: 'other', CARGO_BUILD_RUSTFLAGS: '--cfg secret', RUSTC: '/tmp/rustc', RUSTC_WRAPPER: '/tmp/wrapper',
+    RUSTC_BOOTSTRAP: '1', RUSTDOCFLAGS: '--cfg secret', WASM_BUILD_TYPE: 'debug', WASM_BUILD_RUSTFLAGS: '--cfg secret',
+    SKIP_WASM_BUILD: '1', RUSTUP_TOOLCHAIN: 'stable', HOME: '/other', CARGO_HOME: '.cargo', RUSTUP_HOME: '.rustup' };
+  for (const [key, value] of Object.entries(overrides)) {
+    assert.throws(() => checkRootCallerEnvironment({ HOME: nativeHome, [key]: value }), /unsupported Root/); negatives++;
+  }
+  const cargoHome = join(root, 'cargo-home');
+  await mkdir(cargoHome);
+  const configCheck = () => checkRootCallerConfiguration(workspace, cargoHome);
+  await configCheck(); positives++;
+  for (const path of [join(workspace, '.cargo/config'), join(workspace, '.cargo/config.toml'),
+    join(root, '.cargo/config'), join(root, '.cargo/config.toml'), join(cargoHome, 'config'), join(cargoHome, 'config.toml')]) {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, '[build]\nrustflags=["--cfg", "secret"]\n');
+    await rejected(configCheck, /unreviewed Root Cargo configuration/);
+    await rm(path);
+    await configCheck();
+  }
+  await checkFiles(); positives++;
+  if (proofPath) {
+    const actual = await readJson(proofPath);
+    validateRootCallerProof(actual, false); positives++;
+    for (const mutation of [p => { p.target = 'x86_64-unknown-linux-gnu'; }, p => { p.features = 'default'; },
+      p => { delete p.trees['wasm-unknown-extended']; }, p => { p.trees.all = '0'.repeat(64); },
+      p => { p.packages.pop(); }, p => { p.packages[0].source = registrySource; },
+      p => { p.advisory.sha256 = '0'.repeat(64); }, p => { p.compilerSha256 = '0'.repeat(64); },
+      p => { p.profile = 'debug'; }, p => { p.inputs.pop(); }, p => { p.packages[0].files.pop(); },
+      p => { p.workspaceRoot = '/native/sdk'; }, p => { p.cargoArgs = ['--config', 'secret']; }]) {
+      const changed = structuredClone(actual); mutation(changed);
+      assert.throws(() => validateRootCallerProof(changed, false)); negatives++;
+    }
+    for (const invalid of [undefined, {}, { packages: actual.packages }]) {
+      assert.throws(() => validateRootCallerProof(invalid, false)); negatives++;
+    }
+    assert.throws(() => validateRootCallerProof(actual, true), /cannot transfer/); negatives++;
+    const actualRoot = dirname(actual.workspaceRoot);
+    const supplied = spawnSync('cargo', ['+1.94.1', ...metadataArgs], { cwd: actual.workspaceRoot, encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 });
+    assert.equal(supplied.status, 0, supplied.stderr);
+    const entry = { ecosystem: 'cargo', id: 'RUSTSEC-2026-0387', reachability: 'source-prerequisite-excluded', sourceCallerRoot: actual };
+    const findings = [{ advisory: { id: entry.id }, package: { name: 'crypto-bigint', version: '0.5.5', source: registrySource } }];
+    const metadata = JSON.parse(supplied.stdout);
+    await enforceRootCaller(entry, findings, metadata, actualRoot,
+      join(actual.workspaceRoot, 'Cargo.lock'), await readFile(join(actual.workspaceRoot, 'Cargo.lock'), 'utf8'), false);
+    positives++;
+    const actualTrees = Object.fromEntries(rootCallerTrees.map(role => {
+      const result = spawnSync('cargo', ['+1.94.1', ...rootCallerTreeArgs(role)],
+        { cwd: actual.workspaceRoot, encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 });
+      assert.equal(result.status, 0, result.stderr);
+      return [role, result.stdout];
+    }));
+    const selected = rootCallerSelection(metadata, actualTrees);
+    for (const name of ['cumulus-pallet-xcmp-queue', 'frame-system', 'sp-application-crypto']) {
+      const pkg = metadata.packages.find(p => p.name === name);
+      assert.ok(selected.has(pkg.id) && actual.packages.some(p => p.id === pkg.id), `Root dependency consumer missing: ${name}`);
+      const missing = { packages: actual.packages.filter(p => p.id !== pkg.id) };
+      await assert.rejects(() => checkRootCallerPackages(missing, metadata, actualRoot, selected), /coverage required/);
+    }
+    console.log('[SUCCESS] Actual Root consumer coverage: local XCMP, registry frame-system and sp-application-crypto included; each omitted binding rejected without source mutation');
+    for (const change of [p => { p.source = 'registry+other'; }, p => { p.manifest_path += '.other'; },
+      p => { p.id += '-other'; }]) {
+      const changed = structuredClone(metadata);
+      change(changed.packages.find(p => p.id === actual.packages[0].id));
+      await rejected(() => checkRootCallerPackages(actual, changed, actualRoot, selected),
+        /coverage required|substitution|package ID missing|package identity mismatch|package\/node missing/);
+    }
+    for (const change of [e => { e.reachability = 'source-backport-reviewed'; },
+      e => { e.sourceCallerNative = {}; }, e => { e.id = 'RUSTSEC-OTHER'; }]) {
+      const changed = structuredClone(entry); change(changed);
+      assert.throws(() => assertRootCallerFindings(changed, findings, metadata)); negatives++;
+    }
+    for (const source of ['registry+other', 'git+other']) {
+      const changed = structuredClone(findings); changed[0].package.source = source;
+      assert.throws(() => assertRootCallerFindings(entry, changed, metadata), /package\/source mismatch/); negatives++;
+    }
+  }
+  console.log(`[SUCCESS] Root caller self-test: ${positives} positive, ${negatives} negative; isolated functional Cargo fixtures${proofPath ? ' and pinned current Root baseline' : '; current Root baseline requires optional reviewed proof argument'}`);
+}
+
+async function selfTestRootConsumers(directory) {
+  const { mkdir, rename } = await import('node:fs/promises');
+  const root = join(directory, 'consumers');
+  const workspace = join(root, 'template');
+  const put = async (path, text) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, text); };
+  await put(join(workspace, 'Cargo.toml'), '[workspace]\nmembers=["runtime","pvf"]\nexclude=["vendor/core","vendor/relay","vendor/direct","vendor/transitive","vendor/macro","vendor/proc","vendor/generator"]\nresolver="2"\n');
+  const packages = [
+    ['runtime', 'deos-runtime', '[dependencies]\ntransitive={path="../vendor/transitive"}\n[features]\ndefault=[]\nruntime-benchmarks=[]\ntry-runtime=[]\n', 'pub use transitive::*;'],
+    ['pvf', 'deos-pvf-validation', '', 'pub fn offline() {}'],
+    ['vendor/core', 'sp-core', '[workspace]\n[features]\nstd=[]\nfull_crypto=[]\n', '#![no_std]\npub mod ecdsa { pub struct Pair(pub [u8;32]); impl Pair { pub fn from_seed_slice(seed: &[u8]) -> Result<Self, ()> { let mut out=[0;32]; if seed.len()!=32 { return Err(()); } out.copy_from_slice(seed); Ok(Self(out)) } }'],
+    ['vendor/relay', 'relay', '[workspace]\n[dependencies]\nsp-core={path="../core",default-features=false}\n', 'pub use sp_core;'],
+    ['vendor/direct', 'direct', '[workspace]\n[dependencies]\nrelay={path="../relay"}\nmacro-provider={path="../macro"}\nproc-provider={path="../proc"}\n[build-dependencies]\ngenerator={path="../generator"}\n', 'pub use relay::sp_core;'],
+    ['vendor/transitive', 'transitive', '[workspace]\n[dependencies]\ndirect={path="../direct"}\n', 'pub use direct::sp_core;'],
+    ['vendor/macro', 'macro-provider', '[workspace]\n', '#[macro_export] macro_rules! seed { ($s:expr) => { sp_core::ecdsa::Pair::from_seed_slice($s) }; }'],
+    ['vendor/proc', 'proc-provider', '[workspace]\n[lib]\nproc-macro=true\n', '#[proc_macro] pub fn seed(_: proc_macro::TokenStream) -> proc_macro::TokenStream { "pub fn public() {}".parse().unwrap() }'],
+    ['vendor/generator', 'generator', '[workspace]\n', "pub fn tokens() -> &'static str { include_str!(\"../constructor.tokens\") }"],
+  ];
+  for (const [path, name, manifest, source] of packages) {
+    await put(join(workspace, path, 'Cargo.toml'), `[package]\nname="${name}"\nversion="0.0.0"\nedition="2021"\n${manifest}`);
+    await put(join(workspace, path, 'src/lib.rs'), source);
+  }
+  await put(join(workspace, 'vendor/direct/build.rs'), 'fn main() { let _ = generator::tokens(); }');
+  await put(join(workspace, 'vendor/generator/constructor.tokens'), 'pub fn public() {}');
+  const run = args => {
+    const result = spawnSync('cargo', ['+1.94.1', ...args], { cwd: workspace, encoding: 'utf8',
+      env: { ...process.env, CARGO_TARGET_DIR: join(root, 'target'), CARGO_TERM_COLOR: 'never' } });
+    assert.equal(result.status, 0, result.stderr); return result.stdout;
+  };
+  run(['generate-lockfile', '--offline']);
+  const metadataArgs = ['metadata', '--locked', '--offline', '--all-features', '--format-version', '1'];
+  const raw = run(metadataArgs);
+  const metadata = JSON.parse(raw);
+  const trees = Object.fromEntries(rootCallerTrees.map(role => [role, run(rootCallerTreeArgs(role))]));
+  const treeProof = { trees: Object.fromEntries(Object.entries(trees).map(([role, tree]) => [role, sha256(tree.replaceAll(root, '$REPO'))])) };
+  for (const role of rootCallerTrees) assertRootCallerTree(role, trees[role], treeProof, root);
+  const selected = rootCallerSelection(metadata, trees);
+  const required = rootCallerBoundary(metadata, selected, ['sp-core@0.0.0']);
+  assert.equal(required.size, packages.length);
+  const proof = { packages: [] };
+  for (const pkg of metadata.packages) {
+    const owner = dirname(pkg.manifest_path);
+    proof.packages.push({ id: pkg.id, files: await Promise.all((await rootCallerInventory(owner, false)).map(async path =>
+      ({ path, sha256: sha256(await readFile(join(owner, path))) }))) });
+  }
+  const check = async (candidate = proof) => {
+    assertRootCallerCoverage(candidate, rootCallerBoundary(metadata, selected, ['sp-core@0.0.0']));
+    for (const review of candidate.packages) {
+      const owner = dirname(metadata.packages.find(p => p.id === review.id).manifest_path);
+      await checkRootCallerFiles(owner, review.files, await rootCallerInventory(owner, false));
+    }
+  };
+  let positives = 0, negatives = 0;
+  const unchanged = () => {
+    assert.equal(run(metadataArgs), raw, 'nonworkspace mutation changed metadata/features');
+    for (const role of rootCallerTrees) assert.equal(run(rootCallerTreeArgs(role)), trees[role], `nonworkspace mutation changed ${role}`);
+  };
+  await check(); positives++;
+  for (const name of ['relay', 'direct', 'transitive', 'macro-provider', 'proc-provider', 'generator']) {
+    const pkg = metadata.packages.find(p => p.name === name);
+    assert.ok(!metadata.workspace_members.includes(pkg.id), 'consumer fixture must be nonworkspace');
+    await assert.rejects(() => check({ packages: proof.packages.filter(p => p.id !== pkg.id) }), /coverage required/); negatives++;
+  }
+  for (const path of ['vendor/relay', 'vendor/direct', 'vendor/transitive']) {
+    const source = join(workspace, path, 'src/lib.rs');
+    const original = await readFile(source);
+    await writeFile(source, Buffer.concat([original, Buffer.from('\npub fn newly_secret() { let _ = sp_core::ecdsa::Pair::from_seed_slice(&[7u8;32]); }\n')]));
+    unchanged();
+    await assert.rejects(check, /source hash drift/); negatives++;
+    await writeFile(source, original);
+  }
+  for (const path of ['vendor/macro', 'vendor/proc']) {
+    const source = join(workspace, path, 'src/lib.rs');
+    const original = await readFile(source);
+    const changed = original.toString().replace('pub fn public() {}',
+      'pub fn secret() { let _ = sp_core::ecdsa::Pair::from_seed_slice(&[7;32]); }')
+      .replace('from_seed_slice($s)', 'from_seed_slice(&[8;32])');
+    assert.notEqual(changed, original.toString());
+    await writeFile(source, changed);
+    unchanged(); await assert.rejects(check, /source hash drift/); negatives++;
+    await writeFile(source, original);
+  }
+  const extra = join(workspace, 'vendor/transitive/src/added.rs');
+  await writeFile(extra, 'pub fn seed() { let _ = crate::sp_core::ecdsa::Pair::from_seed_slice(&[9;32]); }');
+  unchanged(); await assert.rejects(check, /inventory drift/); negatives++;
+  await rename(extra, extra + '.renamed');
+  await assert.rejects(check, /inventory drift/); negatives++;
+  await rm(extra + '.renamed');
+  const nestedTarget = join(workspace, 'vendor/transitive/src/target/seed.rs');
+  await put(nestedTarget, 'pub fn seed() {}');
+  await assert.rejects(check, /inventory drift/); negatives++;
+  await rm(dirname(nestedTarget), { recursive: true });
+  const generatorInput = join(workspace, 'vendor/generator/constructor.tokens');
+  await writeFile(generatorInput, 'pub fn newly_secret() { let _ = sp_core::ecdsa::Pair::from_seed_slice(&[7;32]); }');
+  unchanged(); await assert.rejects(check, /source hash drift/); negatives++;
+  await writeFile(generatorInput, 'pub fn public() {}');
+  const removed = join(workspace, 'vendor/relay/src/lib.rs');
+  const original = await readFile(removed);
+  await rm(removed); await assert.rejects(check, /inventory drift/); negatives++;
+  await writeFile(removed, original);
+  // The same selector refuses source ambiguity, unknown orphans and source swaps.
+  for (const mutate of [m => { m.packages.push({ ...m.packages[0] }); },
+    m => { m.packages[0].manifest_path = join(dirname(m.packages[0].manifest_path), 'other/Cargo.toml'); }]) {
+    const changed = structuredClone(metadata); mutate(changed);
+    assert.throws(() => rootCallerSelection(changed, trees), /identity mismatch/); negatives++;
+  }
+  assert.throws(() => rootCallerSelection(metadata, { all: '0unknown v0.0.0|\n' }), /identity mismatch/); negatives++;
+  await check(); positives++;
+  console.log(`[SUCCESS] Root nonworkspace consumer self-test: ${positives} positive, ${negatives} negative; direct/transitive public constructors, reexports, ordinary macros, build generator inputs; unchanged metadata and all seven trees`);
+}
+
+async function selfTestNativePreparation(directory) {
+  const { mkdir, symlink } = await import('node:fs/promises');
+  let positives = 0;
+  let negatives = 0;
+  const reject = (fn, pattern) => { assert.throws(fn, pattern); negatives++; };
+  const rejectAsync = async (fn, pattern) => { await assert.rejects(fn, pattern); negatives++; };
+  const root = join(directory, 'source-preparation');
+  const sdk = join(root, 'sdk');
+  const vendor = join(root, 'vendor');
+  const external = join(root, 'external');
+  for (const owner of [sdk, vendor, external]) await mkdir(owner, { recursive: true });
+  await writeFile(join(sdk, 'Cargo.toml'), 'profile and target inputs');
+  await writeFile(join(vendor, 'backport.rs'), 'reviewed correction');
+  for (const name of ['direct.rs', 'transitive.rs', 'macro.rs', 'generator.dat'])
+    await writeFile(join(external, name), 'reviewed consumer input');
+  const pkg = { id: 'registry#zstd-safe@6.0.6', name: 'zstd-safe', version: '6.0.6', source: registrySource,
+    manifest_path: join(external, 'Cargo.toml') };
+  const metadata = { packages: [pkg] };
+  const selected = new Map([[pkg.id, ['std']]]);
+  const seal = { sourceRoot: root, sourceInventories: { sdk: await nativePreparationInventory(sdk),
+    vendor: await nativePreparationInventory(vendor) }, consumers: [{ id: pkg.id, root: external, owner: null,
+      files: await nativePreparationInventory(external) }] };
+  const row = { id: 'RUSTSEC-2026-0397', packageId: pkg.id, name: pkg.name, version: pkg.version,
+    source: registrySource, rawSources: [registrySource], decision: 'selected-prerequisite' };
+  const entry = { id: row.id, ecosystem: 'cargo', reachability: 'source-prerequisite-excluded',
+    sourceCallerNative: { stage: nativePreparationStage, proof: 'nativeSourcePreparationProof' } };
+  const findings = [{ advisory: { id: row.id }, package: { name: pkg.name, version: pkg.version, source: registrySource } }];
+  const preflight = { schema: 1, stage: 'accepted-composition-source-preflight', capturedAt: 'fixture', qualification: 'UNQUALIFIED',
+    sourceRoot: root, workspaceRoot: sdk, evidenceRoot: root, identity: {},
+    role: { package: nativeRole.package, features: [nativeRole.features], target: nativeRole.target, edges: nativeRole.edges,
+      toolchain: nativeRole.toolchain, profile: nativeRole.profile },
+    configuration: { home: nativeHome, cargoHome: join(nativeHome, '.cargo'), rustupHome: join(nativeHome, '.rustup'),
+      configs: [[join(sdk, '.cargo/config.toml'), nativeCargoConfigSha256]] }, sharedCaches: [], producers: [],
+    proofs: nativePreparationProofFiles.map(path => [path, '0'.repeat(64)]) };
+  const proof = { schema: 1, stage: nativePreparationStage, preflight,
+    audits: { actual: 'fixture', registryEquivalent: 'fixture', versionLock: 'fixture' },
+    review: { composition: 'fixture', dnsMisc: 'fixture', io: 'fixture', provider: 'fixture', scope: 'fixture' }, rows: [row] };
+  validateNativePreparationProof(proof, true, sha256(canonical(proof))); positives++;
+  const audits = { cargo: { database: 'fixed', settings: [] }, projectedAudit: { database: 'fixed', settings: [] }, projectedLock: 'fixed' };
+  const auditProof = { audits: { actual: sha256(canonical(audits.cargo)),
+    registryEquivalent: sha256(canonical(audits.projectedAudit)), versionLock: sha256(audits.projectedLock) } };
+  assertNativePreparationAudits(auditProof, audits); positives++;
+  for (const change of [a => { a.cargo.database = 'new'; }, a => { a.projectedAudit.settings = ['ignore']; },
+    a => { a.projectedLock = 'new'; }]) {
+    const a = structuredClone(audits); change(a);
+    reject(() => assertNativePreparationAudits(auditProof, a), /audit\/database\/settings identity drift/);
+  }
+  await rejectAsync(() => boundFile(root, { path: 'source-tools.txt', sha256: '0'.repeat(64) }), /ENOENT/);
+  await writeFile(join(root, 'source-tools.txt'), 'compiler and default cfg');
+  const toolProof = { path: 'source-tools.txt', sha256: sha256('compiler and default cfg') };
+  await boundFile(root, toolProof); positives++;
+  await writeFile(join(root, 'source-tools.txt'), 'injected cfg');
+  await rejectAsync(() => boundFile(root, toolProof), /source hash drift/);
+  await rm(join(root, 'source-tools.txt'));
+  const policyPath = join(root, 'policy.json');
+  const sharedPath = join(root, 'shared.json');
+  await writeFile(policyPath, '{}');
+  await writeFile(sharedPath, '{}');
+  assert.deepEqual((await loadNativePreparationProof({ path: 'shared.json' }, policyPath)).proof, {}); positives++;
+  for (const path of ['../shared.json', sharedPath, './shared.json'])
+    await rejectAsync(() => loadNativePreparationProof({ path }, policyPath), /canonical owner-relative|outside owner/);
+  await rejectAsync(() => loadNativePreparationProof({ path: 'sdk' }, policyPath), /nonregular file/);
+  await symlink('shared.json', join(root, 'shared-link.json'));
+  await rejectAsync(() => loadNativePreparationProof({ path: 'shared-link.json' }, policyPath), /symlink/);
+  const fifo = join(root, 'shared.fifo');
+  const created = spawnSync('mkfifo', [fifo], { encoding: 'utf8', timeout: 3000 });
+  assert.equal(created.status, 0, `FIFO fixture unavailable: ${created.error ?? created.stderr}`);
+  // Bound the regression in a child: a read-before-stat bug must fail, not hang the suite.
+  const fifoCheck = spawnSync(process.execPath, ['--input-type=module', '-e', `
+import assert from 'node:assert/strict';
+import { readFile, realpath, lstat } from 'node:fs/promises';
+import { dirname, resolve, relative } from 'node:path';
+import { createHash } from 'node:crypto';
+const sha256 = value => createHash('sha256').update(value).digest('hex');
+${exactKeys.toString()}
+${regularOwnerFile.toString()}
+${boundFile.toString()}
+${loadNativePreparationProof.toString()}
+await assert.rejects(() => loadNativePreparationProof({ path: 'shared.fifo' }, ${JSON.stringify(policyPath)}), /nonregular file/);
+`], { encoding: 'utf8', timeout: 3000 });
+  assert.equal(fifoCheck.error, undefined, `FIFO proof refusal hung: ${fifoCheck.error}`);
+  assert.equal(fifoCheck.status, 0, `FIFO proof refusal failed: ${fifoCheck.stderr}`); negatives++;
+  // No fixture or caller hash can become production authority.
+  reject(() => validateNativePreparationProof(proof, true), /unreviewed Native/);
+  reject(() => validateNativePreparationProof(proof, false, sha256(canonical(proof))), /cannot transfer to Root/);
+  for (const change of [p => { delete p.preflight; }, p => { p.unknown = true; }, p => { p.stage = 'BUILD'; },
+    p => { p.schema = 2; }]) {
+    const p = structuredClone(proof); change(p);
+    reject(() => validateNativePreparationProof(p, true, sha256(canonical(p))), /unknown or missing|unknown Native/);
+  }
+  for (const change of [p => { p.preflight.stage = 'prepared'; }, p => { p.preflight.proofs.pop(); },
+    p => { p.preflight.proofs = p.preflight.proofs.filter(([name]) => name !== 'source-tools.txt'); },
+    p => { p.preflight.unknown = true; }, p => { p.audits.unknown = true; }, p => { p.preflight.role.target = 'all'; },
+    p => { p.preflight.role.profile = 'release'; }, p => { p.preflight.configuration.home = '.'; },
+    p => { p.rows[0].id = 'RUSTSEC-2026-0387'; }, p => { p.rows[0].decision = 'safe'; }]) {
+    const p = structuredClone(proof); change(p);
+    reject(() => validateNativePreparationProof(p, true, sha256(canonical(p))), /unknown|mismatch|B approval|proof coverage/);
+  }
+  assertNativePreparationInstances([entry], [row], findings, metadata, selected); positives++;
+  const absent = { ...row, decision: 'normal-absent' };
+  assertNativePreparationInstances([entry], [absent], findings, metadata, new Map()); positives++;
+  for (const [rows, data, selection, pattern] of [
+    [[row, row], metadata, selected, /duplicate or overlapping/],
+    [[row, absent], metadata, selected, /duplicate or overlapping/],
+    [[absent], metadata, selected, /selected\/normal-absent/],
+    [[row], { packages: [] }, selected, /actual role package ID/],
+    [[row], { packages: [{ ...pkg, source: null }] }, selected, /package\/source mismatch/],
+    [[{ ...row, rawSources: [registrySource, registrySource] }], metadata, selected, /coverage mismatch/],
+    [[{ ...row, id: 'stale' }], metadata, selected, /exact advisory coverage/],
+  ]) reject(() => assertNativePreparationInstances([entry], rows, findings, data, selection), pattern);
+  for (const change of [e => { e.sourceCallerNative.stage = 'UNKNOWN'; }, e => { e.sourceCallerNative.proof = 'arbitrary'; },
+    e => { e.sourceCallerNative.sha256 = '0'.repeat(64); }, e => { e.reachability = 'lockfile-only'; }]) {
+    const e = structuredClone(entry); change(e);
+    reject(() => assertNativePreparationInstances([e], [row], findings, metadata, selected), /unknown|classification/);
+  }
+  await checkNativePreparationSeal(seal, metadata, selected); positives++;
+  for (const name of ['direct.rs', 'transitive.rs', 'macro.rs', 'generator.dat']) {
+    const path = join(external, name);
+    await writeFile(path, 'new unsafe operation; metadata/features/normal tree unchanged');
+    await rejectAsync(() => checkNativePreparationSeal(seal, metadata, selected), /external consumer source drift/);
+    await writeFile(path, 'reviewed consumer input');
+  }
+  for (const [owner, name] of [[sdk, 'new.rs'], [vendor, 'new.rs'], [external, 'new.rs']]) {
+    const path = join(owner, name);
+    await writeFile(path, 'new input');
+    await rejectAsync(() => checkNativePreparationSeal(seal, metadata, selected), /source drift/);
+    await rm(path);
+  }
+  await rm(join(external, 'direct.rs'));
+  await rejectAsync(() => checkNativePreparationSeal(seal, metadata, selected), /external consumer source drift/);
+  await symlink('transitive.rs', join(external, 'direct.rs'));
+  await rejectAsync(() => checkNativePreparationSeal(seal, metadata, selected), /external consumer source drift/);
+  await rm(join(external, 'direct.rs'));
+  await writeFile(join(external, 'direct.rs'), 'reviewed consumer input');
+  await checkNativePreparationSeal(seal, metadata, selected); positives++;
+  await writeFile(join(vendor, 'backport.rs'), 'lost source correction');
+  await rejectAsync(() => checkNativePreparationSeal(seal, metadata, selected), /vendor source drift/);
+  await writeFile(join(vendor, 'backport.rs'), 'reviewed correction');
+  await rejectAsync(() => checkNativePreparationSeal({ ...seal, consumers: [] }, metadata, selected), /consumer coverage/);
+  await rejectAsync(() => checkNativePreparationSeal({ ...seal, consumers: [...seal.consumers, ...seal.consumers] }, metadata, selected), /consumer coverage/);
+  const environment = { HOME: nativeHome, CARGO_HOME: join(nativeHome, '.cargo'), RUSTUP_HOME: join(nativeHome, '.rustup') };
+  checkNativePreparationEnvironment(environment); positives++;
+  for (const key of ['RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER', 'CARGO_PROFILE_PRODUCTION_LTO',
+    'CARGO_PROFILE_PRODUCTION_CODEGEN_UNITS', 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER', 'WASM_BUILD_TOOLCHAIN',
+    'SKIP_WASM_BUILD', 'RUST_TARGET_PATH', 'SUBSTRATE_RUNTIME_TARGET', 'HOME', 'CARGO_HOME', 'RUSTUP_HOME'])
+    reject(() => checkNativePreparationEnvironment({ ...environment, [key]: '.' }), /unsupported Native/);
+  assert.deepEqual(nativePreparationSelection(metadata, '0zstd-safe v6.0.6|std\n'), selected); positives++;
+  assert.deepEqual(nativePreparationSelection(metadata, '0zstd-safe v6.0.6|std\n1zstd-safe v6.0.6|alloc,std\n'),
+    new Map([[pkg.id, ['alloc', 'std']]])); positives++;
+  for (const [name, version, feature] of [['zstd-safe', '6.0.6', 'experimental'], ['zstd-safe', '6.0.6', 'zstdmt'],
+    ['zstd', '0.12.4', 'zdict_builder'], ['zstd-sys', '2.1.2', 'legacy'], ['hickory-resolver', '0.24.2', 'dnssec'],
+    ['hickory-proto', '0.24.4', 'text-parsing'], ['keccak', '0.1.4', 'asm'], ['rand', '0.8.5', 'log'], ['rand', '0.9.0', 'log']])
+    reject(() => nativePreparationSelection({ packages: [{ ...pkg, name, version }] }, `0${name} v${version}|${feature}\n`), /prerequisite activated/);
+  console.log(`[SUCCESS] Native SOURCEPREPARATION self-test: ${positives} positive, ${negatives} negative; source-only shared proof, full input seals, no binary receipts`);
+}
+
 if (process.argv[2] === '--self-test') {
-  assert.equal(process.argv.length, 3);
+  assert.ok([3, 4].includes(process.argv.length), 'Usage: --self-test [REVIEWED_ROOT_PROOF_JSON]');
   const directory = await mkdtemp(join(tmpdir(), 'deos-dependency-self-test.'));
+  await selfTestNativePreparation(directory);
   await selfTestNativeConfiguration(directory);
   selfTestNativeInstances();
+  await selfTestRootCaller(directory, process.argv[3]);
+  await selfTestRootConsumers(directory);
   const date = new Date().toISOString().slice(0, 10);
   const advisory = 'RUSTSEC-SELFTEST-0001';
   const exception = {
@@ -738,7 +1629,7 @@ if (externalWorkspace) arguments_.pop();
 const [cargoPath, projectedAuditPath, npmPath, exceptionPath, packageLockPath,
   lockPath, metadataPath, projectedLockPath, repoRoot] = arguments_;
 if (arguments_.length !== 9) {
-  console.error('Usage: dependency-provenance.mjs ACTUAL_AUDIT PROJECTED_AUDIT NPM_AUDIT EXCEPTIONS PACKAGE_LOCK ACTUAL_LOCK FULL_METADATA PROJECTED_LOCK REPO_ROOT [--external-workspace] | --project ACTUAL_LOCK FULL_METADATA TEMP_LOCK | --project-external-workspace ACTUAL_LOCK FULL_METADATA TEMP_LOCK | --self-test');
+  console.error('Usage: dependency-provenance.mjs ACTUAL_AUDIT PROJECTED_AUDIT NPM_AUDIT EXCEPTIONS PACKAGE_LOCK ACTUAL_LOCK FULL_METADATA PROJECTED_LOCK REPO_ROOT [--external-workspace] | --project ACTUAL_LOCK FULL_METADATA TEMP_LOCK | --project-external-workspace ACTUAL_LOCK FULL_METADATA TEMP_LOCK | --self-test [REVIEWED_ROOT_PROOF_JSON]');
   process.exit(2);
 }
 const [cargo, projectedAudit, npm, ledger, packageLock, lock, metadata, projectedLock] = await Promise.all([
@@ -811,6 +1702,14 @@ for (const finding of cargoFindings) {
   findings.add(`cargo:${finding.advisory.id}`);
 }
 
+// An affected local Root bigint cannot be waived with package files alone.
+const rootSources = ledger.exceptions.filter(e => e.sourceCallerRoot !== undefined ||
+  (!externalWorkspace && e.ecosystem === 'cargo' && e.id === 'RUSTSEC-2026-0387'));
+for (const entry of rootSources) {
+  assert.ok(!process.exitCode, 'invalid exception settings before Root caller proof');
+  await enforceRootCaller(entry, cargoFindings, metadata, repoRoot, lockPath, lock, externalWorkspace);
+}
+
 const rootAbsences = ledger.exceptions.filter(e => e.reachability === 'root-normal-build-absent' ||
   e.absentFromRootNormalBuild !== undefined);
 if (rootAbsences.length) {
@@ -822,9 +1721,20 @@ if (rootAbsences.length) {
 }
 
 const nativeSources = ledger.exceptions.filter(e => e.sourceCallerNative !== undefined);
-if (nativeSources.length) {
-  assert.ok(!process.exitCode, 'invalid exception settings before Native source proof');
-  await enforceNativeSources(nativeSources, cargoFindings, metadata, repoRoot, lockPath, lock, externalWorkspace);
+const nativePreparation = nativeSources.filter(e => e.sourceCallerNative?.stage === nativePreparationStage);
+if (nativePreparation.length) {
+  assert.equal(nativeSources.length, nativePreparation.length, 'mixed Native proof stages');
+  assert.equal(ledger.exceptions.filter(e => e.ecosystem === 'cargo').length, nativePreparation.length,
+    'Native preparation cannot mix unbound Cargo decisions or approve Native0387 B');
+  assert.ok(!process.exitCode, 'invalid exception settings before Native preparation proof');
+  await enforceNativePreparation(nativePreparation, ledger.nativeSourcePreparationProof, cargoFindings, metadata,
+    repoRoot, lockPath, lock, externalWorkspace, exceptionPath, { cargo, projectedAudit, projectedLock });
+} else {
+  assert.equal(ledger.nativeSourcePreparationProof, undefined, 'stale Native preparation proof');
+  if (nativeSources.length) {
+    assert.ok(!process.exitCode, 'invalid exception settings before Native source proof');
+    await enforceNativeSources(nativeSources, cargoFindings, metadata, repoRoot, lockPath, lock, externalWorkspace);
+  }
 }
 
 // A future independent review may bind a backport decision to these exact files.
@@ -848,7 +1758,8 @@ for (const entry of ledger.exceptions.filter(e => e.excludedFeatures !== undefin
     }
   }
 }
-for (const entry of ledger.exceptions.filter(e => e.reachability === 'source-backport-reviewed' || e.reviewedSources !== undefined)) {
+for (const entry of ledger.exceptions.filter(e => !nativePreparation.includes(e) &&
+  (e.reachability === 'source-backport-reviewed' || e.reviewedSources !== undefined))) {
   assert.equal(entry.ecosystem, 'cargo', 'source review requires Cargo finding');
   const affected = cargoFindings.filter(f => f.advisory.id === entry.id);
   const packages = new Map(affected.map(f => [`${f.package.name}@${f.package.version}`, f.package]));
