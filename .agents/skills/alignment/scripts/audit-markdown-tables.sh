@@ -71,7 +71,7 @@ run_audit() {
     local file path
     for file in "${FILES[@]}"; do
         case "$file" in
-            .agents/skills/wiki-sync/references/okf-*.md|"$PROJECT_ROOT"/.agents/skills/wiki-sync/references/okf-*.md)
+            wiki/references/okf-*.md|"$PROJECT_ROOT"/wiki/references/okf-*.md)
                 log_info "Skipping immutable upstream reference: $file"
                 continue
                 ;;

@@ -128,6 +128,7 @@ pub(crate) fn market_execution_failure(error: DispatchError) -> pallet_deos_rout
     MarketError::<Runtime>::ProvidedMaximumNotSufficientForSwap.into(),
     MarketError::<Runtime>::BelowMinimum.into(),
     MarketError::<Runtime>::PoolEmpty.into(),
+    MarketError::<Runtime>::PoolUnavailable.into(),
   ];
   if retryable.contains(&error) {
     router_adapter_failure(

@@ -43,7 +43,10 @@ Notes:
   build root stabilizes Cargo crate identity; canonical virtual source,
   Cargo-home, and Rustup-home prefixes remove machine paths from Wasm bytes.
   A concurrent or stale canonical build root fails closed rather than sharing
-  mutable build state.
+  mutable build state. CARGO_TARGET_DIR is honored for Cargo output discovery;
+  relative values are resolved from the staged template working directory.
+  The script owns WASM_BUILD_WORKSPACE_HINT and FORCE_WASM_BUILD to bind the
+  staged lock even with an external target cache; inherited values are refused.
 EOF
 }
 
@@ -102,8 +105,16 @@ resolve_output() {
     fi
 }
 
+check_owned_wasm_controls() {
+    if [[ -v WASM_BUILD_WORKSPACE_HINT || -v FORCE_WASM_BUILD ]]; then
+        log_error "WASM_BUILD_WORKSPACE_HINT and FORCE_WASM_BUILD are owned by this build entrypoint"
+        return 1
+    fi
+}
+
 check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
+    check_owned_wasm_controls
     require_directory "$TEMPLATE_DIR" "Template directory"
     hydrate_local_tool_paths
     require_commands rustc cargo rustup du cut sha256sum tar mkdir rm cp mv link dirname basename mktemp
@@ -163,6 +174,9 @@ configure_reproducible_wasm_paths() {
         [[ ! "$path" =~ [[:space:]] ]] || { log_error "Reproducible Wasm path roots must not contain whitespace: $path"; exit 1; }
     done
     export WASM_BUILD_TYPE=production
+    export WASM_BUILD_WORKSPACE_HINT="$BUILD_TEMPLATE_DIR"
+    # The SDK watches FORCE_WASM_BUILD, not the hint; keep their workspace identities paired.
+    export FORCE_WASM_BUILD="$WASM_BUILD_WORKSPACE_HINT"
     export WASM_BUILD_RUSTFLAGS="--remap-path-prefix=$BUILD_PROJECT_ROOT=/deos/source --remap-path-prefix=$cargo_home=/deos/cargo --remap-path-prefix=$rustup_home=/deos/rustup"
     export CARGO_INCREMENTAL=0
     log_success "Runtime Wasm uses the production profile and canonical build identity"
@@ -170,8 +184,10 @@ configure_reproducible_wasm_paths() {
 
 build_runtime() {
     phase_banner "Step 4: Build runtime"
-    local built_wasm
-    built_wasm="$BUILD_TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
+    local built_wasm target_dir
+    target_dir="${CARGO_TARGET_DIR:-$BUILD_TEMPLATE_DIR/target}"
+    [[ "$target_dir" == /* ]] || target_dir="$BUILD_TEMPLATE_DIR/$target_dir"
+    built_wasm="$target_dir/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
     log_info "Building parachain runtime (this may take several minutes)..."
 
     # substrate-wasm-builder treats any presence of SKIP_WASM_BUILD, including `0`, as skip.
@@ -181,7 +197,7 @@ build_runtime() {
         "Build parachain runtime" \
         "" \
         "cd '$BUILD_TEMPLATE_DIR' && cargo build --release -p deos-runtime --locked"
-    [[ -f "$built_wasm" ]] || { log_error "Staged runtime Wasm is unavailable: $built_wasm"; exit 1; }
+    [[ -f "$built_wasm" ]] || { log_error "Built runtime Wasm is unavailable: $built_wasm"; exit 1; }
 
     publish_runtime_wasm "$built_wasm"
     log_success "Runtime Wasm atomically written from the canonical build root"
@@ -305,7 +321,48 @@ run_self_test() (
     shopt -s nullglob
     local leftovers=("$fixture"/.deos_runtime.compact.compressed.wasm.*)
     [[ ${#leftovers[@]} == 0 ]]
-    log_success "Runtime output self-test passed: exclusive creation/races, default replacement and cleanup; no build"
+    (
+        unset WASM_BUILD_WORKSPACE_HINT FORCE_WASM_BUILD
+        check_owned_wasm_controls
+        WASM_BUILD_WORKSPACE_HINT=''
+        if check_owned_wasm_controls >/dev/null 2>&1; then exit 1; fi
+        unset WASM_BUILD_WORKSPACE_HINT
+        FORCE_WASM_BUILD=''
+        if check_owned_wasm_controls >/dev/null 2>&1; then exit 1; fi
+        unset FORCE_WASM_BUILD
+        BUILD_PROJECT_ROOT="$fixture/locked-source"
+        BUILD_TEMPLATE_DIR="$BUILD_PROJECT_ROOT/template"
+        configure_reproducible_wasm_paths
+        [[ "$WASM_BUILD_WORKSPACE_HINT" == "$BUILD_TEMPLATE_DIR" ]]
+        [[ "$FORCE_WASM_BUILD" == "$WASM_BUILD_WORKSPACE_HINT" ]]
+    )
+    local target_mode
+    for target_mode in default absolute relative; do
+        (
+            BUILD_TEMPLATE_DIR="$fixture/$target_mode/staged/template"
+            local expected_target
+            case "$target_mode" in
+                default) unset CARGO_TARGET_DIR; expected_target="$BUILD_TEMPLATE_DIR/target" ;;
+                absolute) CARGO_TARGET_DIR="$fixture/$target_mode/cache"; expected_target="$CARGO_TARGET_DIR" ;;
+                relative) CARGO_TARGET_DIR="relative cache"; expected_target="$BUILD_TEMPLATE_DIR/$CARGO_TARGET_DIR" ;;
+            esac
+            local wasm_suffix="release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
+            mkdir -p "$BUILD_TEMPLATE_DIR/target/$(dirname "$wasm_suffix")"
+            printf 'stale staged output\n' >"$BUILD_TEMPLATE_DIR/target/$wasm_suffix"
+            configure_reproducible_wasm_paths() { :; }
+            run_shell_step() {
+                [[ "$1" == "Build parachain runtime" && -z "$2" ]]
+                [[ "$3" == "cd '$BUILD_TEMPLATE_DIR' && cargo build --release -p deos-runtime --locked" ]]
+                mkdir -p "$expected_target/$(dirname "$wasm_suffix")"
+                cp "$fixture/source.wasm" "$expected_target/$wasm_suffix"
+            }
+            OUTPUT_EXCLUSIVE=1
+            OUTPUT_WASM_PATH="$fixture/$target_mode/result.wasm"
+            build_runtime
+            cmp "$fixture/source.wasm" "$OUTPUT_WASM_PATH"
+        )
+    done
+    log_success "Runtime output self-test passed: exclusive creation/races, Cargo target/lock routing, default replacement and cleanup; no build"
 )
 
 main() {

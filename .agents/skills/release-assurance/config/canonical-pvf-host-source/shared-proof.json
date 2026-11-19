@@ -1,0 +1,714 @@
+{
+  "schema": 1,
+  "stage": "CANONICALHOSTSOURCE",
+  "preflight": {
+    "workspaceRoot": "/home/llb/Repos/deos/template/tools/pvf-validation",
+    "evidenceRoot": "/home/llb/.local/state/deos/0.7.28-assets/02/host-case-r2-framework-notice",
+    "role": {
+      "package": "deos-pvf-validation",
+      "purpose": "source-only",
+      "features": "default",
+      "edges": "normal,build",
+      "target": "x86_64-unknown-linux-gnu",
+      "toolchain": "1.94.1",
+      "profile": "dev: opt0, debug0, nonincremental, unwind",
+      "support": "Finite public CLI including arbitrary guest Wasm, SCALE fixtures and opt-in CPU trace; secure default; explicit insecure-local and positive-only remain narrower; no Node/network/keypair/ETH signer or external-worker clearance"
+    },
+    "inputs": [
+      {
+        "path": "template/tools/pvf-validation/Cargo.toml",
+        "sha256": "18b98b79d79843a9e72cbf94016092f8b90f3656dfcb00799358bc933a2f180c"
+      },
+      {
+        "path": "template/tools/pvf-validation/Cargo.lock",
+        "sha256": "59630fe13ef8e2676aee9d216f7496c0480257aff06d044d83d39b90797c6404"
+      },
+      {
+        "path": "template/rust-toolchain.toml",
+        "sha256": "65c209bb7f6bb23e50e17220955aa8f818e55973436ea7dc93e1cb7ec5afe37e"
+      },
+      {
+        "path": "scripts/pvf-assurance.sh",
+        "sha256": "a8e072971b8a38c81e211c8cd6393b0977027fa9377acca175a2475a83792741"
+      },
+      {
+        "path": "scripts/_common.sh",
+        "sha256": "422af8868a255e5866f05b695b73874ff6294124233ed01569c214b169930eca"
+      },
+      {
+        "path": "template/tools/pvf-validation/src/main.rs",
+        "sha256": "c6bc01cb5029ce66e82913f170bfa2ad5eee514fb5440876e8c8232ac9bc3744"
+      },
+      {
+        "path": "template/tools/pvf-validation/src/cpu_trace.rs",
+        "sha256": "da7e07c81634d242b6c087f663b2ce202de2835d2b0d6543fec697da60de9a93"
+      },
+      {
+        "path": "template/tools/pvf-validation/src/cpu_trace_tests.rs",
+        "sha256": "45a6a053f2bb429f3c3d893229bc83d43ac0e8fda1914e991491dc7875aa8466"
+      },
+      {
+        "path": "template/tools/pvf-validation/src/proof_input_budget.rs",
+        "sha256": "a2f23b47b51e2e24ae101a6c4d0686e8bf86234f3339dbe100038e393ddff531"
+      },
+      {
+        "path": "template/tools/pvf-validation/src/tests.rs",
+        "sha256": "02e1f326b840d9134a963aa37c6cd7d36319063f68a83f4e9b87860761994d37"
+      }
+    ],
+    "proofs": [
+      {
+        "path": "after-metadata.json",
+        "sha256": "272a0195d184ab1daaf63f9e418dd45f4e5365570543cdeca0d58e408565824b"
+      },
+      {
+        "path": "after-linux-normal.tree",
+        "sha256": "5ab03c6e61adb9ac46e76ce2895aee971ee2f3304b3259218ac91f24fb7649cb"
+      },
+      {
+        "path": "after-all.tree",
+        "sha256": "f75f01d287e0859616421343ad0bd4146468ff980c55b3142e06d35644e41bab"
+      },
+      {
+        "path": "source-inventories.json",
+        "sha256": "5debddbbb9f4c5df43173b86dbc376b2869871db62e34b8d3b6e7949dbcbfc3e"
+      },
+      {
+        "path": "host-source-prerequisite-inputs.json",
+        "sha256": "792cae315139a15cea932c01dc2601ac3f8f3c50cf9e06689ea40c62b8ac0b03"
+      },
+      {
+        "path": "conditionRows-proposal.json",
+        "sha256": "0383e31fb6f4357618d51b8100877814f300a9d1317e55f512269ab681ea8654"
+      },
+      {
+        "path": "instance-dispositions.json",
+        "sha256": "e5acdd89990068412169346ec6a86dd77e51fe32856cd9125ff8b71dd233a8b0"
+      },
+      {
+        "path": "all-affected-and-added-archive-checks.json",
+        "sha256": "993c52161c6f12b3e0c7d7a8ca7ec3bbef65e83ad5c5bc7d53d459bdf110c769"
+      },
+      {
+        "path": "vendor-archive-deltas.json",
+        "sha256": "bd7655453af66ea72642ec46414e57249da2e4e4bcbe7420e05c02be9e094bc9"
+      },
+      {
+        "path": "source-case-proposals.md",
+        "sha256": "b5cad904abdc63c747648a6a1172a58f636b876d731c6c91af5bd617ebb8a2b9"
+      },
+      {
+        "path": "per-instance-handoff.md",
+        "sha256": "ea6cdd6e644f545ea2963db428e2a93baea5f6b95e943df1d721aab2d6e4e769"
+      },
+      {
+        "path": "host-case-delta.md",
+        "sha256": "36f762210a21b2a6a5c32d2b81fe5a13b490d4d42aa9002803ff8af720d28199"
+      }
+    ],
+    "supplement": {
+      "path": "inventory-supplement.json",
+      "sha256": "feec0fda14fda371fe13e67170d58cc4802ac786a88e5c9a3a889dc00227394e"
+    }
+  },
+  "audits": {
+    "actual": "a3d9566a76c9408e4d36b3fde13490dde558892c10ca69bf3714fb13b255498e",
+    "registryEquivalent": "7b324e27ac08f5bdb94c6b8a5c5d023a7854639d003bd235a359aaba4b72ebac",
+    "versionLock": "1bfd89b2ac1218764c8279b928cfd7949bd638235542abd9b25f646f5a8fc8a0"
+  },
+  "review": {
+    "status": "ASSETS-0550/0551 CASE — independent review required before installation; 51-row case remains historical",
+    "expires": "2026-12-12",
+    "scope": "Exact finite isolated Linux source role only. The byte seal is not exhaustive semantic review. Existing Root/Native authority does not transfer. Original113: 56 compatible,14 local,43 prerequisites; current51:22 absent,8 backport,21 prerequisite. Assets case adds 0550/0551 for the same selected local hickory-proto0.24.4 prerequisite at RustSec 472a4c9a785030434f15d7da84964d60fbe789ab: current53:22 absent,8 backport,23 prerequisite.",
+    "inventoryCorrection": "Original957/46261 capture omitted cc and network-interface src/target. The named supplement is independently reviewable and must be sealed with the original inventory; nested target directories are never generally excluded.",
+    "legacyInventory": {
+      "path": "/home/llb/.cache/deos-rc-0728/source-aware-integration/canonical-host-instance-dispositions.json",
+      "sha256": "36822e90d1b47f49a4bad7c7c79eb7926e101e47b1d504f64918f0608f5c1dbd"
+    }
+  },
+  "rows": [
+    {
+      "id": "RUSTSEC-2025-0073",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#alloy-dyn-abi@1.2.1",
+      "name": "alloy-dyn-abi",
+      "version": "1.2.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0387",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/crypto-bigint#0.5.5",
+      "name": "crypto-bigint",
+      "version": "0.5.5",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0258",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#h2@0.3.26",
+      "name": "h2",
+      "version": "0.3.26",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0490",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/hickory-proto#0.24.4",
+      "name": "hickory-proto",
+      "version": "0.24.4",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0491",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/hickory-proto#0.24.4",
+      "name": "hickory-proto",
+      "version": "0.24.4",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-backport"
+    },
+    {
+      "id": "RUSTSEC-2026-0505",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/hickory-proto#0.24.4",
+      "name": "hickory-proto",
+      "version": "0.24.4",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0511",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/hickory-proto#0.24.4",
+      "name": "hickory-proto",
+      "version": "0.24.4",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0512",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/hickory-proto#0.24.4",
+      "name": "hickory-proto",
+      "version": "0.24.4",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0530",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/hickory-proto#0.24.4",
+      "name": "hickory-proto",
+      "version": "0.24.4",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0531",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/hickory-proto#0.24.4",
+      "name": "hickory-proto",
+      "version": "0.24.4",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0119",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/hickory-proto#0.24.4",
+      "name": "hickory-proto",
+      "version": "0.24.4",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-backport"
+    },
+    {
+      "id": "RUSTSEC-2026-0487",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/hickory-proto#0.24.4",
+      "name": "hickory-proto",
+      "version": "0.24.4",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0489",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/hickory-proto#0.24.4",
+      "name": "hickory-proto",
+      "version": "0.24.4",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0514",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#hickory-resolver@0.24.2",
+      "name": "hickory-resolver",
+      "version": "0.24.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0525",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#libp2p-quic@0.11.1",
+      "name": "libp2p-quic",
+      "version": "0.11.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0185",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#quinn-proto@0.11.14",
+      "name": "quinn-proto",
+      "version": "0.11.14",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0338",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#quinn-proto@0.11.14",
+      "name": "quinn-proto",
+      "version": "0.11.14",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0339",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#quinn-proto@0.11.14",
+      "name": "quinn-proto",
+      "version": "0.11.14",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0340",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#quinn-proto@0.11.14",
+      "name": "quinn-proto",
+      "version": "0.11.14",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0342",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#quinn-proto@0.11.14",
+      "name": "quinn-proto",
+      "version": "0.11.14",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0523",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#quinn-proto@0.11.14",
+      "name": "quinn-proto",
+      "version": "0.11.14",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0524",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#quinn-proto@0.11.14",
+      "name": "quinn-proto",
+      "version": "0.11.14",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0538",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#quinn-udp@0.5.4",
+      "name": "quinn-udp",
+      "version": "0.5.4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2025-0009",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#ring@0.16.20",
+      "name": "ring",
+      "version": "0.16.20",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0220",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#ruint@1.17.2",
+      "name": "ruint",
+      "version": "1.17.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0098",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#rustls-webpki@0.101.4",
+      "name": "rustls-webpki",
+      "version": "0.101.4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0099",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#rustls-webpki@0.101.4",
+      "name": "rustls-webpki",
+      "version": "0.101.4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0104",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#rustls-webpki@0.101.4",
+      "name": "rustls-webpki",
+      "version": "0.101.4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0382",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#rustls-webpki@0.101.4",
+      "name": "rustls-webpki",
+      "version": "0.101.4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0344",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#ruzstd@0.8.1",
+      "name": "ruzstd",
+      "version": "0.8.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2025-0055",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#tracing-subscriber@0.2.25",
+      "name": "tracing-subscriber",
+      "version": "0.2.25",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2025-0055",
+      "packageId": "path+file:///home/llb/Repos/deos/template/tools/pvf-validation/vendor/tracing-subscriber-0.3.19#tracing-subscriber@0.3.19",
+      "name": "tracing-subscriber",
+      "version": "0.3.19",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-backport"
+    },
+    {
+      "id": "RUSTSEC-2026-0383",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#webpki-root-certs@1.0.3",
+      "name": "webpki-root-certs",
+      "version": "1.0.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0381",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/webpki-roots#0.25.4",
+      "name": "webpki-roots",
+      "version": "0.25.4",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-backport"
+    },
+    {
+      "id": "RUSTSEC-2026-0403",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#zstd-safe@6.0.6",
+      "name": "zstd-safe",
+      "version": "6.0.6",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0221",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#event-listener@5.3.1",
+      "name": "event-listener",
+      "version": "5.3.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0253",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/lru-0.7.8#lru@0.7.8",
+      "name": "lru",
+      "version": "0.7.8",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-backport"
+    },
+    {
+      "id": "RUSTSEC-2026-0002",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/lru-0.12.3#lru@0.12.3",
+      "name": "lru",
+      "version": "0.12.3",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-backport"
+    },
+    {
+      "id": "RUSTSEC-2026-0253",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/lru-0.12.3#lru@0.12.3",
+      "name": "lru",
+      "version": "0.12.3",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-backport"
+    },
+    {
+      "id": "RUSTSEC-2026-0253",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#lru@0.16.3",
+      "name": "lru",
+      "version": "0.16.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "normal-absent"
+    },
+    {
+      "id": "RUSTSEC-2026-0186",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/memmap2-0.5.10#memmap2@0.5.10",
+      "name": "memmap2",
+      "version": "0.5.10",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-backport"
+    },
+    {
+      "id": "RUSTSEC-2026-0097",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#rand@0.8.5",
+      "name": "rand",
+      "version": "0.8.5",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0097",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#rand@0.9.0",
+      "name": "rand",
+      "version": "0.9.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0395",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#zstd-safe@6.0.6",
+      "name": "zstd-safe",
+      "version": "6.0.6",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0397",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#zstd-safe@6.0.6",
+      "name": "zstd-safe",
+      "version": "6.0.6",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0399",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#zstd-safe@6.0.6",
+      "name": "zstd-safe",
+      "version": "6.0.6",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0400",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#zstd-safe@6.0.6",
+      "name": "zstd-safe",
+      "version": "6.0.6",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0401",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#zstd-safe@6.0.6",
+      "name": "zstd-safe",
+      "version": "6.0.6",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0402",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#zstd-safe@6.0.6",
+      "name": "zstd-safe",
+      "version": "6.0.6",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0404",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#zstd-safe@6.0.6",
+      "name": "zstd-safe",
+      "version": "6.0.6",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0406",
+      "packageId": "registry+https://github.com/rust-lang/crates.io-index#zstd-safe@6.0.6",
+      "name": "zstd-safe",
+      "version": "6.0.6",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0550",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/hickory-proto#0.24.4",
+      "name": "hickory-proto",
+      "version": "0.24.4",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    },
+    {
+      "id": "RUSTSEC-2026-0551",
+      "packageId": "path+file:///home/llb/Repos/deos/template/vendor/hickory-proto#0.24.4",
+      "name": "hickory-proto",
+      "version": "0.24.4",
+      "source": null,
+      "rawSources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "decision": "selected-prerequisite"
+    }
+  ]
+}

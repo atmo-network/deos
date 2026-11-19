@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "role": "chain-spec-builder",
+  "baseVersion": "19.0.0",
+  "originalManifestSha256": "08e69984c843253f99234136ae7e7e0b203384fd63addb3ce019bd13c2164b1a",
+  "originalLockSha256": "5f013f0ebaecb2a186bc53251a19a54274211ceddd564dbfc809367eaa76de2e",
+  "lockFile": "maintenance.lock",
+  "lockSha256": "84f701e7f87d8c21b31583b9dfaac8d13069401cea6e9a42c83f8a67dad55459",
+  "patches": [
+    {
+      "name": "hickory-proto",
+      "directory": "template/vendor/hickory-proto",
+      "sha256": "5dc493b97ad48a7ac5e5ac8e4a4b1dd1d0cdb9a5ce300e3dc1b90733a284b639"
+    },
+    {
+      "name": "lru",
+      "directory": "template/vendor/lru-0.12.3",
+      "sha256": "dc3a43ddf480a4a36e7b81a148f955a8d9fb4a1049d01f89872691b21130f1ae"
+    },
+    {
+      "name": "webpki-roots",
+      "directory": "template/vendor/webpki-roots",
+      "sha256": "9dd455307cc720aeb88700369638ae2849c18b7eca15fe421582e319fae96458"
+    }
+  ],
+  "sourceReview": {
+    "status": "accepted",
+    "constructionBasisSha256": "31ef26443c5c27ee7cbc8fa003ee046c93b20e55fe483a91b878741180f9521c",
+    "targets": [
+      "x86_64-unknown-linux-gnu"
+    ],
+    "expiresAt": "2026-12-12",
+    "scope": "Linux x86_64 source/API only for script04 Create --raw-storage --verify named-preset {development,local_testnet}, bound to the reviewed construction basis and all 81 retained dispositions. No artifact, unrestricted CLI, reference execution, macOS or distribution qualification."
+  }
+}

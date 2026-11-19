@@ -1,0 +1,80 @@
+[
+  {
+    "packageId": "registry+https://github.com/rust-lang/crates.io-index#cc@1.2.58",
+    "sourceRoot": "/home/llb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cc-1.2.58",
+    "files": [
+      {
+        "path": "src/target/apple.rs",
+        "mode": 420,
+        "bytes": 3159,
+        "sha256": "da9411b2c4db419e0fa39f765ee53b8665b3837fb39827679a53238734a4a1c1"
+      },
+      {
+        "path": "src/target/generated.rs",
+        "mode": 420,
+        "bytes": 19390,
+        "sha256": "aaa0b5d83c84b14b7f5342c0bfc0926320f72d6bf331fc3d9043c93164bdbd45"
+      },
+      {
+        "path": "src/target/llvm.rs",
+        "mode": 420,
+        "bytes": 10356,
+        "sha256": "190fe8d2b204cd4a6e68f2a1aada17ecd6390799564ed25792fcc08ab34710ba"
+      },
+      {
+        "path": "src/target/parser.rs",
+        "mode": 420,
+        "bytes": 22709,
+        "sha256": "e7311bc5ac4bc8d266ebe1e6ca396d5483900dc2903e7122dcdd3768fc682e36"
+      }
+    ]
+  },
+  {
+    "packageId": "registry+https://github.com/rust-lang/crates.io-index#network-interface@2.0.1",
+    "sourceRoot": "/home/llb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/network-interface-2.0.1",
+    "files": [
+      {
+        "path": "src/target/getifaddrs.rs",
+        "mode": 420,
+        "bytes": 1051,
+        "sha256": "a03be56847b0ecc44d2e7ffea1c3d107b069cd46eaa84e600f05e24eda00231d"
+      },
+      {
+        "path": "src/target/linux.rs",
+        "mode": 420,
+        "bytes": 5304,
+        "sha256": "3e08344cd3a69c6307597375aa6eba7907883756ff685315700c3d920d31d93b"
+      },
+      {
+        "path": "src/target/mod.rs",
+        "mode": 420,
+        "bytes": 825,
+        "sha256": "155b60826b41b387a880dbb57f5794207c5edea5ba6684db4dc3181a0bb27b27"
+      },
+      {
+        "path": "src/target/unix/ffi/lladdr.c",
+        "mode": 420,
+        "bytes": 381,
+        "sha256": "9d6c40ca5a7bef43c85c5553ec0b6da0fe73425560208871f66658220c991533"
+      },
+      {
+        "path": "src/target/unix/ffi/mod.rs",
+        "mode": 420,
+        "bytes": 257,
+        "sha256": "b3e66c9b28039d52275bb5ce7e19577e7b4b5b070d6d30765fbf07beac454b96"
+      },
+      {
+        "path": "src/target/unix/mod.rs",
+        "mode": 420,
+        "bytes": 5260,
+        "sha256": "a24209e25e346cb0b806418668290b75e5c80d9ef23a7ef7d4a1b1dec72fe456"
+      },
+      {
+        "path": "src/target/windows.rs",
+        "mode": 420,
+        "bytes": 14552,
+        "sha256": "2cf7d820a0bec351203b28f4aaa30ad49a597e6aadc76490ce62a7308d68cddd"
+      }
+    ]
+  }
+]

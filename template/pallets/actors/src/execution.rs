@@ -2709,6 +2709,9 @@ impl<T: Config> Pallet<T> {
     actor: &T::AccountId,
     actor_type: ActorType,
   ) -> Result<(), TaskFailure> {
+    #[cfg(all(feature = "runtime-benchmarks", feature = "std"))]
+    let _observation =
+      crate::benchmark_observation::enter(crate::benchmark_observation::Phase::Task);
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       let result = (|| -> Result<(), TaskFailure> {
         match task {

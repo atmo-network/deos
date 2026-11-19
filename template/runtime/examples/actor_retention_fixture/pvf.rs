@@ -25,6 +25,12 @@ pub(super) fn export(
   preset: &PresetId,
   (storage, expected, parent, mut block, data): (Storage, Storage, &Header, Block, InherentData),
 ) -> Result<(), String> {
+  if cfg!(all(
+    feature = "benchmark-authority-scaffolding",
+    not(feature = "runtime-benchmarks")
+  )) {
+    return Err("native admission fixture cannot export PVF artifacts".into());
+  }
   use polkadot_sdk::sp_consensus_aura::{
     digests::CompatibleDigestItem,
     sr25519::{AuthorityPair, AuthoritySignature},

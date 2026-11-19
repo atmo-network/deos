@@ -31,7 +31,7 @@ This Skill may read project truth and invoke public project operations. Its priv
 | Concern | Truth owner |
 | --- | --- |
 | Rust and npm dependency identity | `template/Cargo.lock`, `web-client/package-lock.json` |
-| Rust, Node, and npm toolchain identity | `template/rust-toolchain.toml`, `web-client/package.json` |
+| Rust, Node, and npm toolchain identity | `template/rust-toolchain.toml`, `.node-version`, `.npm-version`; client projections are validated |
 | Bootstrap binary identity | `scripts/01-download-binaries.sh` and project pins |
 | Runtime semantics and invariants | Owning specifications, architecture documents, code, and tests |
 | Accepted production Weight | `template/runtime/src/weights/*.rs` |
@@ -52,7 +52,9 @@ This Skill may read project truth and invoke public project operations. Its priv
 4. Review dependency and bootstrap provenance:
 
 ```bash
-./.agents/skills/release-assurance/scripts/dependency-provenance.sh
+./.agents/skills/release-assurance/scripts/dependency-provenance.sh --framework
+# Optional client review (independent result):
+./.agents/skills/release-assurance/scripts/dependency-provenance.sh --client
 ```
 
 5. Regenerate the candidate-specific Weight comparison after accepted production Weight changes, then require freshness:
@@ -68,7 +70,7 @@ This Skill may read project truth and invoke public project operations. Its priv
 
 ## Dependency Review Contract
 
-- Every material Cargo or npm finding must be fixed or appear exactly once in `config/dependency-provenance-exceptions.json`.
+- Every material Cargo or npm finding must be fixed or appear exactly once in the policy for its actual reviewed role. `config/dependency-provenance-exceptions.json` owns Root/client decisions; `config/canonical-pvf-host-source/` owns isolated Host Cargo decisions; `config/native-source-preparation/exceptions.json` and its single shared proof own the finite selected Native source role through the same validator. Neither policy transfers authority into another role, a new ELF or unrestricted CLI.
 - Each retained finding names reachability, a material rationale, and an expiry no more than 90 days after review.
 - New, duplicate, stale, expired, fixed-but-retained, or graph-absent exceptions fail.
 - npm critical findings cannot be excepted.

@@ -1,0 +1,11 @@
+{
+  "default_plane": "deos",
+  "planes": [
+    {
+      "id": "deos",
+      "title": "DEOS",
+      "required": true
+    }
+  ],
+  "memberships": {}
+}

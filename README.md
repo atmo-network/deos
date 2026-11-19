@@ -1,121 +1,45 @@
-# DEOS
+# DEOS — Deterministic Economic Operating System
 
-> A forkable economic runtime where issuance, liquidity, routing, governance, and automation operate as one bounded cybernetic system.
+DEOS is a reusable FRAME framework for developers building downstream protocol economies. It supplies bounded Actors, asset routing, issuance, staking, governance and observation mechanisms. The reference runtime composes these into a development instance; your fork owns its economics, identities, authorities and rollout policy. See the [framework/instance contract](docs/deos/framework-instance.contract.en.md).
 
-DEOS is a Polkadot SDK framework for building protocol economies. It moves recurring economic coordination out of multisigs, bots, and operator convention into explicit runtime mechanisms that can be inspected, tested, configured, and forked.
+## What is included
 
-**TMCTOL** is the flagship standard implemented on DEOS. DEOS provides the reusable substrate; TMCTOL defines one concrete economy running on it.
+- [`template/primitives`](template/primitives), [`template/pallets`](template/pallets), and [`template/runtime`](template/runtime): the reusable crates, reference composition, runtime-owned genesis presets and regression tests.
+- [`template/vendor`](template/vendor/README.md) and [`template/tools`](template/tools/README.md): selected SDK corrections and security backports, indexed by which workspace patches each package and why, plus the independent exact-tag PVF validation host.
+- [Scripts](scripts/README.md) for toolchain setup, framework validation, Wasm builds, metadata export, chain-spec preparation and PVF. [Notices](notices/) accompany the [project license](LICENSE) and vendor license files.
+- [Contracts and implementation guides](docs/deos/README.md), pallet embedding fixtures, and [TMCTOL mathematical tests](simulators/tmctol/).
 
-[Start in 60 seconds](./wiki/getting-started/deos-in-60-seconds.en.md) | [Evaluate DEOS](./wiki/getting-started/partner-pitch.en.md) | [Read the specification](./docs/tmctol.specification.en.md) | [Run locally](#run-locally)
+## Build and validate
 
----
-
-## One Economic Circuit
-
-- **TMC — deterministic issuance.** A unidirectional curve defines how assets enter circulation without promising protocol redemption.
-- **TOL — owned liquidity.** Mint output can accumulate into protected and governed liquidity lanes under an explicit bucket policy.
-- **DEOS Router — max-output execution.** A bounded set of XYK, TMC, and Native-anchored routes compete by expected recipient output.
-- **DEOS Actors — autonomous operations.** Typed execution plans drive the Burn Actor, Liquidity Actor, splitters, buckets, and treasuries within storage and block-weight bounds.
-- **Governance — constrained change.** Domain-scoped primary/protection tracks execute typed payloads instead of exposing unrestricted administration.
-
-DEOS makes deterministic execution claims, not deterministic market-outcome claims. Liquidity support, burn dynamics, oracle guards, and governance safety hold only under the preconditions defined in the specifications.
-
----
-
-## Framework, Not Product Policy
-
-DEOS owns reusable mechanisms: runtime primitives, invariants, adapters, bounded read models, validation gates, and reference implementations.
-
-A downstream ecosystem owns its identity, dApps, launch policy, labor model, treasury choices, token names, and concrete economic parameters.
-
-Read the [Framework / Instance Contract](./docs/framework-instance.contract.en.md) before turning the reference topology into a product.
-
----
-
-## Run Locally
-
-### Requirements
-
-- [Rust](https://rustup.rs/)
-- [Node.js](https://nodejs.org/)
-- Linux environment suitable for Polkadot SDK tooling
-
-### Start the network
+Use Linux x86-64, Bash 4.3+, Rustup, Python 3.11+ with `tomllib`, a C/C++ toolchain with make, Perl (including `FindBin` and `IPC::Cmd`), `pkg-config`, OpenSSL development libraries, `protoc`, `ripgrep`, `jq`, GNU coreutils/tar and Git for Cargo's Git dependencies. Guest checks require a Wasm-capable C toolchain (`clang` and `llvm-ar` by default; override with `CC_wasm32v1_none` and `AR_wasm32v1_none`). Use the Node version in [`.node-version`](.node-version) for framework scripts and the simulator. Toolchain and locked dependency acquisition may use the network. No frontend npm packages or installed Skills are needed.
 
 ```bash
-./scripts/bootstrap-local-network.sh
+./scripts/setup-environment.sh framework
+DEOS_TEST_PROFILE=release DEOS_TEST_TIMEOUT_MINUTES=60 ./scripts/validate-local.sh framework
+./scripts/03-build-runtime.sh --output "$PWD/deos-development.wasm"
+./scripts/export-papi-metadata.sh --wasm "$PWD/deos-development.wasm" --output "$PWD/deos.scale"
 ```
 
-This builds the runtime, prepares the chain specification, downloads the required operator binaries, and starts a local Zombienet network through Omni Node.
+The Wasm build uses the production **compiler profile**, not production-qualified weights or an accepted network artifact. Metadata export calls that Wasm's Metadata API, checks byte equality, and refuses native fallback. `--native-only` is a separate schema preparation route and does not establish correspondence to Wasm.
 
-### Start the reference client
+## Configure or embed
+
+Fork [`template/runtime/src/configs`](template/runtime/src/configs) and the [runtime-owned genesis configuration](template/runtime/src/genesis_config_presets.rs) for a composed instance. The `development` and `local_testnet` presets are development profiles; scripts select a named preset without patching economic policy or authorities. Consult the [reference runtime guide](template/README.md) for composition and configuration owners.
+
+For a smaller integration, follow the [Router embedding guide](template/pallets/router/docs/embedding.md). The [separate fixture crate](template/pallets/router/embedding-runtime) implements the host traits with its own assets and route policy, without the DEOS runtime. Run its hosted behavior and guest compile checks:
 
 ```bash
-cd web-client
-npm install
-npm run dev
+SKIP_WASM_BUILD=1 ./scripts/ci-local.sh --only tests --package pallet-deos-router-embedding-fixture
+SKIP_WASM_BUILD=1 RUSTFLAGS='--cfg substrate_runtime' CC_wasm32v1_none=clang AR_wasm32v1_none=llvm-ar \
+  ./scripts/ci-local.sh --only check --package pallet-deos-router-embedding-fixture --no-default-features --target wasm32v1-none
 ```
 
-Optional demo-state seeding, from the repository root:
+## Demonstrated and unavailable capabilities
 
-```bash
-./scripts/seed-web-client-state.sh
-```
+The [0.7.28 distribution and support table](docs/deos/framework-distribution.en.md) distinguishes framework development, finite reference-Wasm execution and production network qualification. The signed Assets blocks and proof-bound PVF validation use prepared parent states; they do not establish authenticated relay ancestry, production resource bounds or a runnable node bundle. Chain-spec generation and local node operations require separately accepted producer artifacts, not just binaries with matching version strings. No downstream production launch is supported before DEOS 1.0.
 
-See [`scripts/README.md`](./scripts/README.md) for individual operator workflows and [`template/README.md`](./template/README.md) for Rust workspace commands.
+## Optional browser and Wiki workspaces
 
----
+The [experimental browser client](https://github.com/atmo-network/deos/tree/0.7.28/web-client) lives in `web-client/` in the full repository, outside the default framework distribution. It consumes framework metadata through its optional PAPI descriptor workflow. Its setup, validation and advisory results are separate from framework results.
 
-## Repository
-
-| Path | Role | Entrypoint |
-| --- | --- | --- |
-| `docs/` | Specifications and shipped architecture | [`docs/README.md`](./docs/README.md) |
-| `template/` | Runtime, pallets, primitives, weights, tests | [`template/README.md`](./template/README.md) |
-| `web-client/` | Browser reference client | [`web-client/README.md`](./web-client/README.md) |
-| `simulator/` | Deterministic TMCTOL mathematical reference | [`simulator/README.md`](./simulator/README.md) |
-| `scripts/` | Bootstrap, validation, benchmarks, administration | [`scripts/README.md`](./scripts/README.md) |
-| `wiki/` | Guided newcomer and frontend knowledge layer | [`wiki/index.en.md`](./wiki/index.en.md) [`wiki/index.ru.md`](./wiki/index.ru.md) |
-
-### Core contracts
-
-- [TMCTOL Specification](./docs/tmctol.specification.en.md)
-- [Builder Economy Contract](./docs/builder-economy.contract.en.md)
-- [DEOS Actors Specification](./template/pallets/actors/docs/specification.en.md)
-- [DEOS Actors External Runtime Embedding Guide](./template/pallets/actors/docs/embedding.md)
-- [DEOS Actors Control-Plane Contract](./docs/actors-control-plane.contract.en.md)
-- [Governance Specification](./template/pallets/governance/docs/specification.en.md)
-- [Read-Model Contract](./docs/read-model.contract.en.md)
-- [Core Architecture](./docs/core.architecture.en.md)
-
----
-
-## Validate
-
-Default changed-scope completion gate:
-
-```bash
-./.agents/skills/alignment/scripts/completion-gate.sh
-```
-
-Select narrower or escalated routes through the [Project Skill Graph](./.agents/skills/README.md) and [`alignment` route matrix](./.agents/skills/alignment/SKILL.md). Run the broad local audit only when that complete surface is intended:
-
-```bash
-./scripts/validate-local.sh fast
-```
-
-When tokenomics, formulas, thresholds, or invariants change:
-
-```bash
-node ./simulator/tests.js
-```
-
----
-
-## Project State
-
-- [`BACKLOG.md`](./BACKLOG.md) — Open work and external gates
-- [`CHANGELOG.md`](./CHANGELOG.md) — Completed delivery history
-- [`AGENTS.md`](./AGENTS.md) — Durable architecture and engineering protocol
-
-DEOS is infrastructure for economies whose rules must remain visible. It does not make markets predictable; it makes the protocol's own behavior explicit.
+The [Wiki workspace](https://github.com/atmo-network/deos/tree/0.7.28/wiki) in the full repository owns the bilingual knowledge planes and the standalone mdBook site. Use `./scripts/validate-local.sh wiki` to check it independently; framework validation does not require Wiki tooling.

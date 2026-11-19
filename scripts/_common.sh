@@ -61,6 +61,35 @@ hydrate_local_tool_paths() {
     add_path_if_dir "$HOME/.cargo/bin"
 }
 
+worktree_evidence_identity() {
+    (
+        cd "$PROJECT_ROOT" || exit 1
+        git ls-files --cached --others --exclude-standard -z -- \
+            template scripts web-client simulators docs .github .cargo \
+            ':/*.toml' ':/*.json' .gitignore .gitattributes .npmrc .node-version .npm-version \
+            ':(exclude,glob)**/target/**' ':(exclude,glob)**/node_modules/**' \
+            ':(exclude,glob)**/build/**' ':(exclude,glob)**/dist/**' \
+            ':(exclude,glob)**/.svelte-kit/**' ':(exclude)web-client/.papi' \
+            ':(exclude)template/chain_spec.json' \
+            | LC_ALL=C sort -zu \
+            | while IFS= read -r -d '' path; do
+                if [[ -L "$path" ]]; then
+                    log_error "Source identity cannot certify a symlink: $path" >&2
+                    exit 1
+                fi
+                # A tracked deletion has the same source tree before and after staging.
+                [[ -e "$path" ]] || continue
+                if [[ -x "$path" ]]; then
+                    printf 'executable\0'
+                else
+                    printf 'regular\0'
+                fi
+                sha256sum --zero -- "$path" || exit 1
+            done \
+            | sha256sum | awk '{print $1}'
+    )
+}
+
 # Print the SHA-256 of one file with whichever checksum tool the platform provides, so the
 # macOS arm64 path (shasum) does not fail on a shared verifier that assumed GNU coreutils.
 deos_sha256_file() {
@@ -75,6 +104,24 @@ deos_sha256_file() {
     fi
 }
 
+verify_guarded_node_environment() {
+    local key
+    for key in NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS NODE_REPL_EXTERNAL_MODULE LD_PRELOAD LD_LIBRARY_PATH DYLD_INSERT_LIBRARIES BASH_ENV ENV ZOMBIENET_IMAGE RUN_IN_CONTAINER PUSHGATEWAY_URL ${!ZOMBIE_@}; do
+        [[ -z "${!key:-}" ]] || { log_error "Diagnostic injection environment: $key" >&2; return 1; }
+    done
+    if env | grep '^BASH_FUNC_' >/dev/null; then log_error 'Diagnostic inherited shell function' >&2; return 1; fi
+    [[ "$(sha256sum "$(command -v node)" | cut -d ' ' -f1)" == '1bec56ef7cfa9a76f3e0b7c0a87f220eb73f23102b9c0b4c7529a3f7c3ce7c31' ]] || {
+        log_error 'Diagnostic requires the reviewed Node 22.22.0 executable' >&2; return 1;
+    }
+}
+
+require_owned_regular_file() {
+    local file="$1"
+    [[ -f "$file" && ! -L "$file" && -O "$file" && "$(realpath -- "$file")" == "$file" ]] || {
+        log_error "Owned canonical regular file required: $file" >&2; return 1;
+    }
+}
+
 verify_deos_omni_node() {
     local node_path="${1:-$BIN_DIR/polkadot-omni-node-deos}"
     local receipt="$BIN_DIR/.deos-omni-node.json"
@@ -83,26 +130,83 @@ verify_deos_omni_node() {
         log_error "Select a qualified Omni with DEOS_OMNI_NODE_PATH and DEOS_OMNI_NODE_SHA256 through 01-download-binaries.sh"
         return 1
     }
+    require_owned_regular_file "$receipt" || return 1
+    require_owned_regular_file "$BIN_DIR/.polkadot-sdk-release" || return 1
     local release selected upstream actual
-    release="$(jq -er 'select(.schema_version == 1) | .sdk_release | select(type == "string")' "$receipt")" || return 1
+    release="$(jq -er 'select(.schema_version == 1 or .schema_version == 2) | .sdk_release | select(type == "string")' "$receipt")" || return 1
     selected="$(jq -er '.selected_sha256 | select(type == "string")' "$receipt")" || return 1
     upstream="$(jq -er '.upstream_omni_sha256 | select(type == "string")' "$receipt")" || return 1
     [[ "$release" == "$(<"$BIN_DIR/.polkadot-sdk-release")" && "$selected" =~ ^[a-f0-9]{64}$ && "$upstream" =~ ^[a-f0-9]{64}$ && "$selected" != "$upstream" ]] || {
-        log_error "Selected Omni receipt does not match the SDK bundle or identifies its unpatched upstream artifact"
+        log_error "Selected Omni receipt does not match the SDK bundle or identifies its unqualified upstream artifact"
         return 1
     }
     actual="$(deos_sha256_file "$node_path")" || return 1
     [[ "$actual" == "$selected" ]] || { log_error "Selected Omni checksum mismatch: $node_path"; return 1; }
-    log_success "Selected Omni artifact verified: $node_path ($selected)"
+    if [[ "$(jq -r .schema_version "$receipt")" == 2 ]]; then verify_reference_omni_node "$node_path" || return 1; fi
+    log_success "Selected Omni identity verified: $node_path ($selected); no general-role qualification"
+}
+
+verify_reference_notices() {
+    local directory="$1" file expected
+    while IFS=$'\t' read -r file expected; do
+        require_owned_regular_file "$directory/$file" || return 1
+        [[ "$(deos_sha256_file "$directory/$file")" == "$expected" ]] || {
+            log_error "Missing or changed reference Unicode notice: $file"; return 1;
+        }
+    done < <(jq -er '.notices | unique_by(.file)[] | [.file, .sha256] | @tsv' "$SCRIPT_DIR/inputs/canonical-linux-reference.json")
+}
+
+verify_reference_omni_node() {
+    local node_path="${1:-$BIN_DIR/polkadot-omni-node-deos}"
+    local acceptance="$SCRIPT_DIR/inputs/canonical-linux-reference.json" receipt="$BIN_DIR/.deos-omni-node.json"
+    [[ "$(uname -s):$(uname -m)" == Linux:x86_64 ]] || { log_error 'Local reference requires Linux x86_64'; return 1; }
+    require_owned_regular_file "$acceptance" || return 1
+    require_owned_regular_file "$receipt" || return 1
+    require_owned_regular_file "$BIN_DIR/.deos-omni-node-acceptance.json" || return 1
+    require_owned_regular_file "$BIN_DIR/.polkadot-sdk-release" || return 1
+    verify_reference_notices "$BIN_DIR/notices" || return 1
+    local expected
+    expected="$(deos_sha256_file "$acceptance")" || return 1
+    [[ -f "$BIN_DIR/.deos-omni-node-acceptance.json" && "$(deos_sha256_file "$BIN_DIR/.deos-omni-node-acceptance.json")" == "$expected" ]] || {
+        log_error 'Missing or changed installed reference acceptance proof'; return 1;
+    }
+    jq -e --arg expected "$expected" --slurpfile acceptance "$acceptance" \
+        '.schema_version == 2 and .role == "canonical-local-linux-reference" and .acceptance_sha256 == $expected and .sdk_release == $acceptance[0].source.tag and .selected_sha256 == $acceptance[0].subject.sha256' \
+        "$receipt" >/dev/null || { log_error 'Unsupported reference role/receipt'; return 1; }
+    [[ -x "$node_path" && "$(<"$BIN_DIR/.polkadot-sdk-release")" == "$(jq -er .source.tag "$acceptance")" && \
+        "$(deos_sha256_file "$node_path")" == "$(jq -er .subject.sha256 "$acceptance")" ]] || { log_error 'Reference executable/SDK drift'; return 1; }
+    [[ "$(date -u +%s)" -lt "$(date -u -d "$(jq -er .expires "$acceptance")" +%s)" ]] || { log_error 'Reference review expired'; return 1; }
+}
+
+# Prepared diagnostics establish only caller-selected executable identity, never qualification.
+verify_network_omni_node() {
+    local selected="${1:-}"
+    if [[ "${DEOS_NETWORK_DIAGNOSTIC:-0}" != "1" ]]; then
+        verify_deos_omni_node "$selected"
+        return
+    fi
+    require_commands readlink
+    local candidate="${DEOS_DIAGNOSTIC_OMNI_PATH:-}" expected="${DEOS_DIAGNOSTIC_OMNI_SHA256:-}" version="${DEOS_DIAGNOSTIC_OMNI_VERSION:-}"
+    [[ "$candidate" == /* && -x "$candidate" && "$expected" =~ ^[a-f0-9]{64}$ && -n "$version" ]] || {
+        log_error "Diagnostic selection requires an absolute executable path, SHA256 and exact version"
+        return 1
+    }
+    [[ -n "$selected" && "$(readlink -f "$selected")" == "$(readlink -f "$candidate")" ]] || {
+        log_error "Diagnostic PATH command differs from the explicitly selected executable"
+        return 1
+    }
+    [[ "$(deos_sha256_file "$candidate")" == "$expected" && "$("$candidate" --version)" == "$version" ]] || {
+        log_error "Diagnostic executable hash/version mismatch"
+        return 1
+    }
+    log_warning "NON-PROMOTING DIAGNOSTIC: $candidate ($expected); no canonical receipt or qualification asserted"
 }
 
 activate_pinned_node() {
-    local package_json="$PROJECT_ROOT/web-client/package.json"
-    [[ -f "$package_json" ]] || { log_error "Node version authority not found: $package_json"; exit 1; }
-    command -v node >/dev/null 2>&1 || { log_error "Node is required to read $package_json"; exit 1; }
-    local expected actual
-    expected="$(node -e 'const p=require(process.argv[1]); process.stdout.write(p.volta?.node ?? "")' "$package_json")"
-    [[ -n "$expected" ]] || { log_error "web-client package.json volta.node is required"; exit 1; }
+    local pin="$PROJECT_ROOT/.node-version" expected actual
+    [[ -f "$pin" ]] || { log_error "Node version authority not found: $pin"; return 1; }
+    expected="$(<"$pin")"
+    [[ "$expected" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { log_error "Invalid Node pin: $pin"; return 1; }
     actual="$(node --version 2>/dev/null || true)"
     actual="${actual#v}"
     if [[ "$actual" == "$expected" ]]; then
@@ -126,6 +230,20 @@ activate_pinned_node() {
     actual="${actual#v}"
     [[ "$actual" == "$expected" ]] || { log_error "Unable to activate Node $expected"; exit 1; }
     log_info "Activated repository Node $expected"
+}
+
+activate_pinned_npm() {
+    local pin="$PROJECT_ROOT/.npm-version" expected actual
+    require_commands npm
+    [[ -f "$pin" ]] || { log_error "npm version authority not found: $pin"; return 1; }
+    expected="$(<"$pin")"
+    [[ "$expected" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { log_error "Invalid npm pin: $pin"; return 1; }
+    actual="$(npm --version)"
+    if [[ "$actual" != "$expected" ]]; then
+        npm install --global "npm@$expected"
+        actual="$(npm --version)"
+    fi
+    [[ "$actual" == "$expected" ]] || { log_error "npm version mismatch: expected $expected, found $actual"; return 1; }
 }
 
 require_directory() {
@@ -198,40 +316,7 @@ run_shell_step() {
     if [[ "$DEOS_VERBOSE" == "1" ]]; then
         log_info "Command: $command"
     fi
-
-    local start_time
-    local end_time
-    local status
-    local log_path=""
-    start_time=$(date +%s)
-    if [[ "$DEOS_VERBOSE" == "1" ]]; then
-        if [[ -n "$timeout_minutes" ]]; then
-            timeout "${timeout_minutes}m" bash -c "$command" || status=$?
-        else
-            bash -c "$command" || status=$?
-        fi
-    else
-        log_path="$(step_log_path "$label")"
-        if [[ -n "$timeout_minutes" ]]; then
-            timeout "${timeout_minutes}m" bash -c "$command" >"$log_path" 2>&1 || status=$?
-        else
-            bash -c "$command" >"$log_path" 2>&1 || status=$?
-        fi
-    fi
-    status="${status:-0}"
-    end_time=$(date +%s)
-
-    if [[ "$status" -ne 0 ]]; then
-        log_error "$label failed with status $status after $((end_time - start_time))s"
-        if [[ -n "$log_path" ]]; then
-            report_step_failure "$log_path"
-        fi
-        return "$status"
-    fi
-    if [[ -n "$log_path" ]]; then
-        rm -f "$log_path"
-    fi
-    log_success "$label completed in $((end_time - start_time))s"
+    run_step_command "$label" "$timeout_minutes" bash -c "$command"
 }
 
 run_command_step() {
@@ -240,25 +325,27 @@ run_command_step() {
     shift 2
 
     log_info "Running: $label"
+    run_step_command "$label" "$timeout_minutes" "$@"
+}
+
+run_step_command() {
+    local label="$1"
+    local timeout_minutes="$2"
+    shift 2
 
     local start_time
     local end_time
     local status
     local log_path=""
     start_time=$(date +%s)
+    if [[ -n "$timeout_minutes" ]]; then
+        set -- timeout "${timeout_minutes}m" "$@"
+    fi
     if [[ "$DEOS_VERBOSE" == "1" ]]; then
-        if [[ -n "$timeout_minutes" ]]; then
-            timeout "${timeout_minutes}m" "$@" || status=$?
-        else
-            "$@" || status=$?
-        fi
+        "$@" || status=$?
     else
         log_path="$(step_log_path "$label")"
-        if [[ -n "$timeout_minutes" ]]; then
-            timeout "${timeout_minutes}m" "$@" >"$log_path" 2>&1 || status=$?
-        else
-            "$@" >"$log_path" 2>&1 || status=$?
-        fi
+        "$@" >"$log_path" 2>&1 || status=$?
     fi
     status="${status:-0}"
     end_time=$(date +%s)

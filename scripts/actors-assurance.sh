@@ -11,6 +11,11 @@ INCLUDE_OCCUPANCY_PROFILE="${INCLUDE_OCCUPANCY_PROFILE:-0}"
 # refresh rather than to release acceptance. They stay runnable with INCLUDE_NIGHTLY_HEAVY=1.
 INCLUDE_NIGHTLY_HEAVY="${INCLUDE_NIGHTLY_HEAVY:-0}"
 QUICK_MODE="${QUICK_MODE:-0}"
+H1_DIAGNOSTIC=0
+EMBEDDING_ONLY=0
+PACKAGE_ONLY=0
+INTEGRATED_TRANSFER_BASELINE=0
+TRANSFER_BASELINE_PROFILE=""
 INTEGRATED_W0_W1=0
 INTEGRATED_W1_ACTOR_ONLY=0
 INTEGRATED_W1_CONTINUOUS_USER=0
@@ -53,8 +58,11 @@ REQUIRED_HEAVY_PROFILES=(
 PACKAGE_HEAVY_PROFILES=(
     "maximum_dormant_identity_population_adds_no_idle_scan"
 )
-OCCUPANCY_HEAVY_PROFILE="profile_scheduler_queue_wakeup_occupancy_10k"
-DIAGNOSTIC_HEAVY_PROFILES=("profile_scheduler_wallclock_matrix")
+OCCUPANCY_HEAVY_PROFILE="current_cadenced_scheduler_occupancy_10k"
+OCCUPANCY_PROGRESS_PROFILE="current_cadenced_scheduler_first_sweep_10k"
+TOPOLOGY_PROGRESS_PROFILE="current_cadenced_sparse_topology_first_sweep"
+HISTORICAL_OCCUPANCY_PROFILE="profile_scheduler_queue_wakeup_occupancy_10k"
+DIAGNOSTIC_HEAVY_PROFILES=("profile_scheduler_wallclock_matrix" "$HISTORICAL_OCCUPANCY_PROFILE")
 
 usage() {
     cat <<'EOF'
@@ -64,20 +72,54 @@ Usage: actors-assurance.sh [OPTIONS]
 Runs the DEOS Actors assurance contract across the package archive, external-consumer fixture, and deos-runtime.
 
 Source identity hashes tracked and untracked source bytes and executable mode in
-template, scripts, web-client, simulator, docs, .github, .cargo, and root build configuration.
+template, scripts, web-client, simulators, docs, .github, .cargo, and root build configuration.
 It includes staged changes and committed content, is independent of checkout path
 and commit packaging, and excludes build outputs, .papi metadata/descriptors, and Skills.
 Weight, production Wasm, and metadata retain their separate artifact identities.
 
-self-test checks source identity in an isolated temporary Git repository, without
-Cargo, network access, or build artifacts. The assurance gate also runs it automatically.
+self-test checks source identity in an isolated temporary Git repository,
+focused native mode exclusivity, and integrated native/replay routing and
+missing/duplicate selection refusal, without Cargo, network access, or build artifacts.
+The assurance gate also runs it automatically.
 
 Options:
-  --skip-occupancy-profile   Skip the gating 10k occupancy profile
+  --skip-occupancy-profile   Skip current 10k native safety/censoring acceptance
   --quick                    Run only fast checks (Clippy + light tests)
-  --exact-heavy-profile NAME Run one declared runtime/package heavy profile
+  --package-only             Check nonempty surface, build/verify the local Cargo
+                             archive and run its distributed semantic oracle offline.
+                             No publication, npm, metadata, production Wasm or
+                             runtime tests; output stays under template/target.
+  --embedding-only           Run independent consumer default/DEX/try-runtime/
+                             combined tests and no-std check only; native Cargo,
+                             no npm, metadata, production Wasm or runtime stress.
+  --h1-diagnostic            Request the historical default-authority User diagnostic.
+                             Unavailable while User identity capacity is unqualified;
+                             absent selection fails closed before workflow execution.
+                             Never silently selects model authority or reissues old results.
+                             No Wasm/metadata/npm prerequisite; no capacity acceptance.
+  --exact-heavy-profile NAME Run one declared runtime/package heavy profile;
+                             current_cadenced_scheduler_occupancy_10k checks safety
+                             and reports every censored Actor at 10k/2500 blocks.
+                             current_cadenced_scheduler_first_sweep_10k separately
+                             checks all first completions in N+1=10001 blocks.
+                             current_cadenced_sparse_topology_first_sweep compares
+                             5000 dense/sparse Actors (stride32), 5001 blocks each.
+                             No selection runs another automatically.
+                             profile_scheduler_queue_wakeup_occupancy_10k retains
+                             its historical strict target, exact-only, not acceptance.
   --production-reference-replay
                              Run the current pinned production-Wasm block/proof replay
+  --router-predicate-baseline PROFILE
+                                 Request Router+4 predicates: short, system-first,
+                                 user-first. Mixed/User bodies lack ordinary capacity;
+                                 no implicit model-to-production-artifact transfer.
+  --transfer-baseline PROFILE     Request scoped Transfer: short, system-first,
+                                  user-first, system-recurring, user-recurring.
+                                  Short native prerequisites are retired/unavailable;
+                                  User profiles lack qualified ordinary capacity.
+                                  No implicit model-to-production-artifact transfer.
+                                  Only explicit recurring selection runs 2 x (64+100).
+                                  Each command has a 60-minute bound; never builds Wasm.
   --integrated-w0-w1              Run only the full-Executive W0/W1 preparation gate
   --integrated-w1-actor-only      Run the exact-Wasm 100-block Actor-only W1 campaign
   --integrated-w1-continuous-user Run the exact-Wasm 100-block continuous-user W1 campaign
@@ -86,11 +128,14 @@ Options:
   --integrated-w4-heterogeneous-effects
                                   Run exact-Wasm Actor-only and valid-user W4 effects
   --integrated-w5-lifecycle-retry-cleanup
-                                  Run native and exact-Wasm W5 lifecycle/retry/cleanup
+                                  Request W5 native/exact-Wasm gates; unavailable at
+                                  default User capacity, no implicit model transfer
   --integrated-w6-mixed-arrival-lifecycle
-                                  Run native and exact-Wasm W6 clocks/Triggers/churn
+                                  Request W6 native/exact-Wasm gates; unavailable at
+                                  default User capacity, no implicit model transfer
   --integrated-current-w7-deadlines
-                                  Run native/exact-Wasm current W7 Sleep/reentry and bounded drain
+                                  Request User retry-Deadline native/exact-Wasm gates;
+                                  unavailable at default capacity, no model transfer
   --integrated-w7-due-only-active-frontier
                                   Run native and exact-Wasm W7 active-frontier scaling
   --integrated-w8-tombstone-prefix-chunk-pressure
@@ -100,7 +145,9 @@ Options:
   --integrated-control-attribution
                                   Run native and exact-Wasm schedule-Control phase attribution
   --integrated-funded-user-action
-                                  Run native and exact-Wasm funded User Action fee evidence
+                                  Request native/exact-Wasm User Action fee evidence;
+                                  missing default User selection refuses, never enables
+                                  model authority for the exact-Wasm stage
   --backpressure-audit            Run existing-path atomicity/retry falsifiers
 
 The preparation gate authors real ordered inherents, finalizes actor-only and
@@ -119,21 +166,24 @@ cells to completion and reports Opening, middle, and final Steps separately.
 The W4 campaign preserves all 15 reference identities, fills the remaining slots
 with 9,485 Transfer, 400 Router SwapOut, and 100 StopCycle Actors, and runs both
 Actor-only and continuously saturated valid-user demand for 100 linked blocks.
-The W5 campaign completes one five-Actor Manual matrix across zero-Step,
+The W5 fixture retains one five-Actor Manual matrix across zero-Step,
 Opening/middle/final Running, retry exhaustion, productive cleanup, minimal
 admission apoptosis, and uncompensated committed-prefix durability.
-The W6 campaign combines dense Manual readiness, sparse block windows, AtTime
+The W6 fixture combines dense Manual readiness, sparse block windows, AtTime
 tick deadlines and seeded Cadenced periods with pause/resume and owner close.
-It checks Q1, window timing, retained readiness and no closed-Actor execution.
+It retains Q1, window timing, readiness and no closed-Actor execution.
 Distinct short tick periods can become due together in the same produced block.
-The current W7 deadline campaign creates 1,024 real User retries through signed
-Manual readiness and ordinary funding-unavailable Attempts, with 16 Actors per
-owner across 64 owners. Its 32 C32 deadline pages become due 32 Actors/block for
-32 blocks, followed by a fixed 32-block drain. It checks due-key/slot extraction
-order, B+1 return service, retry exhaustion and custody neutrality, reporting
-unfinished Sleep/Service obligations, persistent bytes/key mutations and proofs.
-The 64 setup blocks remain separate from the 64-block measurement horizon; every
-block is replayed against the pinned Wasm. A false completion target is retained.
+Both integrated requests require their default-native selection, which lacks User
+capacity. Separate model-native qualification cannot enable the exact-Wasm stage.
+The current W7 fixture retains 1,024 User retries across 64 owners, signed Manual
+readiness, ordinary funding-unavailable Attempts and 16 Actors per owner. Its
+32 C32 pages become due 32 Actors/block for 32 blocks, then retain a fixed
+32-block drain. Assertions cover due-key/slot order, B+1, exhaustion, custody and
+unfinished Sleep/Service obligations. The 64 setup blocks stay outside the
+64-block observation window, whose original false target remains visible.
+Its integrated request keeps ordinary native authority, which lacks User capacity;
+model-native preparation cannot qualify the exact-Wasm stage. Artifact replay
+assertions remain unchanged, not newly accepted by this request.
 The W7 campaign compares one 100-due-Actor control with the same due frontier at
 10,000 total identities: 4,943 future, 4,942 unsignaled, and 15 retained reference
 identities form the 9,900 non-due population. Both profiles must preserve equal
@@ -177,6 +227,17 @@ parse_args() {
             --quick)
                 QUICK_MODE=1
                 ;;
+            --h1-diagnostic)
+                H1_DIAGNOSTIC=1
+                ;;
+            --package-only)
+                [[ "$PACKAGE_ONLY" == 0 ]] || { log_error 'Duplicate --package-only'; exit 2; }
+                PACKAGE_ONLY=1
+                ;;
+            --embedding-only)
+                [[ "$EMBEDDING_ONLY" == 0 ]] || { log_error 'Duplicate --embedding-only'; exit 2; }
+                EMBEDDING_ONLY=1
+                ;;
             --exact-heavy-profile)
                 [[ $# -ge 2 ]] || {
                     log_error "--exact-heavy-profile requires a profile name"
@@ -187,6 +248,28 @@ parse_args() {
                 ;;
             --production-reference-replay)
                 PRODUCTION_REFERENCE_REPLAY=1
+                ;;
+            --router-predicate-baseline)
+                [[ $# -ge 2 ]] || { log_error '--router-predicate-baseline requires a profile'; exit 2; }
+                [[ "$INTEGRATED_TRANSFER_BASELINE" == 0 ]] || { log_error 'Select one economic baseline profile'; exit 2; }
+                case "$2" in
+                    short|system-first|user-first) ;;
+                    *) log_error "Unknown Router predicate baseline: $2"; exit 2 ;;
+                esac
+                INTEGRATED_TRANSFER_BASELINE=1
+                TRANSFER_BASELINE_PROFILE="router-$2"
+                shift
+                ;;
+            --transfer-baseline)
+                [[ $# -ge 2 ]] || { log_error '--transfer-baseline requires a profile'; exit 2; }
+                [[ "$INTEGRATED_TRANSFER_BASELINE" == 0 ]] || { log_error 'Select one Transfer baseline profile'; exit 2; }
+                case "$2" in
+                    short|system-first|user-first|system-recurring|user-recurring) ;;
+                    *) log_error "Unknown Transfer baseline profile: $2"; exit 2 ;;
+                esac
+                INTEGRATED_TRANSFER_BASELINE=1
+                TRANSFER_BASELINE_PROFILE="$2"
+                shift
                 ;;
             --integrated-w0-w1)
                 INTEGRATED_W0_W1=1
@@ -245,7 +328,17 @@ parse_args() {
         esac
         shift
     done
-    local integrated_count=$((INTEGRATED_W0_W1 + INTEGRATED_W1_ACTOR_ONLY + INTEGRATED_W1_CONTINUOUS_USER + INTEGRATED_W2_SCHEDULES + INTEGRATED_W3_OPENING_MATRIX + INTEGRATED_W4_HETEROGENEOUS_EFFECTS + INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP + INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE + INTEGRATED_CURRENT_W7_DEADLINES + INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER + INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE + INTEGRATED_W9_RESOURCE_INDEPENDENCE + INTEGRATED_CONTROL_ATTRIBUTION + INTEGRATED_FUNDED_USER_ACTION))
+    local integrated_count=$((INTEGRATED_TRANSFER_BASELINE + INTEGRATED_W0_W1 + INTEGRATED_W1_ACTOR_ONLY + INTEGRATED_W1_CONTINUOUS_USER + INTEGRATED_W2_SCHEDULES + INTEGRATED_W3_OPENING_MATRIX + INTEGRATED_W4_HETEROGENEOUS_EFFECTS + INTEGRATED_W5_LIFECYCLE_RETRY_CLEANUP + INTEGRATED_W6_MIXED_ARRIVAL_LIFECYCLE + INTEGRATED_CURRENT_W7_DEADLINES + INTEGRATED_W7_DUE_ONLY_ACTIVE_FRONTIER + INTEGRATED_W8_TOMBSTONE_PREFIX_CHUNK_PRESSURE + INTEGRATED_W9_RESOURCE_INDEPENDENCE + INTEGRATED_CONTROL_ATTRIBUTION + INTEGRATED_FUNDED_USER_ACTION))
+    if [[ "$PACKAGE_ONLY" == 1 && ( "$EMBEDDING_ONLY" == 1 || "$QUICK_MODE" == 1 || "$H1_DIAGNOSTIC" == 1 || "$integrated_count" -gt 0 || "$BACKPRESSURE_AUDIT" == 1 || "$PRODUCTION_REFERENCE_REPLAY" == 1 || -n "$EXACT_HEAVY_PROFILE" ) ]]; then
+        log_error '--package-only selects one independent archive cohort'; exit 2
+    fi
+    if [[ "$EMBEDDING_ONLY" == 1 && ( "$QUICK_MODE" == 1 || "$H1_DIAGNOSTIC" == 1 || "$integrated_count" -gt 0 || "$BACKPRESSURE_AUDIT" == 1 || "$PRODUCTION_REFERENCE_REPLAY" == 1 || -n "$EXACT_HEAVY_PROFILE" ) ]]; then
+        log_error '--embedding-only selects one independent native consumer cohort'; exit 2
+    fi
+    if [[ "$H1_DIAGNOSTIC" == "1" && ( "$QUICK_MODE" == "1" || "$integrated_count" -gt 0 || "$BACKPRESSURE_AUDIT" == "1" || "$PRODUCTION_REFERENCE_REPLAY" == "1" || -n "$EXACT_HEAVY_PROFILE" ) ]]; then
+        log_error "--h1-diagnostic selects one independent native diagnostic cohort"
+        exit 2
+    fi
     if [[ "$integrated_count" -gt 1 ]]; then
         log_error "Select exactly one integrated workload cohort"
         exit 2
@@ -268,7 +361,9 @@ parse_args() {
     fi
     if [[ -n "$EXACT_HEAVY_PROFILE" ]]; then
         local exact_matches=0 profile
-        [[ "$EXACT_HEAVY_PROFILE" == "$OCCUPANCY_HEAVY_PROFILE" ]] && exact_matches=$((exact_matches + 1))
+        for profile in "$OCCUPANCY_HEAVY_PROFILE" "$OCCUPANCY_PROGRESS_PROFILE" "$TOPOLOGY_PROGRESS_PROFILE" "$HISTORICAL_OCCUPANCY_PROFILE"; do
+            [[ "$EXACT_HEAVY_PROFILE" == "$profile" ]] && exact_matches=$((exact_matches + 1))
+        done
         for profile in "${REQUIRED_HEAVY_PROFILES[@]}" "${PACKAGE_HEAVY_PROFILES[@]}"; do
             [[ "$EXACT_HEAVY_PROFILE" == "$profile" ]] && exact_matches=$((exact_matches + 1))
         done
@@ -307,37 +402,9 @@ check_prerequisites() {
     log_success "Release gate prerequisites checked"
 }
 
-worktree_evidence_identity() {
-    (
-        cd "$PROJECT_ROOT" || exit 1
-        git ls-files --cached --others --exclude-standard -z -- \
-            template scripts web-client simulator docs .github .cargo \
-            ':/*.toml' ':/*.json' .gitignore .gitattributes .npmrc \
-            ':(exclude,glob)**/target/**' ':(exclude,glob)**/node_modules/**' \
-            ':(exclude,glob)**/build/**' ':(exclude,glob)**/dist/**' \
-            ':(exclude,glob)**/.svelte-kit/**' ':(exclude)web-client/.papi' \
-            ':(exclude)template/chain_spec.json' \
-            | LC_ALL=C sort -zu \
-            | while IFS= read -r -d '' path; do
-                if [[ -L "$path" ]]; then
-                    log_error "Source identity cannot certify a symlink: $path" >&2
-                    exit 1
-                fi
-                # A tracked deletion has the same source tree before and after staging.
-                [[ -e "$path" ]] || continue
-                if [[ -x "$path" ]]; then
-                    printf 'executable\0'
-                else
-                    printf 'regular\0'
-                fi
-                sha256sum --zero -- "$path" || exit 1
-            done \
-            | sha256sum | awk '{print $1}'
-    )
-}
-
 run_self_test() (
     local fixture
+    local QUICK_MODE=0 EMBEDDING_ONLY=0 PACKAGE_ONLY=0
     require_commands bash git sha256sum sort mktemp
     fixture="$(mktemp -d "${TMPDIR:-/tmp}/deos-source-identity.XXXXXX")"
     trap 'rm -rf -- "$fixture"' EXIT
@@ -346,6 +413,206 @@ run_self_test() (
     assert_equal() { [[ "$1" == "$2" ]] || { log_error "$3"; exit 1; }; }
     assert_changed() { [[ "$1" != "$2" ]] || { log_error "$3"; exit 1; }; }
 
+    (parse_args --h1-diagnostic; [[ "$H1_DIAGNOSTIC" == "1" ]])
+    (
+        cargo() {
+            printf '%s\n' \
+                'tests::production_block_replay::full_executive_funded_action_collection_replays_exact_production_wasm: test' \
+                'tests::production_block_replay::full_executive_w5_lifecycle_retry_cleanup_campaign_replays_exact_production_wasm: test' \
+                'tests::production_block_replay::full_executive_w6_mixed_arrival_lifecycle_campaign_replays_exact_production_wasm: test' \
+                'tests::production_block_replay::full_executive_current_w7_deadlines_replay_exact_production_wasm: test' \
+                'tests::production_block_replay::transfer_baseline::transfer_baseline_short_replays_exact_production_wasm: test'
+        }
+        # External timeout cannot invoke the shell's Cargo stub; no real child runs here.
+        timeout() { shift; "$@"; }
+        run_shell_step() { exit 77; }
+        local gate status TRANSFER_BASELINE_PROFILE=short
+        for gate in run_integrated_funded_user_action_gate \
+            run_integrated_w5_lifecycle_retry_cleanup_gate \
+            run_integrated_w6_mixed_arrival_lifecycle_gate \
+            run_integrated_current_w7_deadlines_gate \
+            run_transfer_baseline_gate; do
+            status=0
+            "$gate" >/dev/null 2>&1 || status=$?
+            assert_equal "$status" 1 "Missing native User selection reached execution or Wasm: $gate"
+        done
+    )
+    (
+        local expected_profile expected_label gate demand stub_listing stub_output expected_command
+        local WASM_SNAPSHOT='/fixture/production snapshot.wasm'
+        log_error() { printf '%s\n' "$*" >&2; }
+        cargo() {
+            [[ "$PWD" == "$TEMPLATE_DIR" && "$*" == 'test --release -p deos-runtime --locked -- --list' ]] || exit 78
+            printf '%s\n' "$stub_listing"
+        }
+        run_shell_step() {
+            assert_equal "$1" "Workload gate: exact production-Wasm $expected_label" 'Integrated replay label changed'
+            assert_equal "$2" '' 'Integrated replay timeout changed'
+            assert_equal "$3" "$expected_command" 'Integrated replay command changed'
+            printf 'replay-selected'
+        }
+        while IFS='|' read -r gate demand expected_profile expected_label; do
+            expected_command="cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$expected_profile' -- --ignored --nocapture"
+            stub_listing="tests::production_block_replay::$expected_profile: test"
+            assert_equal "$("$gate" ${demand:+"$demand"})" 'replay-selected' "Integrated replay routing changed: $gate $demand"
+            stub_listing="$stub_listing"$'\n'"$stub_listing"
+            if stub_output="$("$gate" ${demand:+"$demand"} 2>/dev/null)"; then
+                log_error "Integrated replay accepted duplicate selection: $gate $demand"; exit 1
+            fi
+            assert_equal "$stub_output" '' 'Duplicate selection reached replay'
+            stub_listing='unrelated_profile: test'
+            if stub_output="$("$gate" ${demand:+"$demand"} 2>/dev/null)"; then
+                log_error "Integrated replay accepted missing selection: $gate $demand"; exit 1
+            fi
+            assert_equal "$stub_output" '' 'Missing selection reached replay'
+        done <<'EOF'
+run_integrated_w1_campaign_gate|actor-only|full_executive_w1_actor_only_100_block_campaign_replays_exact_production_wasm|Actor-only W1 campaign
+run_integrated_w1_campaign_gate|continuous-user|full_executive_w1_continuous_valid_user_100_block_campaign_replays_exact_production_wasm|continuous valid-user W1 campaign
+run_integrated_w2_schedule_gate||full_executive_w2_manual_and_cadenced_only_100_block_campaigns_replay_exact_production_wasm|Manual-only and Cadenced-only W2 campaigns
+run_integrated_w3_opening_matrix_gate||full_executive_w3_opening_predicate_mixed_length_campaign_replays_exact_production_wasm|W3 Opening-predicate and mixed-length matrix
+run_integrated_w4_heterogeneous_effects_gate||full_executive_w4_heterogeneous_effect_campaigns_replay_exact_production_wasm|W4 heterogeneous effect campaigns
+EOF
+    )
+    (
+        local gate expected_native expected_wasm expected_prefix expected_skip stub_listing stub_output expected_commands
+        local SKIP_WASM_BUILD='' WASM_SNAPSHOT='/fixture/production snapshot.wasm'
+        log_error() { printf '%s\n' "$*" >&2; }
+        cargo() {
+            [[ "$PWD" == "$TEMPLATE_DIR" && "$*" == 'test -p deos-runtime --locked -- --list' ]] || exit 78
+            assert_equal "${SKIP_WASM_BUILD:-}" "$expected_skip" 'Integrated discovery environment changed'
+            printf '%s\n' "$stub_listing"
+        }
+        run_shell_step() {
+            assert_equal "$2" '' 'Integrated native/replay timeout changed'
+            printf '%s\n' "$3"
+        }
+        while IFS='|' read -r gate expected_native expected_wasm expected_prefix expected_skip; do
+            expected_commands="cd \"$TEMPLATE_DIR\" && ${expected_prefix}cargo test -p deos-runtime --locked '$expected_native' -- --nocapture"
+            expected_commands+=$'\n'"cd \"$TEMPLATE_DIR\" && ${expected_prefix}DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$expected_wasm' -- --ignored --nocapture"
+            stub_listing="tests::production_block_replay::$expected_native: test"$'\n'"tests::production_block_replay::$expected_wasm: test"
+            assert_equal "$("$gate")" "$expected_commands" "Integrated native/replay routing changed: $gate"
+            local native_entry="tests::production_block_replay::$expected_native: test"
+            local wasm_entry="tests::production_block_replay::$expected_wasm: test"
+            for stub_listing in "$native_entry" "$wasm_entry" \
+                "$native_entry"$'\n'"$native_entry"$'\n'"$wasm_entry" \
+                "$native_entry"$'\n'"$wasm_entry"$'\n'"$wasm_entry"; do
+                if stub_output="$("$gate" 2>/dev/null)"; then
+                    log_error "Integrated native/replay accepted missing or duplicate selection: $gate"; exit 1
+                fi
+                assert_equal "$stub_output" '' 'Incomplete/ambiguous pair reached execution'
+            done
+        done <<'EOF'
+run_integrated_w0_w1_gate|full_executive_w0_w1_fixture_covers_actor_only_and_valid_user_demand|full_executive_w0_w1_replays_exact_production_wasm||
+run_integrated_w7_due_only_active_frontier_gate|full_executive_w7_due_only_active_frontier_fixture_scales_independently|full_executive_w7_due_only_active_frontier_campaign_replays_exact_production_wasm|RUST_TEST_THREADS=1 |
+run_integrated_w8_tombstone_prefix_chunk_pressure_gate|full_executive_w8_tombstone_prefix_chunk_pressure_fixture_preserves_fifo|full_executive_w8_tombstone_prefix_chunk_pressure_campaign_replays_exact_production_wasm|RUST_TEST_THREADS=1 |
+run_integrated_w9_resource_independence_gate|full_executive_w9_resource_independence_fixture_preserves_actor_service|full_executive_w9_resource_independence_campaign_replays_exact_production_wasm|RUST_TEST_THREADS=1 |
+run_integrated_control_attribution_gate|full_executive_control_phase_attribution_fixture_isolates_materialization|full_executive_control_phase_attribution_replays_exact_production_wasm|SKIP_WASM_BUILD=1 RUST_TEST_THREADS=1 |1
+EOF
+    )
+    local baseline_profile conflicting_mode
+    for baseline_profile in short system-first user-first system-recurring user-recurring; do
+        (parse_args --transfer-baseline "$baseline_profile"; [[ "$TRANSFER_BASELINE_PROFILE" == "$baseline_profile" && "$INTEGRATED_TRANSFER_BASELINE" == 1 ]])
+    done
+    for conflicting_mode in --quick --integrated-w0-w1 --h1-diagnostic --production-reference-replay --backpressure-audit; do
+        if (parse_args --transfer-baseline short "$conflicting_mode") >/dev/null 2>&1; then
+            log_error "Transfer baseline accepted conflicting mode: $conflicting_mode"; exit 1
+        fi
+    done
+    if (parse_args --transfer-baseline short --transfer-baseline user-recurring) >/dev/null 2>&1; then
+        log_error 'Transfer baseline accepted duplicate selectors'; exit 1
+    fi
+    if (parse_args --transfer-baseline unknown) >/dev/null 2>&1 || (parse_args --transfer-baseline) >/dev/null 2>&1; then
+        log_error 'Transfer baseline accepted missing/unknown profile'; exit 1
+    fi
+    for baseline_profile in short system-first user-first; do
+        (parse_args --router-predicate-baseline "$baseline_profile"; [[ "$TRANSFER_BASELINE_PROFILE" == "router-$baseline_profile" && "$INTEGRATED_TRANSFER_BASELINE" == 1 ]])
+    done
+    for conflicting_mode in --quick --integrated-w0-w1 --h1-diagnostic --production-reference-replay --backpressure-audit; do
+        if (parse_args --router-predicate-baseline short "$conflicting_mode") >/dev/null 2>&1; then
+            log_error "Router predicate baseline accepted conflicting mode: $conflicting_mode"; exit 1
+        fi
+    done
+    if (parse_args --router-predicate-baseline short --transfer-baseline short) >/dev/null 2>&1 \
+        || (parse_args --transfer-baseline short --router-predicate-baseline short) >/dev/null 2>&1 \
+        || (parse_args --router-predicate-baseline short --router-predicate-baseline user-first) >/dev/null 2>&1 \
+        || (parse_args --router-predicate-baseline unknown) >/dev/null 2>&1 \
+        || (parse_args --router-predicate-baseline) >/dev/null 2>&1; then
+        log_error 'Router predicate baseline accepted invalid/duplicate selector'; exit 1
+    fi
+    local conflicting
+    for conflicting in --quick --integrated-w0-w1 --production-reference-replay --backpressure-audit; do
+        if (parse_args --h1-diagnostic "$conflicting") >/dev/null 2>&1; then
+            log_error "H1 diagnostic accepted conflicting mode: $conflicting"
+            exit 1
+        fi
+    done
+    if (parse_args --h1-diagnostic --exact-heavy-profile maximum_dormant_identity_population_adds_no_idle_scan) >/dev/null 2>&1; then
+        log_error 'H1 diagnostic accepted a heavy-profile cohort'
+        exit 1
+    fi
+    local occupancy
+    for occupancy in "$OCCUPANCY_HEAVY_PROFILE" "$OCCUPANCY_PROGRESS_PROFILE" "$TOPOLOGY_PROGRESS_PROFILE" "$HISTORICAL_OCCUPANCY_PROFILE"; do
+        (parse_args --exact-heavy-profile "$occupancy"; [[ "$EXACT_HEAVY_PROFILE" == "$occupancy" ]])
+    done
+    assert_equal "$(INCLUDE_NIGHTLY_HEAVY=0 INCLUDE_OCCUPANCY_PROFILE=1 required_heavy_profiles)" \
+        "$OCCUPANCY_HEAVY_PROFILE" 'Current occupancy inventory selected a historical target'
+    if (parse_args --exact-heavy-profile missing_occupancy_profile) >/dev/null 2>&1; then
+        log_error 'Exact heavy selector accepted an undeclared occupancy profile'; exit 1
+    fi
+    (parse_args --embedding-only; [[ "$EMBEDDING_ONLY" == 1 ]])
+    for conflicting_mode in --quick --h1-diagnostic --integrated-w0-w1 --production-reference-replay --backpressure-audit; do
+        if (parse_args --embedding-only "$conflicting_mode") >/dev/null 2>&1; then
+            log_error "Embedding accepted conflicting mode: $conflicting_mode"; exit 1
+        fi
+    done
+    if (parse_args --embedding-only --exact-heavy-profile "$OCCUPANCY_HEAVY_PROFILE") >/dev/null 2>&1 \
+        || (parse_args --embedding-only --embedding-only) >/dev/null 2>&1; then
+        log_error 'Embedding accepted duplicate/heavy selection'; exit 1
+    fi
+    (
+        check_prerequisites() { log_error 'Embedding touched full-runtime prerequisites'; return 1; }
+        capture_evidence_identity() { return 1; }
+        snapshot_wasm_artifact() { return 1; }
+        run_embedding_only() { printf 'embedding-native-only'; }
+        assert_equal "$(main --embedding-only)" 'embedding-native-only' 'Embedding dispatch crossed full-runtime setup'
+    )
+    (parse_args --package-only; [[ "$PACKAGE_ONLY" == 1 ]])
+    for conflicting_mode in --quick --embedding-only --h1-diagnostic --integrated-w0-w1 --production-reference-replay --backpressure-audit; do
+        if (parse_args --package-only "$conflicting_mode") >/dev/null 2>&1; then
+            log_error "Package accepted conflicting mode: $conflicting_mode"; exit 1
+        fi
+    done
+    if (parse_args --package-only --package-only) >/dev/null 2>&1 \
+        || (parse_args --package-only --exact-heavy-profile "$OCCUPANCY_HEAVY_PROFILE") >/dev/null 2>&1; then
+        log_error 'Package accepted duplicate/heavy selection'; exit 1
+    fi
+    (
+        check_prerequisites() { return 1; }
+        capture_evidence_identity() { return 1; }
+        snapshot_wasm_artifact() { return 1; }
+        run_package_only() { printf 'package-offline-only'; }
+        assert_equal "$(main --package-only)" 'package-offline-only' 'Package dispatch crossed full-runtime setup'
+    )
+    (
+        timeout() { shift; "$@"; }
+        cargo() {
+            if [[ "$1" == pkgid ]]; then
+                printf 'path+file:///fixture#pallet-deos-actors@0.7.27\n'
+            else
+                printf '%s\n' Cargo.toml src/lib.rs tests/current_state_semantic_oracle.rs tests/fixtures/current_state_round_trace_v1.tsv README.md docs/embedding.md docs/specification.en.md docs/architecture.en.md
+            fi
+        }
+        run_shell_step() {
+            [[ "$3" == *'cargo package '* && "$3" != *'--no-verify'* && "$3" == *'--test current_state_semantic_oracle'* ]] || exit 1
+            printf 'archive-verification-selected'
+        }
+        [[ "$(run_package_archive_gate)" == *archive-verification-selected* ]] || exit 1
+        [[ "$(run_package_archive_gate list-only)" != *archive-verification-selected* ]] || exit 1
+        cargo() { printf '%s\n' Cargo.toml src/lib.rs; }
+        if run_package_archive_gate >/dev/null 2>&1; then
+            log_error 'Package surface accepted incomplete content'; exit 1
+        fi
+    )
     git -C "$fixture" init -q
     git -C "$fixture" config user.name 'Source identity test'
     git -C "$fixture" config user.email 'source-identity@example.invalid'
@@ -395,7 +662,7 @@ run_self_test() (
         log_error 'Symlink source must fail closed instead of certifying external bytes'
         exit 1
     fi
-    log_success 'Actors source identity self-test passed'
+    log_success 'Actors source identity and diagnostic selection self-test passed'
 )
 
 capture_evidence_identity() {
@@ -508,18 +775,59 @@ verify_heavy_profiles_resolve_exactly_once() {
     log_success "All package heavy profiles resolve to exactly one test"
 }
 
-run_integrated_w0_w1_gate() {
-    local native_profile="full_executive_w0_w1_fixture_covers_actor_only_and_valid_user_demand"
-    local wasm_profile="full_executive_w0_w1_replays_exact_production_wasm"
-    local listing profile matches
-    listing="$(cd "$TEMPLATE_DIR" && cargo test -p deos-runtime --locked -- --list 2>/dev/null)"
-    for profile in "$native_profile" "$wasm_profile"; do
+run_transfer_baseline_gate() {
+    local prefix='tests::production_block_replay::transfer_baseline::transfer_baseline'
+    local profile listing native
+    require_commands timeout
+    listing="$(cd "$TEMPLATE_DIR" && SKIP_WASM_BUILD=1 timeout 60m cargo test --release --lib -p deos-runtime --locked -- --list)"
+    case "$TRANSFER_BASELINE_PROFILE" in
+        router-*)
+            prefix='tests::production_block_replay::transfer_baseline::router_predicate_baseline'
+            case "$TRANSFER_BASELINE_PROFILE" in
+                router-short) profile="${prefix}_short_replays_exact_production_wasm" ;;
+                router-system-first) profile="${prefix}_system_first" ;;
+                router-user-first) profile="${prefix}_user_first" ;;
+            esac
+            ;;
+        short)
+            profile="${prefix}_short_replays_exact_production_wasm"
+            for native in short_profiles first_block_preserves_partial_fifo owner_partition_and_phase_contract fee_sink_allocations_reconcile legacy_runner_preserves_demand_modes; do
+                [[ "$(printf '%s\n' "$listing" | grep -Fxc "${prefix}_${native}: test")" == 1 ]] || {
+                    log_error "Missing/duplicate short native profile: $native"; return 1;
+                }
+            done
+            run_shell_step "Transfer baseline: short native conformance only" "60" \
+                "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 cargo test --lib -p deos-runtime --locked 'tests::production_block_replay::transfer_baseline::transfer_baseline_' -- --nocapture"
+            ;;
+        *)
+            profile="${prefix}_${TRANSFER_BASELINE_PROFILE//-/_}"
+            ;;
+    esac
+    [[ "$(printf '%s\n' "$listing" | grep -Fxc "$profile: test")" == 1 ]] || {
+        log_error "Transfer baseline must select exactly one declared profile: $profile"; return 1;
+    }
+    run_shell_step "Economic baseline: exact production-Wasm $TRANSFER_BASELINE_PROFILE" "60" \
+        "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release --lib -p deos-runtime --locked '$profile' -- --exact --ignored --nocapture"
+}
+
+require_integrated_profiles() {
+    local listing="$1" profile matches
+    shift
+    for profile in "$@"; do
         matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
         if [[ "$matches" -ne 1 ]]; then
             log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
             return 1
         fi
     done
+}
+
+run_integrated_w0_w1_gate() {
+    local native_profile="full_executive_w0_w1_fixture_covers_actor_only_and_valid_user_demand"
+    local wasm_profile="full_executive_w0_w1_replays_exact_production_wasm"
+    local listing
+    listing="$(cd "$TEMPLATE_DIR" && cargo test -p deos-runtime --locked -- --list 2>/dev/null)"
+    require_integrated_profiles "$listing" "$native_profile" "$wasm_profile" || return 1
     run_shell_step \
         "Workload gate: native full-Executive W0/W1 fixture" \
         "" \
@@ -528,6 +836,17 @@ run_integrated_w0_w1_gate() {
         "Workload gate: exact production-Wasm W0/W1 replay" \
         "" \
         "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$wasm_profile' -- --ignored --nocapture"
+}
+
+run_integrated_wasm_gate() {
+    local profile="$1" label="$2"
+    local listing
+    listing="$(cd "$TEMPLATE_DIR" && cargo test --release -p deos-runtime --locked -- --list 2>/dev/null)"
+    require_integrated_profiles "$listing" "$profile" || return 1
+    run_shell_step \
+        "Workload gate: exact production-Wasm $label" \
+        "" \
+        "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
 }
 
 run_integrated_w1_campaign_gate() {
@@ -547,62 +866,25 @@ run_integrated_w1_campaign_gate() {
             return 2
             ;;
     esac
-    local listing matches
-    listing="$(cd "$TEMPLATE_DIR" && cargo test --release -p deos-runtime --locked -- --list 2>/dev/null)"
-    matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
-    if [[ "$matches" -ne 1 ]]; then
-        log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
-        return 1
-    fi
-    run_shell_step \
-        "Workload gate: exact production-Wasm ${label} W1 campaign" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
+    run_integrated_wasm_gate "$profile" "${label} W1 campaign"
 }
 
 run_integrated_w2_schedule_gate() {
-    local profile="full_executive_w2_manual_and_cadenced_only_100_block_campaigns_replay_exact_production_wasm"
-    local listing matches
-    listing="$(cd "$TEMPLATE_DIR" && cargo test --release -p deos-runtime --locked -- --list 2>/dev/null)"
-    matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
-    if [[ "$matches" -ne 1 ]]; then
-        log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
-        return 1
-    fi
-    run_shell_step \
-        "Workload gate: exact production-Wasm Manual-only and Cadenced-only W2 campaigns" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
+    run_integrated_wasm_gate \
+        "full_executive_w2_manual_and_cadenced_only_100_block_campaigns_replay_exact_production_wasm" \
+        "Manual-only and Cadenced-only W2 campaigns"
 }
 
 run_integrated_w3_opening_matrix_gate() {
-    local profile="full_executive_w3_opening_predicate_mixed_length_campaign_replays_exact_production_wasm"
-    local listing matches
-    listing="$(cd "$TEMPLATE_DIR" && cargo test --release -p deos-runtime --locked -- --list 2>/dev/null)"
-    matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
-    if [[ "$matches" -ne 1 ]]; then
-        log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
-        return 1
-    fi
-    run_shell_step \
-        "Workload gate: exact production-Wasm W3 Opening-predicate and mixed-length matrix" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
+    run_integrated_wasm_gate \
+        "full_executive_w3_opening_predicate_mixed_length_campaign_replays_exact_production_wasm" \
+        "W3 Opening-predicate and mixed-length matrix"
 }
 
 run_integrated_w4_heterogeneous_effects_gate() {
-    local profile="full_executive_w4_heterogeneous_effect_campaigns_replay_exact_production_wasm"
-    local listing matches
-    listing="$(cd "$TEMPLATE_DIR" && cargo test --release -p deos-runtime --locked -- --list 2>/dev/null)"
-    matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
-    if [[ "$matches" -ne 1 ]]; then
-        log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
-        return 1
-    fi
-    run_shell_step \
-        "Workload gate: exact production-Wasm W4 heterogeneous effect campaigns" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && DEOS_PRODUCTION_WASM='$WASM_SNAPSHOT' cargo test --release -p deos-runtime --locked '$profile' -- --ignored --nocapture"
+    run_integrated_wasm_gate \
+        "full_executive_w4_heterogeneous_effect_campaigns_replay_exact_production_wasm" \
+        "W4 heterogeneous effect campaigns"
 }
 
 run_integrated_w5_lifecycle_retry_cleanup_gate() {
@@ -613,7 +895,7 @@ run_integrated_w5_lifecycle_retry_cleanup_gate() {
     for profile in "$native_profile" "$wasm_profile"; do
         matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
         if [[ "$matches" -ne 1 ]]; then
-            log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
+            log_error "W5 profile '${profile}' unavailable or ambiguous (${matches} selections); expected exactly 1. Native User setup requires explicit model capacity, which cannot transfer to the exact-Wasm stage"
             return 1
         fi
     done
@@ -635,7 +917,7 @@ run_integrated_funded_user_action_gate() {
     for profile in "$native_profile" "$wasm_profile"; do
         matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
         if [[ "$matches" -ne 1 ]]; then
-            log_error "Funded User Action profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
+            log_error "Funded User Action profile '${profile}' unavailable or ambiguous (${matches} selections); expected exactly 1. Native User preparation requires explicit model capacity, which cannot transfer to the exact-Wasm stage"
             return 1
         fi
     done
@@ -657,7 +939,7 @@ run_integrated_w6_mixed_arrival_lifecycle_gate() {
     for profile in "$native_profile" "$wasm_profile"; do
         matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
         if [[ "$matches" -ne 1 ]]; then
-            log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
+            log_error "W6 profile '${profile}' unavailable or ambiguous (${matches} selections); expected exactly 1. Native User setup requires explicit model capacity, which cannot transfer to the exact-Wasm stage"
             return 1
         fi
     done
@@ -679,7 +961,7 @@ run_integrated_current_w7_deadlines_gate() {
     for profile in "$native_profile" "$wasm_profile"; do
         matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
         if [[ "$matches" -ne 1 ]]; then
-            log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
+            log_error "Current W7 profile '${profile}' unavailable or ambiguous (${matches} selections); expected exactly 1. Native User setup requires explicit model capacity, which cannot transfer to the exact-Wasm stage"
             return 1
         fi
     done
@@ -696,15 +978,9 @@ run_integrated_current_w7_deadlines_gate() {
 run_integrated_w7_due_only_active_frontier_gate() {
     local native_profile="full_executive_w7_due_only_active_frontier_fixture_scales_independently"
     local wasm_profile="full_executive_w7_due_only_active_frontier_campaign_replays_exact_production_wasm"
-    local listing profile matches
+    local listing
     listing="$(cd "$TEMPLATE_DIR" && cargo test -p deos-runtime --locked -- --list 2>/dev/null)"
-    for profile in "$native_profile" "$wasm_profile"; do
-        matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
-        if [[ "$matches" -ne 1 ]]; then
-            log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
-            return 1
-        fi
-    done
+    require_integrated_profiles "$listing" "$native_profile" "$wasm_profile" || return 1
     run_shell_step \
         "Workload gate: native full-Executive W7 due-only active-frontier fixture" \
         "" \
@@ -718,15 +994,9 @@ run_integrated_w7_due_only_active_frontier_gate() {
 run_integrated_w8_tombstone_prefix_chunk_pressure_gate() {
     local native_profile="full_executive_w8_tombstone_prefix_chunk_pressure_fixture_preserves_fifo"
     local wasm_profile="full_executive_w8_tombstone_prefix_chunk_pressure_campaign_replays_exact_production_wasm"
-    local listing profile matches
+    local listing
     listing="$(cd "$TEMPLATE_DIR" && cargo test -p deos-runtime --locked -- --list 2>/dev/null)"
-    for profile in "$native_profile" "$wasm_profile"; do
-        matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
-        if [[ "$matches" -ne 1 ]]; then
-            log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
-            return 1
-        fi
-    done
+    require_integrated_profiles "$listing" "$native_profile" "$wasm_profile" || return 1
     run_shell_step \
         "Workload gate: native full-Executive W8 Service after closed-prefix setup" \
         "" \
@@ -740,15 +1010,9 @@ run_integrated_w8_tombstone_prefix_chunk_pressure_gate() {
 run_integrated_w9_resource_independence_gate() {
     local native_profile="full_executive_w9_resource_independence_fixture_preserves_actor_service"
     local wasm_profile="full_executive_w9_resource_independence_campaign_replays_exact_production_wasm"
-    local listing profile matches
+    local listing
     listing="$(cd "$TEMPLATE_DIR" && cargo test -p deos-runtime --locked -- --list 2>/dev/null)"
-    for profile in "$native_profile" "$wasm_profile"; do
-        matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
-        if [[ "$matches" -ne 1 ]]; then
-            log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
-            return 1
-        fi
-    done
+    require_integrated_profiles "$listing" "$native_profile" "$wasm_profile" || return 1
     run_shell_step \
         "Workload gate: native full-Executive W9 resource independence" \
         "" \
@@ -762,15 +1026,9 @@ run_integrated_w9_resource_independence_gate() {
 run_integrated_control_attribution_gate() {
     local native_profile="full_executive_control_phase_attribution_fixture_isolates_materialization"
     local wasm_profile="full_executive_control_phase_attribution_replays_exact_production_wasm"
-    local listing profile matches
+    local listing
     listing="$(cd "$TEMPLATE_DIR" && SKIP_WASM_BUILD=1 cargo test -p deos-runtime --locked -- --list 2>/dev/null)"
-    for profile in "$native_profile" "$wasm_profile"; do
-        matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
-        if [[ "$matches" -ne 1 ]]; then
-            log_error "Integrated profile '${profile}' resolved to ${matches} test(s); expected exactly 1"
-            return 1
-        fi
-    done
+    require_integrated_profiles "$listing" "$native_profile" "$wasm_profile" || return 1
     run_shell_step \
         "Workload gate: native schedule-Control phase attribution" \
         "" \
@@ -797,6 +1055,9 @@ run_production_reference_replay() {
 }
 
 run_exact_heavy_profile() {
+    if [[ "$EXACT_HEAVY_PROFILE" == "$HISTORICAL_OCCUPANCY_PROFILE" ]]; then
+        log_warning 'Historical occupancy target selected explicitly; its result is not current safety acceptance'
+    fi
     local package="deos-runtime"
     local profile
     for profile in "${PACKAGE_HEAVY_PROFILES[@]}"; do
@@ -818,13 +1079,81 @@ run_exact_heavy_profile() {
         "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p '$package' --locked '$EXACT_HEAVY_PROFILE' -- --ignored --nocapture"
 }
 
-# The nightly `scheduler_stress_fifo_*` matrices assert throughput bounds measured against the
-# previous engine; the new architecture serves fewer actors per block by construction, so those
-# bounds belong to the deferred workload refresh rather than to release acceptance.
+run_package_archive_gate() {
+    local listing required count
+    listing="$(cd "$TEMPLATE_DIR" && timeout 15m cargo package -p pallet-deos-actors --allow-dirty --locked --list)" || return 1
+    count="$(printf '%s\n' "$listing" | grep -c . || true)"
+    [[ "$count" -gt 0 ]] || { log_error 'Actor package selected no files'; return 1; }
+    for required in Cargo.toml src/lib.rs tests/current_state_semantic_oracle.rs tests/fixtures/current_state_round_trace_v1.tsv README.md docs/embedding.md docs/specification.en.md docs/architecture.en.md; do
+        grep -Fxq "$required" <<< "$listing" || { log_error "Actor package omits $required"; return 1; }
+    done
+    log_info "Actor package surface files=$count; required code/host/specification/architecture entries present"
+    [[ "${DEOS_VERBOSE:-0}" != 1 ]] || printf '%s\n' "$listing"
+    [[ "${1:-}" != list-only ]] || return 0
+    local package_id version archive
+    package_id="$(cd "$TEMPLATE_DIR" && cargo pkgid --locked -p pallet-deos-actors)" || return 1
+    version="${package_id##*@}"
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]] || { log_error 'Invalid package version'; return 1; }
+    archive="$TEMPLATE_DIR/target/package/pallet-deos-actors-$version"
+    run_shell_step "Actors gate: pallet package archive and distributed oracle" "15" \
+        "cd \"$TEMPLATE_DIR\" && cargo package -p pallet-deos-actors --allow-dirty --locked --target-dir \"$TEMPLATE_DIR/target\" && test -s \"$archive.crate\" && cargo test --locked --manifest-path \"$archive/Cargo.toml\" --target-dir \"$TEMPLATE_DIR/target\" --test current_state_semantic_oracle && sha256sum \"$archive.crate\""
+}
+
+run_package_only() {
+    require_directory "$TEMPLATE_DIR" 'Template directory'
+    hydrate_local_tool_paths
+    require_commands cargo git sha256sum timeout
+    run_self_test
+    local source_before
+    source_before="$(worktree_evidence_identity)"
+    log_info "Offline package source: $source_before"
+    log_info 'Package-only: Cargo verification, no publication, production artifacts or other acceptance cohorts'
+    CARGO_NET_OFFLINE=true SKIP_WASM_BUILD=1 run_package_archive_gate
+    [[ "$(worktree_evidence_identity)" == "$source_before" ]] || { log_error 'Package source changed during execution'; return 1; }
+    log_success 'Actor archive verification retained exact source identity'
+}
+
+run_independent_embedding_gate() {
+    local profile feature_args listing count
+    for profile in default dex-fixture try-runtime dex-fixture,try-runtime; do
+        feature_args=""
+        [[ "$profile" == default ]] || feature_args="--features $profile"
+        listing="$(cd "$TEMPLATE_DIR" && SKIP_WASM_BUILD=1 timeout 15m cargo test --$CARGO_PROFILE \
+            -p pallet-deos-actors-embedding-fixture --locked --lib $feature_args -- --list 2>&1)" || {
+            log_error "Embedding $profile listing/build failed"
+            printf '%s\n' "$listing" | tail -n 40
+            return 1
+        }
+        [[ "${DEOS_VERBOSE:-0}" != 1 ]] || printf '%s\n' "$listing"
+        count="$(printf '%s\n' "$listing" | grep -c ': test$' || true)"
+        [[ "$count" -gt 0 ]] || { log_error "Embedding $profile selected no tests"; return 1; }
+        log_info "Embedding profile=$profile tests=$count"
+        run_shell_step "Actors gate: independent embedding $profile" "15" \
+            "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 cargo test --$CARGO_PROFILE -p pallet-deos-actors-embedding-fixture --locked --lib $feature_args"
+    done
+    run_shell_step "Actors gate: independent embedding no-std contract" "15" \
+        "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 cargo check --$CARGO_PROFILE -p pallet-deos-actors-embedding-fixture --locked --no-default-features"
+}
+
+run_embedding_only() {
+    require_directory "$TEMPLATE_DIR" 'Template directory'
+    hydrate_local_tool_paths
+    require_commands cargo git sha256sum timeout
+    run_self_test
+    local source_before
+    source_before="$(worktree_evidence_identity)"
+    log_info "Native embedding source: $source_before"
+    log_info 'Embedding-only: production Wasm/metadata not required or executed; no runtime stress'
+    run_independent_embedding_gate
+    [[ "$(worktree_evidence_identity)" == "$source_before" ]] || { log_error 'Embedding source changed during execution'; return 1; }
+    log_success 'Independent embedding matrix retained exact source identity'
+}
+
+# Legacy nightly throughput targets stay separate from current native/embedding safety.
 run_gate() {
     run_self_test
     run_shell_step "Actors gate: fee-envelope vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --metadata ../web-client/.papi/metadata/deos.scale --weights runtime/src/weights/pallet_deos_actors.rs --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
-    run_shell_step "Actors gate: runtime cost vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p deos-runtime --example actor_cost_vectors -- --check ../web-client/src/lib/automation/actors-cost-vectors.json"
+    run_shell_step "Actors gate: runtime cost vector freshness" "" "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 cargo run -q --locked -p deos-runtime --features benchmark-authority-scaffolding --example actor_cost_vectors -- --check ../web-client/src/lib/automation/actors-cost-vectors.json"
     run_shell_step "Actors gate: ABI manifest drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-abi"
     run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-normative-drift"
     run_shell_step "Actors gate: certified ingress evidence drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:ingress-evidence"
@@ -834,34 +1163,13 @@ run_gate() {
     if [[ "$QUICK_MODE" == "1" ]]; then
         run_shell_step "Actors quick gate: Clippy" "" "cd \"$TEMPLATE_DIR\" && cargo clippy --locked -p pallet-deos-actors -p deos-runtime -p pallet-deos-actors-embedding-fixture --all-targets -- -D warnings"
         run_shell_step "Actors quick gate: basic tests" "" "cd \"$TEMPLATE_DIR\" && cargo test -q --locked -p pallet-deos-actors --lib && cargo test -q --locked -p pallet-deos-actors-embedding-fixture --lib"
-        run_shell_step "Actors quick gate: package archive surface" "" "cd \"$TEMPLATE_DIR\" && cargo package -p pallet-deos-actors --allow-dirty --locked --list"
+        run_package_archive_gate list-only
         return
     fi
 
-    run_shell_step \
-        "Actors gate: pallet package archive" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo package -p pallet-deos-actors --allow-dirty --locked"
+    run_package_archive_gate
 
-    run_shell_step \
-        "Actors gate: independent embedding default profile" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p pallet-deos-actors-embedding-fixture --locked --lib"
-
-    run_shell_step \
-        "Actors gate: independent embedding DEX profile" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p pallet-deos-actors-embedding-fixture --locked --lib --features dex-fixture"
-
-    run_shell_step \
-        "Actors gate: independent embedding try-runtime profile" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p pallet-deos-actors-embedding-fixture --locked --lib --features try-runtime"
-
-    run_shell_step \
-        "Actors gate: independent embedding no-std contract" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo check --$CARGO_PROFILE -p pallet-deos-actors-embedding-fixture --locked --no-default-features"
+    run_independent_embedding_gate
 
     if [[ "$QUICK_MODE" != "1" ]]; then
         verify_heavy_profiles_resolve_exactly_once
@@ -883,7 +1191,7 @@ run_gate() {
             "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p pallet-deos-actors --locked ${profile} -- --ignored --nocapture"
     done
     if [[ "$INCLUDE_OCCUPANCY_PROFILE" != "1" ]]; then
-        log_warning "Skipping occupancy profile"
+        log_warning "Skipping current native occupancy safety/censoring profile"
     fi
     log_info "Non-gating diagnostics (not resolved or executed by this gate): ${DIAGNOSTIC_HEAVY_PROFILES[*]}"
 }
@@ -918,8 +1226,51 @@ run_backpressure_audit() {
     done
 }
 
+run_h1_diagnostic() {
+    require_directory "$TEMPLATE_DIR" "Template directory"
+    hydrate_local_tool_paths
+    require_commands cargo rustc git sha256sum timeout
+    case "$CARGO_PROFILE" in
+        release|dev) ;;
+        *) log_error 'H1 diagnostic requires CARGO_PROFILE=release|dev'; return 2 ;;
+    esac
+    local minutes="${DEOS_TEST_TIMEOUT_MINUTES:-15}"
+    [[ "$minutes" =~ ^[1-9][0-9]*$ ]] || { log_error 'DEOS_TEST_TIMEOUT_MINUTES must be positive'; return 2; }
+    local source_before weight_before listing
+    source_before="$(worktree_evidence_identity)"
+    weight_before="$(sha256sum "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" | awk '{print $1}')"
+    log_info "H1 native diagnostic source: $source_before"
+    log_info "H1 declared Actors Weight: $weight_before"
+    log_info "H1 HEAD/tree anchors (not a clean-tree certificate): $(git -C "$PROJECT_ROOT" rev-parse HEAD 'HEAD^{tree}' | tr '\n' ' ')"
+    (cd "$TEMPLATE_DIR" && rustc --version --verbose && cargo --version)
+    log_info 'Executor: native library test; no production or benchmark Wasm executes'
+    local profile='tests::actors_h1_diagnostic::h1_public_user_lengths_report_declared_cost_and_q1'
+    listing="$(cd "$TEMPLATE_DIR" && SKIP_WASM_BUILD=1 timeout "${minutes}m" cargo test --profile "$CARGO_PROFILE" -p deos-runtime --locked --lib -- --list)"
+    [[ "$(printf '%s\n' "$listing" | grep -Fxc "$profile: test" || true)" == "1" ]] || {
+        log_error 'H1 diagnostic unavailable at default authority: qualified User identity capacity is absent; model-profile discovery is not campaign acceptance'
+        return 1
+    }
+    run_shell_step "H1 public User workflow diagnostic" "$minutes" \
+        "cd \"$TEMPLATE_DIR\" && SKIP_WASM_BUILD=1 cargo test --profile '$CARGO_PROFILE' -p deos-runtime --locked --lib '$profile' -- --exact --nocapture"
+    [[ "$(worktree_evidence_identity)" == "$source_before" ]] || { log_error 'H1 source changed during execution'; return 1; }
+    [[ "$(sha256sum "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" | awk '{print $1}')" == "$weight_before" ]] || { log_error 'H1 Weight changed during execution'; return 1; }
+    log_success 'H1 diagnostic retained source and declared Weight; physical/capacity qualification remains open'
+}
+
 main() {
     parse_args "$@"
+    if [[ "$PACKAGE_ONLY" == 1 ]]; then
+        run_package_only
+        return
+    fi
+    if [[ "$EMBEDDING_ONLY" == 1 ]]; then
+        run_embedding_only
+        return
+    fi
+    if [[ "$H1_DIAGNOSTIC" == "1" ]]; then
+        run_h1_diagnostic
+        return
+    fi
     phase_banner "DEOS Actors assurance"
     check_prerequisites
     capture_evidence_identity
@@ -934,6 +1285,8 @@ main() {
         run_production_reference_replay
     elif [[ "$INTEGRATED_W0_W1" == "1" ]]; then
         run_integrated_w0_w1_gate
+    elif [[ "$INTEGRATED_TRANSFER_BASELINE" == "1" ]]; then
+        run_transfer_baseline_gate
     elif [[ "$INTEGRATED_W1_ACTOR_ONLY" == "1" ]]; then
         run_integrated_w1_campaign_gate actor-only
     elif [[ "$INTEGRATED_W1_CONTINUOUS_USER" == "1" ]]; then

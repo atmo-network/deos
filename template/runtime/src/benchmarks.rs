@@ -1,4 +1,8 @@
+#[cfg(feature = "runtime-benchmarks")]
+pub(crate) mod authorship;
+
 polkadot_sdk::frame_benchmarking::define_benchmarks!(
+  [runtime_authorship, crate::benchmarks::authorship::Pallet::<Runtime>]
   [frame_system, SystemBench::<Runtime>]
   [pallet_balances, Balances]
   [pallet_session, SessionBench::<Runtime>]

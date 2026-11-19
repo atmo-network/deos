@@ -69,4 +69,4 @@ Navigate to individual pallet directories for component-specific orientation and
 
 These pallets are designed for seamless integration with the runtime configuration located in [`../runtime/src/configs/`](../runtime/src/configs/mod.rs). The modular design enables flexible deployment scenarios while maintaining architectural consistency.
 
-For development workflow and contribution guidelines, refer to the [Documentation index](../../docs/README.md) for comprehensive technical guides and architectural patterns.
+For development workflow and contribution guidelines, refer to the [Documentation index](../../docs/deos/README.md) for comprehensive technical guides and architectural patterns.

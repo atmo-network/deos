@@ -1,0 +1,727 @@
+{
+  "formatVersion": 1,
+  "reviewedAt": "2026-11-14",
+  "nativeSourcePreparationProof": {
+    "path": "shared-proof.json"
+  },
+  "exceptions": [
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2025-0073",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0258",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0490",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0491",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0504",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0505",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0511",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0512",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0530",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0531",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0532",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0118",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0119",
+      "reachability": "source-backport-reviewed",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0487",
+      "reachability": "source-backport-reviewed",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0489",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0514",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0525",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0459",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0418",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0477",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0185",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0338",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0339",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0340",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0342",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0523",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0524",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0538",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2025-0009",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2023-0071",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0220",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0346",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0349",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2024-0336",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0098",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0099",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0104",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0382",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0344",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0067",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0068",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2025-0055",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0383",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0381",
+      "reachability": "source-backport-reviewed",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0403",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0221",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0008",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0183",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0184",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0012",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0253",
+      "reachability": "source-backport-reviewed",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0097",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0395",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0397",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0399",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0400",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0401",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0402",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0404",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0406",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0002",
+      "reachability": "source-backport-reviewed",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0186",
+      "reachability": "source-backport-reviewed",
+      "reason": "Exact reviewed Native SOURCEPREPARATION instance/source/normal-role decision only; the shared fixed proof seals all source consumers and configuration before and after. No ELF or Native0387 B clearance.",
+      "expires": "2027-01-31",
+      "sourceCallerNative": {
+        "stage": "SOURCEPREPARATION",
+        "proof": "nativeSourcePreparationProof"
+      }
+    },
+    {
+      "ecosystem": "npm",
+      "id": "@polkadot-api/cli",
+      "expires": "2026-12-12",
+      "reachability": "trusted-generation-only",
+      "reason": "The high aggregate resolves exclusively to GHSA-ggr8-5vv4-36mx through write-package; the CLI consumes repository-owned metadata during descriptor generation and is not shipped in the browser bundle."
+    },
+    {
+      "ecosystem": "npm",
+      "id": "deepmerge-ts",
+      "expires": "2026-12-12",
+      "reachability": "trusted-generation-only",
+      "reason": "GHSA-ggr8-5vv4-36mx requires a recursive attacker-controlled object graph; descriptor generation consumes locally exported runtime metadata and bounded repository configuration."
+    },
+    {
+      "ecosystem": "npm",
+      "id": "polkadot-api",
+      "expires": "2026-12-12",
+      "reachability": "trusted-generation-only",
+      "reason": "The high aggregate is inherited from the package's CLI generation dependency; browser runtime imports do not invoke write-package or deepmerge-ts."
+    },
+    {
+      "ecosystem": "npm",
+      "id": "write-package",
+      "expires": "2026-12-12",
+      "reachability": "trusted-generation-only",
+      "reason": "The package is reachable only through local descriptor generation, and its recursive merge input is repository-owned rather than user supplied."
+    }
+  ],
+  "licenseExceptions": [
+    {
+      "ecosystem": "npm",
+      "id": "svelte-toolbelt@0.10.6",
+      "expires": "2026-12-12",
+      "reason": "The 0.10.6 registry tarball matches locked SHA512 integrity and contains an MIT LICENSE (SHA256 8914f144af4333312a07b30438dc6b75dd8da7a665c3ae9fa751f229eb615e8b); only its manifest license field is absent. Re-verify on identity change."
+    }
+  ]
+}

@@ -3,7 +3,8 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-POLKADOT_SDK_RELEASE="polkadot-stable2609"
+# Pin the published executable bundle independently of source/worker qualification.
+POLKADOT_SDK_RELEASE="polkadot-stable2609-2"
 REPOSITORY="paritytech/polkadot-sdk"
 BASE_URL="https://github.com/$REPOSITORY/releases/download/$POLKADOT_SDK_RELEASE"
 BINARY_NAMES=(
@@ -22,6 +23,7 @@ SELF_TEST=0
 OMNI_NODE_PATH="${DEOS_OMNI_NODE_PATH:-}"
 OMNI_NODE_SHA256="${DEOS_OMNI_NODE_SHA256:-}"
 BINARY_STAGING_DIR=""
+BUNDLE_ACTION="" BUNDLE_INPUT="" BUNDLE_OUTPUT=""
 
 usage() {
     cat <<'EOF'
@@ -30,23 +32,48 @@ Usage: 01-download-binaries.sh [OPTIONS]
 Downloads the pinned Polkadot SDK executable bundle required by DEOS operations.
 
 Options:
+  --export-reference-bundle NEW_PATH  Verify/copy explicit accepted operator inputs
+  --check-reference-bundle PATH       Verify all bundle inputs without executing them
+  --import-reference-bundle PATH --bundle-output NEW_PATH
+                    Verify/stage a fresh owned operational root, no downloads/exec
   --check           Verify the existing selection without downloading
   --only NAME       Select one pinned binary; repeat for a subset (default: all)
-  --self-test       Test selection/publication/checksum contracts offline
+  --self-test       Test selection/publication/checksum contracts offline;
+                    DEOS_REFERENCE_TEST_BUNDLE + DEOS_REFERENCE_TEST_ROOT optionally
+                    test supplied exact bundle missing/mutation/nonregular boundaries
   -h, --help        Show this help message
 
 Environment:
   DEOS_BINARY_DIR=<directory>  Bundle and selected-node output directory
-  DEOS_OMNI_NODE_PATH=<path>   Optional independently qualified source-built Omni
+  DEOS_OMNI_NODE_PATH=<path>   Optional source-built Omni identity selection
   DEOS_OMNI_NODE_SHA256=<sha>  Required expected digest when selecting that node
+  DEOS_OMNI_NODE_BUILD_DIR=<work>  Required for the accepted Linux reference ELF;
+    verifies actual source inventories, prepared proof and original build receipts
+    before copying. Other selections remain identity-only, not reference-qualified.
+
+Operator bundle (Linux x86_64 only):
+  Export requires explicit DEOS_OMNI_NODE_PATH, DEOS_OMNI_NODE_BUILD_DIR,
+  DEOS_REFERENCE_NODE_PATH, DEOS_REFERENCE_CLI_ROOT, DEOS_REFERENCE_GUEST_PATH,
+  DEOS_REFERENCE_SPEC_PATH. All are canonical owned regular files/trees.
+  NEW_PATH must be absent beneath an existing canonical owned directory.
+  Layout: acceptance.json, bin/{node,polkadot-omni-node-deos}, cli/ (entire exact
+  reviewed tree), guest.wasm, chain_spec.json, proofs/{prepared.json,attempts/0001/*},
+  bin/notices/*, bundle-provenance.json. Import adds verified selection receipts
+  and bin/zombienet. Relay/workers remain separately acquired through --only;
+  no unneeded published binary bulk is included. No ELF/CLI is run by these modes.
+  Hash authority is the project record, never a caller-supplied bundle manifest.
+  Original accepted receipts are required; future builds need new independent
+  artifact acceptance, not regenerated historical receipts or automatic approval.
 
 Inputs:
   Network access to the pinned paritytech/polkadot-sdk release when the local
   bundle is absent or checksum-mismatched, plus a supported host platform.
 
 Authority:
-  GitHub release: paritytech/polkadot-sdk polkadot-stable2609
-  Compatibility: DEOS workspace Polkadot SDK 2609 package line
+  GitHub release: paritytech/polkadot-sdk polkadot-stable2609-2
+  Workspace source: polkadot-stable2609-2; local corrections remain separate
+  Compatibility: DEOS workspace Polkadot SDK 2609 package line; worker/node
+  qualification is separate from download/checksum verification
   Supported hosts: Linux x86_64 and macOS arm64 (checksum-pinned release assets)
 
 Outputs:
@@ -61,6 +88,13 @@ Outputs:
 Side effects:
   Downloads only missing or checksum-mismatched assets, verifies every pinned
   SHA-256 digest before publication, and replaces only the selected files.
+  Retains resumable, non-executable downloads under
+  ./bin/.downloads/<release>/<asset>.<expected-sha256>.part (or DEOS_BINARY_DIR).
+  An interrupted invocation can resume with the same command; cached bytes never
+  qualify a binary until the complete expected checksum matches. Corrupt or
+  oversized cache files fail closed and remain for diagnosis; remove only the
+  reported cache file to restart that asset, since resumption cannot repair an
+  already-corrupt prefix.
   Partial selection never writes a full-bundle marker or qualifies unselected
   files. --check without --only still requires the complete marked bundle.
   Names: polkadot, polkadot-omni-node, polkadot-prepare-worker,
@@ -68,8 +102,11 @@ Side effects:
   selection requires a complete bundle; it is rejected in partial mode.
   Optional node selection atomically copies an operator-supplied artifact and
   records its digest/SDK line; it rejects the known unpatched release Omni.
-  These identity checks do not establish the supplied node's source correction,
-  caller qualification or published-build-profile equivalence.
+  Other artifact identities do not establish source correction, caller qualification
+  or published-build-profile equivalence. The exact accepted Linux reference ELF
+  additionally requires its original source/build proofs and installs schema-2
+  bounded-role acceptance plus package-associated Unicode notices. This is not
+  general CLI/ETH/BIP32, published-producer, portable-platform or release clearance.
 EOF
 }
 
@@ -77,6 +114,12 @@ parse_args() {
     local argument_count=$# index found
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --export-reference-bundle|--check-reference-bundle|--import-reference-bundle)
+                [[ $# -ge 2 && -n "$2" && -z "$BUNDLE_ACTION" ]] || { log_error 'Bundle action requires one path'; exit 2; }
+                BUNDLE_ACTION="${1#--}" BUNDLE_INPUT="$2"; shift 2; continue ;;
+            --bundle-output)
+                [[ $# -ge 2 && -n "$2" && -z "$BUNDLE_OUTPUT" ]] || { log_error 'Bundle output requires one path'; exit 2; }
+                BUNDLE_OUTPUT="$2"; shift 2; continue ;;
             --check)
                 CHECK_ONLY=1
                 ;;
@@ -112,6 +155,14 @@ parse_args() {
         esac
         shift
     done
+    if [[ -n "$BUNDLE_ACTION" ]]; then
+        (( SELF_TEST == 0 && CHECK_ONLY == 0 && ${#SELECTED_INDICES[@]} == 0 )) || { log_error 'Bundle modes are exclusive'; exit 2; }
+        if [[ "$BUNDLE_ACTION" == import-reference-bundle ]]; then
+            [[ -n "$BUNDLE_OUTPUT" && "$argument_count" == 4 ]] || { log_error 'Import requires --bundle-output'; exit 2; }
+        else [[ -z "$BUNDLE_OUTPUT" && "$argument_count" == 2 ]] || { log_error 'Bundle action is exclusive'; exit 2; }; fi
+        return
+    fi
+    [[ -z "$BUNDLE_OUTPUT" ]] || { log_error '--bundle-output requires import'; exit 2; }
     if (( SELF_TEST == 1 )); then
         (( argument_count == 1 )) || { log_error "--self-test must be used alone"; exit 2; }
         return
@@ -135,11 +186,11 @@ resolve_platform() {
             require_commands sha256sum
             CHECKSUM_COMMAND=(sha256sum)
             CHECKSUMS=(
-                8f0b466d84206097ff49c4d675d971ef457ba7c41d480f048098a41e7cc304fb
-                441c40b5b3d4769d2fb4e447b5a863a07f7ee1cc5120129ff76d4994c15b32e7
-                385dc434a42611e01db36735fa993c219c96e285ab1d47a9c21ff85aae7af731
-                1e2eaf7984315937a9fcdb91f1ce0bdf04c5c796fa170a9f75369141ca710721
-                4ec0f11dd97a1ad1af266132ebceae5c7993e8cd3eb45bcfb917cf77742534a7
+                7c21c5831eb0c093e3b91e23857cfaecf30ba15b4d14256c13f942a43542c21b
+                2066854bdaf9a2cdfb4a331f9684953e4a8000a1aa96bb684e112f50fbc91c4e
+                b33b8a288b386ff5d1bbd28eb6a3ee70e0ada968e93c369888ee0cf67303e771
+                16ecbd306afa6562d911a8d533e976e194c6d5e3f404321ea83ec4171f7fe5f6
+                2c78e5105272a6e23f1def5dd4003080358df15845530736a65a82415aea7c28
             )
             ;;
         Darwin:arm64)
@@ -147,11 +198,11 @@ resolve_platform() {
             CHECKSUM_COMMAND=(shasum -a 256)
             ASSET_SUFFIX="-aarch64-apple-darwin"
             CHECKSUMS=(
-                dac528b581a41d5f0d87b03add0f2bcaab8db3866eca09dae120c585eb447788
-                3e0ee31dacf3e64a486da74cdb73a45b4ebc106a84b6dc481992d3cdcc420888
-                db18f5b99d9e6951a6eb02178171131decf5b830076bc54e6e4df2c1a433cbdb
-                5e8a499383c467797793d5b0865e5f1a9a9377c7fb890578c9987c09ecbc6f49
-                500dab36c358f99e55fb7824d3b3eb4e7f2754f6e253d0bb2138dd3b67d97d9d
+                2d556b07a703010ee139732763f6e367865c589928a1c91bb681a0b075c88fba
+                abb5b18beb1fdf148c117dcf7564336a3d80b3e83b19b9e6fe16060854ee4d41
+                29dd86a180e2eea20b4faff9626bf7153b8904caa9651a9658c63041b20c6167
+                76d21993ef47e942f25a1137dd6160f767634247de677d00691686e910ccb683
+                0b37b9835a9580c555489e787f8b4449d710118464d2433396181edb4a88a416
             )
             ;;
         *)
@@ -171,9 +222,26 @@ check_prerequisites() {
             exit 1
         }
         checksum_matches "$OMNI_NODE_PATH" "$OMNI_NODE_SHA256" || { log_error "Supplied Omni checksum mismatch"; exit 1; }
-        [[ "$OMNI_NODE_SHA256" != "${CHECKSUMS[1]}" ]] || { log_error "The release Omni lacks the transaction-depth fix; select an independently qualified source build"; exit 1; }
+        if [[ "$OMNI_NODE_SHA256" == "$(jq -er .subject.sha256 "$SCRIPT_DIR/inputs/canonical-linux-reference.json")" ]]; then
+            require_commands node
+            verify_guarded_node_environment || return 1
+            [[ -n "${DEOS_OMNI_NODE_BUILD_DIR:-}" ]] || { log_error 'Reference selection requires DEOS_OMNI_NODE_BUILD_DIR'; exit 1; }
+            node "$SCRIPT_DIR/build-corrected-node.mjs" reference-artifact "$DEOS_OMNI_NODE_BUILD_DIR" "$OMNI_NODE_PATH"
+        fi
+        if is_unqualified_omni_checksum "$OMNI_NODE_SHA256"; then
+            log_error "Published Omni artifacts are not qualified DEOS selections; select an independently qualified source build"
+            exit 1
+        fi
     fi
     log_success "Pinned binary prerequisites checked"
+}
+
+# Keep known prior-release Omni artifacts excluded when the current pin advances.
+is_unqualified_omni_checksum() {
+    case "$1" in
+        "${CHECKSUMS[1]}"|a30cc63c7794eec8c22d92bbb103c6757b8dcab6c6f550eb480bec0edd5716cb|2cd1ddb414bc6bba46be19052ff8f4b95172761ff8b465d8c5a506e9c9b4f0ce) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 checksum_matches() {
@@ -193,7 +261,9 @@ download_bundle() {
     BINARY_STAGING_DIR="$staging_dir"
     trap cleanup_binary_staging EXIT
 
-    local index name asset destination expected
+    local index name asset destination expected cached
+    local cache_dir="$BIN_DIR/.downloads/$POLKADOT_SDK_RELEASE"
+    mkdir -p "$cache_dir"
     for index in "${SELECTED_INDICES[@]}"; do
         name="${BINARY_NAMES[$index]}"
         asset="$name$ASSET_SUFFIX"
@@ -203,9 +273,17 @@ download_bundle() {
             log_info "Reusing verified $name"
             cp "$BIN_DIR/$name" "$destination"
         else
-            log_info "Downloading $asset from $POLKADOT_SDK_RELEASE"
-            curl --fail --location --silent --show-error --retry 3 --retry-all-errors \
-                --output "$destination" "$BASE_URL/$asset"
+            cached="$cache_dir/$asset.$expected.part"
+            if ! checksum_matches "$cached" "$expected"; then
+                log_info "Downloading/resuming $asset from $POLKADOT_SDK_RELEASE"
+                curl --fail --location --silent --show-error --retry 3 --retry-all-errors \
+                    --continue-at - --output "$cached" "$BASE_URL/$asset"
+            fi
+            if ! checksum_matches "$cached" "$expected"; then
+                log_error "SHA-256 mismatch for cached $asset; retained untrusted bytes: $cached"
+                exit 1
+            fi
+            cp "$cached" "$destination"
         fi
         if ! checksum_matches "$destination" "$expected"; then
             log_error "SHA-256 mismatch for $asset"
@@ -230,7 +308,7 @@ download_bundle() {
 
 install_omni_selection() {
     [[ -n "$OMNI_NODE_PATH" ]] || return 0
-    phase_banner "Step 3: Select qualified Omni artifact"
+    phase_banner "Step 3: Select Omni artifact identity and applicable role"
     BINARY_STAGING_DIR="$(mktemp -d "$BIN_DIR/.omni-selection.XXXXXX")"
     trap cleanup_binary_staging EXIT
     cp -- "$OMNI_NODE_PATH" "$BINARY_STAGING_DIR/polkadot-omni-node-deos"
@@ -239,6 +317,21 @@ install_omni_selection() {
     jq -n --arg release "$POLKADOT_SDK_RELEASE" --arg selected "$OMNI_NODE_SHA256" --arg upstream "${CHECKSUMS[1]}" \
         '{schema_version: 1, sdk_release: $release, selected_sha256: $selected, upstream_omni_sha256: $upstream}' \
         >"$BINARY_STAGING_DIR/.deos-omni-node.json"
+    if [[ "$OMNI_NODE_SHA256" == "$(jq -er .subject.sha256 "$SCRIPT_DIR/inputs/canonical-linux-reference.json")" ]]; then
+        verify_guarded_node_environment || return 1
+        node "$SCRIPT_DIR/build-corrected-node.mjs" reference-artifact "$DEOS_OMNI_NODE_BUILD_DIR" "$BINARY_STAGING_DIR/polkadot-omni-node-deos"
+        verify_reference_notices "$PROJECT_ROOT/notices" || exit 1
+        mkdir -p "$BIN_DIR/notices"
+        local notice
+        while IFS= read -r notice; do cp "$PROJECT_ROOT/notices/$notice" "$BIN_DIR/notices/$notice"; done < <(jq -er '.notices | unique_by(.file)[].file' "$SCRIPT_DIR/inputs/canonical-linux-reference.json")
+        verify_reference_notices "$BIN_DIR/notices" || exit 1
+        cp "$SCRIPT_DIR/inputs/canonical-linux-reference.json" "$BINARY_STAGING_DIR/.deos-omni-node-acceptance.json"
+        jq --arg acceptance "$(deos_sha256_file "$BINARY_STAGING_DIR/.deos-omni-node-acceptance.json")" \
+            '.schema_version = 2 | .role = "canonical-local-linux-reference" | .acceptance_sha256 = $acceptance' \
+            "$BINARY_STAGING_DIR/.deos-omni-node.json" >"$BINARY_STAGING_DIR/reference-receipt.json"
+        mv "$BINARY_STAGING_DIR/reference-receipt.json" "$BINARY_STAGING_DIR/.deos-omni-node.json"
+        mv "$BINARY_STAGING_DIR/.deos-omni-node-acceptance.json" "$BIN_DIR/.deos-omni-node-acceptance.json"
+    fi
     mv "$BINARY_STAGING_DIR/polkadot-omni-node-deos" "$BIN_DIR/polkadot-omni-node-deos"
     mv "$BINARY_STAGING_DIR/.deos-omni-node.json" "$BIN_DIR/.deos-omni-node.json"
     cleanup_binary_staging
@@ -287,7 +380,7 @@ verify_bundle() {
 }
 
 self_test() (
-    local fixture name index bad_asset=""
+    local fixture name index bad_asset="" interrupted_asset=""
     fixture="$(mktemp -d "${TMPDIR:-/tmp}/deos-binary-self-test.XXXXXX")"
     trap 'rm -rf -- "$fixture"' EXIT
     BIN_DIR="$fixture/published"
@@ -300,10 +393,25 @@ self_test() (
         printf '#!/usr/bin/env bash\nprintf "fixture %s\\n"\n' "$name" >"$fixture/source/$name"
         CHECKSUMS+=("$(sha256sum "$fixture/source/$name" | cut -d ' ' -f 1)")
     done
+    local checksum
+    for checksum in "${CHECKSUMS[1]}" a30cc63c7794eec8c22d92bbb103c6757b8dcab6c6f550eb480bec0edd5716cb 2cd1ddb414bc6bba46be19052ff8f4b95172761ff8b465d8c5a506e9c9b4f0ce; do
+        if ! is_unqualified_omni_checksum "$checksum"; then
+            log_error "Published Omni checksum escaped corrected-node refusal"
+            exit 1
+        fi
+    done
+    if is_unqualified_omni_checksum "${CHECKSUMS[0]}"; then
+        log_error "Omni refusal incorrectly classified a distinct artifact"
+        exit 1
+    fi
     curl() {
-        local destination="" asset=""
+        local destination="" asset="" resume=0
         while [[ $# -gt 0 ]]; do
-            if [[ "$1" == "--output" ]]; then
+            if [[ "$1" == "--continue-at" ]]; then
+                [[ "$2" == "-" ]]
+                resume=1
+                shift 2
+            elif [[ "$1" == "--output" ]]; then
                 destination="$2"
                 shift 2
             else
@@ -311,8 +419,17 @@ self_test() (
                 shift
             fi
         done
+        [[ "$resume" == "1" ]]
         printf '%s\n' "$asset" >>"$fixture/calls"
-        cp "$fixture/source/$asset" "$destination"
+        if [[ "$asset" == "$interrupted_asset" ]]; then
+            printf '#!/usr' >"$destination"
+            return 18
+        fi
+        local offset=0 size
+        [[ ! -f "$destination" ]] || offset="$(wc -c <"$destination")"
+        size="$(wc -c <"$fixture/source/$asset")"
+        (( offset <= size )) || return 33
+        tail -c "+$((offset + 1))" "$fixture/source/$asset" >>"$destination"
         [[ "$asset" != "$bad_asset" ]] || printf 'corrupt\n' >>"$destination"
     }
     select_args() {
@@ -357,11 +474,39 @@ self_test() (
     cmp "$fixture/source/frame-omni-bencher" "$BIN_DIR/frame-omni-bencher"
     [[ ! -e "$BIN_DIR/polkadot-prepare-worker" && ! -e "$BIN_DIR/.polkadot-sdk-release" ]]
     bad_asset=""
+    if (download_bundle) >/dev/null 2>&1; then
+        log_error "An oversized corrupt cache recovered without explicit removal"
+        exit 1
+    fi
+    [[ ! -e "$BIN_DIR/polkadot-prepare-worker" ]]
+    rm -- "$BIN_DIR/.downloads/$POLKADOT_SDK_RELEASE/polkadot-prepare-worker.${CHECKSUMS[2]}.part"
     select_args --only polkadot-prepare-worker --only polkadot-execute-worker
     (download_bundle)
     select_args --check --only polkadot-prepare-worker --only polkadot-execute-worker
     verify_bundle
     [[ ! -e "$BIN_DIR/.polkadot-sdk-release" && ! -e "$BIN_DIR/polkadot" ]]
+    select_args --only polkadot
+    interrupted_asset="polkadot"
+    if (download_bundle) >/dev/null 2>&1; then
+        log_error "Interrupted download was accepted"
+        exit 1
+    fi
+    local partial="$BIN_DIR/.downloads/$POLKADOT_SDK_RELEASE/polkadot.${CHECKSUMS[0]}.part"
+    [[ "$(<"$partial")" == '#!/usr' && ! -x "$partial" ]]
+    [[ ! -e "$BIN_DIR/polkadot" && ! -e "$BIN_DIR/.polkadot-sdk-release" ]]
+    interrupted_asset=""
+    (download_bundle)
+    cmp "$fixture/source/polkadot" "$BIN_DIR/polkadot"
+    [[ ! -e "$BIN_DIR/.polkadot-sdk-release" ]]
+    select_args --only polkadot-omni-node
+    local corrupt_prefix="$BIN_DIR/.downloads/$POLKADOT_SDK_RELEASE/polkadot-omni-node.${CHECKSUMS[1]}.part"
+    printf '#!/bad' >"$corrupt_prefix"
+    if (download_bundle) >/dev/null 2>&1; then
+        log_error "A corrupt prefix was overwritten or accepted during continuation"
+        exit 1
+    fi
+    [[ ! -e "$BIN_DIR/polkadot-omni-node" && ! -e "$BIN_DIR/.polkadot-sdk-release" ]]
+    rm -- "$corrupt_prefix"
     select_args --only frame-omni-bencher --only polkadot-execute-worker \
         --only polkadot-prepare-worker --only polkadot-omni-node --only polkadot
     complete_selection
@@ -372,18 +517,46 @@ self_test() (
         checksum_matches "$BIN_DIR/${BINARY_NAMES[$index]}" "${CHECKSUMS[$index]}"
     done
     [[ "$(<"$BIN_DIR/.polkadot-sdk-release")" == "$POLKADOT_SDK_RELEASE" ]]
+    printf 'other-release\n' >"$BIN_DIR/.polkadot-sdk-release"
+    if (verify_bundle) >/dev/null 2>&1; then
+        log_error "A stale release marker qualified the current bundle"
+        exit 1
+    fi
+    printf '%s\n' "$POLKADOT_SDK_RELEASE" >"$BIN_DIR/.polkadot-sdk-release"
     printf 'corrupt\n' >>"$BIN_DIR/frame-omni-bencher"
     if (select_args --check --only frame-omni-bencher; verify_bundle) >/dev/null 2>&1; then
         log_error "Partial verification accepted corrupted published bytes"
         exit 1
     fi
-    log_success "Pinned binary selection/publication/checksum self-test passed (offline fixtures only)"
+    mkdir "$fixture/notices"
+    local notice
+    while IFS= read -r notice; do cp "$PROJECT_ROOT/notices/$notice" "$fixture/notices/$notice"; done < <(jq -er '.notices | unique_by(.file)[].file' "$SCRIPT_DIR/inputs/canonical-linux-reference.json")
+    verify_reference_notices "$fixture/notices"
+    for notice in "$fixture"/notices/*; do
+        cp "$notice" "$fixture/notice-original"
+        printf 'mutated\n' >>"$notice"
+        if verify_reference_notices "$fixture/notices" >/dev/null 2>&1; then log_error 'Mutated notice accepted'; exit 1; fi
+        rm "$notice"
+        if verify_reference_notices "$fixture/notices" >/dev/null 2>&1; then log_error 'Missing notice accepted'; exit 1; fi
+        cp "$fixture/notice-original" "$notice"
+    done
+    if [[ -n "${DEOS_REFERENCE_TEST_BUNDLE:-}" ]]; then
+        verify_guarded_node_environment || return 1
+        node "$SCRIPT_DIR/build-corrected-node.mjs" reference-bundle-self-test "$DEOS_REFERENCE_TEST_BUNDLE" "${DEOS_REFERENCE_TEST_ROOT:?Existing owned evidence root required}"
+    fi
+    log_success "Pinned binary selection/publication/checksum and Unicode notice self-test passed (offline fixtures only)"
 )
 
 main() {
     parse_args "$@"
     if (( SELF_TEST == 1 )); then
         self_test
+        return
+    fi
+    if [[ -n "$BUNDLE_ACTION" ]]; then
+        require_commands node sha256sum realpath
+        verify_guarded_node_environment || return 1
+        node "$SCRIPT_DIR/build-corrected-node.mjs" "$BUNDLE_ACTION" "$BUNDLE_INPUT" "$BUNDLE_OUTPUT"
         return
     fi
     phase_banner "DEOS executable bundle download"

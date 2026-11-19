@@ -33,6 +33,7 @@ pub mod constants {
   mod test_weights {
     use polkadot_sdk::*;
 
+    use super::BlockExecutionWeight as W;
     use frame_support::weights::constants;
 
     /// Checks that the weight exists and is sane.
@@ -40,7 +41,16 @@ pub mod constants {
     // you can delete it.
     #[test]
     fn sane() {
-      let w = super::constants::BlockExecutionWeight::get();
+      assert_eq!(
+        core::any::TypeId::of::<W>(),
+        core::any::TypeId::of::<super::BlockExecutionWeight>(),
+        "Sanity checks must use the local getter",
+      );
+      let w = W::get();
+      assert_eq!(
+        w,
+        <crate::Runtime as frame_system::Config>::BlockWeights::get().base_block,
+      );
 
       // At least 100 µs.
       assert!(

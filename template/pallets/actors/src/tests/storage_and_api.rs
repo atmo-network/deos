@@ -2710,6 +2710,112 @@ fn semantic_generation_is_nonzero_and_fails_closed_at_exhaustion() {
 }
 
 #[test]
+fn semantic_storage_mutation_preserves_fresh_validation_and_rollback() {
+  use polkadot_sdk::frame_support::storage::{TransactionOutcome, with_transaction_unchecked};
+  new_test_ext().execute_with(|| {
+    let actor = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let original = ActorSemanticStates::<Test>::get(actor).unwrap();
+    let mut changed = original.clone();
+    let ActorSemanticState::Active(record) = &mut changed else {
+      panic!("public active Actor has semantic authority");
+    };
+    record.hot.unsuccessful_attempt_streak = 1;
+    assert_ne!(original, changed);
+    assert_eq!(
+      Actors::mutate_actor_semantic_state(
+        actor,
+        ActorSemanticMutation::Replace {
+          expected: original.clone(),
+          replacement: original.clone(),
+        }
+      ),
+      Ok(Some(original.clone()))
+    );
+    assert_eq!(
+      Actors::mutate_actor_semantic_state(actor, ActorSemanticMutation::Publish(original.clone())),
+      Err(ActorSemanticMutationError::AlreadyPublished)
+    );
+    // A callback or intervening valid writer changes the authoritative record after a snapshot.
+    assert_eq!(
+      Actors::mutate_actor_semantic_state(
+        actor,
+        ActorSemanticMutation::Replace {
+          expected: original.clone(),
+          replacement: changed.clone(),
+        }
+      ),
+      Ok(Some(changed.clone()))
+    );
+    for replacement in [original.clone(), changed.clone()] {
+      assert_eq!(
+        Actors::mutate_actor_semantic_state(
+          actor,
+          ActorSemanticMutation::Replace {
+            expected: original.clone(),
+            replacement,
+          }
+        ),
+        Err(ActorSemanticMutationError::Stale)
+      );
+      assert_eq!(
+        ActorSemanticStates::<Test>::get(actor),
+        Some(changed.clone())
+      );
+    }
+    with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::mutate_actor_semantic_state(
+          actor,
+          ActorSemanticMutation::Replace {
+            expected: changed.clone(),
+            replacement: original.clone(),
+          }
+        ),
+        Ok(Some(original.clone()))
+      );
+      assert_eq!(
+        ActorSemanticStates::<Test>::get(actor),
+        Some(original.clone())
+      );
+      TransactionOutcome::Rollback(())
+    });
+    assert_eq!(
+      ActorSemanticStates::<Test>::get(actor),
+      Some(changed.clone())
+    );
+    assert_eq!(
+      Actors::mutate_actor_semantic_state(
+        actor,
+        ActorSemanticMutation::Remove {
+          expected: changed.clone(),
+        }
+      ),
+      Ok(None)
+    );
+    assert!(!ActorSemanticStates::<Test>::contains_key(actor));
+    for mutation in [
+      ActorSemanticMutation::Replace {
+        expected: original.clone(),
+        replacement: original.clone(),
+      },
+      ActorSemanticMutation::Remove {
+        expected: original.clone(),
+      },
+    ] {
+      assert_eq!(
+        Actors::mutate_actor_semantic_state(actor, mutation),
+        Err(ActorSemanticMutationError::Missing)
+      );
+    }
+    assert_eq!(
+      Actors::mutate_actor_semantic_state(actor, ActorSemanticMutation::Publish(original.clone())),
+      Ok(Some(original.clone()))
+    );
+    assert_eq!(ActorSemanticStates::<Test>::get(actor), Some(original));
+  });
+}
+
+#[test]
 fn semantic_mutation_is_complete_compare_and_replace_without_placement_authority() {
   let dormant = ActorSemanticState::Dormant(DormantActorSemanticRecord {
     identity: 1u32,
@@ -4120,6 +4226,53 @@ fn canonical_effectful_later_retry_moves_through_deadline_and_reenters_once() {
         "branch refusal must retain the exact due source and canonical Service state"
       );
     }
+    // Explicit destination invariant fault, not an admitted public history.
+    let healthy_header = ServiceHeader::<Test>::get();
+    assert_eq!(healthy_header.count, 0);
+    ServiceHeader::<Test>::mutate(|header| header.count = 1);
+    let faulty_root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+    let expected_failure = Err(DependencyReviewWorkerError::Deadline(
+      DeadlineMutationError::ProcessResidenceMismatch,
+    ));
+    let mut failed_return = WeightMeter::with_limit(deadline_weight);
+    assert_eq!(
+      Actors::process_next_due_block_deadline(
+        &mut failed_return,
+        ServiceResidenceKind::Live,
+        retry_at,
+        None,
+      ),
+      expected_failure,
+    );
+    assert_eq!(failed_return.consumed(), deadline_weight);
+    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), faulty_root);
+
+    // An admitted Block failure does not spend or suppress the independent Tick attempt.
+    let mut pair_meter = WeightMeter::with_limit(Actors::deadline_service_weight_upper());
+    let pair = Actors::service_due_deadline_frontiers(
+      &mut pair_meter,
+      ServiceResidenceKind::Live,
+      retry_at,
+      0,
+      None,
+    )
+    .expect("complete independent-clock admission");
+    assert_eq!(pair.block, expected_failure);
+    assert_eq!(
+      pair.tick,
+      Err(DependencyReviewWorkerError::Deadline(
+        DeadlineMutationError::MemberMissing,
+      )),
+    );
+    let tick_selector = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_tick_deadline();
+    assert_eq!(
+      pair_meter.consumed(),
+      deadline_weight.checked_add(&tick_selector).unwrap(),
+    );
+    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), faulty_root);
+    ServiceHeader::<Test>::put(healthy_header);
+    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), source_root);
+
     let mut admitted = WeightMeter::with_limit(deadline_weight);
     assert_eq!(
       Actors::process_next_due_block_deadline(
@@ -8830,6 +8983,128 @@ fn canonical_service_round_matches_the_independent_semantic_trace() {
       });
     }
   });
+}
+
+#[test]
+fn canonical_service_head_advance_revalidates_intervening_changes() {
+  for mode in 0..3 {
+    for case in 0..7 {
+      new_test_ext().execute_with(|| {
+        let first = actor_ref(120, 1);
+        let second = actor_ref(121, 1);
+        for actor in [first, second] {
+          ActorProcesses::<Test>::insert(
+            actor.actor_id,
+            serving_process(actor, ServiceResidenceKind::Live),
+          );
+          polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+            Actors::insert_service_member(actor, ServiceResidenceKind::Live, 0).unwrap();
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+          });
+        }
+        if mode == 2 {
+          ActorProcesses::<Test>::mutate(first.actor_id, |p| {
+            p.as_mut().unwrap().last_attempted = Some(1)
+          });
+        }
+        polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+          Actors::begin_service_round(1).unwrap();
+          assert_eq!(
+            Actors::consider_service_head(1),
+            Ok(if mode == 2 {
+              ServiceRoundEncounter::AlreadyAttempted(first)
+            } else {
+              ServiceRoundEncounter::Eligible(first)
+            })
+          );
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+        });
+        let expected = match case {
+          0 => {
+            ServiceNodes::<Test>::mutate(first.actor_id, |n| n.as_mut().unwrap().generation += 1);
+            Some(ServiceRoundError::StaleGeneration)
+          }
+          1 => {
+            ActorProcesses::<Test>::mutate(first.actor_id, |p| p.as_mut().unwrap().generation += 1);
+            ServiceNodes::<Test>::mutate(first.actor_id, |n| {
+              n.as_mut().unwrap().last_considered = 1
+            });
+            Some(ServiceRoundError::StaleGeneration)
+          }
+          2 => {
+            ActorProcesses::<Test>::mutate(first.actor_id, |p| {
+              p.as_mut().unwrap().residence = None
+            });
+            ServiceNodes::<Test>::mutate(first.actor_id, |n| {
+              n.as_mut().unwrap().last_considered = 1
+            });
+            Some(ServiceRoundError::ProcessResidenceMismatch)
+          }
+          3 => {
+            ServiceNodes::<Test>::mutate(first.actor_id, |n| {
+              let n = n.as_mut().unwrap();
+              n.last_considered = 1;
+              n.eligible_from = 9;
+            });
+            ActorProcesses::<Test>::mutate(first.actor_id, |p| {
+              p.as_mut().unwrap().last_attempted = Some(2)
+            });
+            Some(ServiceRoundError::CorruptRing)
+          }
+          4 => {
+            ServiceHeader::<Test>::mutate(|h| h.round_block = Some(2));
+            ServiceNodes::<Test>::mutate(first.actor_id, |n| n.as_mut().unwrap().generation += 1);
+            Some(ServiceRoundError::RoundNotStarted)
+          }
+          5 => {
+            ServiceHeader::<Test>::mutate(|h| h.cursor = Some(second));
+            Some(ServiceRoundError::CorruptRing)
+          }
+          _ => None,
+        };
+        let before = (
+          ServiceHeader::<Test>::get(),
+          ServiceNodes::<Test>::get(first.actor_id),
+          ActorProcesses::<Test>::get(first.actor_id),
+        );
+        polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+          let result = match mode {
+            0 => Actors::advance_service_head(first, 1),
+            1 => Actors::advance_idle_service_head(first, 1),
+            _ => Actors::converge_attempted_service_head(first, 1),
+          };
+          if let Some(error) = expected {
+            assert_eq!(result, Err(error));
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+          } else {
+            assert_ok!(result);
+            assert_eq!(ServiceHeader::<Test>::get().cursor, Some(second));
+            assert_eq!(
+              ServiceNodes::<Test>::get(first.actor_id)
+                .unwrap()
+                .last_considered,
+              1
+            );
+            assert_eq!(
+              ActorProcesses::<Test>::get(first.actor_id)
+                .unwrap()
+                .last_attempted,
+              if mode == 1 { None } else { Some(1) }
+            );
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+          }
+        });
+        assert_eq!(
+          (
+            ServiceHeader::<Test>::get(),
+            ServiceNodes::<Test>::get(first.actor_id),
+            ActorProcesses::<Test>::get(first.actor_id)
+          ),
+          before
+        );
+      });
+    }
+  }
 }
 
 #[test]
