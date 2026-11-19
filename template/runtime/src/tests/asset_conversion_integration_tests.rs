@@ -42,6 +42,142 @@ fn swap_exact_tokens_for_tokens(
 }
 
 #[test]
+fn unavailable_pool_rejects_both_directions_and_remains_retryable() {
+  use crate::{Runtime, configs::deos_router_config::market_execution_failure};
+  use polkadot_sdk::frame_support::assert_noop;
+  for freeze_class in [false, true] {
+    new_test_ext().execute_with(|| {
+      let native = AssetKind::Native;
+      let token = AssetKind::Local(12);
+      let liquidity = 100 * EXISTENTIAL_DEPOSIT;
+      assert_ok!(create_test_asset(12, &ALICE));
+      assert_ok!(mint_tokens(12, &ALICE, &BOB, 2 * liquidity));
+      assert_ok!(create_pool(RuntimeOrigin::signed(ALICE), native, token));
+      assert_ok!(add_liquidity(
+        RuntimeOrigin::signed(BOB),
+        native,
+        token,
+        liquidity,
+        liquidity,
+        1,
+        1,
+        &BOB
+      ));
+      let pool =
+        <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::pool_address(
+          &native, &token,
+        )
+        .unwrap();
+      if freeze_class {
+        assert_ok!(Assets::freeze_asset(RuntimeOrigin::signed(ALICE), 12));
+      } else {
+        assert_ok!(Assets::block(
+          RuntimeOrigin::signed(ALICE),
+          12,
+          pool.clone().into()
+        ));
+      }
+      for (input, output) in [(native, token), (token, native)] {
+        assert!(matches!(
+          AssetConversion::get_reserves(input, output),
+          Err(polkadot_sdk::pallet_asset_conversion::Error::<Runtime>::PoolUnavailable)
+        ));
+        assert_eq!(
+          AssetConversion::quote_price_exact_tokens_for_tokens(input, output, 10, true),
+          None
+        );
+        assert_eq!(
+          AssetConversion::quote_price_tokens_for_exact_tokens(input, output, 10, true),
+          None
+        );
+        assert_noop!(
+          swap_exact_tokens_for_tokens(RuntimeOrigin::signed(BOB), vec![input, output], 10, 1, BOB),
+          polkadot_sdk::pallet_asset_conversion::Error::<Runtime>::PoolUnavailable
+        );
+      }
+      let failure = market_execution_failure(
+        polkadot_sdk::pallet_asset_conversion::Error::<Runtime>::PoolUnavailable.into(),
+      );
+      assert_eq!(
+        failure.failure_class(),
+        pallet_deos_router::RouterFailureClass::LiquidityUnavailable
+      );
+      assert_eq!(
+        failure.retry_disposition(),
+        pallet_deos_router::RetryDisposition::RetryLater
+      );
+      if freeze_class {
+        assert_ok!(Assets::thaw_asset(RuntimeOrigin::signed(ALICE), 12));
+      } else {
+        assert_ok!(Assets::thaw(RuntimeOrigin::signed(ALICE), 12, pool.into()));
+      }
+      assert_ok!(AssetConversion::get_reserves(native, token));
+    });
+  }
+}
+
+#[test]
+fn failed_exact_output_credit_swap_returns_change_without_issuance_loss() {
+  use crate::Runtime;
+  use polkadot_sdk::{
+    frame_support::traits::fungibles::Balanced, pallet_asset_conversion::SwapCredit,
+  };
+  type PoolAssets = <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::Assets;
+  new_test_ext().execute_with(|| {
+    let native = AssetKind::Native;
+    let token = AssetKind::Local(12);
+    let minimum = 150;
+    let native_liquidity = 100 * EXISTENTIAL_DEPOSIT;
+    let token_liquidity = 200;
+    assert_ok!(Assets::force_create(
+      RuntimeOrigin::root(),
+      12,
+      ALICE.into(),
+      true,
+      minimum
+    ));
+    assert_ok!(mint_tokens(12, &ALICE, &BOB, 1000));
+    assert_ok!(create_pool(RuntimeOrigin::signed(ALICE), native, token));
+    assert_ok!(add_liquidity(
+      RuntimeOrigin::signed(BOB),
+      native,
+      token,
+      native_liquidity,
+      token_liquidity,
+      1,
+      1,
+      &BOB
+    ));
+    // The credit API computes a price before splitting, but the withdrawal must fail Preserve.
+    let amount_out = token_liquidity - minimum + 1;
+    let amount_in = AssetConversion::get_amount_in(
+      <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::LPFee::get(),
+      &amount_out,
+      &native_liquidity,
+      &token_liquidity,
+    )
+    .unwrap();
+    let change = EXISTENTIAL_DEPOSIT;
+    let issuance = Balances::total_issuance();
+    let credit = PoolAssets::issue(native, amount_in + change);
+    let (returned, error) =
+      <AssetConversion as SwapCredit<AccountId>>::swap_tokens_for_exact_tokens(
+        vec![native, token],
+        credit,
+        amount_out,
+      )
+      .unwrap_err();
+    assert_eq!(
+      error,
+      polkadot_sdk::sp_runtime::TokenError::NotExpendable.into()
+    );
+    assert_eq!(returned.peek(), amount_in + change);
+    drop(returned);
+    assert_eq!(Balances::total_issuance(), issuance);
+  });
+}
+
+#[test]
 fn test_asset_creation_and_minting() {
   new_test_ext().execute_with(|| {
     let admin = ALICE;

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { readActorResourceProjection } from '../src/lib/adapters/blockchain/actor-resource.ts';
@@ -122,6 +123,20 @@ test('resource transport projects independent creation and freeze flags at the s
   assert.deepEqual(
     calls.find(([name]) => name === 'flags'),
     ['flags', { at: '0x42' }],
+  );
+});
+
+test('resource widget labels permission without promising admission or capacity', async () => {
+  const widget = await readFile(
+    new URL('../src/lib/widgets/AutomationWidget.svelte', import.meta.url),
+    'utf8',
+  );
+  assert.match(widget, /label="User creation permission"/);
+  assert.doesNotMatch(widget, /label="User creation admission"/);
+  assert.match(widget, /Permission is not admission approval\./);
+  assert.match(
+    widget,
+    /does not expose\s+qualified capacity or an admission forecast\./,
   );
 });
 

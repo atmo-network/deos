@@ -1,7 +1,7 @@
 /*
 Domain: Actors generated cost vectors
-Owns: Fail-closed projection of production-runtime ActorCostApi fixtures across geometry and Trigger families.
-Excludes: Runtime API transport, live fee estimation, Action receipts, and historical indexing.
+Owns: Fail-closed projection of native model-capacity ActorCostApi declaration/codec fixtures across geometry and Trigger families.
+Excludes: Production admission qualification, physical price validation, runtime API transport, live fee estimation, Action receipts, and historical indexing.
 Zone: Automation domain contract; runtime-generated vectors bind browser cost names to metadata and Weight identities.
 */
 import vectorsJson from './actors-cost-vectors.json' with { type: 'json' };
@@ -21,8 +21,11 @@ export type ActorCostVector = {
 
 export type ActorCostVectors = {
   format: 'deos.actor.cost-vectors';
-  formatVersion: 1;
+  formatVersion: 2;
   runtimeApiVersion: 1;
+  admissionProfile: 'native-model-capacity';
+  productionAdmissionQualified: false;
+  physicalPricesQualified: false;
   metadataSha256: string;
   weightSha256: string;
   vectors: ActorCostVector[];
@@ -279,10 +282,19 @@ export function parseActorCostVectors(value: unknown): ActorCostVectors {
   const source = record(value, 'Actor cost vector artifact');
   if (
     source.format !== 'deos.actor.cost-vectors' ||
-    source.formatVersion !== 1 ||
+    source.formatVersion !== 2 ||
     source.runtimeApiVersion !== 1
   ) {
     throw new Error('Actor cost vector identity or version is unsupported');
+  }
+  if (
+    source.admissionProfile !== 'native-model-capacity' ||
+    source.productionAdmissionQualified !== false ||
+    source.physicalPricesQualified !== false
+  ) {
+    throw new Error(
+      'Actor cost vectors require explicit model-only provenance without production admission or physical price qualification',
+    );
   }
   if (!Array.isArray(source.vectors)) {
     throw new Error('Actor cost vectors must be an array');
@@ -334,6 +346,9 @@ export function parseActorCostVectors(value: unknown): ActorCostVectors {
     format: source.format,
     formatVersion: source.formatVersion,
     runtimeApiVersion: source.runtimeApiVersion,
+    admissionProfile: source.admissionProfile,
+    productionAdmissionQualified: source.productionAdmissionQualified,
+    physicalPricesQualified: source.physicalPricesQualified,
     metadataSha256: digest(source.metadataSha256, 'metadata identity'),
     weightSha256: digest(source.weightSha256, 'Weight identity'),
     vectors,

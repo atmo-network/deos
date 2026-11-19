@@ -471,7 +471,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
             >
               <div class="col-span-full grid gap-1">
                 <DetailRow
-                  label="User creation admission"
+                  label="User creation permission"
                   value={resource.machineControl
                     ? resource.machineControl.userCreationEnabled
                       ? 'Enabled'
@@ -479,6 +479,10 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                     : 'Unavailable'}
                   valueClass="text-(--mono-text)"
                 />
+                <p class="text-(--mono-muted)">
+                  Permission is not admission approval. This API does not expose
+                  qualified capacity or an admission forecast.
+                </p>
                 <DetailRow
                   label="Machine freeze"
                   value={resource.machineControl

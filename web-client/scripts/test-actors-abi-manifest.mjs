@@ -1,6 +1,16 @@
+import {
+  getDynamicBuilder,
+  getLookupFn,
+} from '@polkadot-api/metadata-builders';
+import {
+  decAnyMetadata,
+  unifyMetadata,
+} from '@polkadot-api/substrate-bindings';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+
+import { readActorsTestMetadata } from './actors-test-metadata.mjs';
 
 const manifest = JSON.parse(
   await readFile(
@@ -8,6 +18,27 @@ const manifest = JSON.parse(
     'utf8',
   ),
 );
+
+test('Actor admission errors decode at their generated metadata discriminants', async () => {
+  const metadata = unifyMetadata(
+    decAnyMetadata(await readActorsTestMetadata()),
+  );
+  const pallet = metadata.pallets.find((entry) => entry.name === 'Actors');
+  assert.ok(pallet?.errors);
+  const codec = getDynamicBuilder(getLookupFn(metadata)).buildDefinition(
+    pallet.errors.type,
+  );
+  for (const name of [
+    'UserAdmissionUnavailable',
+    'UserIdentityCapacityExceeded',
+  ]) {
+    const variant = manifest.pallet.errors.find((entry) => entry.name === name);
+    assert.ok(variant, `${name} must be present in the current-source ABI`);
+    const encoded = codec.enc({ type: name, value: undefined });
+    assert.deepEqual([...encoded], [variant.index]);
+    assert.equal(codec.dec(encoded).type, name);
+  }
+});
 
 function graphNode(path) {
   const typeName = path.split('::').at(-1);

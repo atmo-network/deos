@@ -146,6 +146,25 @@ struct EffectfulStepTransition<T: Config> {
   behavior: Option<BehaviorPolicyCandidateOf<T>>,
 }
 
+/// Storage-free inputs retained after residence publication for the same validated attempt.
+/// This transient record grants no authority and is never another scheduler or committer.
+pub(crate) struct PublishedStepCommit<T: Config> {
+  pub(crate) plan: CurrentStepPlanOf<T>,
+  pub(crate) execution_instance: ActiveActorViewOf<T>,
+  pub(crate) step: StepOf<T>,
+  pub(crate) control_context: StepControlWeightContext,
+  pub(crate) reserved_control_weight: Weight,
+  pub(crate) effect_execution: super::TaskEffectExecution,
+  pub(crate) actual_effect_weight: Weight,
+  pub(crate) control_outcome: StepControlOutcome,
+  pub(crate) placement: StepControlPlacement,
+  pub(crate) parked_balance_reserved: bool,
+  pub(crate) parked_balance_completion: bool,
+  pub(crate) behavior: Option<BehaviorPolicyCandidateOf<T>>,
+  pub(crate) attempt: ActorAttemptEvidence,
+  pub(crate) financial_recovery: Option<crate::FinancialWaitReceipt>,
+}
+
 /// Carrier-neutral intent selected after a semantic transition. The legacy
 /// FIFO adapter may realize this intent physically or fail closed when its
 /// scheduler namespace is exhausted.
@@ -370,6 +389,9 @@ impl<T: Config> Pallet<T> {
       Weight,
     )>,
   ) -> CyclePass {
+    #[cfg(all(feature = "runtime-benchmarks", feature = "std"))]
+    let _observation =
+      crate::benchmark_observation::enter(crate::benchmark_observation::Phase::Pass);
     if remaining_weight.is_zero() {
       return CyclePass {
         consumed: Weight::zero(),
@@ -459,6 +481,12 @@ impl<T: Config> Pallet<T> {
           scanned = scanned.saturating_add(1);
           executed = executed.saturating_add(1);
           starvation_observed = true;
+          starved = false;
+        }
+        Ok(ServiceRoundEncounter::ConsumedRefusal(_)) => {
+          scanned = scanned.saturating_add(1);
+          starvation_observed = true;
+          starved = executed == 0;
         }
         Ok(ServiceRoundEncounter::NoWork(_)) => {
           scanned = scanned.saturating_add(1);
@@ -528,6 +556,18 @@ impl<T: Config> Pallet<T> {
       actor_id,
       fee: breakdown.total_fee,
     });
+    Ok(())
+  }
+
+  fn ensure_opening_admission_current(
+    instance: &ActiveActorViewOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+  ) -> Result<(), AttemptTransactionError> {
+    if instance.cycle_state == CycleState::Idle
+      && !Self::admission_matches_current_authority(admission)
+    {
+      return Err(AttemptTransactionError::Invariant);
+    }
     Ok(())
   }
 
@@ -840,6 +880,7 @@ impl<T: Config> Pallet<T> {
     );
     state.hot = Self::prepare_opening_rearm_hot(actor_id, &opening, admission, state.hot)?;
     Self::charge_pipeline_opening(actor_id, &opening)?;
+    Self::ensure_opening_admission_current(&opening, admission)?;
     let cycle_nonce = state
       .identity
       .cycle_nonce
@@ -1035,6 +1076,10 @@ impl<T: Config> Pallet<T> {
         if let Some(receipt) = recovery {
           Self::deposit_event(Event::FinancialWaitRecovered { receipt });
         }
+        // Publication, cleanup and host settlement may cross further callbacks after Opening.
+        if !Self::admission_matches_current_authority(admission) {
+          return Err(AttemptTransactionError::Invariant);
+        }
         Ok(StepCommitEvidence {
           actual_control_weight,
           actual_effect_weight: Weight::zero(),
@@ -1199,6 +1244,10 @@ impl<T: Config> Pallet<T> {
         Self::prepare_opening_rearm_hot(actor_id, &execution_instance, admission, plan.hot)?;
     }
     Self::charge_pipeline_opening(actor_id, &execution_instance)?;
+    if let Err(error) = Self::ensure_opening_admission_current(&execution_instance, admission) {
+      *retained_effect_weight = Some(Weight::zero());
+      return Err(error);
+    }
     let (mut plan, effect_execution, disposition, outcomes, eligible_at) =
       Self::execute_loaded_single_step_core(actor_id, &execution_instance, plan, now, step_count)?;
     let actual_effect_weight =
@@ -1983,6 +2032,110 @@ impl<T: Config> Pallet<T> {
     Ok((state, reason, transition.actual_effect_weight))
   }
 
+  /// Genuine plain User StopCycle transition with a test-local publisher over real consumers.
+  /// The caller owns rollback and must finish the returned attempt through the real late consumer.
+  #[cfg(all(test, feature = "runtime-benchmarks"))]
+  pub(crate) fn benchmark_prepare_stop_cycle_commit(
+    actor: ActorRef,
+    kind: ServiceResidenceKind,
+    state: ActiveActorStateOf<T>,
+    plan: CurrentStepPlanOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+    publish: impl FnOnce(
+      ActorRef,
+      ServiceResidenceKind,
+      &ActiveActorStateOf<T>,
+      BlockNumberFor<T>,
+    ) -> Result<StepControlPlacement, AttemptTransactionError>,
+  ) -> Result<PublishedStepCommit<T>, AttemptTransactionError> {
+    if !polkadot_sdk::frame_support::storage::transactional::is_transactional()
+      || state.hot.cycle_state != CycleState::Idle
+      || state.run_state.is_some()
+      || state.contract.close_when.is_some()
+      || state.contract.on_unfunded != OnUnfunded::Close
+      || state.contract.window.is_some()
+      || state.contract.parked_balance_activation.is_some()
+      || !matches!(plan.loaded_step.step.task, super::types::Task::StopCycle)
+    {
+      return Err(AttemptTransactionError::Invariant);
+    }
+    let semantic = Self::load_service_actor_semantic_state(actor, kind)
+      .map_err(|_| AttemptTransactionError::Invariant)?;
+    if semantic.identity != state.identity
+      || semantic.hot != state.hot
+      || semantic.admission != *admission
+      || Self::consider_service_head(now).map_err(|_| AttemptTransactionError::Invariant)?
+        != ServiceRoundEncounter::Eligible(actor)
+    {
+      return Err(AttemptTransactionError::Invariant);
+    }
+    let mut retained = None;
+    let EffectfulStepTransition {
+      plan,
+      execution_instance,
+      step,
+      control_context,
+      reserved_control_weight,
+      effect_execution,
+      actual_effect_weight,
+      disposition,
+      attempt,
+      financial_wait,
+      next_residence,
+      eligible_at,
+      parked_balance_reserved,
+      behavior,
+    } = Self::execute_effectful_step_transition(
+      actor.actor_id,
+      state,
+      plan,
+      admission,
+      now,
+      false,
+      &mut retained,
+    )?;
+    if execution_instance.actor_class.actor_type() != ActorType::User
+      || financial_wait.is_some()
+      || eligible_at.is_some_and(|at| now.checked_add(&One::one()) != Some(at))
+      || parked_balance_reserved
+      || behavior.is_some()
+      || effect_execution != super::TaskEffectExecution::Invoked
+      || retained != Some(actual_effect_weight)
+    {
+      return Err(AttemptTransactionError::Invariant);
+    }
+    let control_outcome = match disposition {
+      AttemptDisposition::Completed => StepControlOutcome::Completed,
+      _ => return Err(AttemptTransactionError::Invariant),
+    };
+    let attempt = attempt.ok_or(AttemptTransactionError::Invariant)?;
+    let NextResidence::Publish { state } = next_residence else {
+      return Err(AttemptTransactionError::Invariant);
+    };
+    let parked_balance_completion = state.contract.parked_balance_activation.is_some();
+    let placement = publish(actor, kind, &state, now)?;
+    if placement != StepControlPlacement::None {
+      return Err(AttemptTransactionError::Invariant);
+    }
+    Ok(PublishedStepCommit {
+      plan,
+      execution_instance,
+      step,
+      control_context,
+      reserved_control_weight,
+      effect_execution,
+      actual_effect_weight,
+      control_outcome,
+      placement,
+      parked_balance_reserved,
+      parked_balance_completion,
+      behavior,
+      attempt,
+      financial_recovery: None,
+    })
+  }
+
   pub(crate) fn execute_effectful_step_on_service_with_deadline(
     actor: ActorRef,
     kind: ServiceResidenceKind,
@@ -2237,85 +2390,26 @@ impl<T: Config> Pallet<T> {
             StepControlPlacement::None
           }
         };
-        let actual_fee = Self::maximum_current_action_fee(
-          execution_instance.actor_class.actor_type(),
-          &step,
-          ActorStepResourceEnvelope {
-            control: Weight::zero(),
-            effect: actual_effect_weight,
+        Self::finish_effectful_step_commit(
+          actor.actor_id,
+          admission,
+          PublishedStepCommit {
+            plan,
+            execution_instance,
+            step,
+            control_context,
+            reserved_control_weight,
+            effect_execution,
+            actual_effect_weight,
+            control_outcome,
+            placement,
+            parked_balance_reserved,
+            parked_balance_completion,
+            behavior,
+            attempt,
+            financial_recovery,
           },
         )
-        .map_err(|_| AttemptTransactionError::Invariant)?;
-        let action_fee_collected = execution_instance.actor_class.actor_type() == ActorType::User
-          && !actual_fee.total_fee.is_zero();
-        let control_execution = StepControlExecution {
-          phase: match execution_instance.cycle_state {
-            CycleState::Idle => StepControlPhase::Opening,
-            CycleState::Running => StepControlPhase::Running,
-            CycleState::Suspended => StepControlPhase::Suspended,
-          },
-          outcome: control_outcome,
-          placement,
-          task_effect: effect_execution,
-          action_fee_collected,
-        };
-        let host_reserved_control = if parked_balance_reserved {
-          reserved_control_weight
-            .checked_sub(&T::WeightInfo::complete_cycle_to_parked_balance())
-            .ok_or(AttemptTransactionError::Invariant)?
-        } else {
-          reserved_control_weight
-        };
-        let host_actual_control = match behavior.as_ref() {
-          Some(candidate) => Self::behavior_control_weight_context(&candidate.source.policy)
-            .and_then(|behavior| {
-              T::StepControlWeight::actual_behavior_control_weight(
-                control_context,
-                &step,
-                behavior,
-                host_reserved_control,
-                control_execution,
-              )
-            }),
-          None => T::StepControlWeight::actual_control_weight(
-            control_context,
-            &step,
-            host_reserved_control,
-            control_execution,
-          ),
-        };
-        let actual_control_weight = host_actual_control
-          .map(|actual| {
-            if parked_balance_completion {
-              actual.saturating_add(T::WeightInfo::complete_cycle_to_parked_balance())
-            } else {
-              actual
-            }
-          })
-          .filter(|actual| actual.all_lte(reserved_control_weight))
-          .ok_or(AttemptTransactionError::Invariant)?;
-        if action_fee_collected {
-          Self::collect_user_step_fee(&execution_instance.sovereign_account, actual_fee.total_fee)?;
-        }
-        if !matches!(step.task, super::types::Task::StopCycle)
-          && matches!(effect_execution, super::TaskEffectExecution::Invoked)
-        {
-          Self::deposit_action_fee_receipt(
-            actor.actor_id,
-            plan.ticket.cycle_nonce,
-            plan.loaded_step.cursor,
-            actual_effect_weight,
-            actual_fee.effect_fee,
-          );
-        }
-        if let Some(receipt) = financial_recovery {
-          Self::deposit_event(Event::FinancialWaitRecovered { receipt });
-        }
-        Ok(StepCommitEvidence {
-          actual_control_weight,
-          actual_effect_weight,
-          attempt: Some(attempt),
-        })
       })();
       match result {
         Ok(evidence) => {
@@ -2329,6 +2423,123 @@ impl<T: Config> Pallet<T> {
     .map_err(|cause| StepRollback {
       cause,
       actual_effect_weight: retained_effect_weight,
+    })
+  }
+
+  /// Resolve, collect and authenticate only after the same attempt's residence publication.
+  /// The caller owns the transaction and retains performed effect Weight on every late refusal.
+  pub(crate) fn finish_effectful_step_commit(
+    actor_id: ActorId,
+    admission: &ActorAdmissionCertificateOf<T>,
+    commit: PublishedStepCommit<T>,
+  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
+    #[cfg(all(feature = "runtime-benchmarks", feature = "std"))]
+    let _observation =
+      crate::benchmark_observation::enter(crate::benchmark_observation::Phase::Settlement);
+    let PublishedStepCommit {
+      plan,
+      execution_instance,
+      step,
+      control_context,
+      reserved_control_weight,
+      effect_execution,
+      actual_effect_weight,
+      control_outcome,
+      placement,
+      parked_balance_reserved,
+      parked_balance_completion,
+      behavior,
+      attempt,
+      financial_recovery,
+    } = commit;
+    let actual_fee = Self::maximum_current_action_fee(
+      execution_instance.actor_class.actor_type(),
+      &step,
+      ActorStepResourceEnvelope {
+        control: Weight::zero(),
+        effect: actual_effect_weight,
+      },
+    )
+    .map_err(|_| AttemptTransactionError::Invariant)?;
+    let action_fee_collected = execution_instance.actor_class.actor_type() == ActorType::User
+      && !actual_fee.total_fee.is_zero();
+    let control_execution = StepControlExecution {
+      phase: match execution_instance.cycle_state {
+        CycleState::Idle => StepControlPhase::Opening,
+        CycleState::Running => StepControlPhase::Running,
+        CycleState::Suspended => StepControlPhase::Suspended,
+      },
+      outcome: control_outcome,
+      placement,
+      task_effect: effect_execution,
+      action_fee_collected,
+    };
+    let host_reserved_control = if parked_balance_reserved {
+      reserved_control_weight
+        .checked_sub(&T::WeightInfo::complete_cycle_to_parked_balance())
+        .ok_or(AttemptTransactionError::Invariant)?
+    } else {
+      reserved_control_weight
+    };
+    let host_actual_control = match behavior.as_ref() {
+      Some(candidate) => {
+        Self::behavior_control_weight_context(&candidate.source.policy).and_then(|behavior| {
+          T::StepControlWeight::actual_behavior_control_weight(
+            control_context,
+            &step,
+            behavior,
+            host_reserved_control,
+            control_execution,
+          )
+        })
+      }
+      None => T::StepControlWeight::actual_control_weight(
+        control_context,
+        &step,
+        host_reserved_control,
+        control_execution,
+      ),
+    };
+    let actual_control_weight = host_actual_control
+      .map(|actual| {
+        if parked_balance_completion {
+          actual.saturating_add(T::WeightInfo::complete_cycle_to_parked_balance())
+        } else {
+          actual
+        }
+      })
+      .filter(|actual| actual.all_lte(reserved_control_weight))
+      .ok_or(AttemptTransactionError::Invariant)?;
+    if action_fee_collected {
+      #[cfg(all(feature = "runtime-benchmarks", feature = "std"))]
+      let _collection =
+        crate::benchmark_observation::enter(crate::benchmark_observation::Phase::Collection);
+      Self::collect_user_step_fee(&execution_instance.sovereign_account, actual_fee.total_fee)?;
+    }
+    if !matches!(step.task, super::types::Task::StopCycle)
+      && matches!(effect_execution, super::TaskEffectExecution::Invoked)
+    {
+      Self::deposit_action_fee_receipt(
+        actor_id,
+        plan.ticket.cycle_nonce,
+        plan.loaded_step.cursor,
+        actual_effect_weight,
+        actual_fee.effect_fee,
+      );
+    }
+    if let Some(receipt) = financial_recovery {
+      Self::deposit_event(Event::FinancialWaitRecovered { receipt });
+    }
+    // The Action collector runs after the effect and publication. A new Cycle must still
+    // authenticate at commit; rollback retains performed effect Weight, not its mutations.
+    #[cfg(all(feature = "runtime-benchmarks", feature = "std"))]
+    let _authentication =
+      crate::benchmark_observation::enter(crate::benchmark_observation::Phase::Authentication);
+    Self::ensure_opening_admission_current(&execution_instance, admission)?;
+    Ok(StepCommitEvidence {
+      actual_control_weight,
+      actual_effect_weight,
+      attempt: Some(attempt),
     })
   }
 
@@ -2988,6 +3199,7 @@ impl<T: Config> Pallet<T> {
       ServiceRoundEncounter::Eligible(_) => attempt
         .map(Self::simulation_attempt_result)
         .ok_or(SimulationError::NotReady),
+      ServiceRoundEncounter::ConsumedRefusal(_) => Err(SimulationError::FeeCollectionFailed),
       ServiceRoundEncounter::TerminallyClosed(reason) => Ok(Self::simulation_attempt_result(
         Self::step_simulation_evidence(
           semantic.identity.cycle_nonce,
@@ -5564,8 +5776,20 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
     disabled: Option<(ActorProcessOf<T>, ProcessDisablement<BlockNumberFor<T>>)>,
   ) -> Result<(), AttemptTransactionError> {
-    if let Some((mut process, disablement)) = disabled {
+    if disabled.is_some() {
       Self::remove_service_member(actor).map_err(|_| AttemptTransactionError::Invariant)?;
+    }
+    Self::finish_idle_service_process(actor, now, disabled)
+  }
+
+  /// Process publication only, after the caller has completed any required Service unlink.
+  /// The caller retains the attempt transaction; keep both writes and the late generation check.
+  pub(crate) fn finish_idle_service_process(
+    actor: ActorRef,
+    now: BlockNumberFor<T>,
+    disabled: Option<(ActorProcessOf<T>, ProcessDisablement<BlockNumberFor<T>>)>,
+  ) -> Result<(), AttemptTransactionError> {
+    if let Some((mut process, disablement)) = disabled {
       process.status = ProcessStatus::Disabled(disablement);
       process.residence = None;
       ActorProcesses::<T>::insert(actor.actor_id, process);

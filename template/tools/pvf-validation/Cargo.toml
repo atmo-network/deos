@@ -14,6 +14,7 @@ workspace = true
 
 [dev-dependencies]
 tracing-core = "0.1"
+polkadot-sdk = { workspace = true, features = ["std", "sp-trie", "sp-state-machine"] }
 
 [dependencies]
 codec = { workspace = true, features = ["std"] }
@@ -37,3 +38,77 @@ polkadot-sdk = { workspace = true, features = [
   "sp-io",
   "sp-runtime",
 ] }
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[workspace.package]
+version = "0.7.28"
+license = "MIT-0"
+authors = ["DEOS Contributors"]
+homepage = "https://github.com/atmo-network/deos"
+repository = "https://github.com/atmo-network/deos"
+edition = "2024"
+
+[workspace.lints.rust]
+suspicious_double_ref_op = { level = "allow", priority = 2 }
+# `substrate_runtime` is a common `cfg` condition name used in the repo.
+unexpected_cfgs = { level = "warn", check-cfg = [
+	'cfg(build_opt_level, values("3"))',
+	'cfg(build_profile, values("debug", "release"))',
+	'cfg(enable_alloc_error_handler)',
+	'cfg(fuzzing)',
+	'cfg(ignore_flaky_test)',
+	'cfg(substrate_runtime)',
+] }
+
+[workspace.lints.clippy]
+all = { level = "allow", priority = 0 }
+bind_instead_of_map = { level = "allow", priority = 2 }
+borrowed-box = { level = "allow", priority = 2 }
+complexity = { level = "warn", priority = 1 }
+correctness = { level = "warn", priority = 1 }
+default_constructed_unit_structs = { level = "allow", priority = 2 }
+derivable_impls = { level = "allow", priority = 2 }
+eq_op = { level = "allow", priority = 2 }
+erasing_op = { level = "allow", priority = 2 }
+extra-unused-type-parameters = { level = "allow", priority = 2 }
+identity-op = { level = "allow", priority = 2 }
+if-same-then-else = { level = "allow", priority = 2 }
+large_enum_variant = { level = "allow", priority = 2 }
+needless-lifetimes = { level = "allow", priority = 2 }
+needless_option_as_deref = { level = "allow", priority = 2 }
+nonminimal-bool = { level = "allow", priority = 2 }
+option-map-unit-fn = { level = "allow", priority = 2 }
+result_unit_err = { level = "allow", priority = 2 }
+stable_sort_primitive = { level = "allow", priority = 2 }
+too-many-arguments = { level = "allow", priority = 2 }
+type_complexity = { level = "allow", priority = 2 }
+unit_arg = { level = "allow", priority = 2 }
+unnecessary_cast = { level = "allow", priority = 2 }
+useless_conversion = { level = "allow", priority = 2 }
+while_immutable_condition = { level = "allow", priority = 2 }
+zero-prefixed-literal = { level = "allow", priority = 2 }
+
+[workspace.dependencies]
+codec = { package = "parity-scale-codec", version = "3.6", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+polkadot-sdk = { git = "https://github.com/paritytech/polkadot-sdk", rev = "9448fe4f252936d241b8d2663506813b884f94f3", version = "=2609.3.0", default-features = false }
+
+[patch.crates-io]
+# Reuse the project-owned compatible sources; package notes retain advisory limits.
+crypto-bigint = { path = "../../vendor/crypto-bigint" }
+hickory-proto = { path = "../../vendor/hickory-proto" }
+hickory-proto-026 = { package = "hickory-proto", path = "../../vendor/hickory-proto-026" }
+webpki-roots = { path = "../../vendor/webpki-roots" }
+str0m-openssl = { path = "../../vendor/str0m-openssl" }
+lru-07 = { package = "lru", path = "../../vendor/lru-0.7.8" }
+lru-012 = { package = "lru", path = "../../vendor/lru-0.12.3" }
+memmap2-05 = { package = "memmap2", path = "../../vendor/memmap2-0.5.10" }
+# Immutable SDK sources require exactly 0.3.19; retain that identity with a local backport.
+tracing-subscriber = { path = "vendor/tracing-subscriber-0.3.19" }
+
+[profile.dev]
+debug = 0
+incremental = false

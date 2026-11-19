@@ -1,0 +1,254 @@
+{
+  "schema": 1,
+  "role": "canonical-local-linux-reference",
+  "authority": "User-authorized DEOS 0.7.28 bounded local reference integration; retained trusted-parent finite-role composition, not general security or release approval",
+  "decisionSha256": "96e696ce464485c7d47667decef0e7f83860c5f00cad4a24ad7455407a14536c",
+  "expires": "2026-12-12T00:00:00Z",
+  "subject": {
+    "sha256": "e0ad86fb103ac83288c8e041d4eee849376206b1e86aa159ec0a9060a8ee7e82",
+    "sizeBytes": 172648368,
+    "buildId": "526dada6df7d3640b3b04a8a92e51b08937985d8",
+    "version": "polkadot-omni-node 1.25.2-9448fe4f252"
+  },
+  "source": {
+    "preparedSha256": "df909524cc7780e647169abd7ee97f78f3914fd5cc66c117f5806089fa800eb2",
+    "manifestSha256": "e4fca58f4fb0e1bc1edc87bfdc4c55e43087ff377940403d7ad18c7568d3f81a",
+    "lockSha256": "4930b498b00c8b6820da65a1ed08c5ce3c1c200dc5a4a1b019a51b1dd0efb8b0",
+    "sdkInventory": "96e724553e457385400ca68ff1c2f12a6bda9970d9c072aaadd2bcae21f384a7",
+    "vendorInventory": "048b9ec875e3eb84213bddb7d33ab8cb1d69e9106433f11bf3ffd6cefa49fa54",
+    "normalProjection": "f24c7440b1e01033f81435f3fd871ddeaff566a8f5496c7f580b7d3f743c7d65",
+    "workspaceProjection": "893cb743c3bf5a75fac73095f205b99b9104020990ad2d75bf5dcfffff885bc1",
+    "sourceProofAuthority": "e0861ad5b0b2ea4b3362b092ff3bea3bab86feddba283b89a279b53eaa01b9e5",
+    "coveredSourceDecisions": 79,
+    "tag": "polkadot-stable2609-2",
+    "commit": "9448fe4f252936d241b8d2663506813b884f94f3",
+    "tree": "97a1f73479286fdbd94e4bed0c5062999fab3073",
+    "originalLock": "f12148367523411902f1cceade3d28d14b94101049dce41f5eb9644775bc0356"
+  },
+  "build": {
+    "target": "x86_64-unknown-linux-gnu",
+    "rust": "1.94.1",
+    "llvm": "21.1.8",
+    "profile": "production opt3/unwind/fat-LTO/CGU1/runtime-benchmarks/jobs2/normal SDK Wasm",
+    "freshTarget": true,
+    "sharedAcquisitionCaches": true,
+    "cleanRoom": false
+  },
+  "buildReceipts": {
+    "build-environment.json": "0d8b1140d4b7bb13b7647eb3e66a7bc44b9724756210ce5639ddef27c3e451ee",
+    "build-tools.txt": "761616ccae07cfec02e5dea2b26e10406318423802bd5816c4b1bfe3bf9937ce",
+    "frozen-inputs.json": "df909524cc7780e647169abd7ee97f78f3914fd5cc66c117f5806089fa800eb2",
+    "exit-status": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "binary.sha256": "b0cca1b28bddfa05146af6fb25edef683cdf1b26d0aa5a7d31f06f4d481256da",
+    "build.log": "2807cd359d2a6d85ed6ab8772cdcfb337455e3eab39dbf4bcfc3cdd5616758b0"
+  },
+  "reviewContents": {
+    "buildReview": "43e6c48137b2775e2198df20d2b7cb44f8ba53396eeb92fc9d24c3d6e4487d47",
+    "coreReview": "16cb55962f8b1eb4d65ea25165279a82f6651592348ec9b7e1c9fde1119e405e",
+    "fixtureReview": "672e71e2082f4e27a99d3748781395d55ac2aab232e5061537f3b0e678717229",
+    "cryptoReview": "835abcff38dbdded14274f930dd2588e0961fe28bfa65e7a5dd36d9dab9cd0c2",
+    "entrypointReview": "19436f2e53908914b8ad988ec9eef5d4cf3e77624799dcdd620b55c03ab94708",
+    "relayReview": "130fb327587c7c8d440ac30f107e1ac525ff9c977ee3960553879187f2ffc2df"
+  },
+  "launch": {
+    "node": "1bec56ef7cfa9a76f3e0b7c0a87f220eb73f23102b9c0b4c7529a3f7c3ce7c31",
+    "tree": "4958357419d153a37f4b983d814b86b18d7ce443a04389b600dd7b3df983b5b1",
+    "specSha256": "64cfd6292ab441ffd8ecec0989b7de6e6cc35902a27ea2bf4e19dc741a352f15",
+    "guestSha256": "ea099c55f967515486c6c62f3230e679430615ad9bc6effa6a0a0220d6ff646b",
+    "binaries": {
+      "polkadot": "7c21c5831eb0c093e3b91e23857cfaecf30ba15b4d14256c13f942a43542c21b",
+      "polkadot-prepare-worker": "b33b8a288b386ff5d1bbd28eb6a3ee70e0ada968e93c369888ee0cf67303e771",
+      "polkadot-execute-worker": "16ecbd306afa6562d911a8d533e976e194c6d5e3f404321ea83ec4171f7fe5f6",
+      "omni": "e0ad86fb103ac83288c8e041d4eee849376206b1e86aa159ec0a9060a8ee7e82"
+    },
+    "recordedConfigSha256": "7f7b02f97a9e6f9ac54796d8db7451cf86df02357bd1ac6e6cb110cc14e4c32f",
+    "recordedInputsSha256": "0025a1ffcbb4d9e8da040d3dd566d5227430a22565382eef74ebc41f8924fbd7"
+  },
+  "remaining": [
+    "Universal/library-wide constant time or arbitrary-host WCET",
+    "Full X.509/DTLS handshake/interoperability or all transitive callees",
+    "Root/source-wide/unrestricted CLI/published relay/Apple clearance",
+    "Independent GRANDPA signature or state-trie proof",
+    "Portable Linux or macOS execution; strong GLIBC2.38/weak2.39 and C++ ABI constraints remain",
+    "Production User admission, system-quarter/physical/resource/Weight/fee qualification",
+    "Canonical promotion, deployment, publication or whole-release acceptance"
+  ],
+  "invalidates": [
+    "Expiry or relevant advisory change",
+    "Any source/consumer/implementation/macro/generator/proof/lock drift",
+    "Changed target/compiler/features/profile/ELF",
+    "Changed producers/Node/CLI/tool tree/relay/workers/config/spec/CODE/commands/entrypoint or callback boundary",
+    "Missing, altered or mismatched evidence/approval authority",
+    "Use outside the exact admitted role requires a new explicit applicable composition decision; this is not a general launch permit"
+  ],
+  "notices": [
+    {
+      "package": "icu_collections",
+      "version": "1.5.0",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "icu_locid",
+      "version": "1.5.0",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "icu_locid_transform",
+      "version": "1.5.0",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "icu_locid_transform_data",
+      "version": "1.5.0",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "icu_normalizer",
+      "version": "1.5.0",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "icu_normalizer_data",
+      "version": "1.5.0",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "icu_properties",
+      "version": "1.5.1",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "icu_properties_data",
+      "version": "1.5.0",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "icu_provider",
+      "version": "1.5.0",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "icu_provider_macros",
+      "version": "1.5.0",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "litemap",
+      "version": "0.7.4",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "tinystr",
+      "version": "0.7.6",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "unicode-ident",
+      "version": "1.0.11",
+      "license": "(MIT OR Apache-2.0) AND Unicode-DFS-2016",
+      "file": "unicode-68f5b9f5ea36.txt",
+      "sha256": "68f5b9f5ea36881a0942ba02f558e9e1faf76cc09cb165ad801744c61b738844"
+    },
+    {
+      "package": "writeable",
+      "version": "0.5.5",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "yoke",
+      "version": "0.7.5",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "yoke-derive",
+      "version": "0.7.5",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "zerofrom",
+      "version": "0.1.5",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "zerofrom-derive",
+      "version": "0.1.5",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "zerovec",
+      "version": "0.10.4",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "package": "zerovec-derive",
+      "version": "0.10.3",
+      "license": "Unicode-3.0",
+      "file": "unicode-f367c1b8e1aa.txt",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    }
+  ],
+  "operationalBundle": {
+    "kind": "operator-supplied-accepted-reference-inputs",
+    "owner": "01-download-binaries.sh --export-reference-bundle / --check-reference-bundle / --import-reference-bundle",
+    "authority": "This project record pins every required file, original build receipt, Node executable and complete CLI tree; caller manifests do not grant authority",
+    "layout": ["acceptance.json", "bin/node", "bin/polkadot-omni-node-deos", "bin/notices/*", "cli/", "guest.wasm", "chain_spec.json", "proofs/prepared.json", "proofs/attempts/0001/*", "bundle-provenance.json"],
+    "inputs": "Explicit canonical owned paths supplied by the operator; the accepted existing image, exact reviewed installed CLI tree, guest/spec and original hash-pinned prepared/build receipts must be supplied, not reconstructed from a cache convention",
+    "accompaniment": "The associated checked-in Unicode notices are copied and verified. Relay/workers remain separately checksum-pinned by 01; no published binary bulk is carried in this bundle",
+    "limits": "Not clean-room acquisition, reproducible ELF production, upstream producer attestation or historical receipt regeneration. A new source reconstruction/preflight/freeze/build produces new receipts and potentially different ELF bytes requiring new independent artifact acceptance"
+  },
+  "recipe": {
+    "sourceVendorInventory": "32c3c37dcd02f86fbc2675705f89dac6d2c71df6934f8e62d818500c0229ab32",
+    "sourceVendorFiles": 461,
+    "sourceProjection": "Known local package roots omit only .git and Cargo target output at import; nested target directories, untracked source/generator inputs and executable bits remain included. Complete imported trees are then frozen without output exclusions. This prospective source-only identity is not source.vendorInventory, which remains the historical raw artifact capture including unused Cargo outputs.",
+    "patch": "canonical-linux-reference.patch",
+    "vendor": [
+      "crypto-bigint",
+      "hickory-proto",
+      "hickory-proto-026",
+      "lru-0.12.3",
+      "lru-0.7.8",
+      "memmap2-0.5.10",
+      "sp-api-proc-macro",
+      "str0m-openssl",
+      "webpki-roots"
+    ],
+    "buildCommand": "cargo +1.94.1 build --offline --locked -p polkadot-omni-node --profile production --features runtime-benchmarks -j 2",
+    "acquisition": "Clone the exact SDK tag/commit, apply the checked-in full lock/manifest/macro patch, and import the named project-owned template/vendor packages through the package-root source projection. Verify the complete SDK and recipe.sourceVendorInventory before source preflight/freeze/build; source.vendorInventory remains the original artifact's raw capture. Acquired roots use independently checked fresh offline metadata/tree projections against the fixed accepted source graph, without importing historical graph files or recreating the original prepared receipt. Rebuilt artifacts require new artifact acceptance; this recipe does not predict byte-identical ELF."
+  }
+}

@@ -21,7 +21,7 @@
     },
     {
       "id": "router-oracle-mitigation-not-immunity",
-      "doc": "docs/core.architecture.en.md",
+      "doc": "docs/deos/core.architecture.en.md",
       "claim": "Directional reference checks and pre-execution publication on every actual XYK leg are shipped mitigations, not flash-loan, ordering, or sandwich immunity.",
       "status": "shipped mitigation",
       "proof_kind": "mitigation",

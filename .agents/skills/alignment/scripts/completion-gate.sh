@@ -115,7 +115,7 @@ should_run_simulator() {
     if [[ "$RUN_SIMULATOR" == "0" ]]; then
         return 1
     fi
-    has_changed_path '^simulator/' || has_changed_path '^template/pallets/(tmc|router)/'
+    has_changed_path '^simulators/tmctol/' || has_changed_path '^template/pallets/(tmc|router)/'
 }
 
 should_run_router_identity_audit() {
@@ -138,7 +138,7 @@ should_run_governance_structural_liveness_audit() {
 should_run_runtime_composition_dag_audit() {
     has_changed_path '^template/pallets/(governance|staking|router|oracle|actors)/Cargo\.toml$' || \
         has_changed_path '^template/runtime/src/configs/' || \
-        has_changed_path '^docs/core\.architecture\.en\.md$' || \
+        has_changed_path '^docs/deos/core\.architecture\.en\.md$' || \
         has_changed_path '^\.agents/skills/alignment/scripts/audit-runtime-composition-dag\.sh$'
 }
 
@@ -146,7 +146,7 @@ should_run_protocol_coherence_regression_audit() {
     has_changed_path '^template/(pallets|primitives)/' || \
         has_changed_path '^template/runtime/src/' || \
         has_changed_path '^docs/' || \
-        has_changed_path '^simulator/' || \
+        has_changed_path '^simulators/tmctol/' || \
         has_changed_path '^web-client/(src|docs|scripts)/' || \
         has_changed_path '^wiki/' || \
         has_changed_path '^scripts/' || \
@@ -215,7 +215,7 @@ run_self_test() (
             return 1
         fi
     done <<'CASES'
-docs/core.architecture.en.md|1|1
+docs/deos/core.architecture.en.md|1|1
 template/pallets/actors/docs/architecture.en.md|1|1
 template/pallets/router/docs/architecture.en.md|1|1
 AGENTS.md|1|0
@@ -223,6 +223,7 @@ AGENTS.md|1|0
 .agents/skills/alignment/economic-claims.json|0|1
 template/pallets/actors/docs/specification.en.md|0|0
 template/pallets/actors/src/execution.rs|0|0
+docs/deos/README.md|0|0
 docs/README.md|0|0
 CASES
     CHANGED_PATHS=()
@@ -230,7 +231,37 @@ CASES
         log_error "Empty diff unexpectedly schedules architecture audits"
         return 1
     fi
-    log_success "Completion audit routing self-test passed"
+    local REQUIRE_CONTEXT_SYNC=1 expected_status status
+    while IFS='|' read -r path expected_status; do
+        CHANGED_PATHS=("$path")
+        status=0
+        (run_knowledge_sync) >/dev/null 2>&1 || status=$?
+        if [[ "$status" != "$expected_status" ]]; then
+            log_error "Knowledge-sync routing mismatch for $path: status=$status expected=$expected_status"
+            return 1
+        fi
+    done <<'CASES'
+README.md|0
+scripts/README.md|0
+template/pallets/actors/README.md|0
+.agents/skills/README.md|0
+AGENTS.md|0
+BACKLOG.md|0
+CHANGELOG.md|0
+docs/deos/core.architecture.en.md|0
+.agents/skills/alignment/SKILL.md|0
+scripts/_common.sh|1
+scripts/README.md.bak|1
+scripts/not-README.md|1
+scripts/readme.md|1
+CASES
+    CHANGED_PATHS=()
+    run_knowledge_sync >/dev/null
+    CHANGED_PATHS=(scripts/_common.sh scripts/README.md)
+    run_knowledge_sync >/dev/null
+    CHANGED_PATHS=(scripts/_common.sh)
+    REQUIRE_CONTEXT_SYNC=0 run_knowledge_sync >/dev/null
+    log_success "Completion audit and knowledge-sync routing self-test passed"
 )
 
 should_run_backlog_audit() {
@@ -481,11 +512,11 @@ run_knowledge_sync() {
         log_success "Clean candidate has no changed paths requiring context sync"
         return 0
     fi
-    if has_changed_path '^(BACKLOG\.md|CHANGELOG\.md|AGENTS\.md|docs/|\.agents/skills/README\.md$|\.agents/skills/.*/SKILL\.md$)'; then
+    if has_changed_path '(^|/)README\.md$|^(BACKLOG\.md|CHANGELOG\.md|AGENTS\.md|docs/|\.agents/skills/.*/SKILL\.md$)'; then
         log_success "Context files were updated in this pass"
         return 0
     fi
-    log_error "Context sync missing: update CHANGELOG.md, AGENTS.md, BACKLOG.md, docs/, the project skill graph, or a touched SKILL.md before the next loop"
+    log_error "Context sync missing: update CHANGELOG.md, AGENTS.md, BACKLOG.md, a root/subtree README.md, docs/, or a touched SKILL.md before the next loop"
     exit 1
 }
 

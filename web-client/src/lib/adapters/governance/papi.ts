@@ -56,6 +56,7 @@ import {
 } from '$lib/wallet/signer';
 
 import { mapInvoiceExecutionReceipt } from './invoice-receipt';
+import { type GovernancePowerLimbs, decodeGovernancePower } from './power';
 import type { GovernanceBlockchainProvider } from './provider';
 
 import type { DeosChainSnapshot, DeosPapiConnection } from '../blockchain/deos';
@@ -451,7 +452,7 @@ function mapFinalizedProposalOutcome(
     };
     VetoCancelled: {
       finalized_epoch: number;
-      veto_weight: bigint;
+      veto_weight: GovernancePowerLimbs;
     };
   }>,
 ): GovernanceFinalizedProposalOutcome {
@@ -480,7 +481,7 @@ function mapFinalizedProposalOutcome(
       return {
         kind: 'VetoCancelled',
         finalizedEpoch: outcome.value.finalized_epoch,
-        vetoWeight: outcome.value.veto_weight,
+        vetoWeight: decodeGovernancePower(outcome.value.veto_weight),
       };
   }
 }
@@ -492,18 +493,18 @@ function mapProposalVoteTally(
         nay_voters: number;
         veto_voters: number;
         pass_voters: number;
-        aye_weight: bigint;
-        nay_weight: bigint;
-        veto_weight: bigint;
-        pass_weight: bigint;
-        turnout_weight: bigint;
-        veto_turnout_weight: bigint;
+        aye_weight: GovernancePowerLimbs;
+        nay_weight: GovernancePowerLimbs;
+        veto_weight: GovernancePowerLimbs;
+        pass_weight: GovernancePowerLimbs;
+        turnout_weight: GovernancePowerLimbs;
+        veto_turnout_weight: GovernancePowerLimbs;
         amplify_voters?: number;
         approve_voters?: number;
         reduce_voters?: number;
-        amplify_weight?: bigint;
-        approve_weight?: bigint;
-        reduce_weight?: bigint;
+        amplify_weight?: GovernancePowerLimbs;
+        approve_weight?: GovernancePowerLimbs;
+        reduce_weight?: GovernancePowerLimbs;
       }
     | undefined,
 ): GovernanceProposalVoteTally | null {
@@ -518,15 +519,24 @@ function mapProposalVoteTally(
     reduceVoters: tally.reduce_voters ?? 0,
     vetoVoters: tally.veto_voters,
     passVoters: tally.pass_voters,
-    ayeWeight: tally.aye_weight,
-    nayWeight: tally.nay_weight,
-    amplifyWeight: tally.amplify_weight ?? 0n,
-    approveWeight: tally.approve_weight ?? 0n,
-    reduceWeight: tally.reduce_weight ?? 0n,
-    vetoWeight: tally.veto_weight,
-    passWeight: tally.pass_weight,
-    turnoutWeight: tally.turnout_weight,
-    vetoTurnoutWeight: tally.veto_turnout_weight,
+    ayeWeight: decodeGovernancePower(tally.aye_weight),
+    nayWeight: decodeGovernancePower(tally.nay_weight),
+    amplifyWeight:
+      tally.amplify_weight === undefined
+        ? 0n
+        : decodeGovernancePower(tally.amplify_weight),
+    approveWeight:
+      tally.approve_weight === undefined
+        ? 0n
+        : decodeGovernancePower(tally.approve_weight),
+    reduceWeight:
+      tally.reduce_weight === undefined
+        ? 0n
+        : decodeGovernancePower(tally.reduce_weight),
+    vetoWeight: decodeGovernancePower(tally.veto_weight),
+    passWeight: decodeGovernancePower(tally.pass_weight),
+    turnoutWeight: decodeGovernancePower(tally.turnout_weight),
+    vetoTurnoutWeight: decodeGovernancePower(tally.veto_turnout_weight),
   };
 }
 
@@ -546,9 +556,9 @@ function mapAccountPowerView(
           DecliningNativeStake: undefined;
           FlatUrgentDirectStake: undefined;
         }>;
-        current_ordinary_weight: bigint;
-        current_protection_weight: bigint;
-        current_protection_raw_power: bigint;
+        current_ordinary_weight: GovernancePowerLimbs;
+        current_protection_weight: GovernancePowerLimbs;
+        current_protection_raw_power: GovernancePowerLimbs;
         frozen_ordinary_ballot?: {
           vote: GovernanceEnum<{
             Aye: undefined;
@@ -560,8 +570,8 @@ function mapAccountPowerView(
             Pass: undefined;
           }>;
           vote_epoch: number;
-          weight: bigint;
-          raw_power: bigint;
+          weight: GovernancePowerLimbs;
+          raw_power: GovernancePowerLimbs;
         } | null;
         frozen_protection_ballot?: {
           vote: GovernanceEnum<{
@@ -574,8 +584,8 @@ function mapAccountPowerView(
             Pass: undefined;
           }>;
           vote_epoch: number;
-          weight: bigint;
-          raw_power: bigint;
+          weight: GovernancePowerLimbs;
+          raw_power: GovernancePowerLimbs;
         } | null;
       }
     | undefined,
@@ -598,17 +608,21 @@ function mapAccountPowerView(
     return {
       voteKind,
       voteEpoch: ballot.vote_epoch,
-      weight: ballot.weight,
-      rawPower: ballot.raw_power,
+      weight: decodeGovernancePower(ballot.weight),
+      rawPower: decodeGovernancePower(ballot.raw_power),
     };
   };
   return {
     governanceLockUntil: view.governance_lock_until ?? null,
     ordinaryPowerProfile,
     protectionPowerProfile,
-    currentOrdinaryWeight: view.current_ordinary_weight,
-    currentProtectionWeight: view.current_protection_weight,
-    currentProtectionRawPower: view.current_protection_raw_power,
+    currentOrdinaryWeight: decodeGovernancePower(view.current_ordinary_weight),
+    currentProtectionWeight: decodeGovernancePower(
+      view.current_protection_weight,
+    ),
+    currentProtectionRawPower: decodeGovernancePower(
+      view.current_protection_raw_power,
+    ),
     frozenOrdinaryBallot: mapFrozenBallot(view.frozen_ordinary_ballot),
     frozenProtectionBallot: mapFrozenBallot(view.frozen_protection_ballot),
   };
@@ -620,9 +634,9 @@ function mapProposalPrimaryTrackTally(
         Binary: {
           aye_voters: number;
           nay_voters: number;
-          aye_weight: bigint;
-          nay_weight: bigint;
-          turnout_weight: bigint;
+          aye_weight: GovernancePowerLimbs;
+          nay_weight: GovernancePowerLimbs;
+          turnout_weight: GovernancePowerLimbs;
           leading_option?:
             | GovernanceEnum<{
                 Aye: undefined;
@@ -638,12 +652,12 @@ function mapProposalPrimaryTrackTally(
           approve_voters: number;
           reduce_voters: number;
           nay_voters: number;
-          amplify_weight: bigint;
-          approve_weight: bigint;
-          reduce_weight: bigint;
-          nay_weight: bigint;
-          positive_weight: bigint;
-          turnout_weight: bigint;
+          amplify_weight: GovernancePowerLimbs;
+          approve_weight: GovernancePowerLimbs;
+          reduce_weight: GovernancePowerLimbs;
+          nay_weight: GovernancePowerLimbs;
+          positive_weight: GovernancePowerLimbs;
+          turnout_weight: GovernancePowerLimbs;
           leading_positive_option?:
             | GovernanceEnum<{
                 Aye: undefined;
@@ -653,7 +667,7 @@ function mapProposalPrimaryTrackTally(
                 Reduce: undefined;
               }>
             | undefined;
-          leading_positive_weight: bigint;
+          leading_positive_weight: GovernancePowerLimbs;
         };
       }>
     | undefined,
@@ -667,9 +681,9 @@ function mapProposalPrimaryTrackTally(
         kind: 'Binary',
         ayeVoters: tally.value.aye_voters,
         nayVoters: tally.value.nay_voters,
-        ayeWeight: tally.value.aye_weight,
-        nayWeight: tally.value.nay_weight,
-        turnoutWeight: tally.value.turnout_weight,
+        ayeWeight: decodeGovernancePower(tally.value.aye_weight),
+        nayWeight: decodeGovernancePower(tally.value.nay_weight),
+        turnoutWeight: decodeGovernancePower(tally.value.turnout_weight),
         leadingOption: mapPrimaryTrackOption(tally.value.leading_option),
       };
     case 'Invoice':
@@ -679,16 +693,18 @@ function mapProposalPrimaryTrackTally(
         approveVoters: tally.value.approve_voters,
         reduceVoters: tally.value.reduce_voters,
         nayVoters: tally.value.nay_voters,
-        amplifyWeight: tally.value.amplify_weight,
-        approveWeight: tally.value.approve_weight,
-        reduceWeight: tally.value.reduce_weight,
-        nayWeight: tally.value.nay_weight,
-        positiveWeight: tally.value.positive_weight,
-        turnoutWeight: tally.value.turnout_weight,
+        amplifyWeight: decodeGovernancePower(tally.value.amplify_weight),
+        approveWeight: decodeGovernancePower(tally.value.approve_weight),
+        reduceWeight: decodeGovernancePower(tally.value.reduce_weight),
+        nayWeight: decodeGovernancePower(tally.value.nay_weight),
+        positiveWeight: decodeGovernancePower(tally.value.positive_weight),
+        turnoutWeight: decodeGovernancePower(tally.value.turnout_weight),
         leadingPositiveOption: mapPrimaryTrackOption(
           tally.value.leading_positive_option,
         ),
-        leadingPositiveWeight: tally.value.leading_positive_weight,
+        leadingPositiveWeight: decodeGovernancePower(
+          tally.value.leading_positive_weight,
+        ),
       };
   }
 }
@@ -700,8 +716,8 @@ function mapProposalResolutionState(
       maturity_epoch: number;
     };
     VetoPassing: {
-      veto_weight: bigint;
-      pass_weight: bigint;
+      veto_weight: GovernancePowerLimbs;
+      pass_weight: GovernancePowerLimbs;
       mode: GovernanceEnum<{
         ImmediateThreshold: undefined;
         TrackOutcome: undefined;
@@ -737,8 +753,8 @@ function mapProposalResolutionState(
     case 'VetoPassing':
       return {
         kind: 'VetoPassing',
-        vetoWeight: resolution.value.veto_weight,
-        passWeight: resolution.value.pass_weight,
+        vetoWeight: decodeGovernancePower(resolution.value.veto_weight),
+        passWeight: decodeGovernancePower(resolution.value.pass_weight),
         mode: mapVetoCancellationMode(resolution.value.mode),
       };
     case 'PassingAye':
@@ -774,8 +790,8 @@ function mapProposalStatus(
             maturity_epoch: number;
           };
           VetoPassing: {
-            veto_weight: bigint;
-            pass_weight: bigint;
+            veto_weight: GovernancePowerLimbs;
+            pass_weight: GovernancePowerLimbs;
             mode: GovernanceEnum<{
               ImmediateThreshold: undefined;
               TrackOutcome: undefined;
@@ -829,7 +845,7 @@ function mapProposalStatus(
           };
           VetoCancelled: {
             finalized_epoch: number;
-            veto_weight: bigint;
+            veto_weight: GovernancePowerLimbs;
           };
         }>;
       }>

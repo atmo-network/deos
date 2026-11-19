@@ -1,0 +1,549 @@
+{
+  "formatVersion": 1,
+  "reviewedAt": "2026-11-18",
+  "exceptions": [
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2025-0009",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "ring@0.16.20: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2025-0055",
+      "expires": "2026-12-12",
+      "reachability": "source-backport-reviewed",
+      "reason": "tracing-subscriber@0.2.25: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance. tracing-subscriber@0.3.19: Explicit local 0.3.19 backport of 0.3.20 message/error/source sanitization, retaining the immutable SDK exact pin, dependency features and licenses. Negative control fails, corrected focused integration test passes.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2025-0073",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "alloy-dyn-abi@1.2.1: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0002",
+      "expires": "2026-12-12",
+      "reachability": "source-backport-reviewed",
+      "reason": "lru@0.12.3: Exact maintained project source corrects the affected operation; official upstream old-version ranges remain affected. SECURITY-BACKPORT.md and complete source inventory retain scope and provenance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0097",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "rand@0.8.5: Exact 0.8.5/0.9.0 source compiles trace/warn logger callbacks only with feature log, absent from both actual role trees and full metadata. Preserve PRNGs; reject log/effective cfg drift. rand@0.9.0: Exact 0.8.5/0.9.0 source compiles trace/warn logger callbacks only with feature log, absent from both actual role trees and full metadata. Preserve PRNGs; reject log/effective cfg drift.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0098",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "rustls-webpki@0.101.4: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0099",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "rustls-webpki@0.101.4: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0104",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "rustls-webpki@0.101.4: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0119",
+      "expires": "2026-12-12",
+      "reachability": "source-backport-reviewed",
+      "reason": "hickory-proto@0.24.4: Exact maintained 0.24.4 source bounds full-message question allocation and replaces quadratic wire compression; no new transport or DNSSEC activation.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0185",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "quinn-proto@0.11.14: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0186",
+      "expires": "2026-12-12",
+      "reachability": "source-backport-reviewed",
+      "reason": "memmap2@0.5.10: Exact maintained project source corrects the affected operation; official upstream old-version ranges remain affected. SECURITY-BACKPORT.md and complete source inventory retain scope and provenance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0220",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "ruint@1.17.2: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0221",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "event-listener@5.3.1: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0253",
+      "expires": "2026-12-12",
+      "reachability": "source-backport-reviewed",
+      "reason": "lru@0.7.8: Exact maintained project source corrects the affected operation; official upstream old-version ranges remain affected. SECURITY-BACKPORT.md and complete source inventory retain scope and provenance. lru@0.12.3: Exact maintained project source corrects the affected operation; official upstream old-version ranges remain affected. SECURITY-BACKPORT.md and complete source inventory retain scope and provenance. lru@0.16.3: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0258",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "h2@0.3.26: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0338",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "quinn-proto@0.11.14: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0339",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "quinn-proto@0.11.14: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0340",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "quinn-proto@0.11.14: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0342",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "quinn-proto@0.11.14: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0344",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "ruzstd@0.8.1: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0381",
+      "expires": "2026-12-12",
+      "reachability": "source-backport-reviewed",
+      "reason": "webpki-roots@0.25.4: Exact maintained 0.25.4 source removes the distrusted emSign G3 anchor; unchanged old-version raw advisory remains visible. This is separate from rustls-webpki verifier repair and operator OS trust-store maintenance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0382",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "rustls-webpki@0.101.4: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0383",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "webpki-root-certs@1.0.3: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0387",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "crypto-bigint@0.5.5: Maintained primitive source adaptation reused, not full advisory repair. Host accepts arbitrary Wasm but does not expose Node/WebRTC certificate creation, ETH signing, keystore generation or secret bigint APIs. Requires independent review of the finite CLI/API consumer source case and fail-closed helper installation; no Root/Native or future-ELF premise.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0395",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "zstd-safe@6.0.6: StableInBuffer requires experimental; absent in safe6/sys/effective cfg.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0397",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "zstd-safe@6.0.6: Sole direct parent zstd0.12.4 uses OutBuffer::around; finite SDK callers do not introduce raw around_pos or external raw buffers. Requires complete consumer/build/macro seal.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0399",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "zstd-safe@6.0.6: Dictionary init APIs require experimental; absent in safe6/sys/effective cfg.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0400",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "zstd-safe@6.0.6: Finite SDK blob/PoV consumers construct fresh Encoder/Decoder contexts; no reused external context or one-shot/stream mixing. Requires complete consumer/build/macro seal.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0401",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "zstd-safe@6.0.6: Training API is gated by zdict_builder, absent through wrapper/safe/sys.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0402",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "zstd-safe@6.0.6: CCtx clone requires experimental and threaded premise; neither experimental nor zstdmt selected.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0403",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "zstd-safe@6.0.6: Legacy absent in exact safe6/sys features; actual blob decompression uses primary-excluded read Decoder. Bind full wrapper/SDK caller seal, not just package names.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0404",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "zstd-safe@6.0.6: DCtx clone API requires experimental; absent in safe6/sys/effective cfg.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0406",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "zstd-safe@6.0.6: Unfinished multi-worker frame premise cannot arise without zstdmt; do not claim NbWorkers itself absent.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0487",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "hickory-proto@0.24.4: Actual local 0.24.4 normal/all-target features omit text-parsing; serialization text module is compile-time gated. This is not a repaired generic text parser.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0489",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "hickory-proto@0.24.4: Actual local 0.24.4 normal/all-target features omit text-parsing; serialization text module is compile-time gated. This is not a repaired generic text parser.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0490",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "hickory-proto@0.24.4: Actual local 0.24.4 normal/all-target features omit text-parsing; serialization text module is compile-time gated. This is not a repaired generic text parser.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0491",
+      "expires": "2026-12-12",
+      "reachability": "source-backport-reviewed",
+      "reason": "hickory-proto@0.24.4: Exact maintained 0.24.4 source bounds full-message question allocation and replaces quadratic wire compression; no new transport or DNSSEC activation.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0505",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "hickory-proto@0.24.4: Actual local 0.24.4 normal/all-target features omit dnssec, gating rr::dnssec and xfer::dnssec_dns_handle. No DNSSEC repair claim.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0511",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "hickory-proto@0.24.4: Actual local 0.24.4 normal/all-target features omit dnssec, gating rr::dnssec and xfer::dnssec_dns_handle. No DNSSEC repair claim.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0512",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "hickory-proto@0.24.4: Actual local 0.24.4 normal/all-target features omit dnssec, gating rr::dnssec and xfer::dnssec_dns_handle. No DNSSEC repair claim.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0514",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "hickory-resolver@0.24.2: Exact resolver 0.24.2 lacks dnssec; async_resolver selects DnssecDnsHandle only under that cfg. No Root resolver/version transfer.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0523",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "quinn-proto@0.11.14: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0524",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "quinn-proto@0.11.14: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0525",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "libp2p-quic@0.11.1: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0530",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "hickory-proto@0.24.4: Actual local 0.24.4 normal/all-target features omit dnssec, gating rr::dnssec and xfer::dnssec_dns_handle. No DNSSEC repair claim.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0531",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "hickory-proto@0.24.4: Actual local 0.24.4 normal/all-target features omit dnssec, gating rr::dnssec and xfer::dnssec_dns_handle. No DNSSEC repair claim.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0550",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "hickory-proto@0.24.4: Actual local 0.24.4 normal/all-target features omit dnssec, gating rr::dnssec and xfer::dnssec_dns_handle. No DNSSEC repair claim.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0551",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "hickory-proto@0.24.4: Actual local 0.24.4 normal/all-target features omit dnssec, gating rr::dnssec and xfer::dnssec_dns_handle. No DNSSEC repair claim.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0538",
+      "expires": "2026-12-12",
+      "reachability": "source-prerequisite-excluded",
+      "reason": "quinn-udp@0.5.4: Exact instance absent from fresh Linux normal/build selection; all-target presence remains separately recorded. No general package safety or non-Linux execution clearance.",
+      "sourceCallerNative": {
+        "stage": "CANONICALHOSTSOURCE",
+        "proof": "canonicalHostSourceProof"
+      }
+    }
+  ],
+  "licenseExceptions": [],
+  "canonicalHostSourceProof": {
+    "path": "shared-proof.json"
+  }
+}

@@ -43,6 +43,51 @@ use std::{
   sync::{Arc, Mutex},
 };
 
+/// Shared request/construction boundary; a native model cannot attest an external Wasm image.
+pub(crate) fn ensure_artifact_profile() -> Result<(), &'static str> {
+  if cfg!(all(
+    feature = "benchmark-authority-scaffolding",
+    not(feature = "runtime-benchmarks")
+  )) {
+    Err("native admission fixture cannot prepare/execute Wasm or export PVF artifacts")
+  } else {
+    Ok(())
+  }
+}
+
+#[cfg(test)]
+#[test]
+fn native_fixture_artifact_profile_is_explicit() {
+  assert_eq!(
+    ensure_artifact_profile().is_err(),
+    cfg!(all(
+      feature = "benchmark-authority-scaffolding",
+      not(feature = "runtime-benchmarks")
+    ))
+  );
+}
+
+#[cfg(all(
+  test,
+  feature = "benchmark-authority-scaffolding",
+  not(feature = "runtime-benchmarks")
+))]
+#[test]
+fn native_fixture_wasm_constructor_refuses_before_decode() {
+  let panic = std::panic::catch_unwind(|| RuntimeExecution::wasm(Vec::new()))
+    .err()
+    .expect("model constructor must refuse before decoding empty Wasm");
+  let message = panic
+    .downcast_ref::<String>()
+    .map(String::as_str)
+    .or_else(|| panic.downcast_ref::<&str>().copied())
+    .expect("guard panic has a message");
+  assert!(
+    message.contains("native admission fixture cannot"),
+    "wrong refusal: {message}"
+  );
+}
+
 struct NativeRuntime;
 
 #[cfg(not(feature = "runtime-benchmarks"))]
@@ -70,6 +115,7 @@ enum RuntimeExecution {
 
 impl RuntimeExecution {
   fn wasm(code: Vec<u8>) -> Self {
+    ensure_artifact_profile().expect("Wasm execution profile");
     let executor = sc_executor::WasmExecutor::<WasmHostFunctions>::builder().build();
     let mut ext = polkadot_sdk::sp_io::TestExternalities::default();
     let bytes = executor
@@ -431,6 +477,9 @@ struct NativeClient {
   finalization_close: Option<Vec<u8>>,
   state_requests: Mutex<usize>,
   recordings: Option<RecordingProofSizeProvider>,
+  // Only the explicit inherent-only path permits a late Core failure with no
+  // proof-size queries; Close callers retain their nonempty-query assertion.
+  inherent_only: bool,
 }
 
 impl CallApiAt<Block> for NativeClient {
@@ -502,7 +551,7 @@ impl CallApiAt<Block> for NativeClient {
       if let Some(recording) = &self.recordings {
         let provisional = recording.recorded_estimations().len();
         assert!(provisional >= recorded_before.unwrap());
-        if params.function != "BlockBuilder_finalize_block" {
+        if params.function != "BlockBuilder_finalize_block" && !self.inherent_only {
           assert!(provisional > recorded_before.unwrap());
         }
         println!(
@@ -570,6 +619,203 @@ impl ProvideRuntimeApi<Block> for NativeClient {
   fn runtime_api(&self) -> ApiRef<'_, Self::Api> {
     RuntimeApi::construct_runtime_api(self)
   }
+}
+
+/// Inherent-only diagnostic: deliberately has no Close/error-injection premise.
+/// Imports still exercise the shared recording/replay and late-root rollback owner.
+#[allow(
+  dead_code,
+  reason = "only the finalization example exposes genesis mode; other Close callers share this module"
+)]
+pub(super) fn assert_genesis_builder(
+  storage: Storage,
+  expected: Storage,
+  block: &Block,
+  data: InherentData,
+  wasm: Option<&[u8]>,
+) {
+  let execution = wasm.map_or(RuntimeExecution::Native, |code| {
+    RuntimeExecution::wasm(code.to_vec())
+  });
+  assert!(storage.children_default.is_empty() && expected.children_default.is_empty());
+  let mut recorded = Vec::new();
+  for provider in [ProofProvider::Plain, ProofProvider::Recording] {
+    let (output, _) = assert_genesis_builder_case(
+      storage.clone(),
+      expected.clone(),
+      block,
+      data.clone(),
+      (provider, execution.clone()),
+      false,
+    );
+    if matches!(provider, ProofProvider::Recording) {
+      recorded = output;
+    }
+  }
+  let imported = assert_import_with_query_contract(
+    storage.clone(),
+    expected.clone(),
+    block,
+    ProofProvider::Recording,
+    execution.clone(),
+    true,
+  );
+  assert_eq!(imported, recorded, "author/import estimation order agrees");
+  assert_import_with_query_contract(
+    storage,
+    expected,
+    block,
+    ProofProvider::Replay(&recorded),
+    execution,
+    true,
+  );
+}
+
+fn assert_genesis_builder_case(
+  storage: Storage,
+  expected: Storage,
+  block: &Block,
+  data: InherentData,
+  (provider, execution): (ProofProvider<'_>, RuntimeExecution),
+  capture: bool,
+) -> (Vec<usize>, Option<serde_json::Value>) {
+  assert!(storage.children_default.is_empty() && expected.children_default.is_empty());
+  let (proof_context, proof_extension) = ProofContext::new(provider);
+  let client = NativeClient {
+    backend: (storage.clone(), execution.version().state_version()).into(),
+    execution: execution.clone(),
+    storage: storage.clone(),
+    depths: Mutex::new(Vec::new()),
+    fail_next_close: Mutex::new(None),
+    expected_rollback: Mutex::new(None),
+    trace: None,
+    finalization_close: None,
+    state_requests: Mutex::new(0),
+    recordings: proof_context.recordings.clone(),
+    inherent_only: true,
+  };
+  let mut extensions = Extensions::new();
+  extensions.register(proof_extension);
+  let mut builder = sc_block_builder::BlockBuilderBuilder::new(&client)
+    .on_parent_block(*block.header.parent_hash())
+    .with_parent_block_number(block.header.number() - 1)
+    .with_inherent_digests(block.header.digest().clone())
+    .with_proof_recorder(proof_context.recorder.clone())
+    .with_extra_extensions(extensions)
+    .build()
+    .unwrap();
+  let inherents = builder.create_inherents(data.clone()).unwrap();
+  assert!(inherents.len() >= 3);
+  assert_eq!(inherents.encode(), block.extrinsics.encode());
+  if capture {
+    assert_eq!(inherents.len(), 3);
+  }
+  for extrinsic in inherents {
+    builder.push(extrinsic).unwrap();
+  }
+  // Literal existing-recorder snapshot: no runtime read, reset or cache mutation.
+  let prefix = capture.then(|| proof_context.recorder.to_storage_proof().into_nodes());
+  let built = builder.build().unwrap();
+  assert_eq!(built.block.encode(), block.encode());
+  assert!(built.storage_changes.child_storage_changes.is_empty());
+  assert_eq!(
+    built.storage_changes.transaction_storage_root,
+    *block.header.state_root()
+  );
+  let evidence = capture.then(|| {
+    serde_json::json!({
+      "author_prefix_nodes": prefix,
+      "author_final_nodes": proof_context.recorder.to_storage_proof().into_nodes(),
+      "Dauthor_drained_materialized": drained_reference(&built.storage_changes),
+    })
+  });
+  let mut post = storage.clone();
+  for (key, value) in built.storage_changes.main_storage_changes {
+    match value {
+      Some(value) => {
+        post.top.insert(key, value);
+      }
+      None => {
+        post.top.remove(&key);
+      }
+    }
+  }
+  assert_eq!(post.top, expected.top);
+  assert_eq!(*client.state_requests.lock().unwrap(), 1);
+  assert!(
+    client
+        .depths
+        .lock()
+        .unwrap()
+        .iter(/* deos-bypass: bounded-iter -- one diagnostic initialize/inherent/finalize API sequence; not consensus-state iteration. */)
+        .all(|depth| *depth == (1, 1))
+  );
+  // Genesis may make no proof-size host queries; empty is not Actor-service coverage.
+  println!(
+    "genesis_sdk_builder execution={} proof_provider={} recorded_estimations={} close_coverage=false",
+    execution.name(),
+    provider.name(),
+    proof_context.recorded().len()
+  );
+  (proof_context.recorded(), evidence)
+}
+
+fn drained_reference(changes: &sp_api::StorageChanges<Block>) -> serde_json::Value {
+  // Direct returned collections preserve None and same-value Some, not endpoint differences.
+  assert!(changes.main_storage_changes.len() < 10_000);
+  assert!(changes.child_storage_changes.is_empty());
+  serde_json::json!({
+    "main": &changes.main_storage_changes,
+    "child": &changes.child_storage_changes,
+    "transaction_storage_root": changes.transaction_storage_root,
+    "offchain_changes_count_excluded_from_consensus_D": changes.offchain_storage_changes.len(),
+    "transaction_index_changes_count_excluded_from_consensus_D": changes.transaction_index_changes.len(),
+    "classification": "SDK drained normalized/materialized collections; not private PVF root-entry D or chronological work"
+  })
+}
+
+#[cfg(all(
+  test,
+  not(feature = "runtime-benchmarks"),
+  not(feature = "benchmark-authority-scaffolding")
+))]
+#[allow(
+  dead_code,
+  reason = "only the finalization example selects this reference; retention shares the helper module"
+)]
+pub(super) fn capture_genesis_reference(
+  storage: Storage,
+  expected: Storage,
+  block: &Block,
+  data: InherentData,
+) -> serde_json::Value {
+  let (author, evidence) = assert_genesis_builder_case(
+    storage.clone(),
+    expected.clone(),
+    block,
+    data,
+    (ProofProvider::Recording, RuntimeExecution::Native),
+    true,
+  );
+  let (imported, import_evidence) = assert_import_case(
+    storage,
+    expected,
+    block,
+    ProofProvider::Recording,
+    RuntimeExecution::Native,
+    true,
+    (true, true),
+  );
+  assert_eq!(imported, author, "author/import estimation order agrees");
+  let mut evidence = evidence.unwrap();
+  evidence["Dimport_drained_materialized"] = import_evidence.as_ref().unwrap()["delta"].clone();
+  evidence["core_positive_nodes"] = import_evidence.unwrap()["nodes"].clone();
+  evidence["native_facade_version_scale"] = serde_json::json!(version().encode());
+  evidence["native_facade_apis"] = serde_json::json!(version().apis.as_ref());
+  evidence["native_facade_role"] = serde_json::json!(
+    "Core/BlockBuilder facade only; compiled Rust; ReadRuntimeVersionExt and recording ProofSizeExt; no production Wasm API identity"
+  );
+  evidence
 }
 
 pub(super) fn assert_builder(
@@ -646,6 +892,7 @@ fn assert_builder_with_provider(
     finalization_close,
     state_requests: Mutex::new(0),
     recordings: proof_context.recordings.clone(),
+    inherent_only: false,
   };
   let recorder = &proof_context.recorder;
   let mut extensions = Extensions::new();
@@ -800,6 +1047,7 @@ fn assert_finalization_errors(
       finalization_close: Some(close_key.clone()),
       state_requests: Mutex::new(0),
       recordings: proof_context.recordings.clone(),
+      inherent_only: false,
     };
     let recorder = &proof_context.recorder;
     let mut extensions = Extensions::new();
@@ -899,98 +1147,144 @@ fn assert_import_with_provider(
   provider: ProofProvider<'_>,
   execution: RuntimeExecution,
 ) -> Vec<usize> {
+  assert_import_with_query_contract(storage, expected, block, provider, execution, false)
+}
+
+fn assert_import_with_query_contract(
+  storage: Storage,
+  expected: Storage,
+  block: &Block,
+  provider: ProofProvider<'_>,
+  execution: RuntimeExecution,
+  inherent_only: bool,
+) -> Vec<usize> {
   assert!(storage.children_default.is_empty() && expected.children_default.is_empty());
   let mut recorded_output = Vec::new();
   println!("native API backend constructed");
-  let parent = *block.header.parent_hash();
   for succeeds in [true, false] {
-    let (proof_context, proof_extension) = ProofContext::new(provider);
-    let client = NativeClient {
-      backend: (storage.clone(), execution.version().state_version()).into(),
-      execution: execution.clone(),
-      storage: storage.clone(),
-      depths: Mutex::new(Vec::new()),
-      fail_next_close: Mutex::new(None),
-      expected_rollback: Mutex::new(None),
-      trace: None,
-      finalization_close: None,
-      state_requests: Mutex::new(0),
-      recordings: proof_context.recordings.clone(),
-    };
-    println!(
-      "API Core execution begins: success={succeeds} execution={}",
-      execution.name()
+    let (output, _) = assert_import_case(
+      storage.clone(),
+      expected.clone(),
+      block,
+      provider,
+      execution.clone(),
+      inherent_only,
+      (succeeds, false),
     );
-    let mut api = RuntimeApi::construct_runtime_api(&client);
-    api.set_call_context(CallContext::Onchain { import: true });
-    let recorder = &proof_context.recorder;
-    api.record_proof_with_recorder(recorder.clone());
-    api.register_extension(proof_extension);
-    let mut input = block.clone();
-    if !succeeds {
-      input
-        .header
-        .set_state_root(*input.header.state_root() ^ H256::repeat_byte(1));
-    }
-    let result = api.execute_block(parent, input.into());
-    assert_eq!(
-      result.is_ok(),
-      succeeds,
-      "only the correct complete block may import"
-    );
-    let proof_bytes = recorder.estimate_encoded_size();
-    let changes = api.into_storage_changes(&client.backend, parent).unwrap();
-    assert!(changes.child_storage_changes.is_empty());
-    let changed_keys = changes.main_storage_changes.len();
-    let mut post = storage.clone();
-    for (key, value) in changes.main_storage_changes {
-      match value {
-        Some(value) => {
-          post.top.insert(key, value);
-        }
-        None => {
-          post.top.remove(&key);
-        }
-      }
-    }
     if succeeds {
-      assert!(proof_bytes > 0 && changed_keys > 0);
-      assert_eq!(post.top, expected.top);
-      assert_eq!(changes.transaction_storage_root, *block.header.state_root());
-      recorded_output = proof_context.recorded();
-    } else {
-      assert_eq!(
-        post.top, storage.top,
-        "late invalid-root failure must restore the complete pre-state"
-      );
-      assert_eq!(changed_keys, 0);
-      assert_eq!(
-        proof_bytes, 0,
-        "host rollback must discard recorded execution nodes"
-      );
-      assert_eq!(changes.transaction_storage_root, *client.backend.root());
-      assert!(proof_context.recorded().is_empty());
+      recorded_output = output;
     }
-    let replayed = proof_context
-      .replay_observations
-      .as_ref()
-      .map(|observations| {
-        let observations = observations.lock().unwrap();
-        let ProofProvider::Replay(expected) = provider else {
-          panic!("only the replay provider observes replay queries")
-        };
-        assert_eq!(observations.as_slice(), expected);
-        observations.len()
-      });
-    println!(
-      "native_api_import execution={} success={succeeds} host_depth=1 changed_keys={changed_keys} recorded_proof_bytes={proof_bytes} post_root={:?} proof_provider={} recorded_estimations={} replayed_estimations={}",
-      execution.name(),
-      changes.transaction_storage_root,
-      provider.name(),
-      proof_context.recorded().len(),
-      replayed.unwrap_or_default(),
-    );
-    assert_eq!(*client.depths.lock().unwrap(), vec![(1, 1)]);
   }
   recorded_output
+}
+
+fn assert_import_case(
+  storage: Storage,
+  expected: Storage,
+  block: &Block,
+  provider: ProofProvider<'_>,
+  execution: RuntimeExecution,
+  inherent_only: bool,
+  (succeeds, capture): (bool, bool),
+) -> (Vec<usize>, Option<serde_json::Value>) {
+  assert!(storage.children_default.is_empty() && expected.children_default.is_empty());
+  assert!(
+    !capture || succeeds,
+    "reference capture admits positive import only"
+  );
+  let parent = *block.header.parent_hash();
+  let (proof_context, proof_extension) = ProofContext::new(provider);
+  let client = NativeClient {
+    backend: (storage.clone(), execution.version().state_version()).into(),
+    execution: execution.clone(),
+    storage: storage.clone(),
+    depths: Mutex::new(Vec::new()),
+    fail_next_close: Mutex::new(None),
+    expected_rollback: Mutex::new(None),
+    trace: None,
+    finalization_close: None,
+    state_requests: Mutex::new(0),
+    recordings: proof_context.recordings.clone(),
+    inherent_only,
+  };
+  println!(
+    "API Core execution begins: success={succeeds} execution={}",
+    execution.name()
+  );
+  let mut api = RuntimeApi::construct_runtime_api(&client);
+  api.set_call_context(CallContext::Onchain { import: true });
+  let recorder = &proof_context.recorder;
+  api.record_proof_with_recorder(recorder.clone());
+  api.register_extension(proof_extension);
+  let mut input = block.clone();
+  if !succeeds {
+    input
+      .header
+      .set_state_root(*input.header.state_root() ^ H256::repeat_byte(1));
+  }
+  let result = api.execute_block(parent, input.into());
+  assert_eq!(
+    result.is_ok(),
+    succeeds,
+    "only the correct complete block may import"
+  );
+  let proof_bytes = recorder.estimate_encoded_size();
+  let changes = api.into_storage_changes(&client.backend, parent).unwrap();
+  let evidence = capture.then(|| {
+    serde_json::json!({
+      "delta": drained_reference(&changes),
+      "nodes": recorder.to_storage_proof().into_nodes(),
+    })
+  });
+  assert!(changes.child_storage_changes.is_empty());
+  let changed_keys = changes.main_storage_changes.len();
+  let mut post = storage.clone();
+  for (key, value) in changes.main_storage_changes {
+    match value {
+      Some(value) => {
+        post.top.insert(key, value);
+      }
+      None => {
+        post.top.remove(&key);
+      }
+    }
+  }
+  if succeeds {
+    assert!(proof_bytes > 0 && changed_keys > 0);
+    assert_eq!(post.top, expected.top);
+    assert_eq!(changes.transaction_storage_root, *block.header.state_root());
+  } else {
+    assert_eq!(
+      post.top, storage.top,
+      "late invalid-root failure must restore the complete pre-state"
+    );
+    assert_eq!(changed_keys, 0);
+    assert_eq!(
+      proof_bytes, 0,
+      "host rollback must discard recorded execution nodes"
+    );
+    assert_eq!(changes.transaction_storage_root, *client.backend.root());
+    assert!(proof_context.recorded().is_empty());
+  }
+  let replayed = proof_context
+    .replay_observations
+    .as_ref()
+    .map(|observations| {
+      let observations = observations.lock().unwrap();
+      let ProofProvider::Replay(expected) = provider else {
+        panic!("only the replay provider observes replay queries")
+      };
+      assert_eq!(observations.as_slice(), expected);
+      observations.len()
+    });
+  println!(
+    "native_api_import execution={} success={succeeds} host_depth=1 changed_keys={changed_keys} recorded_proof_bytes={proof_bytes} post_root={:?} proof_provider={} recorded_estimations={} replayed_estimations={}",
+    execution.name(),
+    changes.transaction_storage_root,
+    provider.name(),
+    proof_context.recorded().len(),
+    replayed.unwrap_or_default(),
+  );
+  assert_eq!(*client.depths.lock().unwrap(), vec![(1, 1)]);
+  (proof_context.recorded(), evidence)
 }

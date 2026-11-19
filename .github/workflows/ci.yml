@@ -12,13 +12,12 @@ permissions:
   contents: read
 
 jobs:
-  validation:
-    name: validation-gate
+  framework:
+    name: Framework source validation
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     env:
       CARGO_INCREMENTAL: 0
-      SKIP_WASM_BUILD: 1
       # The runtime and pallet suites exceed the harness step timeout in the debug profile, which
       # is what the local release profile already solves; keep CI on the same profile so the gate
       # measures the code rather than the debug build.
@@ -30,12 +29,62 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install validation prerequisites
-        run: sudo apt-get update && sudo apt-get install --yes ripgrep perl protobuf-compiler pkg-config libssl-dev
+        run: sudo apt-get update && sudo apt-get install --yes build-essential clang llvm lld python3 ripgrep jq perl protobuf-compiler pkg-config libssl-dev
 
       - name: Setup pinned Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version-file: web-client/package.json
+          node-version-file: .node-version
 
-      - name: Prepare pinned dependencies and run heavy validation
-        run: ./scripts/validate-local.sh heavy
+      - name: Validate the unpacked framework and independent PVF host
+        run: |
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/deos-framework-target"
+          ./scripts/package-framework.sh --source HEAD --output "$RUNNER_TEMP/deos-framework-artifacts"
+          mkdir "$RUNNER_TEMP/deos-framework-unpacked"
+          tar -xf "$RUNNER_TEMP"/deos-framework-artifacts/deos-*-framework.tar.gz -C "$RUNNER_TEMP/deos-framework-unpacked"
+          cd "$RUNNER_TEMP"/deos-framework-unpacked/deos-*-framework
+          ./scripts/validate-local.sh framework
+
+  client:
+    name: Experimental browser companion
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+      - name: Validate optional client (independent result)
+        run: ./scripts/validate-local.sh client
+
+  wiki:
+    name: Standalone Wiki validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+      - name: Validate the Wiki domain (independent result)
+        run: ./scripts/validate-local.sh wiki
+
+  validation-gate:
+    name: validation-gate
+    if: ${{ always() }}
+    needs: [framework, client, wiki]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every independent validation result
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              echo "::error::Independent validation result: $result"
+              exit 1
+            fi
+          done
