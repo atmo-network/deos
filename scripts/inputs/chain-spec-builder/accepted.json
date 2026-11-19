@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "role": "chain-spec-builder",
+  "receiptSha256": "b22903b6e7e410306b0d258c47537fcd5047b9e5f5533e210dd5f1febb793551",
+  "subjectSha256": "cec1014c3d5ac247feea6d25cc6f3ee372ac5bed15254bcc5c0033fd1679bc77",
+  "securityQualified": true,
+  "expiresAt": "2026-12-12",
+  "constructionBasisSha256": "31ef26443c5c27ee7cbc8fa003ee046c93b20e55fe483a91b878741180f9521c",
+  "callerClosure": {
+    "scripts/02-install-tools.sh": "ec3a15aa743606208403a20c9ad390ca3bc93a5f3b5cceca673a81cc0c137e3d",
+    "scripts/04-generate-chain-spec.sh": "15d5a89fb2572399cdd528cf36afe59bb2e1b76dbac9ea2f3ab012eafb06bc0a",
+    "scripts/_common.sh": "6316b1606886b9d99e38683e9ccdc5dc009b1d23e04d8f4ef1a9665eb4737771",
+    "scripts/inputs/chain-spec-builder/provenance.mjs": "d140eb668f8035ede6419c543318bdf6c89e4875c766cfd7091f227876caf8e6",
+    "scripts/inputs/chain-spec-builder/source.json": "7e1997cba02e354d47ed9c126bc310a5bc7903075e45721b87185165aa421a63",
+    "web-client/package.json": "82e5a3cdf87badea0daaebc552f33914df81d4e74a63b854a9260ac9350e7ddf"
+  },
+  "scope": "Exact maintained Builder19 Linux x86_64 image from attempt.V1fMqZ, finite script04 Create --raw-storage --verify named-preset {development,local_testnet}, preserving arbitrary selected runtime Wasm and all 81 accepted source dispositions. Exclusive expiry 2026-12-12T00:00:00Z or earlier consumed-input drift. Not unrestricted CLI, universal cryptographic timing, macOS, distribution, external producer, whole SDK, numerical/resource or final-cohort qualification. Actual finite script04 execution remains a separate gate."
+}

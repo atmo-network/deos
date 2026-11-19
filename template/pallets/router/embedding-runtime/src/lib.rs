@@ -1,5 +1,8 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+extern crate alloc;
+
+use alloc::vec::Vec;
 use pallet_deos_router::{
   AdapterFailure, AssetKind, ExactOutputExecution, FeeRoutingAdapter, PriceOracle, TmcInterface,
   types::AssetConversionApi,
@@ -13,15 +16,18 @@ use polkadot_sdk::{
   },
   frame_system,
   sp_runtime::{
-    DispatchError, Perbill,
-    testing::H256,
-    traits::{BlakeTwo256, IdentityLookup},
+    DispatchError, Perbill, generic,
+    traits::{BlakeTwo256, Hash, IdentityLookup},
   },
 };
 
 pub type AccountId = u64;
 pub type Balance = u128;
-type Block = frame_system::mocking::MockBlock<Runtime>;
+// The same block as FRAME's MockBlock, without its std-only test module.
+type Block = generic::Block<
+  generic::Header<u64, BlakeTwo256>,
+  generic::UncheckedExtrinsic<AccountId, RuntimeCall, (), ()>,
+>;
 
 construct_runtime!(
   pub struct Runtime {
@@ -37,7 +43,7 @@ impl frame_system::Config for Runtime {
   type Block = Block;
   type AccountId = AccountId;
   type Lookup = IdentityLookup<Self::AccountId>;
-  type Hash = H256;
+  type Hash = <BlakeTwo256 as Hash>::Output;
   type Hashing = BlakeTwo256;
   type AccountData = polkadot_sdk::pallet_balances::AccountData<Balance>;
 }

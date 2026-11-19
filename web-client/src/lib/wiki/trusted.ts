@@ -18,16 +18,19 @@ export type TrustedWikiPage = {
   html: string;
 };
 
-const wikiPageImporters = import.meta.glob<string>('../../../../wiki/**/*.md', {
-  query: '?raw',
-  import: 'default',
-});
+const wikiPageImporters = import.meta.glob<string>(
+  '../../../../wiki/layers/deos/**/*.md',
+  {
+    query: '?raw',
+    import: 'default',
+  },
+);
 
 const wikiPageCache = new Map<string, Promise<TrustedWikiPage>>();
 const wikiPageImportersByPath = new Map<string, WikiPageImport>(
   Object.entries(wikiPageImporters)
     .map(([path, load]) => {
-      const relativePath = path.split('/wiki/')[1];
+      const relativePath = path.split('/wiki/layers/deos/')[1];
       return relativePath ? [relativePath, load] : null;
     })
     .filter((entry): entry is [string, WikiPageImport] => entry !== null),
@@ -54,10 +57,19 @@ function resolveWikiHref(href: string, sourcePath: string): ResolvedWikiHref {
   ) {
     return { kind: 'external', href };
   }
-  const resolvedUrl = new URL(href, `https://repo.local/wiki/${sourcePath}`);
+  const resolvedUrl = new URL(
+    href,
+    `https://repo.local/wiki/layers/deos/${sourcePath}`,
+  );
   const resolvedPath = decodeURIComponent(resolvedUrl.pathname);
-  if (resolvedPath.startsWith('/wiki/') && resolvedPath.endsWith('.md')) {
-    return { kind: 'wiki', path: resolvedPath.slice('/wiki/'.length) };
+  if (
+    resolvedPath.startsWith('/wiki/layers/deos/') &&
+    resolvedPath.endsWith('.md')
+  ) {
+    return {
+      kind: 'wiki',
+      path: resolvedPath.slice('/wiki/layers/deos/'.length),
+    };
   }
   return { kind: 'repo', path: resolvedPath.slice(1) };
 }

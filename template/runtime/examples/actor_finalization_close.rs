@@ -1,5 +1,5 @@
-//! Native SDK caller witness for a public terminal Close inside Executive finalization.
-//! Root admission setup is outside the encoded block; no complete resource maximum is claimed.
+//! SDK caller diagnostics: finalization Close, or explicit inherent-only genesis mode.
+//! Close setup is outside the block; neither mode claims a complete resource maximum.
 
 #[path = "actor_retention_fixture/block.rs"]
 mod actor_block_fixture;
@@ -35,7 +35,7 @@ use polkadot_sdk::{
   sp_state_machine::Backend,
   sp_trie::{
     proof_size_extension::{ProofSizeExt, RecordingProofSizeProvider},
-    recorder::Recorder,
+    recorder::Recorder as SharedProofRecorder,
   },
   sp_weights::WeightToFee,
 };
@@ -54,6 +54,9 @@ fn top(ext: &TestExternalities) -> Storage {
 }
 
 fn run(preset: &PresetId, wasm: Option<&[u8]>, pvf_output: Option<&std::path::Path>) {
+  if wasm.is_some() || pvf_output.is_some() {
+    native_api::ensure_artifact_profile().expect("Wasm-bound native preparation profile");
+  }
   println!("native finalization Close preparation begins: preset={preset}");
   let pair = Sr25519Keyring::Alice.pair();
   let owner = Sr25519Keyring::Alice.to_account_id();
@@ -192,7 +195,7 @@ fn run(preset: &PresetId, wasm: Option<&[u8]>, pvf_output: Option<&std::path::Pa
     storage.clone(),
     deos_runtime::VERSION.state_version(),
   );
-  let recorder = Recorder::<Blake2Hasher>::default();
+  let recorder = SharedProofRecorder::<Blake2Hasher>::default();
   author.register_extension(ProofSizeExt::new(RecordingProofSizeProvider::new(
     recorder.clone(),
   )));
@@ -241,21 +244,110 @@ fn run(preset: &PresetId, wasm: Option<&[u8]>, pvf_output: Option<&std::path::Pa
   );
 }
 
+// No setup mutation, User creation or admission override: only runtime-owned genesis
+// System Actors and one inherent-only block with a synthetic relay proof.
+fn prepare_genesis(
+  storage: Storage,
+  code: &[u8],
+) -> (
+  Storage,
+  Storage,
+  Header,
+  Block,
+  polkadot_sdk::sp_inherents::InherentData,
+) {
+  let mut author = TestExternalities::new_with_code_and_state(
+    code,
+    storage,
+    deos_runtime::VERSION.state_version(),
+  );
+  let storage = top(&author);
+  let parent = Header::new(
+    0,
+    BlakeTwo256::ordered_trie_root(
+      Vec::new(),
+      deos_runtime::VERSION.extrinsics_root_state_version(),
+    ),
+    *author.as_backend().root(),
+    Default::default(),
+    Digest::default(),
+  );
+  let data = inherents(&parent, 1);
+  let recorder = SharedProofRecorder::<Blake2Hasher>::default();
+  author.register_extension(ProofSizeExt::new(RecordingProofSizeProvider::new(
+    recorder.clone(),
+  )));
+  let block = author.execute_with_recorder(recorder, || {
+    let header = Header::new(
+      1,
+      Default::default(),
+      Default::default(),
+      parent.hash(),
+      Digest {
+        logs: vec![DigestItem::PreRuntime(
+          polkadot_sdk::sp_consensus_aura::AURA_ENGINE_ID,
+          1u64.encode(),
+        )],
+      },
+    );
+    Executive::initialize_block(&header);
+    let extrinsics = <Runtime as BlockBuilder<Block>>::inherent_extrinsics(data.clone());
+    for xt in &extrinsics {
+      Executive::apply_extrinsic(xt.clone()).unwrap().unwrap();
+    }
+    Block {
+      header: Executive::finalize_block(),
+      extrinsics,
+    }
+  });
+  author.commit_all().unwrap();
+  assert_eq!(*author.as_backend().root(), *block.header.state_root());
+  let expected = top(&author);
+  (storage, expected, parent, block, data)
+}
+
+fn run_genesis(preset: &PresetId, wasm: Option<&[u8]>, pvf_output: Option<&std::path::Path>) {
+  let (storage, expected, parent, block, data) =
+    prepare_genesis(preset_storage(preset), wasm.unwrap_or_default());
+  native_api::assert_genesis_builder(
+    storage.clone(),
+    expected.clone(),
+    &block,
+    data.clone(),
+    wasm,
+  );
+  if let Some(output) = pvf_output {
+    pvf_fixture::export(output, preset, (storage, expected, &parent, block, data)).unwrap();
+  }
+  println!(
+    "genesis_only preset={preset} blocks=1 synthetic_relay=true finalization_close_coverage=false retention_coverage=false lifecycle_coverage=false"
+  );
+}
+
 fn main() -> Result<(), String> {
-  let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+  run_with_args(std::env::args().skip(1).collect())
+}
+
+fn run_with_args(mut arguments: Vec<String>) -> Result<(), String> {
   if arguments == ["--help"] || arguments == ["-h"] {
     println!(
-      "Usage: actor_finalization_close [--sdk-wasm PATH | --pvf-fixture PATH NEW_DIR]\n\nRuns both runtime-owned presets through a finite native-prepared finalization Close witness,\nactual SDK BlockBuilder with plain/recording proof-size providers, post-Close\nexecutor/response-decode errors in push and finalization, fresh Core recording/replay\nimports, and late invalid-root rollback.\nBy default the SDK executor uses compiled Rust. --sdk-wasm selects actual Wasm execution\nfor SDK authoring/import and checks the artifact's full runtime version; preparation\nand the independent expected block/state remain native. No native fallback is allowed.\n--pvf-fixture binds the selected code in parent storage and exports proof-bound,\nAura-sealed candidate inputs after an independent native seal/state check.\nPVF worker validation is a separate caller. This does not authenticate relay history,\nrun a live node, replay public setup history or establish a resource maximum."
+      "Usage: actor_finalization_close [--genesis-only] [--sdk-wasm PATH | --pvf-fixture PATH NEW_DIR]\n\nRuns both runtime-owned presets through a finite native-prepared finalization Close witness,\nactual SDK BlockBuilder with plain/recording proof-size providers, post-Close\nexecutor/response-decode errors in push and finalization, fresh Core recording/replay\nimports, and late invalid-root rollback.\nBy default the SDK executor uses compiled Rust. --sdk-wasm selects actual Wasm execution\nfor SDK authoring/import and checks the artifact's full runtime version; preparation\nand the independent expected block/state remain native. No native fallback is allowed.\n--pvf-fixture binds the selected code in parent storage and exports proof-bound,\nAura-sealed candidate inputs after an independent native seal/state check.\n--genesis-only instead runs one inherent-only block directly from each named genesis\npreset, without setup mutations or User admission. SDK plain/recording authoring,\nCore recording/replay and late-root rollback still run. This is NOT finalization Close,\nretention or lifecycle coverage. Relay inputs are synthetic; worker validation is separate.\nNeither mode authenticates relay history, runs a live node, replays public setup history\nor establishes a resource maximum."
     );
     return Ok(());
+  }
+  let genesis_only = arguments.first().is_some_and(|arg| arg == "--genesis-only");
+  if genesis_only {
+    arguments.remove(0);
   }
   let (wasm, pvf_output) = match arguments.as_slice() {
     [] => (None, None),
     [flag, path] if flag == "--sdk-wasm" => {
+      native_api::ensure_artifact_profile()?;
       let code = std::fs::read(path).map_err(|error| format!("cannot read Wasm: {error}"))?;
       (Some(code), None)
     }
     [flag, path, output] if flag == "--pvf-fixture" => {
+      native_api::ensure_artifact_profile()?;
       let code = std::fs::read(path).map_err(|error| format!("cannot read Wasm: {error}"))?;
       let output = std::path::PathBuf::from(output);
       std::fs::create_dir(&output)
@@ -265,7 +357,235 @@ fn main() -> Result<(), String> {
     _ => return Err("unexpected arguments; use --help".into()),
   };
   for preset in <Runtime as GenesisBuilder<Block>>::preset_names() {
-    run(&preset, wasm.as_deref(), pvf_output.as_deref());
+    if genesis_only {
+      run_genesis(&preset, wasm.as_deref(), pvf_output.as_deref());
+    } else {
+      run(&preset, wasm.as_deref(), pvf_output.as_deref());
+    }
   }
   Ok(())
+}
+
+#[cfg(all(
+  test,
+  feature = "benchmark-authority-scaffolding",
+  not(feature = "runtime-benchmarks")
+))]
+#[test]
+fn native_fixture_requests_refuse_before_io() {
+  let output = std::env::temp_dir().join(format!(
+    "deos-denied-finalization-request-{}",
+    std::process::id()
+  ));
+  assert!(!output.exists());
+  let missing = output.join("missing.wasm").to_string_lossy().into_owned();
+  for request in [
+    vec!["--sdk-wasm".into(), missing.clone()],
+    vec![
+      "--pvf-fixture".into(),
+      missing,
+      output.to_string_lossy().into_owned(),
+    ],
+  ] {
+    for genesis_only in [false, true] {
+      let mut args = request.clone();
+      if genesis_only {
+        args.insert(0, "--genesis-only".into());
+      }
+      let error = run_with_args(args).unwrap_err();
+      assert!(
+        error.contains("native admission fixture cannot"),
+        "wrong refusal: {error}"
+      );
+      assert!(!output.exists(), "denied request must not create output");
+    }
+  }
+  assert!(run_with_args(vec!["--help".into()]).is_ok());
+}
+
+#[cfg(all(
+  test,
+  not(feature = "runtime-benchmarks"),
+  not(feature = "benchmark-authority-scaffolding")
+))]
+#[test]
+fn parenthash_full_db_reference_from_presets() {
+  use polkadot_sdk::{
+    frame_support::storage::storage_prefix,
+    sp_core::{
+      H256,
+      storage::{StateVersion, well_known_keys::CODE},
+    },
+    sp_state_machine::InMemoryBackend,
+    sp_trie::{
+      LayoutV1, NodePlan, Recorder as PointReadRecorder, TrieDBBuilder,
+      TrieDBNodeDoubleEndedIterator, ValuePlan, read_trie_value,
+    },
+  };
+  type Layout = LayoutV1<BlakeTwo256>;
+  assert_eq!(deos_runtime::VERSION.state_version(), StateVersion::V1);
+  let presets = <Runtime as GenesisBuilder<Block>>::preset_names();
+  assert_eq!(presets.len(), 2);
+  for preset in presets {
+    let initial = preset_storage(&preset);
+    // top() is lossy for children: establish its validity before either conversion.
+    assert!(initial.children_default.is_empty());
+    let (storage, expected, parent, block, data) = prepare_genesis(initial, &[]);
+    assert!(storage.children_default.is_empty() && expected.children_default.is_empty());
+    assert_eq!(storage.top.get(CODE), Some(&Vec::new()));
+    assert_eq!(*parent.number(), 0);
+    assert_eq!(*block.header.number(), 1);
+    assert_eq!(*block.header.parent_hash(), parent.hash());
+    assert_eq!(block.extrinsics.len(), 3);
+    let root = *parent.state_root();
+    assert_ne!(
+      *block.header.state_root(),
+      root,
+      "actual roots, not a delta-size inference"
+    );
+    let key = storage_prefix(b"System", b"ParentHash").to_vec();
+    let old = storage
+      .top
+      .get(&key)
+      .expect("genesis ParentHash is present");
+    assert_eq!(old.len(), 32);
+    assert_eq!(old, &H256::repeat_byte(69).encode());
+    let events_key = storage_prefix(b"System", b"Events").to_vec();
+    // This fresh complete backend is diagnostic-only, never an execution cache/recorder.
+    let diagnostic: InMemoryBackend<BlakeTwo256> =
+      (storage.clone(), deos_runtime::VERSION.state_version()).into();
+    assert_eq!(*diagnostic.root(), root);
+    let mut point = PointReadRecorder::<Layout>::new();
+    assert_eq!(
+      read_trie_value::<Layout, _>(
+        diagnostic.backend_storage(),
+        &root,
+        &key,
+        Some(&mut point),
+        None
+      )
+      .unwrap()
+      .as_ref(),
+      Some(old)
+    );
+    let records = point.drain();
+    let trie = TrieDBBuilder::<Layout>::new(diagnostic.backend_storage(), &root).build();
+    let mut nodes = TrieDBNodeDoubleEndedIterator::new(&trie).unwrap();
+    nodes.prefix(&key).unwrap();
+    let key_nibbles: Vec<u8> = key
+      .iter()
+      .flat_map(|byte| [*byte >> 4, *byte & 15])
+      .collect();
+    let mut selected = None;
+    let mut visited = 0;
+    for item in nodes {
+      visited += 1;
+      assert!(
+        visited <= key_nibbles.len() + 1,
+        "bounded exact-key diagnostic"
+      );
+      let (prefix, hash, node) = item.unwrap();
+      let NodePlan::Leaf {
+        partial,
+        value: ValuePlan::Inline(range),
+      } = node.node_plan()
+      else {
+        continue;
+      };
+      let partial = partial.build(node.data());
+      let path: Vec<u8> = (0..prefix.len())
+        .map(|i| prefix.at(i))
+        .chain((0..partial.len()).map(|i| partial.at(i)))
+        .collect();
+      if path != key_nibbles {
+        continue;
+      }
+      assert_eq!(&node.data()[range.clone()], old.as_slice());
+      let hash = hash.expect("inline32 leaf must be hash referenced");
+      assert!(
+        node.data().len() >= 34,
+        "inline32 leaf encoding exceeds hash width"
+      );
+      assert_eq!(BlakeTwo256::hash(node.data()), hash);
+      assert!(
+        records
+          .iter()
+          .any(|record| record.hash == hash && record.data.as_slice() == node.data())
+      );
+      assert!(selected.is_none(), "ambiguous terminal node");
+      selected = Some((
+        hash,
+        node.data().to_vec(),
+        path,
+        prefix.len(),
+        range.clone(),
+      ));
+    }
+    let (hash, bytes, path, prefix_nibbles, value_range) =
+      selected.expect("authentic terminal leaf");
+    let mut execution =
+      native_api::capture_genesis_reference(storage.clone(), expected.clone(), &block, data);
+    for field in [
+      "author_prefix_nodes",
+      "author_final_nodes",
+      "core_positive_nodes",
+    ] {
+      let nodes: Vec<Vec<u8>> = serde_json::from_value(execution[field].clone()).unwrap();
+      let contains = nodes
+        .iter()
+        .any(|node| BlakeTwo256::hash(node) == hash && *node == bytes);
+      execution[format!("{field}_contains_h")] = serde_json::json!(contains);
+    }
+    let parent_rows: Vec<_> = storage.top.iter().collect();
+    let post_rows: Vec<_> = expected.top.iter().collect();
+    let diagnostic_records: Vec<_> = records
+      .iter()
+      .map(|record| (record.hash, &record.data))
+      .collect();
+    println!(
+      "{}",
+      serde_json::json!({
+        "kind": "native_full_db_genesis_reference",
+        "preset": preset,
+        "profile": "std/default; no runtime-benchmarks or benchmark-authority-scaffolding",
+        "provenance": "compiled Rust; empty native code; synthetic relay slot1; unsealed; not AuraExt/Wasm/PVF/network/accepted N2 history",
+        "S_top_rows": parent_rows,
+        "S_children_default": [],
+        "header0_scale": parent.encode(),
+        "R0": root,
+        "old_parent_key": key,
+        "old_parent_raw": old,
+        "events_key": events_key,
+        "events_raw": storage.top.get(&events_key),
+        "B_scale": block.encode(),
+        "B_header_scale": block.header.encode(),
+        "B_digest_scale": block.header.digest().encode(),
+        "B_body_scale": block.extrinsics.encode(),
+        "Rdelta": block.header.state_root(),
+        "Rdelta_ne_R0": block.header.state_root() != &root,
+        "post_top_rows": post_rows,
+        "h": { "hash": hash, "bytes": bytes, "size": bytes.len(), "path_nibbles": path,
+          "prefix_nibbles": prefix_nibbles, "inline_value_range": [value_range.start, value_range.end],
+          "inline_value": old },
+        "diagnostic_point_records": diagnostic_records,
+        "execution": execution,
+        "limits": "unordered SDK proof cuts, not A/first-demand/cache chronology; drained materialized D, not private PVF root-entry D or work multiplicity; no physical/CPU/fee-sharing claim"
+      })
+    );
+  }
+}
+
+#[cfg(test)]
+#[test]
+fn genesis_only_native_presets_and_argument_refusal() {
+  assert!(run_with_args(vec!["--genesis-only".into()]).is_ok());
+  for args in [
+    vec!["--genesis-only".into(), "--genesis-only".into()],
+    vec!["--genesis-only".into(), "--sdk-wasm".into()],
+  ] {
+    assert_eq!(
+      run_with_args(args).unwrap_err(),
+      "unexpected arguments; use --help"
+    );
+  }
 }

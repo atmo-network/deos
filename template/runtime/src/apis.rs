@@ -1,5 +1,5 @@
 // External crates imports
-use alloc::{collections::BTreeSet, vec::Vec};
+use alloc::vec::Vec;
 
 use polkadot_sdk::*;
 
@@ -24,13 +24,76 @@ use super::{
   InherentDataExt, Nonce, ParachainInfo, ParachainSystem, Runtime, RuntimeCall,
   RuntimeGenesisConfig, SLOT_DURATION, SessionKeys, System, TransactionPayment, VERSION,
 };
-use crate::configs::{
-  AssetKind, MaxInboundDownwardMessagesPerContext, MaxInboundHorizontalChannelsPerContext,
-  MaxInboundHorizontalMessagesPerContext,
-};
+use crate::configs::AssetKind;
+pub(crate) use crate::configs::unsigned::validate_inbound_messages_geometry;
 
 pub(crate) const CONTEXT_GEOMETRY_INHERENT_IDENTIFIER: sp_inherents::InherentIdentifier =
   *b"deosctx0";
+const CONTEXT_ORDER_INHERENT_IDENTIFIER: sp_inherents::InherentIdentifier = *b"deosord0";
+
+fn validate_prepass_context_order(
+  block: &<Block as BlockT>::LazyBlock,
+) -> Result<(), sp_inherents::InherentIdentifier> {
+  use sp_runtime::traits::{ExtrinsicCall, ExtrinsicLike, LazyBlock};
+  let (mut timestamp, mut validation, mut prepass) = (false, false, false);
+  // Three reference providers; inspect one successor only to reject a duplicate inherent.
+  for extrinsic in block.extrinsics().take(4) {
+    let Ok(extrinsic) = extrinsic else {
+      return Err(CONTEXT_ORDER_INHERENT_IDENTIFIER);
+    };
+    if !extrinsic.is_bare() {
+      return prepass
+        .then_some(())
+        .ok_or(CONTEXT_ORDER_INHERENT_IDENTIFIER);
+    }
+    match extrinsic.call() {
+      RuntimeCall::Timestamp(pallet_timestamp::Call::set { .. }) if !timestamp && !prepass => {
+        timestamp = true
+      }
+      RuntimeCall::ParachainSystem(
+        cumulus_pallet_parachain_system::Call::set_validation_data {
+          inbound_messages_data,
+          ..
+        },
+      ) if !validation && !prepass => {
+        validate_inbound_messages_geometry(inbound_messages_data)
+          .map_err(|_| CONTEXT_GEOMETRY_INHERENT_IDENTIFIER)?;
+        validation = true
+      }
+      RuntimeCall::Actors(pallet_deos_actors::Call::actor_prepass {})
+        if timestamp && validation && !prepass =>
+      {
+        prepass = true
+      }
+      RuntimeCall::Timestamp(_)
+      | RuntimeCall::ParachainSystem(
+        cumulus_pallet_parachain_system::Call::set_validation_data { .. },
+      )
+      | RuntimeCall::Actors(pallet_deos_actors::Call::actor_prepass {}) => {
+        return Err(CONTEXT_ORDER_INHERENT_IDENTIFIER);
+      }
+      _ => {
+        return prepass
+          .then_some(())
+          .ok_or(CONTEXT_ORDER_INHERENT_IDENTIFIER);
+      }
+    }
+  }
+  prepass
+    .then_some(())
+    .ok_or(CONTEXT_ORDER_INHERENT_IDENTIFIER)
+}
+
+fn context_order_fatal_result() -> sp_inherents::CheckInherentsResult {
+  let mut result = sp_inherents::CheckInherentsResult::new();
+  result
+    .put_error(
+      CONTEXT_ORDER_INHERENT_IDENTIFIER,
+      &sp_inherents::MakeFatalError::from(()),
+    )
+    .expect("a fresh fixed-size context-order error must encode"); // deos-bypass: panic-owner — Fresh result and unit fatal error have fixed infallible encoding.
+  result
+}
 
 fn with_actor_prepass_inherent_data(
   mut data: sp_inherents::InherentData,
@@ -71,58 +134,6 @@ pub(crate) fn validate_context_inherent_geometry(
     return Ok(());
   };
   validate_inbound_messages_geometry(&inbound_messages_data)
-}
-
-pub(crate) fn validate_inbound_messages_geometry(
-  inbound_messages_data: &cumulus_pallet_parachain_system::parachain_inherent::InboundMessagesData,
-) -> Result<(), pallet_deos_actors::BlockResourceError> {
-  use pallet_deos_actors::{ContextMessageGeometry, ContextMessageLimits};
-
-  let (downward_full, downward_hashed) = inbound_messages_data.downward_messages.messages();
-  let (horizontal_full, horizontal_hashed) = inbound_messages_data.horizontal_messages.messages();
-  let downward_full = u32::try_from(downward_full.len())
-    .map_err(|_| pallet_deos_actors::BlockResourceError::ArithmeticOverflow)?;
-  let downward_hashed = u32::try_from(downward_hashed.len())
-    .map_err(|_| pallet_deos_actors::BlockResourceError::ArithmeticOverflow)?;
-  let horizontal_full_count = u32::try_from(horizontal_full.len())
-    .map_err(|_| pallet_deos_actors::BlockResourceError::ArithmeticOverflow)?;
-  let horizontal_hashed_count = u32::try_from(horizontal_hashed.len())
-    .map_err(|_| pallet_deos_actors::BlockResourceError::ArithmeticOverflow)?;
-  let limits = ContextMessageLimits::new(
-    MaxInboundDownwardMessagesPerContext::get(),
-    MaxInboundHorizontalMessagesPerContext::get(),
-    MaxInboundHorizontalChannelsPerContext::get(),
-  );
-  limits.validate(ContextMessageGeometry::new(
-    downward_full,
-    downward_hashed,
-    horizontal_full_count,
-    horizontal_hashed_count,
-    0,
-  ))?;
-  let mut horizontal_channels = BTreeSet::new();
-  for sender in horizontal_full
-    .iter() // deos-bypass: bounded-iter — aggregate HRMP geometry is validated above and the channel set rejects at runtime maximum plus one.
-    .map(|(sender, _)| *sender)
-    .chain(
-      horizontal_hashed
-        .iter() // deos-bypass: bounded-iter — the same admitted full-plus-hashed HRMP bound owns this traversal.
-        .map(|(sender, _)| *sender),
-    )
-  {
-    horizontal_channels.insert(sender);
-    if horizontal_channels.len() > MaxInboundHorizontalChannelsPerContext::get() as usize {
-      return Err(pallet_deos_actors::BlockResourceError::ContextGeometryExceeded);
-    }
-  }
-  limits.validate(ContextMessageGeometry::new(
-    downward_full,
-    downward_hashed,
-    horizontal_full_count,
-    horizontal_hashed_count,
-    u32::try_from(horizontal_channels.len())
-      .map_err(|_| pallet_deos_actors::BlockResourceError::ArithmeticOverflow)?,
-  ))
 }
 
 impl Runtime {
@@ -301,7 +312,15 @@ impl pallet_deos_actors::ActorEligibilityApi<Block, BlockNumber, Balance> for Ru
             if validate_context_inherent_geometry(&data).is_err() {
                 return context_geometry_fatal_result();
             }
-            with_actor_prepass_inherent_data(data).check_extrinsics(&block)
+            let result = with_actor_prepass_inherent_data(data).check_extrinsics(&block);
+            if !result.ok() {
+                return result;
+            }
+            match validate_prepass_context_order(&block) {
+                Ok(()) => result,
+                Err(CONTEXT_GEOMETRY_INHERENT_IDENTIFIER) => context_geometry_fatal_result(),
+                Err(_) => context_order_fatal_result(),
+            }
         }
     }
 

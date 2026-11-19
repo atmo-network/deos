@@ -32,11 +32,7 @@ Asset Registry is primarily an identity/namespace layer, not a policy engine.
 
 Token lifecycle orchestration remains documented in `core.architecture.en.md` and executed by runtime policy wiring across economic pallets.
 
-Current coupling status in the DEOS runtime:
-
-- registration and linking establish foreign identity only; the configured token-domain hook is currently a no-op
-- TMC curve creation and governance-controlled Actor activation remain separate explicit onboarding transitions
-- Asset Registry therefore does not silently install TOL, liquidity, routing, or other economic policy
+`TokenDomainHook` is a host-supplied boundary after identity publication. The unit implementation adds no child work; a nonunit implementation may perform additional work or reject. Registration and linking do not hardcode curve creation, treasury policy or Actor activation. Concrete reference-runtime composition belongs in the integration owner.
 
 ### System Architecture
 
@@ -52,9 +48,10 @@ graph TD
     subgraph "Registration Flow"
         Registry -->|1. Location| Generator[AssetIdGenerator<br/>BLAKE2 Hash]
         Generator -->|2. Derive ID| Validator{Validate<br/>0xF Bitmask}
-        Validator -->|3. Check Collision| PAssets[pallet-assets<br/>force_create]
-        PAssets -->|4. Persist| Storage
-        Storage -->|5. Emit Event| Event[ForeignAssetRegistered]
+        Validator -->|3. Persist both mappings| Storage
+        Storage -->|4. Root create then metadata| PAssets[pallet-assets]
+        PAssets -->|5. TokenDomainHook| Hook[Host callback]
+        Hook -->|6. Emit Event| Event[ForeignAssetRegistered]
     end
 
     Runtime -->|Available to| Router[DEOS Router]
@@ -82,16 +79,16 @@ graph TD
 4. Reject collisions against both live `pallet-assets` identity and any retained reverse mapping, including a mapping whose ledger asset was later destroyed
 5. Reject every host-reserved location before creating or changing either mapping direction
 
-`Asset Creation (Delegation)`:
-
-1. Call `pallet_assets::force_create(asset_id, AssetOwner, ...)` via Root origin
-2. Call `pallet_assets::force_set_metadata(asset_id, symbol, ...)` for XCM metadata
-
-`Persistence`:
+`Transactional publication and delegation`:
 
 1. Store `ForeignAssetMapping[location] = asset_id`
 2. Store `ForeignAssetLocationByAssetId[asset_id] = location`
-3. Emit `ForeignAssetRegistered { asset_id, location, symbol }`
+3. Call `pallet_assets::force_create(asset_id, AssetOwner, ...)` via Root origin
+4. Call `pallet_assets::force_set_metadata(...)` via Root origin
+5. Invoke `TokenDomainHook::on_token_registered(Foreign(asset_id))`
+6. Emit `ForeignAssetRegistered { asset_id, location, symbol }`
+
+The [registration bodies](../src/lib.rs) publish both mappings before fallible ledger creation, metadata and hook calls. Their generated dispatch layer and explicit transaction restore storage on error; earlier map, ledger, encoding and callback work is still incurred. Linking skips creation/metadata but retains mapping-before-hook/event order. An arbitrary raw old reverse mapping is not authenticated merely by migrating its forward key.
 
 Try-state proves the retained mapping is an exact live bijection: every Location owns one unique foreign-namespaced `AssetId`, no Location is host-reserved, every forward identity resolves to the same reverse Location, forward/reverse cardinalities match, and every mapped ID still exists in `pallet-assets`. Corruption tests separately falsify missing, mismatched, orphan, duplicate, non-foreign, reserved-location, and deleted-ledger identities.
 
@@ -229,7 +226,7 @@ impl Convert<Location, AssetId> for LocationToAssetIdConverter {
 
 ## Asset Registry Read-Model Contract
 
-This subsystem follows the project-wide [`read-model.contract.en.md`](../../../../docs/read-model.contract.en.md) split.
+This subsystem follows the project-wide [`read-model.contract.en.md`](../../../../docs/deos/read-model.contract.en.md) split.
 
 ### Canonical on-chain asset-registry projections
 
@@ -344,4 +341,4 @@ migrate_location_key(
 - `Security`: RegistryOrigin, generated/manual bitmask validation, live-ledger plus retained-reverse collision checks, and transactional hook composition.
 - `Migration Path`: `migrate_location_key` for XCM upgrades.
 - `Integration`: Full support in Router, Burn Actor, and liquidity-provisioning actors via `pallet-assets`.
-- `Domain Bootstrap Hook`: A host may compose idempotent token-domain bootstrap on registration; the current DEOS binding is intentionally no-op.
+- `Domain Bootstrap Hook`: Host-supplied composition runs after mapping/ledger publication; no economic bootstrap is built into the registry.

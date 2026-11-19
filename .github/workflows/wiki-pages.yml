@@ -1,0 +1,50 @@
+# Publish the standalone Wiki only after its project validation profile passes.
+name: Wiki Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "wiki/**"
+      - "scripts/validate-local.sh"
+      - "scripts/_common.sh"
+      - ".node-version"
+      - ".npm-version"
+      - ".github/workflows/wiki-pages.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: wiki-pages
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Build and publish the static Wiki
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # GitHub Pages project sites live under /<repository>/; a fork with a custom domain sets
+      # the WIKI_BASE_PATH (/), WIKI_SITE_URL and WIKI_PAGES_CNAME repository variables.
+      WIKI_BASE_PATH: ${{ vars.WIKI_BASE_PATH || format('/{0}/', github.event.repository.name) }}
+      # Absolute public URL of the site: canonical/hreflang links and sitemap.xml.
+      WIKI_SITE_URL: ${{ vars.WIKI_SITE_URL || format('https://{0}.github.io/{1}/', github.repository_owner, github.event.repository.name) }}
+      WIKI_PAGES_CNAME: ${{ vars.WIKI_PAGES_CNAME }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup pinned Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+
+      - name: Validate the Wiki and build for the Pages base path
+        run: ./scripts/validate-local.sh wiki
+
+      - name: Publish to the gh-pages branch
+        run: |
+          args=(--push --expect-base "$WIKI_BASE_PATH")
+          if [[ -n "$WIKI_PAGES_CNAME" ]]; then args+=(--cname "$WIKI_PAGES_CNAME"); fi
+          bash wiki/scripts/publish-pages.sh "${args[@]}"

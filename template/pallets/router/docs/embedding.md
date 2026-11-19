@@ -21,11 +21,13 @@ The Router does not require DEOS Actor accounts or concrete DEOS market policy. 
 
 ## Evidence
 
-`../embedding-runtime` compiles the pallet in an independent minimal runtime with host-local adapters and no dependency on `deos-runtime` or `pallet-deos-actors`.
+`../embedding-runtime` compiles the pallet in an independent minimal runtime with host-local adapters and no dependency on `deos-runtime` or `pallet-deos-actors`. The fixture uses FRAME's generic block and unchecked extrinsic types directly so the same composition checks under `std` and guest `no_std`.
 
 ```bash
 cargo check -p pallet-deos-router-embedding-fixture --all-features
 cargo clippy -p pallet-deos-router-embedding-fixture --all-targets --all-features -- -D warnings
+RUSTFLAGS='--cfg substrate_runtime' cargo check --locked -p pallet-deos-router-embedding-fixture \
+  --no-default-features --target wasm32v1-none
 ```
 
 Package tests own reusable behavior. Concrete DEOS pools, Oracle wiring, Actor policy, fees, runtime weights, and rollback evidence belong to the root integration surfaces and runtime tests.

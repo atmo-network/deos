@@ -1,0 +1,97 @@
+# Wiki mdBook Implementation
+
+## Boundary
+
+The Wiki domain owns this optional website pipeline. Its Bash entrypoint composes pinned preparation, structural compilation, mdBook, output validation and Node-only checks of the shipped native search data. The project Wiki profile and Pages workflow use it; framework and client validation do not invoke it. No browser takes part in validation or publication. Static output is independently deployable.
+
+## Data Flow
+
+`wiki/layers/_meta/planes.json` declares plane order and required/optional roots. `src/corpus.mjs` loads each declared bundle, locale/navigation/graph manifests, canonical page identities and structured provenance. It rejects missing required planes, malformed present planes, missing mirrors, identity/path drift and unsafe reviewed Markdown. The existing strict OKF method checks remain separately available through the Skill.
+
+`src/projection.mjs::unifiedGraph` qualifies nodes by plane, preserves every authored typed edge and records localized URLs/provenance. `linearOrder` uses the plane index and authored section/item order, deduplicating references by first encounter. A graph page without a position fails; graph degree and edge iteration do not affect chapter order. `tests/projection.test.mjs` reverses graph order and metadata order independently to falsify accidental coupling.
+
+`projectBooks` produces Markdown bodies, a tree SUMMARY (plane landing, then one foldable draft node per navigation section), TOML configuration, theme partials, the content-free `site-index.html` redirect and one `projection.json`. It retains authored bodies and source-relative paths, and prepends static layer tags. Every generated link is relative to its source file. The EN/RU books share the same mdBook engine and graph; the Contents page and empty-state pages are not added as knowledge nodes. The graph stays behind the UI: no graph page, relation tables or graph links are emitted. Authored graph cycles remain valid.
+
+## Semantic Layer Views
+
+`src/corpus.mjs` carries the container's optional `memberships` overrides into composition. `src/layers.mjs::assignMemberships` validates known node/layer IDs, nonempty unique sets and the reserved virtual `all` name, then serializes each node's membership in declaration order. The default is its storage plane; explicit overrides replace that default. `graph.json` contains declared `layers` and each node's `layers`, independent of locale and with unchanged identity/URLs/provenance.
+
+`selectLayer` returns an induced view with the matching linear subsequence, retaining the original node objects and authored edge directions/types. The complete graph remains intact. Projection regressions cover ownership defaults, mixed and exclusive overrides, invalid metadata, a synthetic empty optional plane, cycles and order conservation. These same views supply the reader context; membership is never inferred again in the theme.
+
+## Reader Layer Context
+
+`src/hash-state.mjs` owns the `#!` fragment grammar: `layer`, `search`, `highlight`, `at` and the preservation of unknown keys, with a plain fragment left to native anchors. `src/context.mjs` admits one exact `layer` fragment value, composes the filtered native chapter sequence and serializes a public graph subset with the shared pure view functions; it also exposes the codec to the reader and scrolls a restored `at` section once the article exists. This context omits provenance copies; `graph.json` retains the full structured record. `prepare-search.mjs` fingerprints the locale context and binds it in the native head after root variables but before search initialization. The language entry book uses the same context through a normal additional script.
+
+The context selects its native index synchronously. A required-context marker gates article display until the controller settles; unsupported selection or unavailable metadata produces an explicit error and recovery, never an unqualified `all` fallback. The native search adapter disables initialization safely in that state, including the focus contract used by native chapter keys. Reading a URL never writes history; selecting a layer follows a normal link.
+
+`theme/layers.js` owns the menu-bar language switch, the conditional layer bar and layer filtering of the sidebar tree and the compiler-marked contents list. A section node or contents heading hides once nothing beneath it remains. It marks the current chapter from the rendered source, because mdBook's location comparison misses slash-less directory URLs. It rewrites both `.nav-chapters` and `.mobile-nav-chapters`; native arrow keys consume the corrected wide anchors. Authored tables and lists outside the generated contents region are not filtered or parsed as metadata.
+
+Eligible links retain the layer. Authored out-of-layer links explicitly expose an `all` exit without changing the article's claims. Ineligible direct URLs retain their location and show a notice with recovery; selection from an ineligible page opens the locale index. Locale links use canonical identity, preserve layer/search context and clear untranslated heading/highlight state. Whole-book print is unavailable in a filtered view rather than misrepresented as filtered output.
+
+The no-script baseline is the native full reader. Its explicit unfiltered notice is a generated `header.hbs` theme partial, outside searchable Markdown. This avoids indexing control labels/fallback instructions as article knowledge. mdBook renders that partial and every article; the theme neither renders Markdown nor supplies a second frontend.
+
+## Rendering and Publication Boundary
+
+`mdbook.json` pins the release and official archive SHA-256 values by platform. `scripts/toolchain.mjs` performs exact structural selection; the Wiki domain’s [`build-site.sh`](../../scripts/build-site.sh) owns download, checksum verification and executable-version checks. Unsupported platforms fail rather than selecting approximate binaries. Preparation and build are distinct modes.
+
+The Bash build renders into a unique owned staging directory, invokes `check-output.mjs` before replacing `dist`, and restores the prior artifact on a failed replacement. Failed compilation/rendering never promotes a partial website. Temporary books, renderer binaries and screenshots stay under ignored `target`; no source content is deleted, and the build itself deploys nothing.
+
+mdBook owns HTML, heading IDs, navigation and search assets. Generated TOML disables `sidebar-header-nav` so the sidebar lists chapters rather than duplicating the current article’s headings. Executable default preprocessors, automatic missing-chapter creation and runnable playgrounds are disabled in generated TOML. The structural compiler emits no HTML files. Native output validation checks local document/asset existence, heading fragments, literal native search-asset bindings and every published graph URL. It is not a Markdown renderer or an untrusted-HTML sanitizer.
+
+`src/corpus.mjs::basePath` validates `WIKI_BASE_PATH`, and `scripts/compile.mjs` passes it into `projectBooks`. `unifiedGraph` stores it as `base_path` and prefixes every `pageRoute`, which keeps graph routes absolute for data consumers. Only the native 404 `site-url` uses it in rendered output. The generated `head.hbs` records the rendered chapter (`wikiSource`) and restores a directory base when an index arrives without its trailing slash. The reader context derives `siteRoot` from mdBook's `path_to_root` and `document.baseURI`; `theme/layers.js` strips `base_path` from graph routes and resolves them against that root. `prepare-search.mjs` strips it when deriving book-relative search destinations.
+
+`check-output.mjs` resolves every same-origin target beneath the base path and fails on any destination outside it.
+
+`scripts/prepare-meta.mjs` runs after search preparation. It fills mdBook's empty description slot from page metadata, marks 404 and table-of-contents fragments `noindex, follow`, and writes `robots.txt`. With `WIKI_SITE_URL`, whose path must equal the base path, it also adds canonical and `hreflang`/`x-default` links, a sitemap link and `sitemap.xml` without invented `lastmod`. `check-output.mjs` resolves every sitemap entry to a real file beneath the base path.
+
+`../../scripts/publish-pages.sh` is the publication leaf. It re-runs `check-output.mjs`, can enforce the expected base path, and adds `.nojekyll` and an optional `CNAME`. It stages `dist` through a temporary Git index in the project object store and commits the tree on top of the remote branch tip, so no checkout or HEAD changes. It then pushes with a lease on that tip. An identical tree publishes nothing. Its `--self-test` covers a dry run, first, unchanged and changed publication, preserved history, refusals and an untouched checkout against a temporary bare remote.
+
+## Native Unicode Search
+
+The pinned renderer's [search indexer](https://github.com/rust-lang/mdBook/blob/v0.5.4/crates/mdbook-html/src/html_handlebars/search.rs) uses the default English Elasticlunr pipeline. Its `elasticlunr-rs` dependency's [trimmer](https://docs.rs/crate/elasticlunr-rs/3.0.2/source/src/lang/en.rs) admits ASCII digits/letters and underscores, dropping Cyrillic; the bundled browser trimmer is likewise ASCII-oriented. Setting the HTML language to `ru` does not prove usable Russian search. The real-browser `наблюдения` witness exposed this failure.
+
+`src/search.mjs` reuses the renderer's stored section text, field configuration, reference IDs and destination list. It rebuilds data through that same bundled Elasticlunr JavaScript library, replacing only token-boundary trimming with a registered Unicode step. Native stop-word filtering, English stemming, search options and section URLs remain. The build-time first step preserves the native 80-UTF-8-byte token admission bound without replacing the tokenizer object, which owns separator state. No second search engine, forked renderer or new dependency is introduced. Remove this adapter when an upgraded pinned renderer passes the same Cyrillic/browser witnesses natively.
+
+The final JSONP asset registers the identical Unicode boundary function before native `Index.load` runs, including direct search-URL initialization. `scripts/prepare-search.mjs` fingerprints that asset and changes only the native head's search-asset assignment, not authored document HTML. It removes the superseded index. The script admits only regular generated inputs inside the owned stage. `node:vm` evaluates trusted pinned-renderer assets only; it is not a sandbox for remote scripts or a Markdown execution facility.
+
+`tests/projection.test.mjs` checks ASCII boundary parity, Cyrillic/Unicode preservation, source-text-preserving rebinding and broken search-asset rejection.
+
+## Scoped Native Search Data
+
+`prepare-search.mjs` consumes the owned projection and an explicit locale. It prepares one native JSONP asset for `all` and each declared layer, recorded in that locale's `search-layers.json` as asset name and stored-section count. `all` preserves the complete native book index; layer indices include only matching knowledge pages, not synthetic navigation. The manifest also binds its fingerprinted `context_asset`. Output validation checks manifest coverage, same-locale asset names, section-count shape and local file existence.
+
+`src/search.mjs::nativeSections` matches original section destinations to eligible localized page paths before `index.addDoc`. Ranking and the native result cap therefore operate only on eligible documents. Reference IDs remain sparse and destination lists/options unchanged; no hidden-row post-filter or second engine exists. An empty selected view has zero indexed sections. The default artifact declares only DEOS; optional-plane construction is tested with synthetic metadata. The early context binds the selected scope before native search starts. Its guarded native fallback uses that same selection even when the ordinary index binding is absent.
+
+`tests/native-search.test.mjs` loads shipped indices through the renderer's actual bundled engine and checks exact section admission, stored text, references, options and destinations. Its isolated synthetic mixed-member witness places an eligible result below the native unfiltered cap, then proves scoped admission retains it. It does not insert fixture content into `/wiki` or measure production ranking/performance. It does not publish fixture membership or downstream content. Optional empty-plane Markdown construction is checked separately in projection tests.
+
+## Native Search URL State
+
+`src/search-url.mjs` owns the search state transitions and their guarded integration into the pinned searcher. `search` presence in the fragment is the open panel, so opening records it even when the text is empty and only an explicit close removes it. Opening also drops the pinned renderer's two scroll-to-top calls, because the panel floats over the article and the reading position must survive; a changed open/close shape fails the build. It adapts the URL codec, restoration and writer, and listens for same-document fragment changes.
+
+The native search handler listens to `input` instead of `keyup`, so edits without a key press use the same result and URL transitions. Clearing resets the native query cache, result list and count. Opaque punctuation remains one `search` value; unrelated fragment keys and the query string stay untouched. Reads decode once, tolerate malformed escapes and never push or replace browser history.
+
+The reader restores empty/nonempty search state on Back/Forward without reloading the document or growing history. Highlight dismissal uses one delegated content-root listener because native highlighting can replace transient mark nodes. One cancellable fade timer cannot clear a subsequently restored highlight. Dismissal removes only `highlight`, preserving active search and the heading.
+
+`prepare-search.mjs` syntax-checks and fingerprints the adapted reader, rebinds only its script resources and the native index assignment, and updates its fallback to the same Unicode index. Both superseded assets are removed. No authored document text is rewritten. Structural drift in the pinned helper spans fails the build rather than silently applying a partial patch. Remove this adapter when an upgraded native reader passes the same URL/history regressions without it.
+
+## Native Reader Localization
+
+`src/locale.mjs` adapts the pinned native reader rather than replacing its controls. `localizeReaderChrome` isolates the single `<main>` article slice and preserves it byte-for-byte, localizing only surrounding Russian navigation, themes, help and search chrome. Native standalone TOC documents have no article chrome. Boundary/string-count drift fails the build. Both locales receive the native search-description ID correction and a titled no-script TOC iframe.
+
+`localizeSearchScript` retains the native formatter interface and plain-text insertion, using Russian plural rules for counts and a localized teaser label. `localizeBookScript` translates hidden-line and clipboard labels/feedback while preserving their state comparisons. Both locales take hidden-line accessible labels from the owning button, not a nested SVG event target. Theme keys and canonical `Rust`/`Ayu` names remain unchanged.
+
+`prepare-search.mjs` syntax-checks adapted native scripts before content fingerprinting, rebinds script resources and removes the superseded searcher/book assets inside the owned stage. It checks aggregate index/context/book binding totals; those totals alone do not prove per-document cardinality. `tests/locale.test.mjs` covers plural families, opaque terms, article preservation and native-contract refusal. No authored concept page is translated by this adapter. Remove it when a pinned native reader supplies equivalent localization/accessibility behavior under the same regressions.
+
+## Shared Contracts
+
+`src/frontmatter.mjs` owns strict YAML parsing, duplicate keys, alias bounds and serialization. The Wiki domain's `scripts/okf-frontmatter.mjs` delegates to it. `src/trust.mjs` owns the reviewed-content guard, reused by the compiler and `scripts/check-trust.mjs`; the Wiki trust route invokes that same check rather than duplicating it.
+
+## Browser Realization and Evidence
+
+`theme/wiki.css` is a narrow mdBook reading/overflow extension: tree sidebar, layer tags, a menu-bar language switch with no container chrome and only an accent-tinted bubble on the active language, a slate dark palette over `navy`, and code scrolling inside `<code>` so the copy tooltip stays inside its block. Print output is disabled.
+
+CSS centres the fixed search panel in the viewport, independently of the sidebar. The open panel triggers a backdrop that intercepts pointer input and CSS scroll locks for the document and sidebar. While locked, the document reserves the scrollbar gutter on the body instead of the root. This keeps the article width stable and puts the gutter under the fixed backdrop in both themes. The panel retains its own scroll container. The focused search field keeps the theme’s blue accent via `--sidebar-header-border-color`. `theme/wiki.js` moves the panel outside mdBook's sliding page wrapper and routes outside clicks through the native search toggle so the same transition clears the fragment state.
+
+`theme/wiki.js` also handles external tabs, a light/dark switch that clicks mdBook's own (hidden) theme buttons, and, only inside a frame, reads the site's own location for the current-page action. It refreshes the destination on focus/pointer/activation as well as navigation events, because native search changes the URL through `pushState` without a navigation event. It neither patches global history nor reads/messages a parent frame. Its menu anchor is bound to the pinned renderer's actual DOM and covered by browser smoke. `theme/layers.js` merges a same-document anchor click into the fragment state and reloads the document for a layer change, because the layer view, sidebar and search index are derived per document.
+
+The browser behavior of the theme is not covered by an automated journey. Validation checks the pure modules the theme shares with the build (`hash-state`, `search-url`, `locale`, `context`, `projection`, native search data and destinations) and the structural output of every locale, including every same-origin destination beneath the base path, but not clicks, keys, layout or scrolling in a live page. Search sheet, layer filtering, language and theme switches, keyboard order, text-resize reflow, and no-script reading are therefore inspected by hand when the theme changes and carry no machine-verified evidence. This is not an accessibility or iframe qualification, and further reader polish does not delay higher-priority framework work.

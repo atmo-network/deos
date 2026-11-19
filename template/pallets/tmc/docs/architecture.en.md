@@ -54,7 +54,7 @@ graph TD
 `1. Curve Lookup + Preflight`
 
 - `get_curve(asset_kind)` retrieves the stored `CurveConfig`
-- Contains: `initial_price`, `slope_parameter`, `initial_issuance`, `native_asset_id`, `foreign_asset_id`
+- Contains: `initial_price`, `slope`, `initial_issuance`, `foreign_asset` and `minted_asset`
 - Creation and mint execution fail closed when Local/Foreign variants alias the same underlying `pallet-assets` ID; mint preflight also validates the exact configured collateral and requires every non-native asset to exist before any transfer
 
 `2. Effective Supply Calculation`
@@ -77,11 +77,11 @@ graph TD
 `5. Transactional Distribution Split`
 
 - Transfer collateral to the resolved collateral account
-- Mint total `ΔS` tokens inside one transactional flow
-- Transfer 1/3 to user (`UserAllocationRatio` = 1/3)
-- Mint the remaining 2/3 into the separately resolved protocol-liquidity account
-- Preflight Actors ingress for both protocol destinations before value movement, then notify collateral and minted-output recipients directly after distribution; dormant/custody destinations remain balance-only
-- If either mint leg or ingress notification fails, the collateral transfer and both mint legs roll back together
+- Compute total `ΔS` and mint the configured `UserAllocationRatio` directly to the recipient
+- Mint the checked remainder into the separately resolved protocol-liquidity account inside the same transaction
+- Invoke `MintDistributionHook::before_collateral_transfer` before collateral movement, `before_user_mint` before the user mint, and `before_sink_mint` after the user mint but before the sink mint
+- Publish the Native accumulator after both mint legs, then invoke `after_distribution`; host adapters own any ingress preflight/notification performed inside these hooks
+- If either mint leg or a fallible distribution hook fails, the collateral transfer and both mint legs roll back together; the reached hook, ledger and encoding work is still incurred
 - Emit `ZapAllocationDistributed` event only after the whole distribution and direct ingress notification succeed
 - A deterministic runtime fault after the first of two direct ingress consequences proves exact storage-root restoration across collateral, issuance, both recipients, TMC counters, events, Actors funding, and scheduler state
 
@@ -141,12 +141,12 @@ Spot-price and mint-integral intermediates use checked `U256` arithmetic:
 
 ```rust
 #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone, Debug, PartialEq)]
-pub struct CurveConfig<Balance, AssetId> {
-    pub initial_price: Balance,
-    pub slope_parameter: Balance,
+pub struct CurveConfig {
+    pub initial_price: Price,
+    pub slope: Slope,
     pub initial_issuance: Balance,
-    pub native_asset_id: AssetId,
-    pub foreign_asset_id: AssetId,
+    pub foreign_asset: AssetKind,
+    pub minted_asset: AssetKind,
 }
 
 #[pallet::storage]
@@ -154,11 +154,11 @@ pub type TokenCurves<T: Config> = StorageMap<
     _,
     Blake2_128Concat,
     AssetKind,
-    CurveConfig<BalanceOf<T>, AssetIdOf<T>>,
+    CurveConfig,
 >;
 ```
 
-Each `AssetKind` (e.g., `Native`, `Foreign(1)`) can have its own bonding curve. The `native_asset_id` and `foreign_asset_id` specify which assets participate in the minting pair.
+Each `AssetKind` (e.g., `Native`, `Foreign(1)`) can have its own bonding curve. The storage key and `minted_asset` identify issued value; `foreign_asset` identifies collateral and is itself an `AssetKind`, not necessarily the Foreign variant. `Price`, `Slope` and `Balance` are fixed `u128` aliases. Try-state checks key/`minted_asset` agreement; decoding arbitrary raw state alone does not establish it.
 
 ### 2. Minting Availability (Current Runtime)
 
@@ -168,13 +168,15 @@ Current implementation does not maintain a dedicated `MintingPaused` storage fla
 
 | Parameter | Type | Description |
 | --- | --- | --- |
-| `InitialPrice` | Balance | Base price P₀ at curve genesis |
-| `SlopeParameter` | Balance | Linear curve slope (price increment per token) |
+| `InitialPrice` | Balance | Host configuration; public creation takes an explicit price |
+| `SlopeParameter` | Balance | Host configuration; public creation takes an explicit slope |
 | `Precision` | Balance | Scaling factor for fixed-point arithmetic (e.g., 10¹²) |
 | `UserAllocationRatio` | Perbill | Fraction to user (default: 1/3 = 333_333_333 Perbill) |
 | `PalletId` | PalletId | Derives the TMC pallet account for pallet-owned operations |
-| `TreasuryAccount` | AccountId | Compatibility/config hook; currently mapped to the TOL pallet account |
-| `LiquidityActorAccount` | AccountId | Active liquidity-actor recipient for non-specialized mint output |
+| `TreasuryAccount` | AccountId | Retained host configuration, not the active output resolver |
+| `MintOutputResolver` | Trait | Resolves collateral and minted-output accounts independently |
+| `DomainGlueHook` | Trait | Fallible host callback during public curve creation |
+| `MintDistributionHook` | Trait | Ordered pre-movement, pre-mint and post-distribution callbacks |
 
 ### 4. Extrinsics (Governance-Controlled)
 
@@ -185,16 +187,16 @@ Current implementation does not maintain a dedicated `MintingPaused` storage fla
 #[pallet::weight(T::WeightInfo::create_curve())]
 pub fn create_curve(
     origin: OriginFor<T>,
-    asset_kind: AssetKind,
-    initial_price: BalanceOf<T>,
-    slope_parameter: BalanceOf<T>,
+    token_asset: AssetKind,
+    foreign_asset: AssetKind,
+    initial_price: Price,
+    slope: Slope,
 ) -> DispatchResult
 ```
 
-Initializes a new bonding curve. Stores `initial_issuance = Currency::total_issuance()` as the baseline.
+The [public creation body](../src/lib.rs) validates origin, absence, nonzero price-or-slope, distinct physical asset identities and asset existence. It calls `DomainGlueHook::on_curve_created(token_asset, foreign_asset)` before reading issuance and publishing the curve/event. Hook refusal therefore retains its reached work under the actual transaction. The baseline reads `Currency::total_issuance()` for Native and `Assets::total_issuance(id)` for Local/Foreign.
 
-Curve parameters are immutable after creation on the current launch line.
-This is a launch-line policy choice rather than a generic pallet prohibition: forks MAY deliberately add post-launch mutation, but that becomes a fork-owned extension outside the default TMCTOL contract because changing slope rewrites launch physics.
+The public surface has no curve-parameter setter and refuses an existing key. Host `InitialPrice`/`SlopeParameter` do not override explicit creation arguments. Genesis is a separate supplied-vector constructor: it reads issuance and writes each curve without the public validation/hook/event path; duplicate keys are last-wins while every earlier write remains work.
 
 `Current call surface`:
 
@@ -204,14 +206,14 @@ Mint execution is performed through the internal mint flow invoked by Router/TMC
 
 ## TMC Read-Model Contract
 
-This subsystem follows the project-wide [`read-model.contract.en.md`](../../../../docs/read-model.contract.en.md) split.
+This subsystem follows the project-wide [`read-model.contract.en.md`](../../../../docs/deos/read-model.contract.en.md) split.
 
 ### Canonical on-chain TMC projections
 
 The current runtime already provides chain-native bounded reads for live minting truth through:
 
 - `TokenCurves[asset_kind]` / curve existence for known assets
-- Current curve parameters (`initial_price`, `slope_parameter`, `initial_issuance`, native/foreign binding)
+- Current curve parameters (`initial_price`, `slope`, `initial_issuance`, minted/collateral binding)
 - Live total issuance and therefore live effective-supply-dependent spot-price state
 - Direct mint-side execution effects via balances and `ZapAllocationDistributed`
 
@@ -309,7 +311,7 @@ While TMC provides the ceiling, TOL provides floor support:
 - `Distribution`: 1/3 user and 2/3 resolved protocol-liquidity account, with an independently resolved collateral account (ratio configurable via `UserAllocationRatio`).
 - `Governance`: Curve parameters are configured at launch-time creation and remain immutable on the current line; forks may intentionally widen that surface, but that is outside the default TMCTOL contract.
 - `Compression`: Bidirectional with Burn Actor (burns reduce ceiling dynamically).
-- `Domain Glue`: `create_curve` executes runtime hook that bootstraps TOL domain routing and enables liquidity-actor processing for the token.
+- `Domain Glue`: `create_curve` calls a fallible host-supplied hook before issuance lookup and publication; TOL routing or Actor activation is not built into the pallet. The reference binding belongs in runtime integration.
 
 ### Planned Evolution (Post-Release)
 

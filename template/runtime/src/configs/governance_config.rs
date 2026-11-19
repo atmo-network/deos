@@ -116,6 +116,28 @@ fn declining_power_weight<ItemId>(
     .saturating_div(voting_period_u128)
 }
 
+// Keep raw balance precision; only the final rational division rounds down.
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn primary_power_weight<ItemId>(
+  base_weight: u128,
+  context: &pallet_governance::ProposalVoteContext<ItemId, BlockNumber>,
+) -> sp_core::U256 {
+  let period = context
+    .maturity_epoch
+    .saturating_sub(context.submitted_epoch)
+    .max(1);
+  let elapsed = context
+    .vote_epoch
+    .max(context.submitted_epoch)
+    .min(context.maturity_epoch)
+    .saturating_sub(context.submitted_epoch);
+  if u128::from(elapsed) * 7 >= u128::from(period) * 6 {
+    return sp_core::U256::from(base_weight);
+  }
+  let numerator = u128::from(period.saturating_sub(elapsed)) * 7;
+  sp_core::U256::from(base_weight) * sp_core::U256::from(numerator) / sp_core::U256::from(period)
+}
+
 #[derive(Clone, Copy)]
 enum RuntimeGovernanceTrackBacking {
   DirectStake,
@@ -465,19 +487,19 @@ impl pallet_governance::ProposalVoteWeightProvider<AccountId, AssetId, u32, Bloc
     domain: AssetId,
     context: &pallet_governance::ProposalVoteContext<u32, BlockNumber>,
     account: &AccountId,
-  ) -> u32 {
+  ) -> sp_core::U256 {
     #[cfg(feature = "runtime-benchmarks")]
     {
       let _ = (domain, context, account);
-      return 1;
+      return sp_core::U256::one();
     }
     #[cfg(not(feature = "runtime-benchmarks"))]
     {
       let base_weight = ordinary_track_base_weight(domain, account);
       if proposal_has_urgent_authorization(domain, context.item_id) {
-        return base_weight.min(u128::from(u32::MAX)) as u32;
+        return sp_core::U256::from(base_weight);
       }
-      declining_power_weight(base_weight, context).min(u128::from(u32::MAX)) as u32
+      primary_power_weight(base_weight, context)
     }
   }
 }
@@ -749,6 +771,65 @@ impl
       pallet_governance::ProposalPayloadKind::L2ParameterChange,
       hash,
     ))
+  }
+
+  fn prepare_invoice_voter(
+    account: &AccountId,
+  ) -> Result<AssetId, polkadot_sdk::sp_runtime::DispatchError> {
+    use polkadot_sdk::frame_support::traits::fungibles::{Inspect, Mutate};
+    use polkadot_sdk::sp_runtime::DispatchError;
+    let domain = tactical_governance_domain();
+    assert_eq!(
+      <RuntimeProposalPrimaryTrackFamilyProvider as pallet_governance::ProposalPrimaryTrackFamilyProvider<AssetId>>::family(
+        domain,
+        pallet_governance::ProposalPayloadKind::L2TreasurySpend,
+      ),
+      pallet_governance::ProposalPrimaryTrackFamily::Invoice,
+    );
+    if !<crate::Assets as Inspect<AccountId>>::asset_exists(domain) {
+      crate::Assets::force_create(
+        RuntimeOrigin::root(),
+        domain,
+        account.clone().into(),
+        true,
+        1,
+      )?;
+    }
+    if crate::Staking::pool(domain).is_none() {
+      crate::Staking::register_staking_asset(RuntimeOrigin::root(), domain)?;
+    }
+    let amount = primitives::ecosystem::params::PRECISION * 100;
+    <crate::Assets as Mutate<AccountId>>::mint_into(domain, account, amount)?;
+    crate::Staking::stake(RuntimeOrigin::signed(account.clone()), domain, amount / 2)?;
+    // Native asset custody is the tactical protection source, not protocol $VETO.
+    // Dominate the existing eligible supply without changing its normalization policy.
+    let protection_amount = protection_track_total_issuance(domain)
+      .checked_add(amount)
+      .ok_or(DispatchError::Other("BenchmarkInvoiceProtectionOverflow"))?;
+    let native = native_staking_asset_id();
+    if !<crate::Assets as Inspect<AccountId>>::asset_exists(native) {
+      crate::Assets::force_create(
+        RuntimeOrigin::root(),
+        native,
+        account.clone().into(),
+        true,
+        1,
+      )?;
+    }
+    let funding = protection_amount
+      .checked_add(<crate::Assets as Inspect<AccountId>>::minimum_balance(
+        native,
+      ))
+      .ok_or(DispatchError::Other("BenchmarkInvoiceFundingOverflow"))?;
+    <crate::Assets as Mutate<AccountId>>::mint_into(native, account, funding)?;
+    crate::Staking::lock_native_asset_for_governance(
+      RuntimeOrigin::signed(account.clone()),
+      native,
+      protection_amount,
+    )?;
+    assert!(crate::Staking::stake_value(domain, account).unwrap_or_default() > 0);
+    assert!(protection_track_base_weight(domain, account) > 0);
+    Ok(domain)
   }
 
   fn prepare_protection_voter(

@@ -11,7 +11,7 @@ Usage: audit-actors-identity.sh [OPTIONS]
 
 Rejects retired Actors state, funding-generation, scheduler-lane, and lineage
 terminology in active package and integration documentation while
-excluding historical delivery records.
+excluding historical delivery records and third-party vendor namespaces.
 
 Options:
   --self-test  Prove accepted accumulator prose and rejected legacy fixtures
@@ -71,6 +71,26 @@ check_paths() {
     check_paths_with_pattern "$legacy_pattern" "$@"
 }
 
+policy_identity_matches() {
+    local policy="$1" rendered
+    rendered="$(node - "$policy" <<'NODE'
+const fs = require('node:fs');
+const policy = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (!Array.isArray(policy.exceptions)) throw new Error('Missing exception inventory');
+for (const row of policy.exceptions) {
+    if (row.id !== 'RUSTSEC-2026-0387' || row.sourceCallerRoot?.role !== 'root-workspace-normal-build') continue;
+    for (const pkg of row.sourceCallerRoot.packages ?? []) {
+        if (!pkg.source?.startsWith('registry+')) continue;
+        // Third-party inventory filenames are evidence, not project identities.
+        for (const file of pkg.files ?? []) file.path = '<third-party source path>';
+    }
+}
+process.stdout.write(JSON.stringify(policy, null, 2));
+NODE
+)" || return 1
+    printf '%s\n' "$rendered" | rg -n -P "$identity_pattern" | awk -v path="$policy" '{ print path ":" $0 }' || [[ "$?" == 1 ]]
+}
+
 run_self_tests() {
     phase_banner "Step 2: Funding terminology fixtures"
     local fixture_dir
@@ -109,6 +129,26 @@ run_self_tests() {
             return 1
         fi
     done
+    local policy_fixture="$fixture_dir/policy.json" policy_matches
+    printf '%s\n' '{"exceptions":[{"id":"RUSTSEC-2026-0387","sourceCallerRoot":{"role":"root-workspace-normal-build","packages":[{"source":"registry+fixture","files":[{"path":"openssl/crypto/x509/v3_'"$(printf 'a%s' 'aa')"'.c"},{"path":"samples/zonefile/'"$(printf 'AA%s' 'AA')"'.sample"}]}]}}]}' > "$policy_fixture"
+    policy_matches="$(policy_identity_matches "$policy_fixture")"
+    [[ -z "$policy_matches" ]] || { log_error "Third-party inventory paths were treated as identities"; return 1; }
+    for location in reason local-path; do
+        node - "$policy_fixture" "$location" "$(printf 'A%sType' 'aa')" <<'NODE'
+const fs = require('node:fs');
+const policy = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const row = policy.exceptions[0];
+if (process.argv[3] === 'reason') row.reason = process.argv[4];
+else {
+    delete row.reason;
+    row.sourceCallerRoot.packages[0].source = null;
+    row.sourceCallerRoot.packages[0].files[0].path = process.argv[4];
+}
+fs.writeFileSync(process.argv[2], JSON.stringify(policy));
+NODE
+        policy_matches="$(policy_identity_matches "$policy_fixture")"
+        [[ -n "$policy_matches" ]] || { log_error "Active policy identity escaped: $location"; return 1; }
+    done
     printf '%s\n' 'Evaluation fees derive from generated WeightInfo through WeightToFee.' > "$fixture_dir/accepted.md"
     check_paths_with_pattern "$removed_surface_pattern" "$fixture_dir/accepted.md"
     for legacy in \
@@ -123,19 +163,54 @@ run_self_tests() {
             return 1
         fi
     done
+    # Exercise the real content/path scan with only declared third-party roots excluded.
+    (
+        local PROJECT_ROOT="$fixture_dir/project" retired
+        retired="$(printf 'A%sType' 'aa')"
+        mkdir -p "$PROJECT_ROOT/template/vendor/fixture" \
+            "$PROJECT_ROOT/template/tools/pvf-validation/vendor/fixture" \
+            "$PROJECT_ROOT/template/tools/pvf-validation/src"
+        git -C "$PROJECT_ROOT" init -q
+        printf '%s\n' "$retired" > "$PROJECT_ROOT/template/vendor/fixture/$retired.rs"
+        printf '%s\n' "$retired" > "$PROJECT_ROOT/template/tools/pvf-validation/vendor/fixture/$retired.rs"
+        check_retired_identity
+        printf '%s\n' "$retired" > "$PROJECT_ROOT/template/tools/pvf-validation/src/lib.rs"
+        if check_retired_identity > "$fixture_dir/active-host.log" 2>&1; then
+            log_error "Active host identity escaped through the vendor exclusion"
+            return 1
+        fi
+        rm "$PROJECT_ROOT/template/tools/pvf-validation/src/lib.rs"
+        printf '%s\n' "$retired" > "$PROJECT_ROOT/template/tools/pvf-validation/vendor-wrapper.rs"
+        if check_retired_identity > "$fixture_dir/active-wrapper.log" 2>&1; then
+            log_error "Active wrapper identity escaped through a vendor-like filename"
+            return 1
+        fi
+    )
     log_success "Actors terminology fixtures passed"
 }
 
 check_retired_identity() {
-    local content_matches path_matches
-    content_matches="$(rg -n -P "$identity_pattern" "$PROJECT_ROOT" \
+    local content_matches path_matches policy_matches
+    local policy="$PROJECT_ROOT/.agents/skills/release-assurance/config/dependency-provenance-exceptions.json"
+    # Anchor vendoring globs to their owner even when invoked from another directory.
+    content_matches="$(cd "$PROJECT_ROOT" && rg -n -P "$identity_pattern" . \
         --hidden \
         -g '!.git/**' \
         -g '!target/**' \
         -g '!node_modules/**' \
         -g '!CHANGELOG.md' \
-        -g '!template/Cargo.lock' 2>/dev/null || true)"
-    path_matches="$(git -C "$PROJECT_ROOT" ls-files -co --exclude-standard | rg '[Aa]{3}' || true)"
+        -g '!template/Cargo.lock' \
+        -g '!template/vendor/**' \
+        -g '!template/tools/pvf-validation/vendor/**' \
+        -g '!.agents/skills/release-assurance/config/dependency-provenance-exceptions.json' 2>/dev/null || true)"
+    if [[ -f "$policy" ]]; then
+        policy_matches="$(policy_identity_matches "$policy")" || return 1
+        [[ -z "$policy_matches" ]] || content_matches+="$policy_matches"
+    fi
+    # DNS record identifiers and CA subject names are not DEOS Actor identities.
+    path_matches="$(git -C "$PROJECT_ROOT" ls-files -co --exclude-standard -- \
+        ':(exclude)template/vendor/**' \
+        ':(exclude)template/tools/pvf-validation/vendor/**' | rg '[Aa]{3}' || true)"
     if [[ -n "$content_matches" || -n "$path_matches" ]]; then
         log_error "Retired actor-runtime identity remains"
         [[ -z "$path_matches" ]] || printf '%s\n' "$path_matches"
@@ -150,17 +225,17 @@ run_audit() {
     phase_banner "Step 3: Active Actors funding terminology"
     check_paths \
         "$TEMPLATE_DIR/pallets/actors/docs" \
-        "$PROJECT_ROOT/docs/actors.integration.en.md" \
-        "$PROJECT_ROOT/docs/core.architecture.en.md"
+        "$PROJECT_ROOT/docs/deos/actors.integration.en.md" \
+        "$PROJECT_ROOT/docs/deos/core.architecture.en.md"
     check_paths_with_pattern "$removed_surface_pattern" \
         "$TEMPLATE_DIR/pallets/actors/src" \
         "$TEMPLATE_DIR/pallets/actors/README.md" \
         "$TEMPLATE_DIR/pallets/actors/docs/architecture.en.md" \
         "$TEMPLATE_DIR/pallets/actors/docs/embedding.md" \
-        "$PROJECT_ROOT/docs/actors.integration.en.md" \
-        "$PROJECT_ROOT/docs/actors-control-plane.contract.en.md" \
-        "$PROJECT_ROOT/docs/core.architecture.en.md" \
-        "$PROJECT_ROOT/docs/read-model.contract.en.md" \
+        "$PROJECT_ROOT/docs/deos/actors.integration.en.md" \
+        "$PROJECT_ROOT/docs/deos/actors-control-plane.contract.en.md" \
+        "$PROJECT_ROOT/docs/deos/core.architecture.en.md" \
+        "$PROJECT_ROOT/docs/deos/read-model.contract.en.md" \
         "$PROJECT_ROOT/web-client/src" \
         "$PROJECT_ROOT/web-client/scripts" \
         "$PROJECT_ROOT/web-client/docs" \
@@ -171,7 +246,7 @@ run_audit() {
 main() {
     parse_args "$@"
     phase_banner "Step 1: Prerequisites"
-    require_commands node rg
+    require_commands node rg awk
     load_rule_inventory
     if [[ "$SELF_TEST" == "1" ]]; then
         run_self_tests

@@ -1,0 +1,7 @@
+{
+  "description": "Run the ABCd context validator for a project root.",
+  "args": [
+    "path:path=."
+  ],
+  "template": "{skill_dir}/scripts/validate-context.mjs {path}"
+}

@@ -1,3 +1,5 @@
+// The shared positive fixture is compiled but not executable without native model capacity.
+#[cfg_attr(not(feature = "benchmark-authority-scaffolding"), allow(dead_code))]
 #[path = "../examples/actor_retention_fixture/wide_close.rs"]
 mod wide_close_fixture;
 
@@ -50,10 +52,77 @@ fn close_hold_host_has_no_custom_account_callbacks() {
   );
 }
 
+#[cfg(feature = "benchmark-authority-scaffolding")]
 #[test]
 fn signed_wide_close_retains_frozen_user_declaration_on_both_presets() {
   for preset in <Runtime as GenesisBuilder<Block>>::preset_names() {
     wide_close_fixture::run(&preset, None, None);
+    eprintln!(
+      "signed_wide_close_profile preset={preset} native_model_capacity=true production_capacity=false wasm_pvf_qualified=false"
+    );
+  }
+}
+
+#[cfg(not(feature = "benchmark-authority-scaffolding"))]
+#[test]
+fn production_user_creation_refuses_without_state_custody_or_slot_changes_on_both_presets() {
+  use deos_runtime::{Actors, Balances, RuntimeOrigin, System, UNIT};
+  use pallet_deos_actors::{Error, Mutability};
+  use polkadot_sdk::{
+    frame_support::{assert_noop, assert_ok},
+    sp_io::TestExternalities,
+    sp_keyring::Sr25519Keyring,
+    sp_runtime::MultiAddress,
+  };
+
+  for preset in <Runtime as GenesisBuilder<Block>>::preset_names() {
+    TestExternalities::new(wide_close_fixture::preset_storage(&preset)).execute_with(|| {
+      System::set_block_number(1);
+      let owner = Sr25519Keyring::Alice.to_account_id();
+      let slot = 0;
+      let custody = Actors::sovereign_account_id(&owner, slot);
+      // Pre-existing sovereign custody must survive refusal, just as it survives Actor Close.
+      assert_ok!(Balances::transfer_keep_alive(
+        RuntimeOrigin::signed(owner.clone()),
+        MultiAddress::Id(custody.clone()),
+        100 * UNIT,
+      ));
+      assert!(!Actors::user_creation_enabled());
+      assert_ok!(Actors::set_user_creation_enabled(RuntimeOrigin::root(), true));
+      assert!(Actors::user_creation_enabled());
+      let next_id = Actors::next_actor_id();
+      let counts = (Actors::actor_identity_count(), Actors::active_actor_count());
+      let slots = Actors::owner_slot_bitmap(&owner);
+      let owner_balance = Balances::free_balance(&owner);
+      let custody_balance = Balances::free_balance(&custody);
+      let root = polkadot_sdk::sp_io::storage::root(deos_runtime::VERSION.state_version());
+      assert_noop!(
+        Actors::create_user_actor(
+          RuntimeOrigin::signed(owner.clone()),
+          Mutability::Mutable,
+          None,
+        ),
+        Error::<Runtime>::UserAdmissionUnavailable
+      );
+      assert_noop!(
+        Actors::create_user_actor_at_slot(
+          RuntimeOrigin::signed(owner.clone()),
+          slot,
+          Mutability::Mutable,
+          None,
+        ),
+        Error::<Runtime>::UserAdmissionUnavailable
+      );
+      assert_eq!(polkadot_sdk::sp_io::storage::root(deos_runtime::VERSION.state_version()), root);
+      assert_eq!(Actors::next_actor_id(), next_id);
+      assert_eq!((Actors::actor_identity_count(), Actors::active_actor_count()), counts);
+      assert_eq!(Actors::owner_slot_bitmap(&owner), slots);
+      assert!(Actors::actor_identity(next_id).is_none());
+      assert!(Actors::actor_state_hold(next_id).is_none());
+      assert_eq!(Balances::free_balance(&owner), owner_balance);
+      assert_eq!(Balances::free_balance(&custody), custody_balance);
+      eprintln!("signed_wide_close_profile preset={preset} user_creation_permission=true user_admission=UserAdmissionUnavailable state_custody_slots_unchanged=true");
+    });
   }
 }
 

@@ -21,6 +21,7 @@ allow = [
   "GPL-3.0",
   "GPL-3.0-only",
   "GPL-3.0-or-later WITH Classpath-exception-2.0",
+  "ISC",
   "MIT",
   "MIT-0",
   "MPL-2.0",
@@ -28,6 +29,14 @@ allow = [
   "Unlicense",
   "Zlib",
 ]
+
+# Exact archive: 301abaae475aa91687eb82514b328ab47a211a533026cb25fc3e519b86adfc3c.
+# Policy admission is not shipping: future bundles must accompany the binary
+# with its notices/ texts (see notices/README.md) and verify their checksums.
+[[licenses.exceptions]]
+name = "unicode-ident"
+version = "=1.0.11"
+allow = ["Unicode-DFS-2016"]
 
 [bans]
 multiple-versions = "allow"
@@ -39,3 +48,7 @@ highlight = "all"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# The isolated Host uses the exact-tag SDK revision sealed by its role proof.
+# Root still refuses all Git inputs at its selected entrypoint.
+allow-git = ["https://github.com/paritytech/polkadot-sdk"]
+required-git-spec = "rev"

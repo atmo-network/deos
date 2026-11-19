@@ -1,5 +1,170 @@
 use super::*;
 
+fn policy_admission_contract(zero_step: bool) -> crate::ActorContractOf<Test> {
+  let steps = if zero_step {
+    BoundedVec::default()
+  } else {
+    transfer_contract_steps(BOB, 1)
+  };
+  let mut contract = user_active_contract(manual_schedule(), None, steps).unwrap();
+  contract.close_when = Some(crate::CloseWhen {
+    clauses: vec![
+      vec![crate::BehaviorAtom {
+        metric: crate::BehaviorMetric::CycleCompletedTotal,
+        threshold: 2,
+      }]
+      .try_into()
+      .unwrap(),
+    ]
+    .try_into()
+    .unwrap(),
+  });
+  contract
+}
+
+#[test]
+fn policy_admission_missing_control_or_inspection_is_not_arithmetic_overflow() {
+  for class in [ActorType::User, ActorType::System] {
+    for zero_step in [false, true] {
+      for missing_control in [false, true] {
+        new_test_ext().execute_with(|| {
+          System::set_block_number(1);
+          let contract = policy_admission_contract(zero_step);
+          set_missing_behavior_control_weight(missing_control);
+          set_missing_behavior_inspection_weight(!missing_control);
+          let before = Actors::next_actor_id();
+          let result = || match class {
+            ActorType::User => Actors::create_user_actor(
+              RuntimeOrigin::signed(ALICE),
+              Mutability::Mutable,
+              Some(contract.clone()),
+            ),
+            ActorType::System => Actors::create_system_actor(
+              RuntimeOrigin::root(),
+              ALICE,
+              Mutability::Mutable,
+              Some(contract.clone()),
+            ),
+          };
+          assert_noop!(result(), Error::<Test>::BehaviorPolicyUnavailable);
+          assert_eq!(Actors::next_actor_id(), before);
+          assert!(fee_collections().is_empty());
+        });
+      }
+    }
+  }
+}
+
+#[test]
+fn policy_admission_activation_and_replacement_preserve_the_existing_source() {
+  for zero_step in [false, true] {
+    for missing_control in [false, true] {
+      new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let dormant = Actors::next_actor_id();
+        assert_ok!(Actors::create_user_actor(
+          RuntimeOrigin::signed(ALICE),
+          Mutability::Mutable,
+          None
+        ));
+        let active = create_user_with(
+          ALICE,
+          Mutability::Mutable,
+          manual_schedule(),
+          None,
+          transfer_contract_steps(BOB, 1),
+        );
+        System::set_block_number(2);
+        clear_fee_collections();
+        set_missing_behavior_control_weight(missing_control);
+        set_missing_behavior_inspection_weight(!missing_control);
+        let contract = policy_admission_contract(zero_step);
+        assert_noop!(
+          Actors::activate_actor(RuntimeOrigin::signed(ALICE), dormant, contract.clone()),
+          Error::<Test>::BehaviorPolicyUnavailable
+        );
+        assert_noop!(
+          Actors::update_contract(RuntimeOrigin::signed(ALICE), active, contract),
+          Error::<Test>::BehaviorPolicyUnavailable
+        );
+        assert!(fee_collections().is_empty());
+      });
+    }
+  }
+}
+
+#[test]
+fn policy_admission_keeps_checked_composition_overflow_distinct() {
+  for zero_step in [false, true] {
+    for maximum in [
+      Weight::from_parts(u64::MAX, 0),
+      Weight::from_parts(0, u64::MAX),
+    ] {
+      new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        set_behavior_control_maximum_override(Some(maximum));
+        assert_noop!(
+          Actors::create_user_actor(
+            RuntimeOrigin::signed(ALICE),
+            Mutability::Mutable,
+            Some(policy_admission_contract(zero_step))
+          ),
+          Error::<Test>::AdmissionBoundOverflow
+        );
+        assert!(fee_collections().is_empty());
+      });
+    }
+  }
+}
+
+#[test]
+fn policy_admission_preserves_existing_complete_native_host_declarations() {
+  for zero_step in [false, true] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let contract = policy_admission_contract(zero_step);
+      prefund_active_user_creation(ALICE, &contract.steps);
+      let id = Actors::next_actor_id();
+      assert_ok!(Actors::create_user_actor(
+        RuntimeOrigin::signed(ALICE),
+        Mutability::Mutable,
+        Some(contract.clone())
+      ));
+      assert_eq!(Actors::load_actor_contract(id), Some(contract));
+      #[cfg(feature = "try-runtime")]
+      Actors::do_try_state().unwrap();
+    });
+  }
+}
+
+#[test]
+fn policy_admission_preserves_invalid_expression_and_absent_policy_semantics() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    set_missing_behavior_control_weight(true);
+    set_missing_behavior_inspection_weight(true);
+    let mut invalid = policy_admission_contract(false);
+    invalid.close_when.as_mut().unwrap().clauses[0][0].threshold = 0;
+    assert_noop!(
+      Actors::create_user_actor(
+        RuntimeOrigin::signed(ALICE),
+        Mutability::Mutable,
+        Some(invalid)
+      ),
+      Error::<Test>::InvalidCloseWhen
+    );
+    assert!(fee_collections().is_empty());
+    let mut ordinary = policy_admission_contract(false);
+    ordinary.close_when = None;
+    prefund_active_user_creation(ALICE, &ordinary.steps);
+    assert_ok!(Actors::create_user_actor(
+      RuntimeOrigin::signed(ALICE),
+      Mutability::Mutable,
+      Some(ordinary)
+    ));
+  });
+}
+
 #[test]
 fn user_creation_normalizes_raw_dnf_before_canonical_predicate_cap() {
   use polkadot_sdk::frame_support::traits::Get;
@@ -918,4 +1083,223 @@ fn user_creation_admission_namespace_publication_is_class_and_clock_neutral() {
       });
     }
   }
+}
+
+fn create_capacity_user(
+  active: bool,
+  slot: Option<u8>,
+) -> polkadot_sdk::sp_runtime::DispatchResult {
+  let contract =
+    active.then(|| user_active_contract(manual_schedule(), None, inert_contract_steps()).unwrap());
+  match slot {
+    Some(slot) => Actors::create_user_actor_at_slot(
+      RuntimeOrigin::signed(ALICE),
+      slot,
+      Mutability::Mutable,
+      contract,
+    ),
+    None => Actors::create_user_actor(RuntimeOrigin::signed(ALICE), Mutability::Mutable, contract),
+  }
+}
+
+#[test]
+fn user_identity_admission_checks_projected_boundary_and_unknown_domain_without_payment() {
+  for active in [false, true] {
+    for slot in [None, Some(0)] {
+      for capacity in [None, Some(0), Some(1), Some(10_001)] {
+        new_test_ext().execute_with(|| {
+          System::set_block_number(1);
+          set_user_identity_capacity(capacity);
+          if capacity == Some(1) {
+            assert_ok!(create_capacity_user(active, slot));
+            assert_eq!(Actors::actor_identity_count(), 1);
+          }
+          clear_fee_collections();
+          let expected = if capacity.is_none() || capacity == Some(10_001) {
+            Error::<Test>::UserAdmissionUnavailable
+          } else {
+            Error::<Test>::UserIdentityCapacityExceeded
+          };
+          assert_noop!(create_capacity_user(active, slot), expected);
+          assert!(fee_collections().is_empty());
+        });
+      }
+      new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        set_user_identity_capacity(Some(1));
+        set_admission_authority_unavailable(true);
+        assert_noop!(
+          create_capacity_user(active, slot),
+          Error::<Test>::UserAdmissionUnavailable
+        );
+        assert!(fee_collections().is_empty());
+      });
+    }
+  }
+}
+
+#[test]
+fn user_identity_admission_rechecks_fresh_count_and_authority_after_payment() {
+  for active in [false, true] {
+    for slot in [None, Some(0)] {
+      for stale_authority in [false, true] {
+        new_test_ext().execute_with(|| {
+          System::set_block_number(1);
+          set_user_identity_capacity(Some(1));
+          let authority = <MockAdmissionCertificateAuthority as crate::AdmissionCertificateAuthorityProvider>::current().unwrap();
+          set_user_capacity_authority(Some(authority));
+          set_fee_collection_hook(move || {
+            if stale_authority {
+              set_admission_semantics_version(authority.runtime_actor_semantics_version + 1);
+            } else {
+              // Fault injection changes the authenticated count, not a forecast or demand signal.
+              crate::ActorIdentityCount::<Test>::put(2);
+            }
+          });
+          let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+          let owner = native_balance(&ALICE);
+          let sink = native_balance(&TestFeeSink::get());
+          let expected = if stale_authority {
+            Error::<Test>::UserAdmissionUnavailable
+          } else {
+            Error::<Test>::UserIdentityCapacityExceeded
+          };
+          assert_noop!(create_capacity_user(active, slot), expected);
+          assert_eq!(Actors::actor_identity_count(), 0);
+          assert_eq!(Actors::next_actor_id(), 0);
+          assert_eq!(OwnerSlotBitmaps::<Test>::get(ALICE), [0; 32]);
+          assert_eq!(native_balance(&ALICE), owner);
+          assert_eq!(native_balance(&TestFeeSink::get()), sink);
+          assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), root);
+          assert!(!fee_collections().is_empty(), "collector trace records an attempted, rolled-back fee");
+        });
+      }
+    }
+  }
+}
+
+#[test]
+fn user_identity_admission_preserves_existing_rights_and_recovers_only_on_close() {
+  for unavailable in [false, true] {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      set_user_identity_capacity(Some(2));
+      let active = create_user_with(
+        ALICE,
+        Mutability::Mutable,
+        manual_schedule(),
+        None,
+        transfer_contract_steps(BOB, 10),
+      );
+      fund_native(active, 1_000_000_000_000_000);
+      let dormant = Actors::next_actor_id();
+      assert_ok!(create_capacity_user(false, Some(1)));
+      set_user_identity_capacity(if unavailable { None } else { Some(0) });
+      assert_noop!(
+        create_capacity_user(false, None),
+        if unavailable {
+          Error::<Test>::UserAdmissionUnavailable
+        } else {
+          Error::<Test>::UserIdentityCapacityExceeded
+        }
+      );
+      System::set_block_number(2);
+      assert_ok!(Actors::activate_actor(
+        RuntimeOrigin::signed(ALICE),
+        dormant,
+        user_active_contract(manual_schedule(), None, inert_contract_steps()).unwrap()
+      ));
+      assert_ok!(Actors::update_contract(
+        RuntimeOrigin::signed(ALICE),
+        active,
+        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 10)).unwrap()
+      ));
+      let bob = native_balance(&BOB);
+      assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), active));
+      run_canonical_block_at(3, Weight::MAX);
+      assert_eq!(native_balance(&BOB), bob + 10);
+      assert_eq!(Actors::actor_identity(active).unwrap().cycle_nonce, 1);
+      System::set_block_number(4);
+      assert_ok!(Actors::deactivate_actor(
+        RuntimeOrigin::signed(ALICE),
+        dormant
+      ));
+      assert_eq!(
+        Actors::actor_identity_count(),
+        2,
+        "deactivation retains reserved rights"
+      );
+      set_user_identity_capacity(Some(2));
+      assert_noop!(
+        create_capacity_user(false, None),
+        Error::<Test>::UserIdentityCapacityExceeded
+      );
+      System::set_block_number(5);
+      assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), dormant));
+      assert_eq!(Actors::actor_identity_count(), 1);
+      assert_ok!(create_capacity_user(false, Some(1)));
+      assert_eq!(Actors::actor_identity_count(), 2);
+      #[cfg(feature = "try-runtime")]
+      Actors::do_try_state().unwrap();
+    });
+  }
+}
+
+#[test]
+fn user_identity_admission_counts_dormant_system_overdraw_without_limiting_system_authority() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    set_user_identity_capacity(Some(1));
+    for _ in 0..2 {
+      assert_ok!(Actors::create_system_actor(
+        RuntimeOrigin::root(),
+        ALICE,
+        Mutability::Mutable,
+        None
+      ));
+    }
+    assert_eq!(Actors::actor_identity_count(), 2);
+    assert_eq!(Actors::active_actor_count(), 0);
+    for active in [false, true] {
+      assert_noop!(
+        create_capacity_user(active, None),
+        Error::<Test>::UserIdentityCapacityExceeded
+      );
+    }
+    #[cfg(feature = "try-runtime")]
+    Actors::do_try_state().unwrap();
+  });
+}
+
+#[test]
+fn user_identity_admission_late_refusal_releases_reserved_rights_and_preserves_switches() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    set_user_identity_capacity(Some(1));
+    set_fail_create_checkpoint(true);
+    assert_noop!(
+      create_capacity_user(true, Some(0)),
+      DispatchError::Other("AtomicityCreateCheckpointFailed")
+    );
+    assert_eq!(Actors::actor_identity_count(), 0);
+    set_fail_create_checkpoint(false);
+    assert_ok!(create_capacity_user(false, Some(0)));
+    set_user_identity_capacity(None);
+    assert_ok!(Actors::set_user_creation_enabled(
+      RuntimeOrigin::root(),
+      false
+    ));
+    assert_noop!(
+      create_capacity_user(false, Some(1)),
+      Error::<Test>::UserCreationDisabled
+    );
+    assert_ok!(Actors::set_global_circuit_breaker(
+      RuntimeOrigin::root(),
+      true
+    ));
+    assert_noop!(
+      create_capacity_user(false, Some(1)),
+      Error::<Test>::GlobalCircuitBreakerActive
+    );
+  });
 }

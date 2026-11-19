@@ -75,8 +75,8 @@ Select additional leaves only when the touched contract requires them. Routing f
 | Benchmark code | `benchmarks.sh --check`, then one exact extrinsic or owning pallet | Other pallets and runtime release build | Production weights or Wasm accepted |
 | Runtime integration | Scoped `deos-runtime` tests, then completion gate | Full workspace, E2E, client | Runtime metadata/Wasm or network behavior changed |
 | Staking delivery | `staking-delivery` readiness ladder through the shared bootstrap script | Signing, funds, governance execution | Explicit target state and mutation approval exist |
-| Wiki only | Wiki trust/consolidation leaves | Client build and Cargo | Renderer/client contract changed |
-| Repository validation | `validate-local.sh PROFILE` | Network assurance and release publication | Explicit `fast`, `heavy`, or `full` boundary |
+| Wiki only | `scripts/validate-local.sh wiki` or focused checks from `wiki/README.md` | Client build and Cargo | Renderer/client contract changed |
+| Repository validation | `validate-local.sh PROFILE` | Network assurance and release publication | Explicit `framework` or optional `client` scope |
 
 Network-backed dependency posture remains opt-in:
 
@@ -124,9 +124,11 @@ Local delivery slices should pass the repo-local completion gate before continui
 
 The gate runs the smallest meaningful changed-scope set: architecture audit, shell syntax, simulator, Cargo checks, runtime unit tests for runtime-source changes, Markdown table/readability checks, wiki trust, release-line audit, and knowledge sync as applicable. It is a project validation entrypoint, not a dependency on any one operator's local execution-loop skill.
 
+Root/subtree `README.md` updates satisfy the knowledge-sync path check, matching their ABCd entrypoint ownership. This recognizes an eligible context surface, not substantive reconciliation or full-tree context validity; code-only changes and README-like filenames still fail the default sync check.
+
 Before checkpointing a release tree, run canonical formatting and the intended direct profile; changed-scope completion does not establish full-profile readiness.
 
-`scripts/validate-local.sh` directly prepares pinned repository dependencies and executes the selected `fast`, `heavy`, or `full` profile. It owns stage order and pass/fail without local evidence records, authority manifests, hidden modes, GitHub provenance discovery, or tag-bound branches. The pull-request `validation-gate` runs `heavy` so client, Actors, and benchmark checks fail before merge rather than first appearing on `main`; network assurance and release publication remain separate explicit operations.
+`scripts/validate-local.sh` prepares and checks the selected `framework` or `client` scope. Pull-request CI exercises the extracted framework payload and reports the optional client independently. Actual-Wasm metadata, finite execution evidence, network assurance and publication remain separate operations; an unselected capability is not a passed check.
 
 `auditor.sh` and `completion-gate.sh` use compact orchestration output by default: successful runs report only the step, duration, and result. Failures retain complete temporary logs and print a bounded tail; `DEOS_VERBOSE=1` restores the full nested protocol for diagnosis.
 

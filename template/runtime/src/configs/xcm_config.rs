@@ -399,6 +399,10 @@ impl TransactAsset for ActorAwareAssetTransactor {
     BaseAssetTransactor::check_out(dest, what, context)
   }
 
+  fn mint_asset(what: &Asset, context: &XcmContext) -> Result<AssetsInHolding, XcmError> {
+    BaseAssetTransactor::mint_asset(what, context)
+  }
+
   fn deposit_asset(
     what: AssetsInHolding,
     who: &Location,
@@ -650,6 +654,171 @@ mod tests {
     staging_xcm_executor::traits::{ConvertOrigin, Properties, ShouldExecute},
   };
   use primitives::assets::{AssetInspector, TYPE_FOREIGN};
+
+  #[cfg(not(feature = "runtime-benchmarks"))]
+  #[test]
+  fn parent_native_trap_claim_preserves_custody_and_issuance() {
+    use polkadot_sdk::{
+      cumulus_primitives_core::AggregateMessageOrigin,
+      frame_support::{assert_ok, traits::ProcessMessage, weights::WeightMeter},
+      staging_xcm_executor::traits::WeightBounds,
+    };
+
+    fn process(mut message: Xcm<RuntimeCall>, nonce: u8, complete: bool) {
+      let cap = crate::configs::MessageQueueServiceWeight::get();
+      let required = <XcmConfig as xcm_executor::Config>::Weigher::weight(&mut message, cap)
+        .expect("real FixedWeightBounds must fit the unchanged MQ service cap");
+      assert!(required.all_lte(cap));
+      message.0[0] = UnpaidExecution {
+        weight_limit: Limited(required),
+        check_origin: Some(Location::parent()),
+      };
+      assert_eq!(
+        <XcmConfig as xcm_executor::Config>::Weigher::weight(&mut message, cap),
+        Ok(required)
+      );
+      let encoded = VersionedXcm::<RuntimeCall>::from(message).encode();
+      let mut meter = WeightMeter::with_limit(cap);
+      let mut id = [nonce; 32];
+      assert_eq!(
+        <<Runtime as pallet_message_queue::Config>::MessageProcessor as ProcessMessage>::process_message(
+          &encoded,
+          AggregateMessageOrigin::Parent,
+          &mut meter,
+          &mut id,
+        ),
+        Ok(complete)
+      );
+    }
+
+    crate::tests::common::new_test_ext().execute_with(|| {
+      let parent = Location::parent();
+      let sovereign = LocationToAccountId::convert_location(&parent)
+        .expect("ParentIsPreset supplies the Parent sovereign");
+      let beneficiary = AccountId::new([79; 32]);
+      let beneficiary_location = Location::new(
+        0,
+        [AccountId32 {
+          network: None,
+          id: beneficiary.clone().into(),
+        }],
+      );
+      let q = crate::EXISTENTIAL_DEPOSIT;
+      assert_eq!(Balances::free_balance(&sovereign), 0);
+      assert_eq!(Balances::free_balance(&beneficiary), 0);
+      assert_ok!(Balances::transfer_keep_alive(
+        RuntimeOrigin::signed(crate::tests::common::ALICE),
+        sovereign.clone().into(),
+        2 * q,
+      ));
+      assert_eq!(Balances::free_balance(&sovereign), 2 * q);
+      let issuance = Balances::total_issuance();
+      let assets: xcm::latest::Assets = (Here, q).into();
+      let versioned_assets = xcm::VersionedAssets::from(assets.clone());
+      let trap_hash = polkadot_sdk::sp_core::H256::from(polkadot_sdk::sp_io::hashing::blake2_256(
+        &(parent.clone(), versioned_assets.clone()).encode(),
+      ));
+      let unpaid = || UnpaidExecution {
+        weight_limit: Limited(crate::configs::MessageQueueServiceWeight::get()),
+        check_origin: Some(parent.clone()),
+      };
+      assert_eq!(PolkadotXcm::asset_trap(&trap_hash), 0);
+      process(
+        Xcm(vec![unpaid(), WithdrawAsset(assets.clone()), Trap(0)]),
+        1,
+        false,
+      );
+      assert_eq!(PolkadotXcm::asset_trap(&trap_hash), 1);
+      assert!(crate::System::events().iter().any(|record| matches!(
+        &record.event,
+        RuntimeEvent::PolkadotXcm(pallet_xcm::Event::AssetsTrapped {
+          hash, origin, assets,
+        }) if *hash == trap_hash && origin == &parent && assets == &versioned_assets
+      )));
+      assert_eq!(Balances::free_balance(&sovereign), q);
+      assert_eq!(Balances::free_balance(&beneficiary), 0);
+      assert_eq!(Balances::total_issuance(), issuance);
+
+      let claim = |ticket: Location| {
+        Xcm(vec![
+          unpaid(),
+          ClaimAsset {
+            assets: assets.clone(),
+            ticket,
+          },
+          DepositAsset {
+            assets: AllCounted(1).into(),
+            beneficiary: beneficiary_location.clone(),
+          },
+        ])
+      };
+      process(claim(Location::new(0, [GeneralIndex(u128::MAX)])), 2, false);
+      assert_eq!(PolkadotXcm::asset_trap(&trap_hash), 1);
+      assert_eq!(Balances::free_balance(&sovereign), q);
+      assert_eq!(Balances::free_balance(&beneficiary), 0);
+      assert_eq!(Balances::total_issuance(), issuance);
+      assert!(!crate::System::events().iter().any(|record| matches!(
+        &record.event,
+        RuntimeEvent::PolkadotXcm(pallet_xcm::Event::AssetsClaimed { .. })
+      )));
+
+      process(claim(Location::here()), 3, true);
+      assert_eq!(PolkadotXcm::asset_trap(&trap_hash), 0);
+      assert!(crate::System::events().iter().any(|record| matches!(
+        &record.event,
+        RuntimeEvent::PolkadotXcm(pallet_xcm::Event::AssetsClaimed {
+          hash, origin, assets,
+        }) if *hash == trap_hash && origin == &parent && assets == &versioned_assets
+      )));
+      assert_eq!(Balances::free_balance(&sovereign), q);
+      assert_eq!(Balances::total_issuance(), issuance);
+      // A successful claim must restore custody, not merely consume the trap.
+      assert_eq!(Balances::free_balance(&beneficiary), q);
+
+      let claims_before = crate::System::events()
+        .iter()
+        .filter(|record| {
+          matches!(
+            &record.event,
+            RuntimeEvent::PolkadotXcm(pallet_xcm::Event::AssetsClaimed { .. })
+          )
+        })
+        .count();
+      process(claim(Location::here()), 4, false);
+      assert_eq!(PolkadotXcm::asset_trap(&trap_hash), 0);
+      assert_eq!(Balances::free_balance(&sovereign), q);
+      assert_eq!(Balances::free_balance(&beneficiary), q);
+      assert_eq!(Balances::total_issuance(), issuance);
+      assert_eq!(
+        crate::System::events()
+          .iter()
+          .filter(|record| matches!(
+            &record.event,
+            RuntimeEvent::PolkadotXcm(pallet_xcm::Event::AssetsClaimed { .. })
+          ))
+          .count(),
+        claims_before
+      );
+
+      let unknown = Asset {
+        id: AssetId(Location::new(1, [Parachain(9_999)])),
+        fun: Fungibility::Fungible(q),
+      };
+      let context = XcmContext {
+        origin: Some(parent),
+        message_id: [5; 32],
+        topic: None,
+      };
+      let base_error = BaseAssetTransactor::mint_asset(&unknown, &context)
+        .err()
+        .expect("Base rejects an unregistered asset");
+      assert_eq!(
+        ActorAwareAssetTransactor::mint_asset(&unknown, &context).err(),
+        Some(base_error)
+      );
+      assert_eq!(Balances::total_issuance(), issuance);
+    });
+  }
 
   #[test]
   fn xcm_fixed_instruction_weight_binds_single_asset_actor_deposit_benchmark() {
@@ -1122,34 +1291,38 @@ mod tests {
 
   #[test]
   fn test_safe_call_filter_now_denies_representative_runtime_calls() {
-    let user_call = RuntimeCall::System(frame_system::Call::remark { remark: Vec::new() });
-    let admin_call =
-      RuntimeCall::Staking(pallet_staking::Call::register_staking_asset { asset_id: 1 });
-    let queue_control_call =
-      RuntimeCall::XcmpQueue(cumulus_pallet_xcmp_queue::Call::suspend_xcm_execution {});
-    let raw_storage_call = RuntimeCall::System(frame_system::Call::set_storage {
-      items: vec![(vec![0xfe; 713], vec![7])],
-    });
-    assert!(
-      !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
-        &user_call,
-      )
-    );
-    assert!(
-      !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
-        &admin_call,
-      )
-    );
-    assert!(
-      !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
-        &queue_control_call,
-      )
-    );
-    assert!(
-      !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
-        &raw_storage_call,
-      )
-    );
+    let calls = [
+      RuntimeCall::System(frame_system::Call::remark { remark: Vec::new() }),
+      RuntimeCall::Staking(pallet_staking::Call::register_staking_asset { asset_id: 1 }),
+      RuntimeCall::XcmpQueue(cumulus_pallet_xcmp_queue::Call::suspend_xcm_execution {}),
+      RuntimeCall::System(frame_system::Call::set_storage {
+        items: vec![(vec![0xfe; 713], vec![7])],
+      }),
+      RuntimeCall::Governance(pallet_governance::Call::cast_vote {
+        domain: 101,
+        item_id: 110,
+        vote: pallet_governance::ProposalVoteKind::Veto,
+      }),
+      RuntimeCall::Governance(pallet_governance::Call::resolve_proposal_from_votes {
+        domain: 101,
+        item_id: 110,
+      }),
+      RuntimeCall::Governance(pallet_governance::Call::force_resolve_proposal_from_votes {
+        domain: 101,
+        item_id: 110,
+      }),
+      RuntimeCall::Governance(pallet_governance::Call::reject_proposal {
+        domain: 101,
+        item_id: 110,
+      }),
+    ];
+    for call in calls {
+      assert!(
+        !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
+          &call
+        )
+      );
+    }
   }
 
   #[test]

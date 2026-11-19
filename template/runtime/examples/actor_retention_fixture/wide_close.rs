@@ -5,15 +5,15 @@
 mod actor_block_fixture;
 #[path = "native_api.rs"]
 mod native_api;
+pub(crate) use actor_block_fixture::preset_storage;
+pub(crate) use native_api::ensure_artifact_profile;
 #[path = "pvf.rs"]
 mod pvf_fixture;
 #[path = "wide_contract.rs"]
 mod wide_contract;
 use deos_runtime as pvf_runtime;
 
-use actor_block_fixture::{
-  contract, create_user, inherents, native_transfer, preset_storage, signed_lifecycle,
-};
+use actor_block_fixture::{contract, create_user, inherents, native_transfer, signed_lifecycle};
 use codec::Encode;
 use deos_runtime::{
   AccountId, Actors, AllPalletsWithSystem, AssetConversion, Assets, Balances, Block, DeosRouter,
@@ -75,6 +75,9 @@ fn top(ext: &TestExternalities) -> Storage {
 }
 
 pub(crate) fn run(preset: &PresetId, wasm: Option<&[u8]>, pvf_output: Option<&std::path::Path>) {
+  if wasm.is_some() || pvf_output.is_some() {
+    ensure_artifact_profile().expect("Wasm-bound native preparation profile");
+  }
   let owner = Sr25519Keyring::Alice.to_account_id();
   let pair = Sr25519Keyring::Alice.pair();
   let code = if pvf_output.is_some() {

@@ -642,6 +642,14 @@ pub struct FixtureAdmissionCertificateAuthority;
 impl pallet_deos_actors::AdmissionCertificateAuthorityProvider
   for FixtureAdmissionCertificateAuthority
 {
+  fn user_identity_capacity(
+    authority: pallet_deos_actors::AdmissionCertificateAuthority,
+  ) -> Option<u32> {
+    // This external-consumer fixture declares native model capacity, not production qualification.
+    (Self::current() == Some(authority))
+      .then_some(<<Runtime as pallet_deos_actors::Config>::MaxActorIdentities as polkadot_sdk::frame_support::traits::Get<u32>>::get())
+  }
+
   fn current() -> Option<pallet_deos_actors::AdmissionCertificateAuthority> {
     Some(pallet_deos_actors::AdmissionCertificateAuthority {
       runtime_actor_semantics_version: 1,

@@ -356,8 +356,29 @@ impl AdmissionCertificateAuthority {
 pub trait AdmissionCertificateAuthorityProvider {
   fn current() -> Option<AdmissionCertificateAuthority>;
 
-  /// Complete additional destruction work for optional policy/monitor state, excluding ordinary
-  /// cleanup. Missing qualification forbids policy-bearing service and destruction.
+  /// Qualified ceiling on total identities (both classes, Active and Dormant) for new User
+  /// admission under this exact current authority and the host's complete legal future domain.
+  /// This reserves full activation/replacement potential, not measured demand. Return None for
+  /// unavailable, stale or out-of-domain qualification. The lookup must be code-static, bounded
+  /// and storage-free; qualify its complete creation/refusal/commit cost before enabling it.
+  /// Existing identity rights and System creation never consult this optional port.
+  fn user_identity_capacity(_authority: AdmissionCertificateAuthority) -> Option<u32> {
+    None
+  }
+
+  /// Complete additional Control for plain Close-mode Service refusal: bounded source snapshot,
+  /// restored-source/ring validation and cursor completion after the Actor worker rolls back.
+  /// Added to, never inferred from, the ordinary admitted branch. Includes preparation even on
+  /// success; no Actor tariff or retry policy is selected. Missing qualification retains the head.
+  /// The lookup is code-static, bounded and storage-free. The host must cover every admitted
+  /// plain Close-mode geometry and bind the bound in its production authority/catalog identity.
+  fn service_refusal_completion_weight() -> Option<Weight> {
+    None
+  }
+
+  /// Optional policy-Close supplement; canonical Close does not consult this port.
+  /// Policy cleanup uses the compiled `WeightInfo::close_actor_policy_bearing` bound, so this
+  /// default alone does not forbid policy-bearing service or destruction.
   fn behavior_close_additional_weight(_behavior: BehaviorControlWeightContext) -> Option<Weight> {
     None
   }

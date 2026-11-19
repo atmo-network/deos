@@ -4,8 +4,7 @@
 
 ## SDK baseline
 
-This pallet is maintained against the current DEOS `Polkadot SDK 2606 / node 1.24.0` line.
-The 2606 upgrade did not require pallet-local semantic changes here; the relevant fallout landed in runtime/parachain-system/asset-conversion integration surfaces rather than in `pallet-deos-asset-registry` core logic.
+This pallet follows the DEOS workspace's pinned Polkadot SDK line; [`template/Cargo.toml`](../../Cargo.toml) owns the exact dependency selection.
 
 ## Scope
 

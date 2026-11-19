@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "role": "chain-spec-builder",
+  "package": "staging-chain-spec-builder",
+  "version": "19.0.0",
+  "archiveUrl": "https://static.crates.io/crates/staging-chain-spec-builder/staging-chain-spec-builder-19.0.0.crate",
+  "archiveSha256": "2d0eaaa88ded7ea3d7257bbcd0e96bd70c030680ef2ca93874a21915d94af9fd",
+  "lockSha256": "5f013f0ebaecb2a186bc53251a19a54274211ceddd564dbfc809367eaa76de2e",
+  "revision": "8ee7713ab4c1665ed777cfd52063c28b05a431ba",
+  "toolchain": "1.94.1",
+  "rustcCommit": "e408947bfd200af42db322daf0fadfe7e26d3bd1",
+  "features": [],
+  "defaultFeatures": true,
+  "profile": "release",
+  "profileEnvironment": {
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+    "CARGO_PROFILE_RELEASE_LTO": "false",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "16",
+    "CARGO_PROFILE_RELEASE_PANIC": "unwind",
+    "CARGO_PROFILE_RELEASE_DEBUG": "false",
+    "CARGO_PROFILE_RELEASE_STRIP": "none",
+    "CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS": "false",
+    "CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS": "false",
+    "CARGO_PROFILE_RELEASE_INCREMENTAL": "false"
+  },
+  "rustflags": "",
+  "targets": ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"],
+  "security": {
+    "status": "unresolved",
+    "requiredDispositions": 81,
+    "basis": "builder19-archive-lock; source/API-specific review required, not Root/Native or SDK builder21 approval"
+  }
+}

@@ -115,11 +115,49 @@ The newest layer retains recent finalized proposal outcomes in bounded storage:
 
 Discovery reads and sorts only `FinalizedProposalIdsByDomain`, bounded by `MaxRecentFinalizedProposalsPerDomain`; it no longer collects a storage prefix before truncation. A full index rejects resolution transactionally and preserves the active proposal. Admission rejects reuse of a retained finalized identity, preventing an older cleanup touch from deleting a replacement record. Cleanup releases discovery capacity and permits later identity reuse. These extra index reads/writes, encoded capacity and per-entry removal cost require refreshed resource qualification; old generated coefficients do not cover this owner.
 
+`epoch_service.rs::service_finalized_proposal_outcomes` performs one discovery-index `mutate_exists` for each expired identity. For a canonical unique index initially containing m identities, removing n distinct present identities in that call visits m+(m−1)+…+(m−n+1) positions through `retain`, with a fresh logical read/decode and encode/write per mutation. Different domains have separate shrinking sequences. Sharing an original trie key does not eliminate repeated overlay/value processing. These are source-level work operands, not CPU instructions, backend I/O or a conservative Weight. Item IDs and index contents are domain-local; equal index lists in different domains do not merge the pallet's reads/retains. Any content-addressed proof-payload sharing belongs to the host encoding, not this source-work bound.
+
 Specification §6.0 separates pending and terminal-history lifetimes. `FinalizedProposalIdsByDomain` admits bounded per-domain discovery; a global `PendingEnactments` vector and `PendingEnactmentCursor` own rotating service independently of epoch catch-up. Approval reserves both capacities before its transaction releases active state. The reference global pending limit is 128, matching the existing domain active capacity numerically without sharing its occupancy; the mock limit of eight exercises rotation under four visits per block. These host bounds select source semantics, not accepted production resource coefficients.
 
 ## Core Data Structures
 
 The native discovery capacity regression fills the index through the real finalization owner, then verifies exact-root rollback of public rejection while full, cleanup release and successful retry. It is a capacity fixture, not an elapsed-time enactment replay. A separate public test prevents retained identity reuse and permits it after cleanup. The expiry benchmark now seeds the full bounded index and checks retained cardinality after removing its selected entries; isolated seeded records do not certify complete lifecycle reachability or physical costs. The mock witness benchmark funds its mandatory refundable deposit and minimum balance before measurement.
+
+The extra `service_finalized_proposal_outcomes_diverse(n)` visits n distinct domain indices, with one due entry per domain, and distributes one shared fixture population across them. Its total is selected from `MaxRecentFinalizedProposalsPerDomain` for this fixture, not asserted as a global retained-state bound. Verification preserves all non-due records/index tails and future buckets. This rejected-record profile complements, not replaces, the maximum-record/single-domain repeated-filter fixture. Native conformance does not qualify arbitrary joint populations, trie proof, RefTime or generated coefficients.
+
+### Finite vote-path resource coverage
+
+`src/maximum_vote_tests.rs` adds native complete-dispatch witnesses at N=256 for both Binary and Invoice families. Initial primary admission fills the last slot with `7 × u128::MAX`; protection replacement exercises both directions, tail-account search, full target refusal and exact transactional rollback. Initial and replacement Veto cancellation remove the full family-valid ballot value. Resolution rejects a maximum Binary tie and approves the maximum Invoice positive tie with Reduce as winner, crediting all N selected winners. These are prepared frozen snapshots with distinct accounts, not jointly backed signed histories; zero-power protection peers preserve supply normalization and maximum encoded geometry.
+
+`maximum_{invoice,binary}_dispatch_original_witness_survives_root_and_commit` share five complete-dispatch cases: initial primary admission, initial Veto cancellation, tail Pass→Veto cancellation, full-target replacement refusal and late finalized-retention refusal after winner updates/removal. Each uses a committed V1 parent, compares plain/recorded post-roots, retains the original ballot value, authenticates compact decoding against its parent root and rejects a wrong root. Dispatch/root/commit replay uses decoded witness values with original trie-prefix/refcount hints, not an independently serialized proof-only consumer. Refusals restore the exact parent root, ballot, lock and counters; raw witness retention survives commit.
+
+`maximum_family_resolution_populated_history_original_witness_and_late_refusal` adds twelve Binary/Invoice cells: ordinary, forced and supplied-winner resolution, each with success and last-winner retention refusal. History is populated through mock Root dispatch before capture, with three epochs, two account entries, sixteen global entries and 256 winners. The refusal follows preceding winner updates and restores the complete parent root; witness-value replay repeats dispatch/root/commit.
+
+These are conservative frozen-value fixtures, not jointly funded signed histories. Primary companions carry distinct-account `7 × u128::MAX` power; protection peers carry zero power and the mock supplies the caller. Mock custody is `()` and lock notification is not a production ledger callback. Populated mock history does not establish complete legal joint discovery, rolling windows, cleanup, expiry or host-provider maxima. Original-input and rollback evidence supplies neither independent DB/ProofSize bounds nor physical timing. The separate marked Invoice cases and their host-preparation contract are described under Validation below.
+
+The finite source inventory below separates executable branch evidence from numerical qualification. “Open” means no accepted complete physical bound follows from these fixtures, not that the branch has no behavioral test. DB coverage requires recorder-isolated complete-owner rows; storage-call counts or post-verification counters cannot substitute. No native unit-test duration is a RefTime price.
+
+| Complete path | Native/domain evidence | RefTime | ProofSize | DB | Wasm binding |
+| --- | --- | --- | --- | --- | --- |
+| Initial primary vote | Both families, last slot, 131-bit frozen power | Open | Both-family original/compact-value replay; maximum open | Open | Open |
+| Protection replacement | Both directions/families, full value, tail search | Open | Both-family cancellation replay; other replacements open | Open | Open |
+| Replacement refusal | Full target, both directions/families, root unchanged | Open | Both-family original/compact-value replay; maximum open | Open | Open |
+| Cancellation retention refusal | Full expiry destination, both families, complete dispatch rollback | Open | Both-family original/compact-value replay; maximum open | Open | Open |
+| Immediate Veto cancellation | Initial/replacement, both families, N winner counters | Open | Both-family original/compact-value replay; maximum open | Open | Open |
+| Resolution from votes | Full family vectors; populated mock history; ordinary/forced/supplied-winner success/refusal | Open | Both-family original/compact-value replay; joint maximum open | Open | Open |
+| Root winner repair | `resolve_proposal(n)` reads full Binary companions and infers tail-selected Nay winners | Open | Binary geometry only | Open | Open |
+| Invoice execution | Host executor/settlement and failure tests | Host-owned, open | Host-owned, open | Open | Open |
+| Pending execution and failures | Full-topology seeded approvals and exact causes | Open | Original/co-read domain open | Open | Open |
+| Historical cleanup | Maximum receipt, independent full indices, hook entry phases | Open | Original/co-read domain open | Open | Open |
+| History/tally projections | Wide arithmetic and bounded discovery regressions | Open | Changed value domains open | Open | Open |
+
+Extra `cast_vote_invoice(c)` supplies the five marked Invoice cases under the host Invoice-preparation contract; the separate Binary `cast_vote` is not their universal maximum. Ordinary and forced Binary resolution now retain maximum Nay/Veto/Pass companions and `n` Ayes with 131-bit frozen power; verification requires Approved, exactly `n` winners and Aye inference. This is a fixed-companion/variable-winner source family, not proven monotonic cost or an accepted affine model. The Root repair benchmark independently retains full Binary companions and tail-selected Nay winners.
+
+Complete resolution still needs joint legal winner-memory, expiry/discovery, failure/repair and urgent/confirm domains beyond the populated mock witnesses. Executor success/failure, pending service plus catch-up/cleanup and history projections retain separate host/phase obligations. No WeightInfo method, production coefficient, cap, physical price or artifact binding changes follow from these source/fixture corrections.
+
+The arithmetic envelope is source-derived, not calibrated: with individual primary power below `2^131`, N=256 gives a Binary sum below `2^140` and a family-coherent Invoice sum below `2^141`. Even the five-vector storage envelope is below `2^142`; multiplication by the Perbill denominator stays below `2^172`. `proposal_resolution.rs` sums frozen weights with checked U256 addition and retains floor-rounded approval and lowest-scalar positive ties. These bounds assume the host's declared `7 × u128::MAX` provider envelope; generic hosts must supply their own finite power contract. Custody, protection supply normalization and ratios are unchanged.
+
+Generated annotations must derive `ProposalVotesByItem` bounds from the embedding runtime's current storage metadata, including its key geometry. Neither that metadata nor the encoded ballot value is a complete trie-proof size or physical rate. Refresh annotations and coefficients together only through the standard benchmark metadata/generator route after source/domain and measurement acceptance; hand-editing comments or coefficients does not close that obligation.
 
 ### Winning-vote window
 
@@ -133,6 +171,10 @@ Each epoch slot holds bounded `item_id`s.
 The implementation constructs the exact configured slot width without fallible pushes, rotates the ring forward on access, and clears expired slots as epochs move. Stored windows must retain exactly `WinningVoteLookbackEpochs` slots: mutation returns `RewardWindowInvariant` on disagreement, read projections return zero reward power, and expiry service leaves malformed state untouched rather than panicking. Rolling, participation, winning, authored, and successful-authorship increments are checked and return `RewardCounterOverflow`; transactional proposal and resolution ingress restores prior windows, counters, custody, and proposal state on a late counter failure. Runtime integrity requires the configured maximum rolling count and retained finalized-outcome capacity to fit their stored widths.
 
 ### Participation counters, proposal tally, and status surfaces
+
+`ProposalBallot` stores two fixed-width `U256` fields, so its SCALE width is `AccountId + Epoch + 64` bytes even for unit power. For a per-direction bound `N`, the seven-vector type maximum is `7 × (Compact(N) + N × ballot_width)`. Binary primary policy admits two primary directions and Invoice admits four; adding both protection directions gives four or six populated vectors, with one-byte prefixes for the remaining empty vectors. These family-coherent geometries do not prove jointly funded public history. Replacement still decodes and rewrites the monolithic value; finalization removes it. `ProposalVoteTally` is 316 bytes; `FinalizedProposalOutcome` can retain a `U256` veto weight, so its maximum variant need not be Approved. Codec and storage-metadata bounds are not complete trie witnesses or RefTime qualification; current numerical owners require independent proof, branch/domain coverage and calibrated execution evidence.
+
+The `cast_vote` benchmark selects the protection helper's Binary domain and requires overlapping primary/protection windows. Before the measured Veto it asserts Aye/Nay/Pass lengths N, Veto N−1, empty Invoice-only directions, distinct accounts, exact encoded payload size and no prior immediate cancellation. Seeded ballots use the configured providers, including zero-power unfunded protection peers; they do not establish signed admission/custody history. At N=256 with 100-byte ballots the pre-call value is 102,311 bytes (four two-byte compact lengths plus three empty prefixes). The generated `bench_cast_vote` test requires terminal `VetoCancelled` and ballot removal. This repairs the selected Binary fixture only: Invoice, replacement, other resolution branches, complete physical cost and existing generated coefficients/Wasm remain unqualified by it.
 
 Public read helpers now expose these governance-observability layers, and the same bounded set is exported through FRAME view functions for direct client/light-client consumption without forcing browser-side reconstruction:
 
@@ -235,7 +277,7 @@ It reports the already-selected winning primary option (`Aye / Nay / Amplify / A
 
 - Additive urgent-policy scaffold over one proposal item
 - Reports whether that proposal's current `(domain, payload_kind)` combination is configured as expeditable by the runtime policy surface
-- The current reference runtime explicitly returns `false` for all launch-line combinations until a later urgent-policy rollout opts some in
+- Eligibility is supplied by the host's selected `ProposalUrgentPolicyProvider`; the package does not impose an all-false default on a nonunit binding
 
 That last distinction is important: a matured proposal may already be logically failing policy and still be `Active(Rejected { ... })` until explicit/manual/automatic finalization executes.
 
@@ -277,27 +319,57 @@ A one-epoch catch-up limit does not recover cursor lag when the host epoch also 
 
 Pending approvals publish no history-expiry touch. `admit_terminal_cleanup` reserves the actual terminal epoch plus nonzero retention before any effect, and `maybe_execute_proposal_payload` binds the existing approval and transactionally commits the result, pending release and cleanup. A nested effect transaction rolls back executor-reported partial failure before recording the typed failure. Cleanup-capacity refusal rolls back the complete attempt, leaves the original pending obligation intact and invokes no effect. Due time alone never changes Pending status into a terminal result.
 
-Native tests cover delay longer than retention, repeated unavailable service and later recovery, full retention after a late effect, full cleanup destination refusal before effects, and rollback of an executor-written storage marker on failure. Six real submitted/resolved mock items exercise rotation with unavailable executable members and independently completing advisory members; these tests preserve bounded ordinary epoch service. Try-state reconciles discovery, pending pointers/membership/cursor and exact terminal cleanup deadlines. They establish semantics, not host-specific numerical bounds.
+Committed terminal cleanup authority and pending authority are disjoint in canonical state. Non-benchmark callers of `proposal_execution.rs::admit_pending_enactment` publish pointers for unattempted approvals; unavailable service preserves it. `maybe_execute_proposal_payload` releases pointer/membership for each committed advisory, missing-preimage, executor-failure or success result. `proposal_resolution.rs::remove_active_proposal_storage` clears it on rejection/veto. Their transactions restore pending authority on refusal, and `reward_memory.rs::do_try_state` reconciles pointer/membership only against unattempted approvals. Thus an expiry pointer delete would target an absent key on these valid histories, not a late release obligation.
+
+`terminal_results_release_pending_authority_before_history_cleanup` covers ten immediate/delayed mock histories: both advisory kinds, missing preimage, executor failure and success. It checks absent pending authority while terminal records/metadata/index/expiry are still retained, then services actual cleanup. Rejection/veto tests assert the same absence. `late_bookkeeping_refusal_restores_pending_authority_and_all_effects` removes the finalized record inside the test executor after writing its effect; the ensuing refusal restores the complete storage root and original due authority despite one observed invocation. Next-block recovery invokes once more and commits terminal release at the new epoch. The fault switch is test-only, thread-local and reset per externalities fixture; it adds no consensus diagnostic state.
+
+`remove_active_proposal_storage` also clears `ProposalUrgentAuthorizedAt` whenever ordinary finalization ends active residence, including approval before delayed execution. Metadata survives; winning-option storage is retained or removed according to the resolution path. Expiry still removes both auxiliary keys, so its removals are not uniformly present-key operations. This source distinction neither makes absent removals free nor qualifies arbitrary host mutation, reentrancy or a further elision.
+
+Mock admin ingress here witnesses package lifecycle, not reference signed-ingress acceptance. These witnesses do not assert that arbitrary corrupt storage is reachable, qualify other host callbacks or supply physical Weight. The expiry worker now elides this absent-pointer delete without adding a getter; pending publication/release and rollback remain with their original owners. This is a canonical-state no-op elision, not a malformed-storage repair API or a numerical fee/reserve credit.
+
+Native tests also cover delay longer than retention, repeated unavailable service and later recovery, full retention after a late effect, full cleanup destination refusal before effects, and rollback of an executor-written storage marker on failure. Six real submitted/resolved mock items exercise rotation with unavailable executable members and independently completing advisory members; these tests preserve bounded ordinary epoch service. Try-state reconciles discovery, pending pointers/membership/cursor and exact terminal cleanup deadlines. They establish semantics, not host-specific numerical bounds.
 
 The pending-service benchmark uses a separate host helper for executable payload preparation; maximum admission-witness preparation remains independent. Ordinary approval epoch one now selects service/due as one plus configured `ProposalEnactmentDelay`, using checked epoch arithmetic and rejecting unrepresentable block context rather than saturating it. Setup rejects advisory kinds, unavailable executors and absent preimages. After service, verification requires the original approval, actual `Enacted` epoch, a success detail and released pending authority for every admitted item, so advisory completion or recorded execution failure cannot substitute for execution. The native mock benchmark exercises the executor transaction.
 
-Seeded approvals establish benchmark authority, not a public proposal history. Distinct-preimage/effect/failure profiles, global pending capacity, maximum discovery and cleanup, nested transactions and simultaneous pending plus historical servicing still need complete cost owners and applicable generated bindings. The executor interface currently returns no inner Weight. The [reference integration](../../../../docs/actors.integration.en.md#governance-activation-flows) owns its concrete L2 payload and qualification.
+Seeded approvals establish benchmark authority, not a public proposal history. Distinct-preimage/effect/failure profiles, global pending capacity, maximum discovery and cleanup, nested transactions and simultaneous pending plus historical servicing still need complete cost owners and applicable generated bindings. The executor interface currently returns no inner Weight. The [reference integration](../../../../docs/deos/actors.integration.en.md#governance-activation-flows) owns its concrete L2 payload and qualification.
 
-Extra `service_pending_enactments_full_topology` fills the configured global pending set and starts at its due tail, leaving earlier peers not yet due. Due sources use approval epoch one; future peers use epoch two and its exact ordinary due, never an approval later than the service epoch. A zero-delay host with nonempty future peers explicitly skips this impossible joint fixture before host preparation; zero delay remains supported by the simple profile.
+Extra `service_pending_enactments_full_topology` fills the configured global pending set and starts at its due tail, leaving earlier peers not yet due. Its default service epoch remains one plus delay, preserving due approval one/future approval two. Shared `prepare_full_pending_enactment_topology` separates setup and the complete verification closure from the unchanged service body. It distinguishes service epoch E from preparation epoch P: due approval is E−delay and future approval is one later; both must be positive/already published by P. Existing benchmark and same-epoch native entrypoints retain P=E. A zero-delay host with nonempty future peers skips before host preparation; zero delay remains supported by the simple profile.
 
 Its categorical selector chooses terminal cleanup with exactly one slot per configured visit available, or a completely full destination. Setup publishes metadata, discovery, records and pending authority through their owners. Success verifies retained peers, each enacted receipt, pending release and a full cleanup bucket. Refusal preserves the complete root after restoring only the expected rotating cursor; a prior no-op FRAME transaction normalizes level metadata, and verification uses a raw overlay layer so its own FRAME level cannot contaminate comparison.
 
 The native-only `verify_pending_enactment_benchmark` bridge selects the existing simple or full-topology fixture and uses SDK `test_instance`/`TestRecording`: a caller observer reads prepared state immediately before service without collecting timing or ProofSize. Native regressions check exact ordinary due identity in all three reference cases and zero-delay rejection plus both positive-delay mock outcomes. Full-topology verification preserves every future peer's result, metadata and due pointer, as well as the existing pending/cleanup and exact refusal-root assertions.
 
+Native `std + runtime-benchmarks` callers can use `prepare_full_pending_enactment_hook(epoch, cleanup_refusal, payload_source)` without dispatching the pending pass. `None` retains the default helper. `Some((domain, kind, hash, winning_option))` binds already-noted executable source data without invoking it; unsupported kinds or missing preimages skip before Governance seeding. An optional primary winner is stored for every pending member. This prepares source semantics, not timing, a proof recorder or public proposal authority.
+
+Native `prepare_full_pending_enactment_parent(child_epoch, payload_source)` selects P=E−1 and no dense-destination refusal. It prepares the predecessor block number, terminal peers dated P in P+retention, and an initially empty E+retention destination; approval dates later than P reject before host preparation. Zero child epoch, unrepresentable context and unsupported full-future cohorts skip without changing protocol support. This is a Governance date-aligned stage, not public history, a complete System/header parent or a bound on producer rates. The host still owns its epoch/block relation and complete caller. Retained peer-bucket assertions cannot be silently discarded if an outer phase expires that bucket.
+
+The one-shot verifier takes an explicit slice of `(due_item_id, failure_reason)` expectations. An empty slice retains the original all-success requirement and is hardcoded by the benchmark. Entries must be unique due IDs; only their exact reasons and `ExecutionFailed` outcomes are accepted, while every unlisted due item must succeed. Peer/result/metadata/due/winning-option and cleanup assertions remain, and the refusal profile accepts no expected failures. Its exact-root check after cursor normalization is unchanged; unrelated historical mutations need a caller-owned root composition. `pending_failure_expectations_preserve_default_success_and_exact_causes` rejects unexpected failure and wrong cause, and accepts the exact expected causes.
+
 This is a configured topology witness with seeded approvals and shared executable preimage, not a public construction history or complete numerical maximum. Hosts unable to construct its joint bounds explicitly skip the diagnostic. It remains excluded from production regression, and the script requires exact `--extra --raw-only --json-file` selection. Discovery admission happens during setup; complete discovery/phase and host-effect resource owners remain separate.
 
-The `service_finalized_proposal_outcomes` benchmark asks the cfg-only host `BenchmarkHelper::prepare_maximum_finalized_execution` for domain, payload identity and a reachable success-detail template. Setup requires exact `MaxEncodedLen` equality for both detail and completed record; an unavailable or smaller template fails closed. It fills the configured domain index through `record_finalized_proposal_outcome` and `update_finalized_proposal`, retaining payload metadata and the matching winning primary option. These are terminal historical fixtures, not pending execution authorization.
+The `service_finalized_proposal_outcomes` benchmark asks the cfg-only host `BenchmarkHelper::prepare_maximum_finalized_execution` for domain, payload identity and a reachable success-detail template. Setup requires exact `MaxEncodedLen` for the success detail, and for the completed record plus the structural difference between its actual outcome and the maximum outcome enum variant. A wider `VetoCancelled` variant does not make an Approved record with a success receipt equally large or make that mixed maximum reachable. An unavailable or smaller detail fails closed. Setup retains payload metadata and the winning primary option. These are terminal historical fixtures, not pending execution authorization; theoretical record bounds remain separate from recorded fixture bytes.
 
 Approval precedes each Enacted epoch by the configured ordinary enactment delay. The first terminal epoch plus unchanged retention selects cleanup time; `n` due records expire there, and maximum-sized peers occupy bounded future buckets with terminal epochs no later than service. Unsupported joint service, discovery or retention limits explicitly skip this profile. The native fixture regression checks the maximum-sized Invoice detail and exact removal/preservation of record, metadata, winning option, index, future expiry and pending state. Empty pending state in this fixture is not nonempty pending-topology coverage.
 
 Verification requires exact retained identity order, result and metadata equality, unchanged future expiry buckets and pending membership/cursor, removal of the due results/metadata and release of the consumed expiry key. It covers maximum encoded completed-record geometry in a full single-domain retained index, not optional resolution companions, independent full domain indexes, multi-epoch catch-up or the combined hook. Preparation and verification remain outside the measured cleanup call; the reference integration owns raw observations and artifact identity. Production numerical binding remains open.
 
-With both `std` and `runtime-benchmarks`, `Pallet::verify_maximum_finalized_cleanup_benchmark` invokes the existing generated fixture through SDK `BenchmarkingSetup::unit_test_instance`. This selects the host's unchanged per-block maximum, rejects a value outside the declared component range and uses SDK `NoopRecording`, not timing/ProofSize collection. The bridge is absent from ordinary runtime and no-std builds; it adds no storage, extrinsic or runtime API. Verification now includes exact retained winning-option equality and removal for every selected due item. This is native fixture conformance, not public construction history, physical cost or complete hook acceptance.
+Extra `on_initialize_finalized_cleanup(n,p)` brackets the actual `Hooks::on_initialize`, including epoch-provider evaluations, empty pending service, catch-up discovery, cleanup and phase/cursor control. It shares `prepare_finalized_cleanup` and the complete preservation verifier with the helper benchmark; the retained helper's marked body is unchanged. `p=0/1` selects initial Maturing/FinalizedOutcome; these are categorical entries, not a fitted continuum. The profile requires the prepared block to produce the expected host epoch or skips, and finishes in RewardExpiry with the completed cursor still E−1. It covers one full single-domain index/maximum records and empty pending only, not distinct full indices, pending effects, catch-up history or a numerical upper. Native `verify_complete_finalized_cleanup_benchmark(n,phase)` uses SDK unit recording without physical sampling. It has no WeightInfo port or production binding.
+
+Extra `on_initialize_full_index_value_classes(q)` uses the same private strict constructor, selecting one/two original value hashes via q0/q1. Setup clears the SDK whitelist; the marked body remains only the actual initialization hook and the original preservation checker runs afterward. There is no WeightInfo port. Native `verify_full_index_value_classes_benchmark(q,recording)` exposes its generated v2 boundary to caller-owned recording, not a second runner. Clock-free native recording verifies baseline0, original payload membership and stop-before-verification; metadata lists the selector only with extras. Its [source/schema canary contract](../../../../docs/deos/actors-performance-assurance.specification.en.md#value-class-emitted-sourceschema-canary) permits only two excluded emitted checks, not rate calibration or production dominance.
+
+Those proof-coordinate checks pass for their pinned snapshot, where terminal verifier calls polluted returned DB counts after body-proof capture. Current `service_finalized_proposal_outcomes`, its diverse helper and this full-index extra use `check_*()?; Ok(())`: only Ok is the unconditional Result tail; strict checks reside inside v2's verify branch. Three generated-instance regressions inject index corruption after stop, requiring success at verify=false and refusal at true, including both q cases. Marked bodies are unchanged. The old emitted DB rows remain historical/polluted; no corrected emitted footprint or production price is qualified.
+
+The runtime's opt-in `full_index_value_classes_sdk_return_separates_optional_verification` now exercises ordinary `Benchmarking::run_benchmark`, not a custom stop callback. On the same distinct-value source it checks clean returned counters at false, verifier-inclusive counters at true and equal saved end proof. SDK commit/returned-row ownership is therefore qualified for that native point; timing fields are ignored. This does not refresh old emitted rows or supply physical rates, complete root/host coverage or production weights.
+
+Extra `on_initialize_finalized_cleanup_diverse(n,p)` brackets the same actual hook with n distinct due-domain indices and categorical p0/1. Shared `prepare_diverse_finalized_cleanup` supplies the existing helper and this caller with identical rejected-record/shared-population setup and peer/future/pending preservation. The helper's marked body remains unchanged. Both hook entries require matching host epoch and empty pending/maturity, finish in RewardExpiry and retain cursor E−1. Native `verify_complete_diverse_finalized_cleanup_benchmark` checks the generated SDK body without physical sampling. This complements the maximum-record/single-index source; it does not multiply per-domain maxima, establish public history or cover pending effects, all failure branches, physical bounds or a production Weight port.
+
+`prepare_independent_full_indices_cleanup_hook` prepares two complete domain indices rather than sharing one capacity between domains. Every identity/terminal touch is inserted through the lifecycle owner; equal ordered ID lists have separate complete record sets. Terminal dates respect the shared bucket cap, and the current clock is at least the latest terminal and selected old expiry. The seeded completed cursor is old expiry−1, not the current clock. Its strict verifier preserves all peers/later buckets/pending authority and requires RewardExpiry with unchanged old cursor after the actual hook. This benchmark-only preparation creates an internally reconciled state, not public history or proved service-debt attainment. Native tests reconcile try-state; there is no sampling selector, Weight port or physical bound.
+
+`prepare_independent_full_indices_cleanup_component` reuses that constructor but returns cleanup-only verification for composition. Prepare it before pending setup, then use the pending topology's independent verifier for membership/receipts and effects. Raising the current clock does not move the old cursor-selected cleanup epoch. The whole-hook wrapper adds its original pending-neutral checks around the shared cleanup verifier; a cursor-mutation regression protects that boundary. A joint success source covers the actual two-owner hook. Pending-only refusal root guards remain scoped to their original complete-state domain and are not implicitly composable with committed cleanup.
+
+`prepare_independent_full_indices_value_contrast(distinct_values)` preserves the strict whole-hook checker and optionally increments only the second domain's final peer identity. Its finalized record and expiry touch are created together through the same lifecycle owner. Index lengths, due cohort, phase and logical filtering stay matched; equal values require one original hash and distinct values two. Peer verification follows actual prepared indices rather than assuming equal ID lists. Existing whole-hook/component entrypoints select the original shared-value case; no consensus policy or Weight port changes.
+
+With both `std` and `runtime-benchmarks`, `Pallet::verify_maximum_finalized_cleanup_benchmark(recording)` invokes the existing generated fixture through SDK `BenchmarkingSetup::instance` with verification enabled. It selects the unchanged host maximum, refuses unsupported component bounds and accepts the standard SDK `Recording` boundary adapter. The reference counter-only recorder commits/reset-tracks before the body and captures actual SDK counters/prefix rows after its commit but before verification; it requests neither timing nor ProofSize. The bridge adds no storage, extrinsic or runtime API and is absent from ordinary/no-std builds. Maximum-record, retained winning-option and exact due/future-state assertions remain enabled. Counters establish the selected fixture footprint, not public history, physical I/O or complete hook qualification.
 
 Native `signed_l2_actor_admission_enacts_after_real_ordinary_delay_on_declared_presets` now passes on both named presets: signed Stake, noted preimage, witness, proposal, Aye and post-enactment User creation use Executive extrinsics. Governance hooks run from epoch 1 through ordinary maturity, the unchanged 43,200-epoch delay and terminal retention. No Root resolution, direct executor, pending-record injection, cursor reset or genesis override substitutes for admission. The test requires the production vote-power provider and is excluded from benchmark builds that replace power with one.
 
@@ -366,48 +438,48 @@ So the coefficient is normalized against the runtime's own configured capacity, 
 
 `submit_signed_proposal(domain, item_id, cadence_mode, payload_kind, payload_hash)`:
 
-- Signed submit path for runtime-approved public combinations only
-- Reuses the single admission classifier also consumed by bounded authority/fee views
-- Applies rejection precedence as authority, required eligibility, compact preimage status/witness compatibility, duplicate, domain capacity, author-index integrity, author capacity, and exact maturity-bucket capacity before fee transfer
-- Admission computes and retains the maturity epoch; insertion uses that admitted value and transactionally writes the same prechecked bucket after fee collection
+- Signed submit path for runtime-approved public combinations only, deriving proposer identity from the signer rather than an admin-supplied sponsor
+- Reuses the classifier consumed by bounded authority/fee views, rejecting in order: authority, required eligibility, compact preimage status/witness compatibility, duplicate, domain capacity, author-index integrity, author capacity, and exact maturity-bucket capacity before fee transfer
+- Admission retains maturity; insertion reuses that admitted value and prechecked bucket after fee collection, with the same bounded active-state insertion and once-only GovXP authorship accounting
 - Reads only compact preimage availability/length status plus `PayloadAdmissionWitnesses`; the generic `PreimageFor` value is absent from this call's generated storage proof
 - Requires exact witness agreement on hash-keyed semantic identity, byte length, execution authority, schema, and runtime-spec compatibility
 - Direct host-executor invocation with an advisory kind returns typed `UnsupportedCall`; missing tactical treasury configuration returns `DispatchFailed`; bounded winner projection returns `ProposalVoteSetFull` on disagreement rather than relying on panic-only assumptions
-- `PrimaryEligibleSigned` additionally calls the host eligibility provider before any fee or proposal mutation
-- The DEOS provider admits protocol / Native `L1RootAction` and `Intent` only when the signer has nonzero direct primary-track staking power; `$VETO` protection balance never enters that predicate
-- Derives proposer identity from the signer rather than an admin-supplied sponsor field
-- Transfers the runtime-configured native opening fee into Fee Sink before proposal creation
+- `PrimaryEligibleSigned` calls host eligibility before fee/proposal mutation. Eligibility, compatibility, ceilings and treasury identity retain their full provider storage/authentication work despite no generic preimage-body fetch
+- Transfers the runtime-configured native opening fee into Fee Sink before creation, emitting `ProposalOpeningFeeCollected` only for a positive fee, then `ProposalSubmitted` after insertion
 - Uses transactional semantics so an unexpected late insertion failure rolls back the fee, while every declared admission failure including full maturity capacity happens before fee transfer
-- Reuses the same bounded active-proposal insertion path and GovXP authorship accounting once admitted
-- Emits `ProposalOpeningFeeCollected` when the opening fee is non-zero, then `ProposalSubmitted`
 
 `prepare_payload_admission_witness(domain, payload_kind, payload_hash, payload)`:
 
-- Signed preparation boundary accepting at most 262 payload bytes, requiring their runtime hash and length to match compact current preimage status, and asking the host runtime for one complete typed result; callers never supply witness fields
-- Enforces kind-specific encoded ceilings: exact fixed typed bounds for Root upgrade and tactical invoice payloads, the six-byte Router-fee call encoding, and 262 bytes for the maximum advisory tuple
-- Rejects missing, oversized, malformed, trailing-byte, domain/kind-incompatible, authority-incompatible, or schema-incompatible bytes before writing
+- Signed preparation accepts `ProposalPayloadBytesOf<T>`, checks compact preimage availability/length and the host's kind ceiling, then passes the complete supplied bytes/hash to `validate_for_witness`; callers never supply witness fields
+- Hashing/selected decoding/authority/compatibility belong to the host; preparation's availability/length/ceiling/provider gates precede witness storage, including the returned-length check. Neither bounded payload nor absent generic preimage fetch bounds other provider storage
 - Reserves one runtime-configured nonzero native storage deposit from the preparer, stores the depositor and deposit with the derived compact witness under `(payload_hash, (domain, payload_kind))`, and emits `ProposalPayloadAdmissionWitnessPrepared`; a failed refresh preserves the prior witness, reserve, and events exactly
-- Successful signed submission consumes the exact witness and releases its deposit in the proposal transaction; abandoned witnesses retain their reserve even if the generic preimage is unnoted, bounding persistent state by funded liability
-- Reads no generic preimage value, so both witness preparation and later signed submission remain Normal-class dispatchable without increasing block limits; enactment separately reads the exact stored bytes selected by proposal hash
+- Successful signed submission consumes the decoded-Some witness and requests unreserve from its stored depositor, not necessarily the proposer. A different preparer reserves first and then requests the old depositor's refund; the same preparer does neither. Ignored unreserve remainder is not a full-refund certificate, and raw deposit coherence remains a separate premise
+- Neither path fetches the generic preimage body. Host status ports can still convert legacy status and mutate currency/holds before a later refusal; compatibility may authenticate other full state. Those provider inputs, repeated work and outer rollback belong to the embedding/resource contract, not a proof-size guarantee from compact witness fields
 
 `cast_vote(domain, item_id, vote)`:
 
 - Requires an active proposal
-- Stores one ordinary-track vote per account in `ayes / nays`
+- Stores one ordinary-track vote per account across `ayes / nays / amplifies / approves / reduces`, with Binary/Invoice direction checks and full-target refusal
 - Stores one protection-track vote per account in `vetoes / passes`
 - Allows the same account to participate once in the ordinary track and once in the protection track for the same item
 - Increments cumulative total participation exactly once on the first proposal-level ballot that account casts for that item
-- Rejects duplicate voting inside the ordinary track family
 - Treats a later protection-track `Veto` or `Pass` ballot as bounded replacement of that account's earlier protection-track side for the same item
 - Rejects protection-track ballots once the configured protection window has closed for that proposal
-- Rejects over-cap voter sets
 - If a newly updated raw `Veto` tally becomes **strictly greater** than the runtime threshold against the domain's total eligible protection supply, the extrinsic finalizes the proposal immediately as `VetoCancelled`
 - Ballot insertion, governance-lock extension, GovXP participation, urgent authorization, and immediate terminal resolution share one transaction; terminal failure restores exact pre-vote state
-- Ballot, primary-turnout, and protection-turnout sums use checked `u64` accumulation; `ProposalVoteTallyOverflow` rolls back vote ingress and makes tally/status projections unavailable rather than saturating a malformed result
-- Invoice positive-weight policy widens the three-option sum into `u128`, while its bounded read projection uses checked `u64` addition and becomes unavailable on malformed overflow; boundary tests distinguish the exact `u64::MAX + 1` majority from a saturated tie
-- Veto and fast-track threshold cross-products widen every `u64` weight by the exact Perbill denominator in `u128`, including `u64::MAX`, so boundary comparison cannot overflow or round through a narrowed ratio
+- Ballots, frozen/current power views, tallies, derived Invoice positive/leading weights and retained outcome weight fields use `U256`; checked accumulation exposes malformed overflow as `ProposalVoteTallyOverflow`, never saturation. Legal host power fits the embedding contract, including aggregates beyond `u128`.
+- `proposal_resolution::primary_approval` computes the exact floor-rounded Perbill ratio in `U256`; resolution retains configured approval/turnout, binary tie rejection and lowest-scalar Invoice ties. Package tests `primary_tally_accepts_aggregate_beyond_u128` and `vote_tally_and_derived_invoice_arithmetic_cover_u128_max_without_saturation` falsify narrowing.
+- Veto and fast-track threshold cross-products use `U256` with the exact Perbill denominator. The protection provider's normalized `u64` power and supply are widened only at the pallet boundary; its normalization and strict/inclusive threshold policies are unchanged.
 - The later maturity-time protection gate only becomes active once raw `Veto` turnout reaches the runtime dust floor against that same protection supply
 - Emits `ProposalVoteCast`
+
+`proposal_resolution.rs::cast_active_proposal_vote` checks the effective primary opening, family and duplicate membership. Its shared `ordinary_proposal_ballot` helper rejects `current_epoch >= effective_primary_close_epoch` with the existing `ProposalPrimaryTrackNotOpen` before context construction/current-power acquisition. It reuses the computed ordinary/urgent close without a new storage read, layer or ABI field. Closing time is independent of whether bounded maturity service has finalized the retained Active item; protection admission is unchanged.
+
+`tests.rs::primary_window_closes_before_current_power_and_publication` covers ordinary Binary/Invoice and publicly authorized urgent Binary directions, zero/positive power and close−1/close/close+1. Last-open preserves exact ballot power; closing refusals are storage no-ops with no ordinary provider call. The unmodified helper returned Ok at close; the guard passes the default/all-feature native property. These are small retained-Active pallet fixtures, not authenticated signed/network history, concrete-host custody integration or physical Weight. The new comparison/refusal path requires affected production resource/artifact qualification.
+
+Current power acquisition is separate from scheduled frozen-ballot folds: primary calls its weighted provider once; protection calls weighted power and then raw power independently. Full-target refusal can occur after both calls. Custody follows the successful full Votes writeback, then aggregate horizon, first participation and VoteCast, before optional terminal resolution; later failure restores state without erasing that work. `unlock_vote_power` uses the retained position amount/horizon and calls the host unlock once before deletion, without rescanning ballots or recomputing eligibility.
+
+Manual winner inference scans Aye/Amplify/Approve/Reduce/Nay against supplied accounts; it is not a policy, time, turnout or complete-winner-set check. Supplied-winner resolution, force resolution and direct `submit_active_proposal` retain their own authority/admission premises rather than inheriting scheduled or signed classifier guarantees. Generated dispatch layers and explicit transactional helpers are distinct even on direct inherent Rust invocation.
 
 Resolution, rejection, and veto cancellation all use one transactional active-state cleanup. Approval releases domain and per-author admission capacity before optional pending enactment, so later enactment success or execution failure does not own or release active capacity again.
 
@@ -442,15 +514,9 @@ This is intentionally retained as a recovery / narrow-control surface.
 
 ### 6. Auto-finalization on `on_initialize`
 
-The pallet's only hook is `on_initialize`, which calls `service_current_epoch(current_epoch)`.
-Today that routine services four bounded bucket families in order:
+`on_initialize` first calls `service_pending_enactments(current_epoch)`, then `service_current_epoch(current_epoch)`, and returns their combined Weight. The chronological worker selects at most one nonempty maturity, finalized-outcome or reward-expiry phase per invocation; the bounded epoch-service description above owns selection and continuation.
 
-1. `service_maturing_proposals(...)`
-2. `service_pending_enactments(...)`
-3. `service_finalized_proposal_outcomes(...)`
-4. `service_expiring_accounts(...)`
-
-That means pending enactment is no longer merely query/status scaffolding inside the pallet itself. The remaining gap sits one layer higher: executable payload kinds still need real runtime dispatch wiring before those bounded due-enactment attempts can do useful work on the reference runtime.
+The pallet defines no separate `on_idle` or `on_finalize` work hook. Unfinished bounded buckets remain obligations for later initialization calls, not an implicit same-block finalization pass. Executable payload behavior is supplied by the host's `ProposalPayloadExecutor`; its complete cost qualification is separate from the hook's reported Weight.
 
 #### Maturity servicing
 
@@ -496,13 +562,13 @@ Approved enactment updates only the nested result while preserving the same appr
 
 `FinalizedProposalRecord.execution_detail` carries only typed success or failure detail. Payload kind, authority, approval epoch, and terminal epoch remain owned by metadata, derived policy, and the finalized outcome rather than being repeated in the detail.
 
-The retention schedule still keys off the original finalized-approval insertion epoch rather than extending history indefinitely after enactment attempts.
-
-They are inserted immediately and scheduled to expire at:
+Specification §6.0 separates approval insertion from terminal retention. Pending approvals enter bounded discovery immediately but publish no history-expiry touch. The committed terminal result, including a late result, schedules expiry at:
 
 ```text
-current_epoch + FinalizedProposalOutcomeRetentionEpochs
+actual_terminal_epoch + FinalizedProposalOutcomeRetentionEpochs
 ```
+
+Executor unavailability preserves the pending obligation; approval time is not its history-retention origin. `proposal_execution.rs::{record_finalized_proposal_outcome, admit_terminal_cleanup}` owns this distinction.
 
 This is a deliberate product/engineering compromise:
 
@@ -633,7 +699,7 @@ Current runtime policy values:
 - `MaxFinalizedProposalOutcomesPerEpoch = 1024`
 - `MaxExpiringAccountsPerEpoch = 1024`
 
-The two-proposal maturity bound keeps the generated worst-case hook ProofSize compatible with the runtime fixed envelope while preserving bounded continuation across later blocks; increasing it requires recomputing `FixedBlockWeight` and maximum signed-call fit.
+The two-proposal maturity bound limits per-hook visits and preserves bounded continuation across later blocks. It does not independently establish complete joint-domain ProofSize or fixed-envelope fit; generated coefficients, host callbacks and enclosing fixed owners require their own qualification. Changing the bound requires re-evaluating `FixedBlockWeight` and maximum signed-call fit.
 
 Ordinary and invoice-family resolution consume exactly the fixed `ProposalApprovalThreshold` and `ProposalMinimumTurnout`. No adaptive ceiling, progress, or decay policy is reconstructed in views or resolution.
 
@@ -645,7 +711,7 @@ For ordinary `Aye / Nay` voting in normal runtime builds, base balance is still:
 Staking::stake_value(domain, account)
 ```
 
-and the runtime provider transforms that base through the shipped piecewise ballot-time Declining Power curve using bounded proposal-time context (`item_id`, `current_epoch`, `submitted_epoch`, `maturity_epoch`, `vote_epoch`), clamping the final result to `u32`.
+and the runtime provider transforms raw base units through the piecewise ballot-time Declining Power curve using bounded proposal-time context (`item_id`, `current_epoch`, `submitted_epoch`, `maturity_epoch`, `vote_epoch`). Its `U256` result has no narrow clamp, eligibility cap or supply normalization; only the final rational division floors. The primary provider remains infallible over legal `u128` backing. The production-provider regressions live in `runtime/src/tests/governance_integration_tests.rs` under `production_primary_power`, excluded from benchmark-authority builds; they cover fractional/split power, decay boundaries, custody reuse and normal/urgent/Invoice resolution above `u128` aggregate power.
 
 For the live protection track, the base surface is domain-specific:
 
@@ -665,7 +731,7 @@ $BLDR tactical governance => Staking::pool(native_asset_id).accounted_balance
 
 using a strict `>` comparison against the runtime threshold, while the end-of-window protection gate first requires raw `Veto` turnout to reach the runtime `1%` dust floor and then compares decline-weighted `Veto` vs decline-weighted `Pass` tallies.
 
-The runtime stores protection ballots as `u64` while canonical balances are `u128`. Values above the exact `u64` envelope use one `U256` proportional normalization for account power and total supply, capped at `u64::MAX / 7` so every ordinary Declining Power result remains representable. Independent account/supply saturation is forbidden because it can turn a minority holder into an apparent 100% holder.
+The protection provider returns `u64` while canonical balances are `u128`; the pallet widens that result into its shared `U256` ballot schema. Values above the exact `u64` envelope retain one common proportional normalization for account power and total supply, capped at `u64::MAX / 7` so every ordinary Declining Power result remains representable. Independent account/supply saturation is forbidden because it can turn a minority holder into an apparent 100% holder. This separate protection policy does not apply to primary power.
 
 In `runtime-benchmarks` builds, the ordinary provider retains equal weight `1`. The protection provider executes its production balance, issuance, normalization, and Declining Power path against a benchmark-prepared `$VETO` asset; `cast_vote` fills the veto set and executes immediate cancellation so generated weight covers the terminal branch and all winner-participation writes.
 
@@ -749,7 +815,7 @@ This is the core boundedness win of the pallet: service cost tracks due bucket e
 
 ## Governance Read-Model Contract
 
-This subsystem follows the project-wide [`read-model.contract.en.md`](../../../../docs/read-model.contract.en.md) split.
+This subsystem follows the project-wide [`read-model.contract.en.md`](../../../../docs/deos/read-model.contract.en.md) split.
 
 ### Canonical on-chain governance projections
 
@@ -862,6 +928,20 @@ The production bridge was regenerated with `frame-omni-bencher 0.22.0`, `50` ste
 
 The runtime benchmark helper ensures the protocol governance asset and staking pool exist, funds the caller, and stakes it before measurement. Lifecycle benchmarks derive voting and maturity epochs from runtime lead-in and voting-period constants rather than mock-only block numbers.
 
+Extra `cast_vote_invoice(c)` calls the public `cast_vote` inside the FRAME marked block; it adds no `WeightInfo` coefficient. `BenchmarkHelper::prepare_invoice_voter` selects the host's Invoice domain and prepares primary backing plus cancelling protection power before recording. The pallet asserts `Invoice` for `L2TreasurySpend`; it never guesses a generic domain identifier. Existing Binary `cast_vote` remains separate and unchanged.
+
+| Case | Marked call | Verification |
+| --- | --- | --- |
+| 0 | Initial Reduce into the final free slot | Full Reduce vector retained |
+| 1 | Initial Veto into the final free slot | Immediate cancellation and terminal state |
+| 2 | Replace the last Pass with Veto | Immediate cancellation and terminal state |
+| 3 | Replace Pass into a full Veto vector | Typed `ProposalVoteSetFull`, original root and ballots |
+| 4 | Replace Pass, then refuse full terminal-retention bucket | Typed `FinalizedProposalOutcomeExpiryBucketFull`, original root and ballots |
+
+The six Invoice-compatible companion vectors use distinct accounts and full configured geometry except the selected destination gap; Aye is empty. Frozen primary companions carry legal individual `7 × u128::MAX` power, a conservative value-domain overapproximation rather than jointly funded signed history. Protection companions use the host provider and retain its separate raw/temporal normalization. The actual caller runs through configured providers, custody, locks, participation and terminal callbacks; source construction and verification roots are outside recording. `verify_invoice_vote_benchmark(c)` runs the same generated fixture for native host conformance without physical sampling.
+
+These cases do not qualify complete resolution/enactment, cleanup, signed-history reachability, independent DB/proof maxima or physical timing. They do not refresh generated weights, production Wasm or downstream identity pins. Extra metadata visibility is not production numerical acceptance; selection/registry safeguards remain an integration obligation before collection.
+
 Error narrowness is compile-enforced at the preimage adapter boundary: `ProposalPreimageAdmissionError` has one exhaustive conversion into the four validation dispatch errors, and `preimage_admission_error_core_maps_exhaustively_to_dispatch` executes every mapping. Compact witness absence and staleness remain distinct pallet-owned admission errors.
 
 Coverage includes:
@@ -962,7 +1042,7 @@ The pallet ships only bounded GovXP input counters. Richer identity layers, any 
 
 `Config::MaxCidBytes` exposes the shared CID bound. `CidBytesOf<T>` binds the executor receipt, success detail, retained finalization/query and treasury-spend event to that bound; the public records carry CID, treasury account, beneficiary/asset, base/scalar, target/actual amounts and capacity-limited status. The host owns CID parsing, declared-treasury authorization and payout semantics; the generic pallet retains and publishes the executor's typed result under the existing bounded finalization lifecycle.
 
-`ProposalExecutionFailureReason` keeps `InsufficientTreasuryCapacity` distinct from generic dispatch refusal and before `DispatchFailed` in the canonical codec; the codec-order regression checks all variants. Larger records and changed source contracts require host benchmarks, metadata and client agreement before complete specification §6.2 acceptance. Concrete reference realization and remaining gates belong to the [DEOS capital-loop architecture](../../../../docs/core.architecture.en.md#63-second-order-bldr-tmctol-and-capital-loop).
+`ProposalExecutionFailureReason` keeps `InsufficientTreasuryCapacity` distinct from generic dispatch refusal and before `DispatchFailed` in the canonical codec; the codec-order regression checks all variants. Larger records and changed source contracts require host benchmarks, metadata and client agreement before complete specification §6.2 acceptance. Concrete reference realization and remaining gates belong to the [DEOS capital-loop architecture](../../../../docs/deos/core.architecture.en.md#63-second-order-bldr-tmctol-and-capital-loop).
 
 ## Conclusion
 

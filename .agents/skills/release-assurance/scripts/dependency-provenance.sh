@@ -1,131 +1,112 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-PROJECT_ROOT="$(cd "$SKILL_DIR/../../.." && pwd -P)"
-export DEOS_PROJECT_ROOT="$PROJECT_ROOT"
-export DEOS_BINARY_DIR="$PROJECT_ROOT/bin"
-source "$PROJECT_ROOT/scripts/_common.sh"
+export DEOS_PROJECT_ROOT="$(cd "$SKILL_DIR/../../.." && pwd -P)"
+export DEOS_BINARY_DIR="$DEOS_PROJECT_ROOT/bin"
+source "$DEOS_PROJECT_ROOT/scripts/_common.sh"
 
-EXCEPTIONS="$SKILL_DIR/config/dependency-provenance-exceptions.json"
-DENY_CONFIG="$SKILL_DIR/config/deny.toml"
-CARGO_AUDIT_VERSION="0.22.2"
-CARGO_DENY_VERSION="0.20.2"
-CARGO_JSON=""
-NPM_JSON=""
+REVIEW_DIR=""
+CARGO_AUDIT_VERSION=0.22.2
+CARGO_DENY_VERSION=0.20.2
+VALIDATOR="$SCRIPT_DIR/dependency-provenance.mjs"
+LEDGER="$SKILL_DIR/config/dependency-provenance-exceptions.json"
 
 usage() {
     cat <<'EOF'
-Usage: dependency-provenance.sh [OPTIONS]
+Usage: dependency-provenance.sh <--framework|--root|--host|--client|--self-test>
 
-Validates locked release inputs, exact toolchains, binary checksums, dependency
-licenses/sources, and current Rust/npm vulnerability findings against the dated
-reachability exception ledger.
+  --framework  Report both selected Cargo roles independently; fail if either fails.
+  --root       Root Cargo licenses/sources, actual and version-view advisory decisions.
+  --host       Isolated Linux PVF Cargo role and pinned workers (not producer clearance).
+  --client     Experimental browser locked npm graph, licenses/sources and advisory decisions.
+  --self-test  Exercise refusal fixtures without building or fetching products.
 
-Options:
-  -h, --help        Show this help message
+The Cargo roles do not read client inputs or require npm. Their JavaScript
+helpers use only Node's standard library. The Zombienet/npm node-launch route
+and SDK-native node producers are separate, unqualified operator selections.
+Development-tool or source decisions do not qualify secret-bearing Native paths,
+external producer binaries, or consensus resource bounds. The Host proof requires
+its reviewed local evidence and exact advisory reports. Refusal is not clearance.
 
-Inputs:
-  template/Cargo.lock, template/rust-toolchain.toml
-  web-client/package-lock.json, web-client/package.json
-  release-assurance/config/deny.toml and dependency-provenance-exceptions.json
-  Current RustSec and npm advisory services
-  Existing checksum-verified ./bin bundle
-
-Outputs:
-  A concise pass/fail review; temporary audit JSON is deleted on exit.
-
-Side effects:
-  Refreshes the local RustSec advisory database and performs npm registry reads.
-  It does not install packages, mutate lockfiles, or alter repository artifacts.
+Side effects: temporary reports and reads from advisory registries; no package
+installations, lockfile edits, network launches, or artifact regeneration.
 EOF
 }
 
-parse_args() {
-    if [[ $# -gt 1 ]]; then
-        usage
-        exit 1
+check_toolchain() {
+    require_commands cargo rustc node cargo-audit cargo-deny
+    [[ "$(cargo audit --version)" == *" $CARGO_AUDIT_VERSION" ]] || { log_error "Expected cargo-audit $CARGO_AUDIT_VERSION"; return 1; }
+    [[ "$(cargo deny --version)" == *" $CARGO_DENY_VERSION" ]] || { log_error "Expected cargo-deny $CARGO_DENY_VERSION"; return 1; }
+    rustc --version | grep -F 'rustc 1.94.1 '
+}
+
+review_cargo() {
+    local scope="$1" workspace="$TEMPLATE_DIR" projection=--project exceptions="$LEDGER"
+    local -a external=()
+    if [[ "$scope" == --host ]]; then
+        workspace="$TEMPLATE_DIR/tools/pvf-validation"
+        projection=--project-external-workspace
+        exceptions="$SKILL_DIR/config/canonical-pvf-host-source/exceptions.json"
+        external=(--external-workspace)
     fi
-    case "${1:-}" in
-        "") ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        *)
-            log_error "Unknown argument: $1"
-            usage
-            exit 1
-            ;;
-    esac
+    cd "$workspace"
+    node "$VALIDATOR" --check-cargo-environment "$PWD"
+    check_toolchain
+    cargo metadata --locked --all-features --format-version 1 >"$REVIEW_DIR/metadata.json"
+    if [[ "$scope" == --root ]]; then
+        node -e 'if (require(process.argv[1]).packages.some(p => p.source?.startsWith("git+"))) throw new Error("Unreviewed Git input to Root")' "$REVIEW_DIR/metadata.json"
+    fi
+    node "$VALIDATOR" "$projection" "$workspace/Cargo.lock" "$REVIEW_DIR/metadata.json" "$REVIEW_DIR/version-view.lock"
+    # Both views must be genuine and from the same current RustSec DB. Audit
+    # returns nonzero on findings; malformed, incomplete or mismatched reports
+    # are rejected by the validator, not treated as zero findings.
+    cargo audit --json >"$REVIEW_DIR/actual-audit.json" || :
+    cargo audit --file "$REVIEW_DIR/version-view.lock" --json >"$REVIEW_DIR/version-audit.json" || :
+    local result=0
+    node "$VALIDATOR" --framework "$REVIEW_DIR/actual-audit.json" "$REVIEW_DIR/version-audit.json" \
+        "$exceptions" "$workspace/Cargo.lock" "$REVIEW_DIR/metadata.json" "$REVIEW_DIR/version-view.lock" \
+        "$PROJECT_ROOT" "${external[@]}" || result=1
+    cargo deny --config "$SKILL_DIR/config/deny.toml" check licenses sources || result=1
+    if [[ "$scope" == --host ]]; then
+        "$PROJECT_ROOT/scripts/01-download-binaries.sh" --check \
+            --only polkadot-prepare-worker --only polkadot-execute-worker || result=1
+    fi
+    return "$result"
 }
 
-cleanup() {
-    [[ -z "$CARGO_JSON" ]] || rm -f -- "$CARGO_JSON"
-    [[ -z "$NPM_JSON" ]] || rm -f -- "$NPM_JSON"
-}
-
-command_has_version() {
-    local cmd="$1"
-    local expected="$2"
-    "$cmd" --version 2>&1 | grep -Fq "$expected"
-}
-
-check_prerequisites() {
-    phase_banner "Step 1: Pinned identities"
-    activate_pinned_node
-    require_commands cargo rustc node npm cargo-audit cargo-deny mktemp rm grep
-    command_has_version cargo-audit "$CARGO_AUDIT_VERSION" || {
-        log_error "cargo-audit $CARGO_AUDIT_VERSION is required; run $SCRIPT_DIR/prepare-tools.sh"
-        exit 1
-    }
-    command_has_version cargo-deny "$CARGO_DENY_VERSION" || {
-        log_error "cargo-deny $CARGO_DENY_VERSION is required; run $SCRIPT_DIR/prepare-tools.sh"
-        exit 1
-    }
-    [[ -f "$EXCEPTIONS" ]] || { log_error "Dependency exception ledger is missing"; exit 1; }
-    (cd "$TEMPLATE_DIR" && rustc --version | grep -Fq 'rustc 1.94.1 ')
-    node -e '
-      const p = require(process.argv[1]);
-      if (process.version.slice(1) !== p.volta.node) process.exit(1);
-      if (`npm@${process.argv[2]}` !== p.packageManager) process.exit(1);
-    ' "$PROJECT_ROOT/web-client/package.json" "$(npm --version)" || {
-        log_error "Node/npm do not match web-client/package.json"
-        exit 1
-    }
-    "$PROJECT_ROOT/scripts/01-download-binaries.sh" --check
-    log_success "Toolchain and binary identities verified"
-}
-
-check_locks_and_licenses() {
-    phase_banner "Step 2: Locked graphs and licenses"
-    run_shell_step "Cargo locked metadata" "5" \
-        "cd '$TEMPLATE_DIR' && cargo metadata --locked --format-version 1 --no-deps >/dev/null"
-    run_shell_step "npm locked graph" "5" \
-        "cd '$PROJECT_ROOT/web-client' && npm ci --ignore-scripts --dry-run >/dev/null"
-    run_shell_step "Cargo licenses and sources" "10" \
-        "cd '$TEMPLATE_DIR' && cargo deny --config '$DENY_CONFIG' check licenses sources"
-}
-
-check_advisories() {
-    phase_banner "Step 3: Vulnerability reachability review"
-    CARGO_JSON="$(mktemp "${TMPDIR:-/tmp}/deos-cargo-audit.XXXXXX.json")"
-    NPM_JSON="$(mktemp "${TMPDIR:-/tmp}/deos-npm-audit.XXXXXX.json")"
-    (cd "$TEMPLATE_DIR" && cargo audit --json >"$CARGO_JSON") || true
-    (cd "$PROJECT_ROOT/web-client" && npm audit --json >"$NPM_JSON") || true
-    node "$SCRIPT_DIR/dependency-provenance.mjs" \
-        "$CARGO_JSON" "$NPM_JSON" "$EXCEPTIONS" "$PROJECT_ROOT/web-client/package-lock.json"
+review_client() {
+    require_commands npm
+    cd "$PROJECT_ROOT/web-client"
+    [[ "$(npm --version)" == "$(<"$PROJECT_ROOT/.npm-version")" ]] || { log_error "npm pin mismatch"; return 1; }
+    node -e 'const p = require("./package.json"); if (p.volta?.node !== process.versions.node || p.volta?.npm !== process.argv[1] || p.packageManager !== `npm@${process.argv[1]}`) process.exit(1);' "$(npm --version)"
+    npm ci --ignore-scripts --dry-run --include=dev --include=optional --include=peer >/dev/null
+    npm audit --json --include=dev --include=optional --include=peer >"$REVIEW_DIR/npm.json" || :
+    node "$VALIDATOR" --client "$REVIEW_DIR/npm.json" "$LEDGER" "$PWD/package-lock.json" "$PROJECT_ROOT"
 }
 
 main() {
-    parse_args "$@"
-    trap cleanup EXIT
-    phase_banner "DEOS dependency provenance review"
-    check_prerequisites
-    check_locks_and_licenses
-    check_advisories
-    log_success "Dependency provenance review passed"
+    [[ $# -eq 1 ]] || { usage; return 1; }
+    case "$1" in
+        --self-test) activate_pinned_node; node "$VALIDATOR" --self-test; return ;;
+        -h|--help) usage; return ;;
+        --framework)
+            local failed=0
+            "$SCRIPT_DIR/dependency-provenance.sh" --root || failed=1
+            "$SCRIPT_DIR/dependency-provenance.sh" --host || failed=1
+            return "$failed" ;;
+        --root|--host|--client) ;;
+        *) usage; return 1 ;;
+    esac
+    phase_banner "Dependency provenance $1"
+    activate_pinned_node
+    REVIEW_DIR="$(mktemp -d "${TMPDIR:-/tmp}/deos-dependency-review.XXXXXX")"
+    trap 'rm -rf -- "$REVIEW_DIR"' EXIT
+    case "$1" in
+        --root|--host) review_cargo "$1" ;;
+        --client) review_client ;;
+    esac
+    log_success "Dependency provenance $1 passed"
 }
 
 main "$@"

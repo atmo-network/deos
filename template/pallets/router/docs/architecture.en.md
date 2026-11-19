@@ -65,7 +65,7 @@ The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point f
 
 System Actor adapters preserve actual input/output facts in `DexSwapOutcome`. They derive authored slippage bounds and retain System-only reference policy, but they do not call a second Router path validator or own route preparation. The guard first reads its independent Fresh Oracle observation and lazily reads direct reserves only when that observation is absent, stale, uninitialized, or zero; it never treats the selected execution quote as its own reference.
 
-Router owns economic execution Weight and returns the committed route class and actual outcome; it does not own Actor Control, FIFO service, or block-share policy. A host Actors adapter reserves the Router maximum from Shared Economic capacity before dispatch, then reports the canonical generated Router effect Weight as valid actual evidence for transactional reclaim. Failed or inconsistent actual evidence rolls back the Actor attempt. The DEOS equal-thirds split is runtime composition in `docs/actors.integration.en.md`, not Router package semantics.
+Router owns economic execution Weight and returns the committed route class and actual outcome; it does not own Actor Control, FIFO service, or block-share policy. A host Actors adapter reserves the Router maximum from Shared Economic capacity before dispatch, then reports the canonical generated Router effect Weight as valid actual evidence for transactional reclaim. Failed or inconsistent actual evidence rolls back the Actor attempt. The DEOS equal-thirds split is runtime composition in `docs/deos/actors.integration.en.md`, not Router package semantics.
 
 `Native Exact-Output Boundary`: `AssetConversionApi` exposes one-pool reverse quotes and execution returning `ExactOutputExecution { amount_in, recipient_amount_out }` from measured caller and recipient deltas.
 
@@ -332,7 +332,7 @@ Genesis calls `inc_providers` on the pallet account so the account survives zero
 
 ## DEOS Router Read-Model Contract
 
-This subsystem follows the project-wide [`read-model.contract.en.md`](../../../../docs/read-model.contract.en.md) split.
+This subsystem follows the project-wide [`read-model.contract.en.md`](../../../../docs/deos/read-model.contract.en.md) split.
 
 ### Canonical on-chain router projections
 

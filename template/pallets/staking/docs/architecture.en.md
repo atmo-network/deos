@@ -88,7 +88,7 @@ Calls, readiness, session management, and runtime adapters consume the classifie
 
 For LP-backed mode, `native_security_view()` fail-closed classifies pool, receipt, LP, reserve, issuance, valuation, bounded-index, positively backed candidate-operator, and duplicate-candidate state; Trusted Set has no impossible readiness field.
 
-The view also projects current and uniquely Planned epoch identity plus whether any Open/Finalized pot or nonzero liability leaves settlement obligations. The pot scan reads at most the hard retention bound plus one and rejects excess retention or multiple Planned epochs. Candidate deposits cannot satisfy operator readiness; none of these surfaces is mutable policy storage.
+The view also projects current and uniquely Planned epoch identity plus whether any Open/Finalized pot or nonzero liability leaves settlement obligations. Its scan limits successfully decoded pot rows to the retention bound plus one and rejects excess retention or multiple Planned epochs. `PrefixIterator` may skip missing or malformed raw entries inside one yielded item, so the decoded limit is not a host-call, raw-byte or trie-work bound. Candidate deposits cannot satisfy operator readiness; these projections are not mutable policy storage.
 
 The reward architecture is mode-aware. `TrustedSet` uses permissioned collators, collects transaction, Actor-execution, governance-opening, and XCM-execution fees in Fee Sink, and divides available native balance 50/50 between staking ingress and liquidity provisioning. DEOS Router trading fees remain on the Burn Actor path.
 
@@ -100,7 +100,7 @@ LP-backed mode divides Fee Sink flow into one 34% security-reward leg and two 33
 
 Under LP-backed mode, each planning attempt overwrites one `LastNativeSecurityBoundaryDiagnostic { planned_epoch, outcome }`. `NativeSecurityBoundaryOutcome` distinguishes `NotReady(readiness)`, `SnapshotOpened`, and `SnapshotOpenFailed`; a non-ready attempt returns before cleanup, snapshot, or ranking, while failed opening preserves active state and returns `None`.
 
-At every session start, the runtime invokes mode-independent retention for the oldest overdue epoch and charges the measured worst-case bounded-scan Weight. During ordinary progression this is exactly the epoch crossing `SecurityRewardClaimHorizon`. A settlement failure cancels that boundary's zero-credit plan and prevents newer planning until recovery.
+`settle_due_native_security_reward` performs mode-independent retention for the oldest overdue epoch under one explicit transaction. It does not register FRAME Weight internally; the embedding Session callback and its complete-call owner account for the reached retention work. During ordinary progression the due epoch crosses `SecurityRewardClaimHorizon`. A caller's attempted cancellation after settlement failure can itself refuse; logging or a declared callback Weight does not establish successful recovery.
 
 After successful retention, LP-backed mode promotes the current plan to Open and finalizes the prior Open pot. Trusted mode instead finalizes any retained Open pot without changing liability, removes the current unactivated zero-credit plan, clears active identity, and leaves the resulting Finalized claim/expiry rights live.
 
@@ -168,7 +168,7 @@ Orphan pots, missing snapshots, active-epoch mismatch, underfunded custody, and 
 - `TotalNativeGovernanceAssetLocked[asset_id]`: aggregate locked native-governance asset amount
 - `PendingNativeGovernanceAssetUnlocks[(account, asset_id)]`: delayed native-governance asset withdrawal
 
-Standalone governance LP feeds NativeVotePower but not nomination rewards. Account collator-locked value is no longer stored separately: `native_locked_lp_position` derives it from at most `MaxNominationsPerAccount` indexed positions, and session reward snapshots derive only the eligible-operator subset they actually need.
+Standalone governance LP feeds NativeVotePower but not nomination rewards. `native_locked_lp_position` reads `AccountNativeLpLocked` and `NativeGovernanceLpLocks`, subtracts governance LP with a zero fallback, and values the total once; it does not scan nomination positions. Snapshot construction separately enumerates the eligible-operator subset of each participant's bounded nominations. The [view implementation](../src/views.rs) and [snapshot constructor](../src/lib.rs) own these distinct functions.
 
 ### Session security snapshot and funding state
 
@@ -178,17 +178,19 @@ Standalone governance LP feeds NativeVotePower but not nomination rewards. Accou
 - `NativeSecurityRewardLiability`: exact sum of certified credit not yet settled
 - `NativeSecurityRewardClaims[(epoch, account)]`: duplicate-proof marker for one paid frozen right
 
-Retained reward maps are hard-bounded to `SecurityRewardClaimHorizon + current + one planned` epochs. Consensus retention scans are bounded by that invariant; planning rejects an overdue epoch, a second Planned pot, or a full retained window before constructing a new snapshot.
+Typed admission enforces a retained window of `SecurityRewardClaimHorizon + current + one planned` decoded epochs. Planning rejects an overdue epoch, a second Planned pot or a full window before constructing a snapshot. These maps are not bounded vectors: the iterator's decoded-yield limit does not bound skipped raw successors, malformed values, tombstones or backend/overlay traversal. Actual accepted-history and provider premises remain necessary for a complete scan owner.
 
 The snapshot enumerates only `NativeSecurityParticipants` and candidate-eligible operators supplied by runtime planning. It freezes each participant's LP assigned to that eligible set, conservative native value, governance coefficient, reward weight, each eligible operator's conservative backing, and the total denominator.
 
-Planning prevalidates retention admission, constructs the complete value, then stores one zero-credit Planned snapshot/pot without changing active state. Session start settles the oldest overdue epoch first, promotes the current plan to Open, finalizes the prior pot, and replaces the active snapshot transactionally. If settlement fails, the current zero-credit plan is removed and newer planning remains blocked until the oldest obligation settles.
+Planning prevalidates retention admission and constructs the complete value before publishing Snapshot then zero-credit Planned Pot, without changing Active. A failing operator push can occur after validator, aggregate lookup, valuation and clone work; the successful operator-vector bound is not an upfront supplied-input limit. Activation checks snapshot/current/prior pot conditions before publishing prior Finalized, current Open and Active values.
+
+Open, activation and plan cancellation supply no independent storage layer; their actual caller owns rollback context. Due settlement and Trusted contraction each supply one explicit layer. Failed due settlement and a caller's later cancellation are separate attempts, not one guaranteed Session-wide transaction.
 
 Later locks, unlocks, redelegation, governance memory, pool valuation, or candidate eligibility cannot rewrite Planned/Open/Finalized values; only a later plan observes them.
 
 `fund_native_security_reward(amount)` is the typed certified pallet call. It derives the current `SecurityEpoch`, requires the configured funding origin, transfers native currency only from `SecurityRewardFundingSource`, and updates pot credit plus liability in one transaction. The runtime Fee Sink adapter also preflights and certifies only the exact Fee Sink-to-reward-account native leg. Direct reward-account balance has no accounting effect.
 
-The accepted `frame-omni-bencher 0.22.0` production-runtime run used 50 steps, 20 repeats, and measured ProofSize with one distinct candidate operator per participant. For participants `p ∈ [1, 100]` and retained epochs `r ∈ [1, 13]`, planning charges `48,059,040 + 43,698,274p + 1,804,670r` RefTime plus database Weight and `11,052 + 2,854p + 2,597r` ProofSize.
+The retained `frame-omni-bencher 0.22.0` reference-runtime measurement used 50 steps, 20 repeats, and measured ProofSize with one distinct candidate operator per participant. For participants `p ∈ [1, 100]` and retained epochs `r ∈ [1, 13]`, planning charges `48,059,040 + 43,698,274p + 1,804,670r` RefTime plus database Weight and `11,052 + 2,854p + 2,597r` ProofSize.
 
 At `p = 100` and measured-success `r = 13`, planning charges 4,441,347,150 RefTime and 330,213 proof bytes before database Weight. The runtime conservatively charges one additional retained-epoch read/proof unit so full-window rejection is covered. Session retention at hard `r = 14` charges 232,532,970 RefTime, 290,294 ProofSize, 119 reads, and 105 writes. Trusted contraction charges 23,258,000 RefTime, 14,309 ProofSize, four reads, and four writes. All are Mandatory session work.
 
@@ -255,7 +257,7 @@ Receipt burn, base payout, checked pool reduction, state write, and event share 
 4. Transfers LP from the user into `native_lp_lock_account()`
 5. Updates the position plus participant/operator indexes
 6. Updates the session-ranking, governance-account, and governance-global aggregates: `OperatorNativeLpLocked`, `AccountNativeLpLocked`, and `TotalNativeLpLocked`
-7. Touches native reward snapshots when the native pool exists
+7. Leaves every already Planned/Open/Finalized snapshot and pot unchanged
 8. Emits `NativeLpLocked`
 
 During the current trusted-collator phase, session sets use the configured invulnerables directly. Collator-locked LP remains the authoritative backing surface for nomination rewards, NativeVotePower, and bounded valuation. If permissionless candidate ranking is enabled later, candidate ordering uses conservative collator-locked LP native-equivalent value; the removed native-binding compatibility path no longer affects candidate ordering.
@@ -284,13 +286,9 @@ Governance unlock requests are blocked while `NativeGovernanceLockProvider::lock
 
 ### 7. Conservative native-equivalent LP valuation
 
-Runtime valuation is centralized in `DelegationWeightedCollatorSessionManager::try_conservative_native_lp_value(locked_lp)`. Governance's explicitly conservative projection uses `conservative_native_lp_value_or_zero`; security admission retains the typed unavailable result:
+`NativeStakingReadModelProvider::native_lp_value(locked_lp)` returns `Option<Balance>`. Readiness probes it and classifies `None` as unavailable; snapshot construction maps `None` to a typed error. The [provider interface](../src/lib.rs) delegates valuation mathematics and data acquisition to the host. Pool/share and reward arithmetic being checked does not automatically establish the host valuation's overflow, saturation or narrowing behavior.
 
-```text
-native_equivalent = 2 * min(reserve_NTVE, reserve_stNTVE * staking_exchange_rate) * locked_lp / lp_supply
-```
-
-Missing receipt identity, pool identity, reserves, issuance, staking shares, backing, or representable proportional arithmetic returns `None`. LP-backed readiness consumes that typed result and fails closed instead of treating unavailable valuation as zero backing; scalar consumers may explicitly narrow `None` to zero only outside security admission and snapshot readiness.
+Concrete reserve formulas, scalar fallbacks and reference-adapter arithmetic belong in [runtime integration](../../../../docs/deos/actors.integration.en.md#consensus-context-admission-and-witness-boundaries), not an implicit generic guarantee that every unrepresentable intermediate yields `None`.
 
 This value is used by:
 
@@ -299,7 +297,7 @@ This value is used by:
 - Governance NativeVotePower through aggregate account locked LP
 - Read-model views through `RuntimeNativeStakingReadModelProvider`
 
-The formula intentionally ignores optimistic value from an unbalanced pool side.
+The host valuation must satisfy the specification and embedding contract; a decoded scalar alone does not authenticate its underlying reserve, issuance, custody or accepted-history inputs.
 
 ## Reward Architecture
 
@@ -311,7 +309,9 @@ The generic reward engine remains absent: there is no block-number-derived rewar
 
 Native liquid and bounded batch claims remain mode-independent and share frozen-snapshot settlement with exact liability reduction and `SecurityRewardClaimHorizon` admission. In batch order, each `NativeSecurityRewardClaimed` event reports the sequential liability immediately after its own epoch claim rather than repeating the final batch value.
 
-Session-start retention and permissionless expiry recovery use one transition that atomically returns exact unclaimed remainder, rounding dust, and uncredited custody excess to Fee Sink once. The transition verifies retained custody against remaining liability, clears at most the snapshot participant bound of claim markers, and removes the snapshot and pot.
+Session-start retention and permissionless expiry recovery share a transition that returns accounted remainder and uncredited custody excess to the configured funding source. It checks retained custody, then calls claim-marker `clear_prefix` with the participant bound as a backend limit, accepts a `None` cursor, removes Snapshot/Pot and publishes Liability/event. The public call and due-settlement helper supply their respective rollback layers; transfer and range work precede any late cursor refusal.
+
+For the selected FRAME/state-machine path, that limit does not cap the full overlay scan or matching tombstone publications. Backend iterator errors can be logged and converted into an accepted `None` cursor without complete removal. An error-free-provider and coherent marker-history premise is required for completeness; transaction rollback on `Err` does not repair a swallowed provider error. This source limitation is not a newly executed fault or a claim of an admitted production exploit.
 
 Liability decreases only by accounted reward remainder. There is no intermediate expired state or separate cleanup call.
 
@@ -461,4 +461,4 @@ This repository is still the forkable framework line. Storage versions are curre
 - Certified funding, retained snapshots/pots, exact liabilities, liquid/batch/compound settlement, claim markers, horizon admission, and atomic bounded expiry are implemented; deterministic package evidence runs four cleanup-free horizons and one LP-backed-to-Trusted transition with Open, Planned, partially claimed, compound-eligible, excess-custody, and pending-unlock state
 - The accepted 50-step, 20-repeat retention benchmark charges 232,532,970 RefTime, 290,294 ProofSize, 119 reads, and 105 writes at the 14-epoch/100-participant runtime bound
 - Browser transport and staking-widget presentation expose mode-gated liquid claim and atomic compound with explicit epoch/operator/minimum-output inputs; composed runtime evidence proves claim consumption through canonical LP mint and operator lock, while live-network execution remains open
-- Runtime snapshot weights use accepted production measurement; production forks should rerun benchmarks on their target hardware and runtime profile before launch
+- Retained benchmark coefficients bind their measured profile, not arbitrary raw/provider domains or complete embedding Session work; hosts must qualify weights for their actual workload and hardware
