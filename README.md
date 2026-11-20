@@ -6,7 +6,7 @@ The Deterministic Economic Operating System is a FRAME framework for on-chain au
 
 **[Read the DEOS Wiki (EN / RU)](https://atmo-network.github.io/deos/)** · [Build from source](#build-and-validate) · [Embed a pallet](#configure-or-embed)
 
-> **Pre-1.0 · Source and development only.** This is not a production network or a runnable node bundle.
+> **Source and development only.** The framework archive is not a production network or a runnable node bundle.
 
 ## What is included
 
@@ -53,15 +53,15 @@ SKIP_WASM_BUILD=1 RUSTFLAGS='--cfg substrate_runtime' \
 
 ## Demonstrated and unavailable capabilities
 
-See the [0.7.28 distribution and support table](docs/deos/framework-distribution.en.md) for the exact scope.
+See the [framework distribution and support guide](docs/deos/framework-distribution.en.md) for the exact scope.
 
 - **Source:** Framework validation supports development; it does not renew the historical Root and Host source-bound security decisions.
 - **Execution:** Signed Assets blocks and proof-bound PVF validation demonstrate behavior on prepared parents, not authenticated relay ancestry or production resource bounds.
-- **Network:** Chain-spec generation and local node operations require separately accepted producer artifacts, not merely matching version strings. No downstream production launch is supported before DEOS 1.0.
+- **Network:** Chain-spec generation and local node operations require separately accepted producer artifacts, not merely matching version strings. The development distribution does not support downstream production launches.
 
 ## Optional browser and Wiki workspaces
 
-- **[Experimental browser client](https://github.com/atmo-network/deos/tree/7cf526687d4503d24dea1f19a8a3a47f28965971/web-client):** Uses framework metadata through its optional PAPI descriptor workflow. Setup, validation and advisory results are separate from the framework's.
-- **[Wiki workspace](https://github.com/atmo-network/deos/tree/7cf526687d4503d24dea1f19a8a3a47f28965971/wiki):** Owns the bilingual corpus and standalone mdBook site. Run `./scripts/validate-local.sh wiki` in the full repository to validate it without framework builds.
+- **[Experimental browser client](https://github.com/atmo-network/deos/tree/main/web-client):** Uses framework metadata through its optional PAPI descriptor workflow. Setup, validation and advisory results are separate from the framework's.
+- **[Wiki workspace](https://github.com/atmo-network/deos/tree/main/wiki):** Owns the bilingual corpus and standalone mdBook site. Run `./scripts/validate-local.sh wiki` in the full repository to validate it without framework builds.
 
-Both workspaces are available in the full repository, not in the framework source archive.
+These links open the current workspaces in the full repository. Neither workspace is in the framework source archive.
