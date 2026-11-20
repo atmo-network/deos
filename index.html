@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DEOS Wiki</title>
+<meta http-equiv="refresh" content="0; url=en/deos/index.html">
+<script>
+(() => {
+  const targets = {"en":"en/deos/index.html","ru":"ru/deos/index.html"};
+  let locale = "en";
+  try {
+    const saved = localStorage.getItem('wiki-locale');
+    if (Object.hasOwn(targets, saved)) locale = saved;
+  } catch {}
+  const here = new URL(location.href);
+  if (!here.pathname.endsWith('/') && !here.pathname.endsWith('.html')) here.pathname += '/';
+  // State arrives in the fragment, which a static host never sees; a layer link means "open this
+  // layer", whose contents always belong to it, unlike the base landing.
+  const fragment = here.hash.slice(1), stateful = fragment.startsWith('!');
+  const state = new URLSearchParams(stateful ? fragment.slice(1) : '');
+  const target = new URL(here.searchParams.has('layer') || state.has('layer') ? locale + '/index.html' : targets[locale], here);
+  target.search = location.search;
+  target.hash = location.hash;
+  location.replace(target.href);
+})();
+</script>
+<link rel="canonical" href="https://atmo-network.github.io/deos/en/deos/index.html">
+        <link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/index.html">
+        <link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/index.html">
+        <link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/index.html">
+        <link rel="sitemap" type="application/xml" title="Sitemap" href="sitemap.xml">
+</head>
+<body>
+<nav>
+<p><a href="en/deos/index.html" hreflang="en">DEOS Wiki — English</a> · <a href="en/index.html" hreflang="en">Contents</a></p>
+<p><a href="ru/deos/index.html" hreflang="ru">DEOS Wiki — Русский</a> · <a href="ru/index.html" hreflang="ru">Содержание</a></p>
+</nav>
+</body>
+</html>

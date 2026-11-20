@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "locale": "ru",
+  "indexes": {
+    "all": {
+      "asset": "searchindex-unicode-64be3128.js",
+      "sections": 448
+    },
+    "deos": {
+      "asset": "searchindex-layer-deos-05ad9d87.js",
+      "sections": 438
+    }
+  },
+  "context_asset": "layer-context-6c33f8dd.js"
+}

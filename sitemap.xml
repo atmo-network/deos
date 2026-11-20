@@ -1,0 +1,567 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/index.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/index.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/index.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/index.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/index.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/index.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/index.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/index.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/index.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/index.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/index.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/index.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/index.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/index.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/index.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/index.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/getting-started/start-here.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/getting-started/start-here.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/getting-started/start-here.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/getting-started/start-here.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/getting-started/start-here.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/getting-started/start-here.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/getting-started/start-here.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/getting-started/start-here.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/getting-started/deos-in-60-seconds.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/getting-started/deos-in-60-seconds.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/getting-started/deos-in-60-seconds.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/getting-started/deos-in-60-seconds.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/getting-started/deos-in-60-seconds.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/getting-started/deos-in-60-seconds.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/getting-started/deos-in-60-seconds.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/getting-started/deos-in-60-seconds.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/getting-started/partner-pitch.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/getting-started/partner-pitch.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/getting-started/partner-pitch.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/getting-started/partner-pitch.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/getting-started/partner-pitch.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/getting-started/partner-pitch.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/getting-started/partner-pitch.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/getting-started/partner-pitch.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/getting-started/executive-summary.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/getting-started/executive-summary.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/getting-started/executive-summary.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/getting-started/executive-summary.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/getting-started/executive-summary.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/getting-started/executive-summary.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/getting-started/executive-summary.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/getting-started/executive-summary.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/overview/deos-framework.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/deos-framework.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/deos-framework.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/deos-framework.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/overview/deos-framework.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/deos-framework.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/deos-framework.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/deos-framework.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/getting-started/first-steps.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/getting-started/first-steps.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/getting-started/first-steps.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/getting-started/first-steps.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/getting-started/first-steps.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/getting-started/first-steps.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/getting-started/first-steps.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/getting-started/first-steps.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/glossary/core-terms.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/glossary/core-terms.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/glossary/core-terms.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/glossary/core-terms.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/glossary/core-terms.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/glossary/core-terms.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/glossary/core-terms.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/glossary/core-terms.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/getting-started/reading-paths.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/getting-started/reading-paths.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/getting-started/reading-paths.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/getting-started/reading-paths.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/getting-started/reading-paths.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/getting-started/reading-paths.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/getting-started/reading-paths.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/getting-started/reading-paths.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/faq/newcomer-faq.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/faq/newcomer-faq.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/faq/newcomer-faq.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/faq/newcomer-faq.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/faq/newcomer-faq.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/faq/newcomer-faq.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/faq/newcomer-faq.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/faq/newcomer-faq.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/tmctol-standard.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/tmctol-standard.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/tmctol-standard.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/tmctol-standard.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/tmctol-standard.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/tmctol-standard.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/tmctol-standard.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/tmctol-standard.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/token-driven-automation.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/token-driven-automation.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/token-driven-automation.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/token-driven-automation.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/token-driven-automation.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/token-driven-automation.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/token-driven-automation.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/token-driven-automation.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/read-model-split.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/read-model-split.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/read-model-split.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/read-model-split.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/read-model-split.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/read-model-split.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/read-model-split.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/read-model-split.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/governance-domains.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/governance-domains.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/governance-domains.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/governance-domains.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/governance-domains.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/governance-domains.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/governance-domains.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/governance-domains.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/generated-wiki.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/generated-wiki.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/generated-wiki.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/generated-wiki.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/generated-wiki.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/generated-wiki.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/generated-wiki.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/generated-wiki.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/domain-map.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/domain-map.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/domain-map.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/domain-map.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/domain-map.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/domain-map.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/domain-map.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/domain-map.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/end-to-end-flows.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/end-to-end-flows.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/end-to-end-flows.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/end-to-end-flows.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/end-to-end-flows.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/end-to-end-flows.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/end-to-end-flows.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/end-to-end-flows.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/architecture-diagrams.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/architecture-diagrams.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/architecture-diagrams.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/architecture-diagrams.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/architecture-diagrams.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/architecture-diagrams.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/architecture-diagrams.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/architecture-diagrams.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/token-surfaces.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/token-surfaces.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/token-surfaces.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/token-surfaces.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/token-surfaces.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/token-surfaces.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/token-surfaces.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/token-surfaces.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/builder-economy.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/builder-economy.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/builder-economy.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/builder-economy.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/builder-economy.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/builder-economy.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/builder-economy.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/builder-economy.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/economic-thresholds.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/economic-thresholds.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/economic-thresholds.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/economic-thresholds.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/economic-thresholds.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/economic-thresholds.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/economic-thresholds.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/economic-thresholds.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/parachain-context.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/parachain-context.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/parachain-context.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/parachain-context.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/parachain-context.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/parachain-context.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/parachain-context.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/parachain-context.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/tol-bucket-scenarios.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/tol-bucket-scenarios.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/tol-bucket-scenarios.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/tol-bucket-scenarios.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/tol-bucket-scenarios.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/tol-bucket-scenarios.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/tol-bucket-scenarios.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/tol-bucket-scenarios.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/invariant-map.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/invariant-map.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/invariant-map.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/invariant-map.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/invariant-map.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/invariant-map.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/invariant-map.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/invariant-map.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/economic-claim-levels.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/economic-claim-levels.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/economic-claim-levels.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/economic-claim-levels.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/economic-claim-levels.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/economic-claim-levels.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/economic-claim-levels.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/economic-claim-levels.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/overview/actor-system.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/actor-system.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/actor-system.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/actor-system.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/overview/actor-system.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/actor-system.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/actor-system.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/actor-system.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/overview/actor.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/actor.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/actor.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/actor.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/overview/actor.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/actor.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/actor.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/actor.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/overview/router.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/router.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/router.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/router.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/overview/router.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/router.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/router.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/router.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/overview/typed-observations.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/typed-observations.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/typed-observations.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/typed-observations.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/overview/typed-observations.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/typed-observations.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/typed-observations.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/typed-observations.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/overview/token-minting-curve.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/token-minting-curve.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/token-minting-curve.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/token-minting-curve.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/overview/token-minting-curve.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/token-minting-curve.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/token-minting-curve.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/token-minting-curve.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/overview/governance.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/governance.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/governance.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/governance.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/overview/governance.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/governance.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/governance.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/governance.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/overview/asset-identity.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/asset-identity.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/asset-identity.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/asset-identity.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/overview/asset-identity.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/asset-identity.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/asset-identity.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/asset-identity.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/overview/randomness-strategy.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/randomness-strategy.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/randomness-strategy.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/randomness-strategy.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/overview/randomness-strategy.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/randomness-strategy.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/randomness-strategy.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/randomness-strategy.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/overview/runtime-patterns.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/runtime-patterns.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/runtime-patterns.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/runtime-patterns.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/overview/runtime-patterns.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/runtime-patterns.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/runtime-patterns.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/runtime-patterns.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/concepts/routing-and-minting-loop.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/routing-and-minting-loop.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/routing-and-minting-loop.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/routing-and-minting-loop.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/concepts/routing-and-minting-loop.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/concepts/routing-and-minting-loop.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/concepts/routing-and-minting-loop.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/concepts/routing-and-minting-loop.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/overview/staking.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/staking.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/staking.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/staking.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/overview/staking.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/staking.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/staking.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/staking.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/overview/reference-client.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/reference-client.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/reference-client.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/reference-client.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/overview/reference-client.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/overview/reference-client.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/overview/reference-client.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/overview/reference-client.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/implementation/repository-structure.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/implementation/repository-structure.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/implementation/repository-structure.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/implementation/repository-structure.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/implementation/repository-structure.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/implementation/repository-structure.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/implementation/repository-structure.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/implementation/repository-structure.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/implementation/tech-stack.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/implementation/tech-stack.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/implementation/tech-stack.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/implementation/tech-stack.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/implementation/tech-stack.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/implementation/tech-stack.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/implementation/tech-stack.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/implementation/tech-stack.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/math/tmctol-formulas.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/math/tmctol-formulas.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/math/tmctol-formulas.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/math/tmctol-formulas.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/math/tmctol-formulas.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/math/tmctol-formulas.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/math/tmctol-formulas.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/math/tmctol-formulas.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/usage/scripts-layer.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/usage/scripts-layer.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/usage/scripts-layer.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/usage/scripts-layer.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/usage/scripts-layer.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/usage/scripts-layer.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/usage/scripts-layer.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/usage/scripts-layer.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/usage/forking-deos.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/usage/forking-deos.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/usage/forking-deos.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/usage/forking-deos.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/usage/forking-deos.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/usage/forking-deos.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/usage/forking-deos.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/usage/forking-deos.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/development/three-layer-validation.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/development/three-layer-validation.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/development/three-layer-validation.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/development/three-layer-validation.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/development/three-layer-validation.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/development/three-layer-validation.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/development/three-layer-validation.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/development/three-layer-validation.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/development/status.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/development/status.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/development/status.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/development/status.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/development/status.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/development/status.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/development/status.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/development/status.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/comparisons/physics-vs-politics.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/comparisons/physics-vs-politics.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/comparisons/physics-vs-politics.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/comparisons/physics-vs-politics.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/comparisons/physics-vs-politics.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/comparisons/physics-vs-politics.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/comparisons/physics-vs-politics.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/comparisons/physics-vs-politics.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/en/deos/community/contributing.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/community/contributing.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/community/contributing.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/community/contributing.html"/>
+  </url>
+  <url>
+    <loc>https://atmo-network.github.io/deos/ru/deos/community/contributing.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://atmo-network.github.io/deos/en/deos/community/contributing.html"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://atmo-network.github.io/deos/ru/deos/community/contributing.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://atmo-network.github.io/deos/en/deos/community/contributing.html"/>
+  </url>
+</urlset>

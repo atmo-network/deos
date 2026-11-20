@@ -1,0 +1,393 @@
+/* A small reading-layout extension; mdBook owns the document and navigation UI.
+   Colors come from mdBook theme variables, so light and dark themes stay consistent. */
+:root {
+  --content-max-width: 78ch;
+}
+.content {
+  min-width: 0;
+}
+.content main {
+  overflow-wrap: anywhere;
+}
+/* Wide content scrolls inside its own box. Code scrolls in <code>, not <pre>, so the copy
+   button's tooltip is never clipped by, or adds a scrollbar to, the code block. */
+.content .table-wrapper {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.content pre {
+  max-width: 100%;
+}
+.content pre > code {
+  overflow-x: auto;
+}
+.content pre > .buttons .tooltiptext {
+  top: 50%;
+  left: auto;
+  right: calc(100% + 4px);
+  margin: 0;
+  transform: translateY(-50%);
+  padding: 2px 8px;
+  font: normal 1.3rem/1.5 sans-serif;
+  white-space: nowrap;
+}
+
+/* Dark theme: one cool slate palette for page, sidebar, code, tables and search, replacing navy's
+   mixed blue page and neutral-brown code. mdBook's own theme switching keeps applying it. */
+html.navy {
+  --bg: #151922;
+  --fg: #c8d0dc;
+  --sidebar-bg: #11151d;
+  --sidebar-fg: #a9b3c4;
+  --sidebar-non-existant: #5d6678;
+  --sidebar-active: #82aaff;
+  --sidebar-spacer: #222836;
+  --sidebar-header-border-color: #82aaff;
+  --scrollbar: #3a4253;
+  --icons: #7f8a9d;
+  --icons-hover: #d5dce7;
+  --links: #82aaff;
+  --inline-code-color: #d5dce7;
+  --theme-popup-bg: #191e28;
+  --theme-popup-border: #2a3142;
+  --theme-hover: #212737;
+  --quote-bg: #1b202b;
+  --quote-border: #2a3142;
+  --table-border-color: #283041;
+  --table-header-bg: #1e2432;
+  --table-alternate-bg: #181c26;
+  --searchbar-border-color: #2a3142;
+  --searchbar-bg: #1b202b;
+  --searchbar-fg: #d5dce7;
+  --searchbar-shadow-color: rgb(0 0 0 / 40%);
+  --searchresults-header-fg: #7f8a9d;
+  --searchresults-border-color: #2a3142;
+  --searchresults-li-bg: #1b202b;
+  --search-mark-bg: #3c4a6e;
+  --footnote-highlight: #82aaff;
+}
+html.navy .hljs {
+  background: #1b202b;
+  color: #c8d0dc;
+}
+html.navy :not(pre) > code.hljs,
+html.navy :not(pre) > code {
+  background: #222838;
+  color: var(--inline-code-color);
+}
+html.navy pre {
+  border: 1px solid var(--quote-border);
+  border-radius: 6px;
+}
+
+/* Calmer vertical rhythm than mdBook's defaults. */
+.content main h2 {
+  margin-block: 1.8em 0.6em;
+}
+.content main h3 {
+  margin-block: 1.4em 0.5em;
+}
+.content main h1 + h2 {
+  margin-top: 1em;
+}
+
+/* A little more room between the viewport edge and the sidebar tree where the desktop allows it. */
+@media (min-width: 1080px) {
+  .sidebar .sidebar-scrollbox {
+    padding-inline-start: 22px;
+  }
+}
+
+/* Sidebar: a classic tree. Section nodes fold their pages; guide lines show nesting.
+   Section nodes keep twice the native space above them and the native space below. */
+.sidebar .chapter > li.chapter-item:has(> ol.section) {
+  margin-block-start: 1.2em;
+}
+.sidebar .chapter li > .chapter-link-wrapper > span {
+  font-weight: 600;
+  color: var(--sidebar-fg);
+}
+/* A group row is one click target, from its title to its chevron. It carries no hover background:
+   the label and chevron turn the sidebar's own link blue instead, the same token mdBook uses for a
+   hovered sidebar link. The hit area also reaches up into the gap above the row without moving the
+   label, so the whole spacing between sections is clickable. */
+.sidebar .chapter .wiki-group {
+  cursor: pointer;
+  margin-block-start: -0.5em;
+  margin-inline-start: -0.4em;
+  padding-block-start: 0.5em;
+  padding-inline-start: 0.4em;
+  user-select: none;
+}
+.sidebar .chapter .wiki-group:hover > :is(span, .chapter-fold-toggle) {
+  color: var(--sidebar-active);
+}
+.sidebar .chapter .wiki-group > span {
+  flex: 1;
+}
+.sidebar .chapter .wiki-group > span:focus-visible {
+  outline: 2px solid var(--links);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.sidebar .chapter ol.section > li.chapter-item {
+  margin-block-start: 0.25em;
+}
+.sidebar .chapter ol.section {
+  margin-inline-start: 0.35em;
+  padding-inline-start: 0.8em;
+  border-inline-start: 1px solid var(--sidebar-spacer);
+}
+.sidebar .chapter li.chapter-item > .chapter-link-wrapper > a:not(.chapter-fold-toggle) {
+  flex: 1;
+  margin-inline-start: -0.4em;
+  padding: 3px 0.4em;
+  border-radius: 4px;
+}
+.sidebar .chapter li.chapter-item > .chapter-link-wrapper > a:not(.chapter-fold-toggle):hover {
+  background: var(--theme-hover);
+  text-decoration: none;
+}
+.sidebar .chapter li a.active {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--sidebar-active) 12%, transparent);
+}
+.sidebar .chapter .chapter-fold-toggle {
+  opacity: 0.6;
+}
+.sidebar .chapter .chapter-fold-toggle:hover {
+  opacity: 1;
+}
+
+/* One light/dark switch replaces the native five-theme palette. */
+#mdbook-theme-toggle {
+  display: none;
+}
+.wiki-theme-toggle,
+.wiki-open-current {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--icons);
+}
+.wiki-theme-toggle:hover,
+.wiki-open-current:hover {
+  color: var(--icons-hover);
+}
+
+/* Menu-bar button groups are centred on the bar's height. */
+#mdbook-menu-bar .left-buttons,
+#mdbook-menu-bar .right-buttons {
+  display: flex;
+  align-items: center;
+  min-height: var(--menu-bar-height);
+}
+
+/* Language switch in the menu bar: plain adjacent links with no container chrome. Only the active
+   language carries a filled bubble, so the current language is a tinted shape against the page
+   background instead of an island inside a capsule track. */
+.wiki-locale-choices {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  margin-inline: 0.4rem;
+  vertical-align: middle;
+}
+.wiki-locale-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.6em;
+  min-height: 26px;
+  padding: 0 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-family: sans-serif;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--icons);
+  text-decoration: none;
+  transition: color 0.15s, background-color 0.15s, border-color 0.15s;
+}
+.wiki-locale-link:hover {
+  color: var(--fg);
+  text-decoration: none;
+}
+.wiki-locale-link[aria-current="true"] {
+  background: color-mix(in srgb, var(--links) 18%, transparent);
+  border-color: color-mix(in srgb, var(--links) 35%, transparent);
+  color: var(--links);
+  cursor: default;
+}
+.wiki-locale-link:focus-visible,
+.wiki-context a:focus-visible,
+.wiki-tag:focus-visible {
+  outline: 2px solid var(--links);
+  outline-offset: 2px;
+}
+
+/* Search opens as an inset panel centred in the viewport instead of pushing the article down: a
+   darker surface, narrower than the page, that scrolls on its own and dismisses on an outside click.
+   The article keeps its layout and scroll position while results are read or dismissed. */
+html,
+.sidebar .sidebar-scrollbox {
+  scrollbar-gutter: stable;
+}
+html:not([data-wiki-layer="error"], [data-wiki-layer="outside"]):has(> body > #mdbook-search-wrapper:not(.hidden)) {
+  overflow: hidden;
+  scrollbar-gutter: auto;
+
+  /* Reserve the gutter inside the document so the fixed backdrop can cover it. */
+  & > body {
+    overflow: hidden;
+    scrollbar-gutter: stable;
+    background-color: var(--bg);
+  }
+
+  .sidebar .sidebar-scrollbox {
+    overflow: hidden;
+  }
+
+  & > body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 102;
+    background: rgb(0 0 0 / 60%);
+  }
+}
+#mdbook-search-wrapper:not(.hidden) {
+  position: fixed;
+  inset: var(--menu-bar-height) 0;
+  width: min(100% - 4 * var(--page-padding), 62ch);
+  margin-inline: auto;
+  z-index: 103;
+  box-sizing: border-box;
+  padding: 0.75rem calc(var(--page-padding) + 5px) 3rem;
+  border: 1px solid var(--table-border-color);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 86%, black);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 24%);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Keep the sidebar drawer above the article when search is closed. */
+.sidebar {
+  z-index: 100;
+}
+#mdbook-searchbar:focus {
+  border-color: var(--sidebar-header-border-color);
+  outline: 1px solid var(--sidebar-header-border-color);
+}
+#mdbook-searchresults {
+  overflow-wrap: anywhere;
+}
+
+/* Layer bar: present only with several layers, an active filter or an error. */
+.wiki-context {
+  max-width: var(--content-max-width);
+  margin: 0.8rem auto 0;
+  padding: 0 15px 0.8rem;
+  border-bottom: 1px solid var(--table-border-color);
+}
+.wiki-context-row,
+.wiki-layer-choices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.wiki-context a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0.2rem 0.9rem;
+  border: 1px solid var(--table-border-color);
+  border-radius: 999px;
+  box-sizing: border-box;
+  text-decoration: none;
+}
+.wiki-context a[aria-current="true"] {
+  border-color: var(--links);
+  background: var(--links);
+  color: var(--bg);
+  font-weight: 700;
+}
+.wiki-context-status {
+  margin: 0.6rem 0 0;
+  font-size: 0.9em;
+  color: var(--icons);
+}
+.wiki-context-status:empty {
+  display: none;
+}
+.wiki-basic-notice nav {
+  display: flex;
+  gap: 0.6rem;
+}
+
+/* Layer tags above an article title. */
+.wiki-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 -0.6em;
+}
+.wiki-tag {
+  display: inline-block;
+  padding: 0.1rem 0.7rem;
+  border-radius: 999px;
+  background: var(--quote-bg);
+  border: 1px solid var(--quote-border);
+  font-family: var(--mono-font, monospace);
+  font-size: 0.85em;
+  text-decoration: none;
+}
+.wiki-tag:hover {
+  text-decoration: none;
+  border-color: var(--links);
+}
+
+/* Contents page and article metadata. */
+.wiki-summary {
+  color: var(--icons);
+}
+.content main ul:has(.wiki-summary) {
+  padding-inline-start: 1.2em;
+}
+.content main ul:has(.wiki-summary) > li {
+  margin-block: 0.35em;
+}
+.wiki-meta {
+  font-size: 0.9em;
+  color: var(--icons);
+}
+
+[data-wiki-layer-exit]::after {
+  content: " ↗ " attr(data-wiki-layer-exit);
+  font-size: 0.8em;
+}
+.chapter-item[hidden],
+.part-title[hidden],
+main [hidden] {
+  display: none !important;
+}
+html[data-wiki-layer="pending"] main {
+  visibility: hidden;
+}
+html[data-wiki-layer="error"] :is(.content, #mdbook-sidebar, #mdbook-search-wrapper),
+html[data-wiki-layer="outside"] :is(.content, #mdbook-sidebar, #mdbook-search-wrapper) {
+  display: none;
+}
+@media (max-width: 440px) {
+  .content {
+    padding-inline: 12px;
+  }
+  .content table {
+    font-size: 0.9em;
+  }
+  .wiki-locale-link {
+    padding: 0 0.5rem;
+  }
+}
