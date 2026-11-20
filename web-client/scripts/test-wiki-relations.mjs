@@ -12,6 +12,7 @@ import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { auditTextDetailed } from '../../wiki/scripts/audit-native-russian.mjs';
 import {
   formatRussianRelation,
   russianRelationLabels,
@@ -27,8 +28,89 @@ const widget = readFileSync(
   resolve(repoRoot, 'web-client/src/lib/widgets/WikiWidget.svelte'),
   'utf8',
 );
+const styleConfig = JSON.parse(
+  readFileSync(resolve(repoRoot, 'wiki/native-russian-style.json'), 'utf8'),
+);
+const relationSource = readFileSync(
+  resolve(scriptDir, '../src/lib/wiki/relation-phrases.ts'),
+  'utf8',
+);
 const titlesById = new Map(graph.nodes.map((node) => [node.id, node.title.ru]));
 const relationTypes = [...new Set(graph.edges.map(({ type }) => type))].sort();
+
+function findBalancedObject(text, start) {
+  let depth = 0;
+  let quote = null;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote) {
+      if (character === '\\') index += 1;
+      else if (character === quote) quote = null;
+    } else if (character === "'" || character === '"' || character === '`')
+      quote = character;
+    else if (character === '{') depth += 1;
+    else if (character === '}' && --depth === 0) return index + 1;
+  }
+  return -1;
+}
+
+function stringRecords(
+  source,
+  rangeStart = 0,
+  rangeEnd = source.length,
+  valuesOnly = false,
+) {
+  const records = [];
+  for (let index = rangeStart; index < rangeEnd; ) {
+    const quote = source[index];
+    if (quote !== "'" && quote !== '"' && quote !== '`') {
+      index += 1;
+      continue;
+    }
+    const start = index;
+    let value = '';
+    for (index += 1; index < rangeEnd; index += 1) {
+      if (source[index] === '\\') {
+        value += source[index] + (source[index + 1] ?? '');
+        index += 1;
+        continue;
+      }
+      if (source[index] === quote) break;
+      value += source[index];
+    }
+    const isValue = source.slice(rangeStart, start).trimEnd().endsWith(':');
+    if (!valuesOnly || isValue) {
+      const prefix = source.slice(0, start + 1);
+      records.push({
+        value,
+        start,
+        line: (prefix.match(/\n/g)?.length ?? 0) + 1,
+        column: start - prefix.lastIndexOf('\n') + 1,
+      });
+    }
+    index += 1;
+  }
+  return records;
+}
+
+function extractRussianWidgetStrings(source) {
+  const records = stringRecords(source).filter(({ value }) =>
+    /\p{Script=Cyrillic}/u.test(value),
+  );
+  const widgetStart = source.indexOf('const widgetText');
+  const localeStart = source.indexOf("currentLocale === 'ru'", widgetStart);
+  const objectStart = source.indexOf('{', localeStart);
+  const objectEnd = findBalancedObject(source, objectStart);
+  if (widgetStart < 0 || localeStart < 0 || objectStart < 0 || objectEnd < 0)
+    throw new Error('Russian WikiWidget copy object not found');
+  for (const record of stringRecords(source, objectStart, objectEnd, true)) {
+    if (!records.some(({ start }) => start === record.start))
+      records.push(record);
+  }
+  return records
+    .sort((left, right) => left.start - right.start)
+    .map(({ start: _start, ...record }) => record);
+}
 
 // These reviewer-selected examples are an independent acceptance fixture, not a
 // claim that automation proves the fluency or meaning of all 92 labels. Human
@@ -233,6 +315,56 @@ test('unknown relation uses a neutral label while retaining explicit canonical e
       target: 'Цель',
     },
   );
+});
+
+test('extracts only displayed Russian WikiWidget string values', () => {
+  const source = `const widgetText = currentLocale === 'ru' ? {\n  provenance: 'Происхождение сведений',\n  confidence: 'Степень обоснованности',\n  helper: 'runtime routing',\n} : { provenance: 'Compiled provenance' };`;
+  const records = extractRussianWidgetStrings(source);
+  assert.deepEqual(
+    records.map(({ value }) => value),
+    ['Происхождение сведений', 'Степень обоснованности', 'runtime routing'],
+  );
+  assert.deepEqual(
+    records.map(({ line }) => line),
+    [2, 3, 4],
+  );
+  assert.deepEqual(
+    records.flatMap(({ value }) =>
+      auditTextDetailed(value, styleConfig).findings.map(({ match }) => match),
+    ),
+    ['runtime routing'],
+  );
+});
+
+test('does not scan Svelte and TypeScript identifiers around the Russian object', () => {
+  const source = `let provenance = true;\nconst widgetText = currentLocale === 'ru' ? { title: 'Вики' } : { title: 'Wiki' };\nconst confidence = 1;`;
+  assert.deepEqual(
+    extractRussianWidgetStrings(source).map(({ value }) => value),
+    ['Вики'],
+  );
+});
+
+test('keeps rendered Russian copy free of reviewed heuristic debt', () => {
+  const inputs = [
+    [extractRussianWidgetStrings(widget), 'WikiWidget.svelte'],
+    [
+      stringRecords(relationSource).filter(({ value }) =>
+        /\p{Script=Cyrillic}/u.test(value),
+      ),
+      'relation-phrases.ts',
+    ],
+  ];
+  for (const [records, source] of inputs) {
+    assert.ok(records.length > 0, `${source} has no extracted Russian copy`);
+    const findings = records.flatMap(
+      ({ value, line, column }) =>
+        auditTextDetailed(value, styleConfig, source, {
+          baseLine: line,
+          baseColumn: column,
+        }).findings,
+    );
+    assert.deepEqual(findings, []);
+  }
 });
 
 test('WikiWidget constructs incoming and outgoing items from canonical edge endpoints', () => {

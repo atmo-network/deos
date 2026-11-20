@@ -10,7 +10,7 @@ usage() {
 Usage: audit-native-russian.sh [OPTIONS]
 
 Report reviewed heuristic English borrowings, calques, and noun chains in Russian
-Wiki display prose, localized manifest labels, and extracted WikiWidget strings.
+Wiki display prose and localized manifest labels.
 This deterministic audit does not claim to prove native fluency; completion still
 requires independent bilingual review.
 

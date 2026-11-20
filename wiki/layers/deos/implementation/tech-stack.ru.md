@@ -14,7 +14,7 @@ sources:
   - resource: ../../../../template/Cargo.toml
   - resource: ../../../../template/runtime/src/lib.rs
   - resource: ../../../../web-client/package.json
-  - resource: ../../../../web-client/src/lib/read-model.ts
+  - resource: ../../../../web-client/docs/architecture.en.md
   - resource: ../../../../simulators/tmctol/README.md
   - resource: ../../../../scripts/README.md
 status: stable

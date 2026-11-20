@@ -9,7 +9,6 @@ import {
   auditText,
   auditTextDetailed,
   extractManifestEvidence,
-  extractRussianWidgetStrings,
   stripNonProse,
 } from "./audit-native-russian.mjs";
 
@@ -23,20 +22,6 @@ function matches(source, customConfig = config, options = {}) {
   return auditText(source, customConfig, "fixture", options).map(
     ({ match }) => match,
   );
-}
-
-function parseRussianRelationLabels() {
-  const source = readFileSync(
-    resolve(projectRoot, "web-client/src/lib/wiki/relation-phrases.ts"),
-    "utf8",
-  );
-  const labels = new Map();
-  for (const match of source.matchAll(
-    /^\s*(?:'([^']+)'|([A-Za-z-]+)):\s*'([^']+)',$/gm,
-  )) {
-    labels.set(match[1] ?? match[2], match[3]);
-  }
-  return labels;
 }
 
 test("detects reviewed borrowings, noun chains, and mixed-language calques", () => {
@@ -242,86 +227,6 @@ test("reports manifest display strings by escaped JSON Pointer", () => {
     evidence.displayRecords.map(({ pointer }) => pointer),
     ["/title/ru", "/a~1b/ru"],
   );
-});
-
-test("extracts only displayed Russian WikiWidget string values", () => {
-  const source = `const widgetText = currentLocale === 'ru' ? {\n  provenance: 'Происхождение сведений',\n  confidence: 'Степень обоснованности',\n  helper: 'runtime routing',\n} : { provenance: 'Compiled provenance' };`;
-  const records = extractRussianWidgetStrings(source);
-  assert.deepEqual(
-    records.map(({ value }) => value),
-    ["Происхождение сведений", "Степень обоснованности", "runtime routing"],
-  );
-  assert.deepEqual(
-    records.map(({ line }) => line),
-    [2, 3, 4],
-  );
-  assert.deepEqual(
-    records.flatMap(({ value }) => matches(value)),
-    ["runtime routing"],
-  );
-});
-
-test("does not scan Svelte and TypeScript identifiers around the Russian object", () => {
-  const source = `let provenance = true;\nconst widgetText = currentLocale === 'ru' ? { title: 'Вики' } : { title: 'Wiki' };\nconst confidence = 1;`;
-  assert.deepEqual(
-    extractRussianWidgetStrings(source).map(({ value }) => value),
-    ["Вики"],
-  );
-});
-
-test("covers every graph relation with one compact endpoint-independent Russian label", () => {
-  const widget = readFileSync(
-    resolve(projectRoot, "web-client/src/lib/widgets/WikiWidget.svelte"),
-    "utf8",
-  );
-  const graph = JSON.parse(
-    readFileSync(resolve(projectRoot, "wiki/layers/deos/_meta/graph.json"), "utf8"),
-  );
-  const labels = parseRussianRelationLabels();
-  const relationTypes = new Set(graph.edges.map(({ type }) => type));
-  assert.equal(relationTypes.size, 92);
-  assert.equal(labels.size, 92);
-  assert.deepEqual(
-    [...relationTypes].filter((type) => !labels.has(type)),
-    [],
-  );
-  for (const [type, label] of labels) {
-    assert.ok(label, `${type} lacks a label`);
-    assert.ok(label.length <= 56, `${type} is not compact`);
-    assert.doesNotMatch(label, /(?:эта|этой|связанн(?:ая|ой|ую)) страница/iu);
-  }
-  assert.match(widget, /itemsById\.get\(edge\.from\)/);
-  assert.match(widget, /itemsById\.get\(edge\.to\)/);
-  assert.match(
-    widget,
-    /formatRelation\(edge\.type, source\.title, target\.title\)/,
-  );
-  assert.doesNotMatch(widget, /forward|inverse/);
-  assert.match(widget, /\{relation\.source\}/);
-  assert.match(widget, /\{relation\.label\}/);
-  assert.match(widget, /\{relation\.target\}/);
-});
-
-test("keeps targeted reviewer acceptance labels without claiming full-surface fluency", () => {
-  const labels = parseRussianRelationLabels();
-  const expected = {
-    "current-documentation-surface":
-      "представление статуса в текущей документации",
-    "current-product-surface": "представление статуса в текущем клиенте",
-    entrypoint: "переход к",
-    "explains-protection-bias": "объяснение приоритета защиты",
-    "implements-read-model-honesty":
-      "реализация честного представления данных для чтения",
-    "instance-view": "представление отдельного экземпляра",
-    "overview-parent": "включение в общий обзор",
-    "publishes-observations": "публикация типизированных наблюдений",
-    requires: "требование",
-    "subsystem-view": "выделение подсистемы",
-    "system-context": "размещение в контексте системы",
-  };
-  for (const [type, label] of Object.entries(expected)) {
-    assert.equal(labels.get(type), label, type);
-  }
 });
 
 test("guards reviewed Actors grammar and Russian formula explanations", () => {
