@@ -19,4 +19,4 @@ This directory contains independently owned documentation spaces. A namespace id
 
 - [Repository overview](../README.md)
 - [Economic simulators](../simulators/README.md)
-- [Wiki](../wiki/README.md)
+- [Public DEOS Wiki](https://atmo-network.github.io/deos/)

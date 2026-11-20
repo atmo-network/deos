@@ -551,7 +551,10 @@ run_audit() {
 
     check_fixed_reference "$PROJECT_ROOT/docs/deos/README.md" "[DEOS Actors Specification](../../template/pallets/actors/docs/specification.en.md)" "Actors package-navigation drift"
     check_fixed_reference "$TEMPLATE_DIR/pallets/actors/README.md" "[DEOS Actors Specification](./docs/specification.en.md)" "Actors package-navigation drift"
-    check_fixed_reference "$PROJECT_ROOT/docs/deos/README.md" "[Web Client Architecture](../../web-client/docs/architecture.en.md)" "Web-client architecture-navigation drift"
+    if ! rg -q '\[Web Client Architecture\]\(https://github\.com/atmo-network/deos/blob/[0-9a-f]{40}/web-client/docs/architecture\.en\.md\)' "$PROJECT_ROOT/docs/deos/README.md"; then
+        log_error "Web-client architecture-navigation drift: framework docs require an immutable archive-safe link"
+        exit 1
+    fi
     check_fixed_reference "$PROJECT_ROOT/web-client/README.md" "[\`docs/architecture.en.md\`](./docs/architecture.en.md)" "Web-client architecture-navigation drift"
     if [[ ! -f "$PROJECT_ROOT/web-client/docs/architecture.en.md" || -e "$PROJECT_ROOT/docs/web-client.architecture.en.md" ]]; then
         log_error "Web-client architecture ownership drift"

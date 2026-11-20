@@ -62,7 +62,8 @@ The TMCTOL specification owns project-independent standard mathematics. The Buil
 ## Workspace and Operations
 
 - [Template Workspace](../../template/README.md)
-- [Experimental Web Client](https://github.com/atmo-network/deos/tree/0.7.28/web-client) ([Web Client Architecture](../../web-client/docs/architecture.en.md) in the full checkout only)
+- [Experimental Web Client](https://github.com/atmo-network/deos/tree/7cf526687d4503d24dea1f19a8a3a47f28965971/web-client) ([Web Client Architecture](https://github.com/atmo-network/deos/blob/7cf526687d4503d24dea1f19a8a3a47f28965971/web-client/docs/architecture.en.md))
+- [Public DEOS Wiki](https://atmo-network.github.io/deos/)
 - [Simulator](../../simulators/tmctol/README.md)
 - [Project Scripts](../../scripts/README.md)
 - [Delivery History](../../CHANGELOG.md)
