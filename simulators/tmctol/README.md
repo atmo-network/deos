@@ -7,17 +7,16 @@ This module is the **spec-side mathematical proving ground** used to:
 - Test tokenomic hypotheses before they become runtime contracts
 - Validate economic formulas before or alongside runtime implementation
 - Explore parameter behavior (`price_initial`, `slope`, fees, mint shares)
-- Exercise deterministic regression scenarios (`67` tests)
+- Exercise deterministic regression scenarios (`76` tests)
 
 ---
 
 ## What is inside
 
-- `model.js` — core model (TMC, TOL, XYK, Router, FeeManager)
+- `model.js` — core model (TMC, TOL, XYK, Router, FeeManager) and the second-order `$BLDR` contour
 - `tests.js` — executable test suite
 - `tests.md` — verbose mirror/explanations for test sections
 - `types.d.ts` — simulator type shapes
-- `second-order.js` / `second-order.tests.js` — the `$BLDR` contour composed from the same primitives, with its own suite
 
 ---
 
@@ -31,21 +30,15 @@ node ./simulators/tmctol/tests.js
 
 Expected output ends with:
 
-- `Total: 67`
-- `Passed: 67`
+- `Total: 76`
+- `Passed: 76`
 - `Failed: 0`
 
 ---
 
 ## Second-order `$BLDR` contour
 
-`second-order.js` reuses the unchanged TMC, XYK and Router with `$BLDR` as native and `$NTVE` as foreign, so route choice by recipient output comes from the first-order Router. Only custody differs: the protocol share splits floor half to BLDR Treasury and the rest, with all collateral, to BLDR Anchor. It adds `anchor_support` (live LP claim only), `stress_floor`/`composite_floor` (explicit pressure assumptions, including correlated first-order stress and invoice-payout pressure), and `bridge_round`, one analytical round of the [Parent Capital Bridge](../../docs/deos/builder-economy.contract.en.md#6-parent-capital-bridge) that keeps reserve release, route, mint or market acquisition, burn, treasury funding and anchor effects separate. `Xyk.remove_liquidity` supplies the pro-rata release.
-
-```bash
-node ./simulators/tmctol/second-order.tests.js
-```
-
-The suite runs 14 fixed deterministic cases. It proves formula and ledger conservation under stated assumptions; it is not a market guarantee, an Actor retry/scheduling model or runtime arithmetic parity.
+`create_builder_system` reuses the unchanged TMC, XYK and Router with `$BLDR` as native and `$NTVE` as foreign, so route choice by recipient output comes from the first-order Router. Only custody differs: `BuilderTol` splits the protocol share into floor half for BLDR Treasury and the rest, with all collateral, for BLDR Anchor. `anchor_support` counts the live LP claim only, and `bridge_round` runs one analytical round of the [Parent Capital Bridge](../../docs/deos/builder-economy.contract.en.md#6-parent-capital-bridge) that keeps reserve release, route, mint or market acquisition, burn, treasury funding and anchor effects separate. `Xyk.remove_liquidity` supplies the pro-rata release. Tests `15.x` cover conservation, route attribution and conditional floors (invoice-payout and correlated first-order stress) under stated assumptions; they are not a market guarantee, an Actor retry/scheduling model or runtime arithmetic parity.
 
 ---
 

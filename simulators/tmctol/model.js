@@ -1197,3 +1197,118 @@ export function create_system(
   const router = new Router(xyk, tmc, fee_manager, config.router);
   return { xyk, tol, tmc, fee_manager, router };
 }
+
+// --- Second-Order Contour ($BLDR) ---
+// Reuses the first-order primitives: "native" is $BLDR and "foreign" is the parent $NTVE, so the
+// unchanged Router already compares TMC and XYK by recipient output. Only custody differs.
+// Contract: docs/deos/builder-economy.contract.en.md.
+
+/** One sealed Anchor-type bucket plus the independent spendable BLDR Treasury. */
+export class BuilderTol extends Tol {
+  constructor(/** @type {Xyk} */ xyk) {
+    super(xyk, { bucket_shares: { anchor_ppb: PPB } });
+    this.treasury_native = 0n;
+  }
+
+  /** Protocol share T: floor(T / 2) to Treasury, the rest with all collateral to the Anchor lane. */
+  receive_mint_allocation(
+    /** @type {bigint} */ protocol_native,
+    /** @type {bigint} */ collateral,
+  ) {
+    const direct_treasury = protocol_native / 2n;
+    this.treasury_native += direct_treasury;
+    return super.receive_mint_allocation(
+      protocol_native - direct_treasury,
+      collateral,
+    );
+  }
+
+  anchor_lp() {
+    return this.buckets.get("anchor")?.lp_tokens ?? 0n;
+  }
+}
+
+export function create_builder_system(
+  /** @type {SystemConfigOverride} */ config_override = {},
+) {
+  const router_config = { ...DEFAULT_CONFIG.router, ...config_override.router };
+  const xyk = new Xyk({ ...DEFAULT_CONFIG.xyk, ...config_override.xyk });
+  const tol = new BuilderTol(xyk);
+  const tmc = new Tmc(tol, {
+    ...DEFAULT_CONFIG.tmc,
+    ...config_override.tmc,
+    mint_shares: {
+      ...DEFAULT_CONFIG.tmc.mint_shares,
+      ...config_override.tmc?.mint_shares,
+    },
+  });
+  const fee_manager = new FeeManager(xyk, tmc, router_config);
+  const router = new Router(xyk, tmc, fee_manager, router_config);
+  return { xyk, tol, tmc, fee_manager, router };
+}
+
+/** Only the live pro-rata LP reserve claim counts as anchor support; unmatched lane balances do not. */
+export function anchor_support(
+  /** @type {ReturnType<typeof create_builder_system>} */ builder,
+) {
+  const { xyk, tol } = builder;
+  const lp = tol.anchor_lp();
+  if (xyk.supply_lp === 0n) return { lp, bldr: 0n, ntve: 0n };
+  return {
+    lp,
+    bldr: BigMath.mul_div(xyk.reserve_native, lp, xyk.supply_lp),
+    ntve: BigMath.mul_div(xyk.reserve_foreign, lp, xyk.supply_lp),
+  };
+}
+
+/**
+ * One Parent Capital Bridge round. Bucket B releases a bounded LP portion to Treasury B; each
+ * reserve asset routes into $BLDR independently; each leg's recipient output Q splits into
+ * floor(Q / 2) burn and the rest to BLDR Treasury. A leg reports minted issuance apart from burn.
+ */
+export function bridge_round(
+  /** @type {ReturnType<typeof create_system>} */ parent,
+  /** @type {ReturnType<typeof create_builder_system>} */ builder,
+  /** @type {bigint} */ release_lp,
+) {
+  const bucket = parent.tol.buckets.get("b");
+  if (!bucket || release_lp <= 0n || release_lp > bucket.lp_tokens) {
+    throw new Error("Bucket B release must be positive and within its LP balance");
+  }
+  const lp_before = bucket.lp_tokens;
+  bucket.lp_tokens -= release_lp;
+  bucket.contributed_native -= BigMath.mul_div(bucket.contributed_native, release_lp, lp_before);
+  bucket.contributed_foreign -= BigMath.mul_div(bucket.contributed_foreign, release_lp, lp_before);
+  const released = parent.xyk.remove_liquidity(release_lp);
+
+  const acquire = (/** @type {bigint} */ ntve_in) => {
+    const supply_before = builder.tmc.supply;
+    const fee_burn_before = builder.fee_manager.total_native_burned;
+    const treasury_before = builder.tol.treasury_native;
+    const swap = builder.router.swap_foreign_to_native(ntve_in);
+    const fee_burn = builder.fee_manager.total_native_burned - fee_burn_before;
+    const burn = swap.native_out / 2n;
+    if (burn > 0n) builder.tmc.burn_native(burn);
+    const recycled = swap.native_out - burn;
+    builder.tol.treasury_native += recycled;
+    return {
+      route: swap.route,
+      ntve_in,
+      router_fee: swap.foreign_router_fee,
+      ntve_routed: swap.foreign_net,
+      recipient_out: swap.native_out,
+      burn,
+      recycled_treasury: recycled,
+      minted: builder.tmc.supply - supply_before + burn + fee_burn,
+      direct_treasury: builder.tol.treasury_native - treasury_before - recycled,
+    };
+  };
+
+  const ntve_leg = acquire(released.native_out);
+  const parent_swap = parent.router.swap_foreign_to_native(released.foreign_out);
+  const foreign_leg = {
+    parent: { route: parent_swap.route, foreign_in: parent_swap.foreign_in, ntve_out: parent_swap.native_out },
+    ...acquire(parent_swap.native_out),
+  };
+  return { released, ntve_leg, foreign_leg };
+}

@@ -6,7 +6,7 @@ Comprehensive test suite detalization synchronized with `/simulators/tmctol/test
 
 ## Test Structure Overview
 
-- Total Tests: 67
+- Total Tests: 76
 - Purpose: Formal verification of TMCTOL mathematical guarantees, component behavior, and emergent properties
 - Methodology: Mathematical Foundations → Core Components → Integration Flows → System Properties → Economic Security
 - Architecture Symmetry: Tests mirror TMCTOL system architecture for progressive comprehension
@@ -549,7 +549,7 @@ node ./simulators/tmctol/tests.js
 
 - Expected Output: Minimal statistics, error codes only for failures
 - Tolerance: Every `assertApprox` tolerance is relative PPB of `abs(expected)`; 10,000,000 PPB is 1%. Zero expected requires exact equality.
-- Coverage: 67 tests validating 13 system layers plus the assertion contract
+- Coverage: 76 tests validating 13 system layers, the assertion contract and the second-order contour
 - Documentation Standard: Each test includes Nature/Necessity/Validates/Failure Criteria
 
 ---
@@ -578,6 +578,7 @@ node ./simulators/tmctol/tests.js
 - Economic Security: 4 tests for attack resistance and capital efficiency (continuous deployment vs idle vaults)
 - Adaptive System Behaviors: 8 tests for intelligent system responses and two-phase reward routing
 - Reporting & Conformance Metrics: 5 tests for floor reporting, burn liveness, Zap accounting, and ledger conservation
+- Second-Order Contour: 9 tests for BLDR mint custody, bridge conservation, route attribution and conditional floors
 - Philosophy: Tests prove specifications; specifications guide implementation; implementation validates mathematics.
 
 ---
@@ -590,6 +591,73 @@ node ./simulators/tmctol/tests.js
 - Necessity: Prevents permissive tolerance units from hiding incorrect economic claims.
 - Validates: Inclusive 1% boundary, signed expected magnitude, exact zero, rejection of wrong floor ratios and thousand-fold fee-unit errors.
 - Failure Criteria: A deliberate mismatch passes or a valid boundary fails.
+
+## 15. Second-Order Contour ($BLDR)
+
+The `$BLDR` contour reuses the first-order TMC, XYK and Router with `$BLDR` as native and `$NTVE` as foreign; only custody and the parent bridge are new. Assumptions are explicit and none is a market guarantee.
+
+### 15.1 BLDR Mint Split and Anchor-Directed Collateral
+
+- Nature: Mints through the `$BLDR` TMC and inspects the three allocations and the collateral lane.
+- Necessity: The second-order split is floor-half of the protocol share to BLDR Treasury and the rest, with all collateral, to BLDR Anchor.
+- Validates: `U + anchor + treasury = M`, direct treasury `floor(T / 2)`, each share about one third, and collateral held only in the pool or the anchor lane buffer.
+- Failure Criteria: Issuance does not conserve, the treasury share differs from `floor(T / 2)`, or collateral appears outside the anchor lane.
+
+### 15.2 Anchor Support Counts Only Live LP Claim
+
+- Nature: Compares the live pro-rata LP claim with and without unmatched lane balances.
+- Necessity: Floor claims may count only live LP reserve claims.
+- Validates: The Anchor owns all protocol-created LP, its claim stays within reserves, and extra buffer balances add no support.
+- Failure Criteria: Unmatched balances change reported support or the claim exceeds reserves.
+
+### 15.3 Contours Share Recipient Share, Not Collateral Custody
+
+- Nature: Mints equal collateral through both contours.
+- Necessity: The contours share only the one-third anchor-directed issuance invariant; collateral allocation is topology-specific.
+- Validates: Both recipient shares are about one third, first-order Bucket A holds half of the LP, and BLDR Anchor holds all of it.
+- Failure Criteria: Either contour deviates from one third, or the collateral shares are inferred equal.
+
+### 15.4 Bridge Release and Acquisition Conservation
+
+- Nature: Releases a bounded Bucket B LP portion and routes both reserve assets into `$BLDR`.
+- Necessity: The bridge must neither lose nor invent a reserve asset or acquired `$BLDR`.
+- Validates: Bucket B falls exactly, reserves leave the parent pool pro rata, each asset is consumed as routed plus fee, and each leg splits `Q` into `floor(Q / 2)` burn and recycled treasury.
+- Failure Criteria: Any released amount, fee, burn or treasury amount fails to reconcile.
+
+### 15.5 Over-Release Fails Before Any Change
+
+- Nature: Requests one LP unit more than Bucket B holds.
+- Necessity: A failed release must leave the parent pool, bucket and supply untouched.
+- Validates: The over-release is rejected and the state snapshot is unchanged.
+- Failure Criteria: The release proceeds or partial state changes.
+
+### 15.6 TMC Leg Is Issuance Minus Burn
+
+- Nature: Runs a bridge round where the pool wins the first leg and its price impact hands the second leg to the TMC.
+- Necessity: A TMC acquisition creates full issuance; reports must not call it deflationary alone.
+- Validates: Route choice by recipient output, issuance and direct treasury attribution, and supply delta equal to the sum of per-leg issuance minus burn.
+- Failure Criteria: Supply delta differs from issuance minus burn or the TMC leg lacks a direct treasury allocation.
+
+### 15.7 Market Leg Is Burn Alone
+
+- Nature: Sells `$BLDR` into the pool so the market route wins, then bridges.
+- Necessity: A market acquisition buys existing `$BLDR`; net issuance changes by `-burn`.
+- Validates: The market leg issues nothing, its net issuance is `-burn`, and supply delta still equals the per-leg sum.
+- Failure Criteria: A market leg mints or the supply delta deviates.
+
+### 15.8 BLDR Supply Equals the Sum of Its Holders
+
+- Nature: Chains mint, market buy, bridge and burn with default router fees.
+- Necessity: No `$BLDR` may appear or vanish outside mint and burn.
+- Validates: Supply equals outside holders, treasury, pool reserve, lane buffer and fee buffer.
+- Failure Criteria: Supply and holders diverge.
+
+### 15.9 Composite Floor Falls With Invoice Payout and Parent Stress
+
+- Nature: Evaluates the conditional floor under invoice-payout pressure into `$NTVE/$BLDR` and correlated first-order stress.
+- Necessity: Floor reports must state stress assumptions and may not exceed their conditions.
+- Validates: Floor in parent quote falls with payout pressure, falls further with correlated parent stress, and stays positive.
+- Failure Criteria: Added pressure raises the floor or collapses it to zero.
 
 ## Test Codes Reference & Architecture Mapping
 
@@ -607,4 +675,5 @@ node ./simulators/tmctol/tests.js
 * `11.1-11.4`: Economic Security & Attack Resistance
 * `12.1-12.8`: Adaptive System Behaviors
 * `13.1-13.5`: Reporting & Conformance Metrics
+* `15.1-15.9`: Second-Order Contour ($BLDR)
 - Use these codes in error messages for quick reference to this documentation.

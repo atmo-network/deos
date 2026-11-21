@@ -7,6 +7,9 @@
 
 import {
   BigMath,
+  anchor_support,
+  bridge_round,
+  create_builder_system,
   create_system,
   PPB,
   PRECISION,
@@ -200,6 +203,7 @@ const TEST_SECTIONS = [
   [12, 8], // Adaptive System Behaviors
   [13, 5], // Reporting & Conformance Metrics
   [14, 1], // Assertion contract
+  [15, 9], // Second-order contour ($BLDR)
 ];
 
 let testCount = 0;
@@ -2230,6 +2234,154 @@ runTest("PPB Tolerance Negative Controls", () => {
     catch (error) { rejected = error instanceof TestFailure; }
     assert(rejected, "Wrong ratios and thousand-fold fee errors must fail");
   }
+});
+
+// 15. SECOND-ORDER CONTOUR ($BLDR)
+
+/** Parent first-order economy with a live Bucket B, plus a $BLDR contour seeded through its own TMC. */
+const buildEconomy = (/** @type {import("./model.js").SystemConfigOverride} */ override = {}) => {
+  const parent = create_system(override);
+  parent.router.swap_foreign_to_native(20_000n * PRECISION);
+  const builder = create_builder_system(override);
+  builder.router.swap_foreign_to_native(1_000n * PRECISION);
+  return { parent, builder };
+};
+const NO_ROUTER_FEE = { router: { fee_router_ppb: 0n } };
+const bucketB = (/** @type {ReturnType<typeof create_system>} */ parent) => parent.tol.buckets.get("b");
+const netIssuance = (/** @type {{ minted: bigint, burn: bigint }} */ leg) => leg.minted - leg.burn;
+const ONE_THIRD_TOLERANCE_PPB = 10n;
+
+runTest("BLDR Mint Split and Anchor-Directed Collateral", () => {
+  const builder = create_builder_system();
+  const result = builder.tmc.mint_native(5_000n * PRECISION);
+  const treasury = builder.tol.treasury_native;
+  const anchor_issuance = result.tol_native - treasury;
+  assert(treasury === result.tol_native / 2n, "Direct treasury is floor(T / 2)");
+  assert(result.user_native + anchor_issuance + treasury === result.total_minted, "U + anchor + treasury = M");
+  for (const share of [result.user_native, anchor_issuance, treasury]) {
+    assertApprox(share * 3n, result.total_minted, ONE_THIRD_TOLERANCE_PPB, "Each BLDR share is one third");
+  }
+  let paid = 5_000n * PRECISION;
+  for (const amount of [700n, 2_500n]) {
+    builder.tmc.mint_native(amount * PRECISION);
+    paid += amount * PRECISION;
+  }
+  assert(
+    builder.xyk.reserve_foreign + builder.tol.buffer_foreign === paid,
+    "All NTVE collateral sits in the pool or the anchor lane buffer",
+  );
+});
+
+runTest("Anchor Support Counts Only Live LP Claim", () => {
+  const { builder } = buildEconomy();
+  const support = anchor_support(builder);
+  assert(support.lp === builder.xyk.supply_lp, "BLDR Anchor owns every protocol-created LP");
+  assert(
+    support.bldr <= builder.xyk.reserve_native && support.ntve <= builder.xyk.reserve_foreign,
+    "Claim stays within reserves",
+  );
+  builder.tol.buffer_native += 999n * PRECISION;
+  builder.tol.buffer_foreign += 999n * PRECISION;
+  const padded = anchor_support(builder);
+  assert(padded.bldr === support.bldr && padded.ntve === support.ntve, "Unmatched lane balances add no support");
+});
+
+runTest("Contours Share Recipient Share, Not Collateral Custody", () => {
+  const parent = create_system();
+  const builder = create_builder_system();
+  const first = parent.tmc.mint_native(5_000n * PRECISION);
+  const second = builder.tmc.mint_native(5_000n * PRECISION);
+  assertApprox(first.user_native * 3n, first.total_minted, ONE_THIRD_TOLERANCE_PPB, "First-order recipient share");
+  assertApprox(second.user_native * 3n, second.total_minted, ONE_THIRD_TOLERANCE_PPB, "Second-order recipient share");
+  const lp = (/** @type {string} */ key) => parent.tol.buckets.get(key)?.lp_tokens ?? 0n;
+  const parent_lp = ["a", "b", "c", "d"].reduce((sum, key) => sum + lp(key), 0n);
+  assertApprox(lp("a") * 2n, parent_lp, ONE_THIRD_TOLERANCE_PPB, "First-order Bucket A holds half of the LP");
+  assert(builder.tol.anchor_lp() === builder.xyk.supply_lp, "BLDR Anchor holds all of the LP");
+});
+
+runTest("Bridge Release and Acquisition Conservation", () => {
+  const { parent, builder } = buildEconomy();
+  const bucket = bucketB(parent);
+  assert(bucket, "Bucket B exists");
+  const before = { lp: bucket.lp_tokens, native: parent.xyk.reserve_native, foreign: parent.xyk.reserve_foreign, supply: parent.xyk.supply_lp };
+  const release = before.lp / 4n;
+  const { released, ntve_leg, foreign_leg } = bridge_round(parent, builder, release);
+  assert(bucket.lp_tokens === before.lp - release, "Bucket B falls by the release");
+  assert(released.native_out === (before.native * release) / before.supply, "Native reserve leaves pro rata");
+  assert(released.foreign_out === (before.foreign * release) / before.supply, "Foreign reserve leaves pro rata");
+  assert(ntve_leg.ntve_routed + ntve_leg.router_fee === released.native_out, "NTVE reserve = routed + fee");
+  assert(foreign_leg.parent.foreign_in === released.foreign_out, "Foreign reserve enters the parent route whole");
+  assert(foreign_leg.ntve_routed + foreign_leg.router_fee === foreign_leg.parent.ntve_out, "Parent proceeds = routed + fee");
+  for (const leg of [ntve_leg, foreign_leg]) {
+    assert(leg.burn === leg.recipient_out / 2n, "Burn is floor(Q / 2)");
+    assert(leg.burn + leg.recycled_treasury === leg.recipient_out, "Burn + recycled treasury = Q");
+  }
+});
+
+runTest("Over-Release Fails Before Any Change", () => {
+  const { parent, builder } = buildEconomy();
+  const bucket = bucketB(parent);
+  assert(bucket, "Bucket B exists");
+  const state = () => [parent.xyk.reserve_native, parent.xyk.supply_lp, bucket.lp_tokens, builder.tmc.supply].join(":");
+  const before = state();
+  let rejected = false;
+  try {
+    bridge_round(parent, builder, bucket.lp_tokens + 1n);
+  } catch {
+    rejected = true;
+  }
+  assert(rejected, "Release above the bucket balance is rejected");
+  assert(state() === before, "State is unchanged");
+});
+
+runTest("TMC Leg Is Issuance Minus Burn", () => {
+  const { parent, builder } = buildEconomy(NO_ROUTER_FEE);
+  const before = builder.tmc.supply;
+  const { ntve_leg, foreign_leg } = bridge_round(parent, builder, (bucketB(parent)?.lp_tokens ?? 0n) / 50n);
+  // The recipient gets one third of a TMC mint, so the pool wins the first leg; its impact hands the second to the TMC.
+  assert(ntve_leg.route === "XYK" && foreign_leg.route === "TMC", "Routes are chosen by recipient output, leg by leg");
+  assert(foreign_leg.minted > 0n && foreign_leg.direct_treasury > 0n, "A TMC leg issues and funds the direct treasury");
+  assertApprox(foreign_leg.recipient_out * 3n, foreign_leg.minted, ONE_THIRD_TOLERANCE_PPB, "Recipient share is attributable");
+  assertApprox(foreign_leg.direct_treasury * 3n, foreign_leg.minted, ONE_THIRD_TOLERANCE_PPB, "Direct treasury share is attributable");
+  assert(builder.tmc.supply - before === netIssuance(ntve_leg) + netIssuance(foreign_leg), "Supply delta = sum of leg (issuance - burn)");
+});
+
+runTest("Market Leg Is Burn Alone", () => {
+  const { parent, builder } = buildEconomy(NO_ROUTER_FEE);
+  // Selling BLDR into the pool pushes its price below the curve, so the market becomes the best route.
+  builder.router.swap_native_to_foreign(builder.xyk.reserve_native / 4n);
+  const before = builder.tmc.supply;
+  const { ntve_leg, foreign_leg } = bridge_round(parent, builder, (bucketB(parent)?.lp_tokens ?? 0n) / 50n);
+  assert(ntve_leg.route === "XYK", "A below-curve pool selects the market route");
+  assert(ntve_leg.minted === 0n && ntve_leg.direct_treasury === 0n, "A market leg issues nothing");
+  assert(netIssuance(ntve_leg) === -ntve_leg.burn, "Its net issuance is -burn");
+  assert(builder.tmc.supply - before === netIssuance(ntve_leg) + netIssuance(foreign_leg), "Supply delta = sum of leg (issuance - burn)");
+});
+
+runTest("BLDR Supply Equals the Sum of Its Holders", () => {
+  const { parent, builder } = buildEconomy();
+  const outside = builder.tmc.supply - builder.tol.treasury_native - builder.tol.buffer_native - builder.xyk.reserve_native - builder.fee_manager.buffer_native;
+  const buy = builder.router.swap_foreign_to_native(300n * PRECISION);
+  bridge_round(parent, builder, (bucketB(parent)?.lp_tokens ?? 0n) / 3n);
+  const holders =
+    outside + buy.native_out + builder.tol.treasury_native + builder.xyk.reserve_native + builder.tol.buffer_native + builder.fee_manager.buffer_native;
+  assert(builder.tmc.supply === holders, "No BLDR appears or disappears outside mint and burn");
+});
+
+runTest("Composite Floor Falls With Invoice Payout and Parent Stress", () => {
+  const { parent, builder } = buildEconomy();
+  const floorOf = (ntve_pressure = 0n, bldr_pressure = 0n) => {
+    const bldr_in_ntve = calculateStressFloor(builder.xyk.reserve_native, builder.xyk.reserve_foreign, bldr_pressure);
+    const ntve_in_parent = calculateStressFloor(parent.xyk.reserve_native, parent.xyk.reserve_foreign, ntve_pressure);
+    return BigMath.mul_div(bldr_in_ntve, ntve_in_parent, PRECISION);
+  };
+  const payout = builder.tol.treasury_native;
+  const calm = floorOf();
+  const invoice = floorOf(0n, payout);
+  const correlated = floorOf(parent.tmc.supply / 3n, payout);
+  assert(invoice < calm, "Invoice-payout pressure lowers the floor");
+  assert(correlated < invoice, "Correlated first-order stress lowers it further");
+  assert(correlated > 0n, "The stressed floor stays positive");
 });
 
 // FINAL STATISTICS
