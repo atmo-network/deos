@@ -211,6 +211,8 @@ The exact-core largest body-plus-current-DB sample models are 1850106000 ps for 
 
 Artifact paths below are relative to `template/target/actors-h1-suspended/`; the full CLI method is owned by the Scripts README. Successful runs retain all samples. The rejected one-step invocation produced no accepted sample artifact.
 
+> **Reading `template/target/` paths in this document.** Every such path names where a documented run writes inside the ignored Cargo build workspace; it is never a retained repository artifact and no reader should expect the file to exist in a checkout. What this document does own is the durable part: the exact hashes, byte sizes, source and runner identities, commands and scopes stated in the text, which reproduce the run. Evidence that must survive a build-directory clean belongs in a repository-owned or experiment-owned record, not here.
+
 | Artifact | SHA-256 |
 | --- | --- |
 | `user-retry.json` (axis sweep) | `2df88547950e1112756fbff5abe76b1dbd1a7a4a6338fdb779c1583e25d8dba4` |
