@@ -68,7 +68,7 @@ Registration exposes distinct existing-producer and new-producer measurements be
 
 ## Falsification and Validation
 
-Package tests pin SCALE variant order, storage names, duplicate and capacity rejection, lifecycle transitions, producer authorization, zero behavior, freshness boundaries, revision overflow, hook rollback and cardinality, exact EMA elapsed vectors, sample/elapsed monotonicity, bounded floor rounding through `u128::MAX`, and try-state corruption detection. `public_error_algebra_is_exhaustive_and_semantic` constructs every Oracle error and uses an exhaustive match so transport or duplicate variants cannot enter silently.
+Package tests pin SCALE variant order, storage names, duplicate and capacity rejection, lifecycle transitions, producer authorization, zero behavior, freshness boundaries, revision overflow, hook rollback and cardinality, exact EMA elapsed vectors, sample/elapsed monotonicity, bounded floor rounding through `u128::MAX`, and try-state corruption detection. `public_error_inventory_is_compiler_exhaustive_and_observation_boundary_stays_opaque` constructs every Oracle error and uses an exhaustive match so transport or duplicate variants cannot enter silently.
 
 The embedding runtime passes default, no-std, runtime-benchmark, and try-runtime profiles without DEOS types. Its unrelated sensor identities and provenance prove that the package contract does not require assets, pools, prices, Router, or Actors.
 
