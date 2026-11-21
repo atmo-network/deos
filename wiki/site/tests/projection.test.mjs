@@ -235,6 +235,12 @@ test('a reader-chosen sidebar width is restored before paint and stored under on
   assert.match(head, /window\.innerWidth - 100/);
   assert.match(theme, /mouseup/);
   assert.match(theme, /touchend/);
+  // A double click on the sidebar returns the site default: the inline width and the stored choice go.
+  assert.match(theme, /dblclick/);
+  assert.match(theme, /removeProperty\('--sidebar-target-width'\)/);
+  assert.match(theme, /removeItem\('mdbook-sidebar-width'\)/);
+  // Only a drag on the resize handle may write, so a plain click never invents a stored width.
+  assert.match(theme, /mdbook-sidebar-resize-handle/);
 });
 
 test('source-route atoms cannot escape the declared locale/plane or become executable URLs', () => {

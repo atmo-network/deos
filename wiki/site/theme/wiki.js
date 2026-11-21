@@ -48,8 +48,20 @@ new MutationObserver(refreshArticleBox).observe(document.documentElement, { attr
 
 // The reader can resize the sidebar, and the renderer keeps that width only in an inline custom
 // property that the next reload discards. The head partial restores it, so the value stored here is
-// the whole persistence layer: read after a drag, written back only when it actually changed.
+// the whole persistence layer: read after a real drag on the resize handle, written back only when it
+// actually changed, and removed by the double-click that returns the site's own default.
+const resizeHandle = document.getElementById('mdbook-sidebar-resize-handle');
+let sidebarWasResized = false;
+if (resizeHandle) {
+  const arm = () => {
+    sidebarWasResized = true;
+  };
+  resizeHandle.addEventListener('mousedown', arm, true);
+  resizeHandle.addEventListener('touchstart', arm, { capture: true, passive: true });
+}
 const storeSidebarWidth = () => {
+  if (!sidebarWasResized) return;
+  sidebarWasResized = false;
   const width = Number.parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-target-width'), 10);
   if (!Number.isFinite(width) || width < 150 || width > 2000) return;
   try {
@@ -59,6 +71,22 @@ const storeSidebarWidth = () => {
 };
 window.addEventListener('mouseup', storeSidebarWidth, true);
 window.addEventListener('touchend', storeSidebarWidth, true);
+
+// A double click on the sidebar itself returns the column to the site's default width and forgets the
+// stored choice; controls inside the sidebar keep their own double-click meaning.
+const sidebarElement = document.getElementById('mdbook-sidebar');
+if (sidebarElement) {
+  sidebarElement.addEventListener('dblclick', event => {
+    if (event.target.closest('a, button, input, select, summary, label')) return;
+    document.documentElement.style.removeProperty('--sidebar-target-width');
+    sidebarWasResized = false;
+    try {
+      localStorage.removeItem('mdbook-sidebar-width');
+    } catch {}
+    refreshArticleBox();
+  });
+}
+if (resizeHandle) resizeHandle.title = ru ? 'Двойной клик — ширина по умолчанию' : 'Double-click for the default width';
 
 if (panel) {
   document.body.append(panel);
