@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary
 
-The DEOS (Deterministic Economic Operating System) framework, currently instantiated in this repository through the TMCTOL standard, combines dedicated economic pallets with a bounded actor scheduler. Token movement can act as an explicit coordination message rather than requiring one bespoke privileged call per flow.
+DEOS (Deterministic Economic Operating System) combines dedicated economic pallets with a bounded actor scheduler. Token movement can act as an explicit coordination message rather than requiring one bespoke privileged call per flow. The reference runtime implements a TMCTOL composition; see the [Framework / Instance Contract](./framework-instance.contract.en.md) for how that assembly relates to a concrete chain.
 
 The runtime remains a deterministic state machine. Actors become eligible through typed balance ingress, timers, or manual governance/owner signals, then execute only fully admitted work through runtime adapters. Route-specific validation mitigates some manipulation paths, but it does not provide blanket immunity to intra-block ordering, MEV, flash-loan, or sandwich risks.
 

@@ -4,20 +4,13 @@
 - **Status**: Durable contract
 - **Audience**: framework contributors, downstream fork authors, reference-client maintainers, partner evaluators
 
-This document defines the boundary between reusable DEOS framework responsibility and downstream instance policy. It prevents one reference economy's choices from becoming accidental framework law while preserving the reusable mechanisms that make DEOS forkable.
-
 ## 1. Core Rule
 
-DEOS provides reusable economic mechanisms and safety contracts.
+- A **DEOS mechanism** defines reusable behavior and the guarantees any host must preserve when using it.
+- The **DEOS reference composition** is one working assembly of mechanisms, adapters and presets. It is a template for a DEOS instance, not a separate framework layer or a mandate for other assemblies.
+- A **DEOS instance** is a concrete chain configured from an assembly, with its own genesis, authorities, state and policy. Independent instances may use the same assembly unchanged; an instance need not wait for a production launch to exist.
 
-A downstream instance chooses its concrete moral, business, product, launch, and labor policy.
-
-Framework work SHOULD therefore ask two questions before hardening any behavior:
-
-1. Is this a reusable mechanism, invariant, safety boundary, configuration seam, or validation rule?
-2. Or is this one instance's brand, product strategy, launch policy, contributor culture, treasury appetite, or demand-generation plan?
-
-Only the first class belongs in the framework by default. The second class belongs in a downstream instance unless repeated implementations reveal a reusable contract.
+The dependency runs one way: an instance selects and depends on DEOS contracts; DEOS does not depend on named downstream instances or descriptions of their differences. Extract an instance need only as a reusable contract that can be specified and validated without that instance.
 
 ## 2. Framework-Owned Surfaces
 
@@ -50,16 +43,7 @@ A downstream instance may diverge from the reference line without violating DEOS
 
 ## 4. Mechanism, Not Mandate
 
-The following DEOS surfaces are mechanisms, not mandatory policies for every fork:
-
-- Builder invoices.
-- Bucketed capital flows.
-- Protocol-owned liquidity.
-- Governance protection / veto surfaces.
-- Actor Contracts and System Actor topologies.
-- Tactical-domain tokens such as a builder token in the reference line.
-
-The framework may ship reference defaults and examples. Those defaults help a fork start safely, but they do not morally bind every downstream economy.
+Builder invoices, bucketed capital flows, protocol-owned liquidity, governance protection and Actor Contracts are optional mechanisms. A System Actor topology or the use of a dedicated builder token is a choice of composition, not a kernel requirement. An instance can reuse, replace or omit those choices subject to the guarantees it claims.
 
 Actor creation admission and machine freeze are reusable bounded controls under the Actors specification §10.6, not a product mandate. The DEOS reference genesis MUST start with `UserCreationEnabled = false` and `GlobalCircuitBreaker = false`: declared System topology may operate while every new User identity remains denied until governance enables creation. Existing User service remains independent of that admission flag. A downstream host owns its own explicit genesis choices.
 
