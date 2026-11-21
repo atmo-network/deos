@@ -6,6 +6,8 @@
   /* The native 300px sidebar clips a title plus its glyph and chrome; 320px keeps nav rows on one
      line without taking width from the article. The reader's own resize still wins once used. */
   --sidebar-target-width: 320px;
+  /* How much of the article stays visible beside the open search panel on each side. */
+  --wiki-search-inset: 32px;
 }
 .content {
   min-width: 0;
@@ -377,8 +379,16 @@ html:not([data-wiki-layer="error"], [data-wiki-layer="outside"]):has(> body > #m
 }
 #mdbook-search-wrapper:not(.hidden) {
   position: fixed;
-  inset: var(--menu-bar-height) 0;
-  width: min(100% - 4 * var(--page-padding), 62ch);
+  top: var(--menu-bar-height);
+  bottom: 0;
+  /* The panel centres on the article column, not on the viewport, so the same amount of article stays
+     visible on both sides; on a wide screen the sidebar occupies the left edge. */
+  left: var(--wiki-article-left, calc(var(--sidebar-width) + var(--sidebar-resize-indicator-width)));
+  right: var(--wiki-article-right, 0px);
+  /* Exactly the article column minus the reveal on each side, so the two gaps stay equal at every
+     width instead of depending on the sidebar, scrollbar gutter or page padding, and search reads as
+     an inset layer over the page rather than a narrow dialog. */
+  width: calc(100% - var(--wiki-article-left, 0px) - var(--wiki-article-right, 0px) - 2 * var(--wiki-search-inset));
   margin-inline: auto;
   z-index: 103;
   box-sizing: border-box;
@@ -492,6 +502,12 @@ html[data-wiki-layer="pending"] main {
 html[data-wiki-layer="error"] :is(.content, #mdbook-sidebar, #mdbook-search-wrapper),
 html[data-wiki-layer="outside"] :is(.content, #mdbook-sidebar, #mdbook-search-wrapper) {
   display: none;
+}
+@media only screen and (max-width: 1080px) {
+  /* A phone has no room for a 32px reveal, but the article still frames the panel. */
+  :root {
+    --wiki-search-inset: 8px;
+  }
 }
 @media (max-width: 440px) {
   .content {

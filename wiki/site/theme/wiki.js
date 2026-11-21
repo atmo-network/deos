@@ -6,11 +6,50 @@ Excludes: Markdown rendering, graph parsing, wallet access and parent-window mes
 (() => {
 const ru = document.documentElement.lang === 'ru';
 
-// The search panel is centred in the viewport, so it leaves the page wrapper: mdBook slides that
-// wrapper during sidebar transitions, and a transformed ancestor would capture the panel's position.
+// The panel leaves the page wrapper: mdBook slides that wrapper during sidebar transitions, and a
+// transformed ancestor would capture the position of a fixed child.
 const panel = document.getElementById('mdbook-search-wrapper');
+
+// The fixed search panel is measured against the viewport, but the article lives in a column inset by
+// the sidebar, the scrollbar gutter and the site's own padding. Publishing the article's own edges lets
+// the panel centre on that column, so the article peeks out equally on both sides.
+const applyArticleBox = () => {
+  const rect = document.querySelector('main')?.getBoundingClientRect();
+  const left = rect ? Math.round(rect.left) : 0;
+  const right = rect ? Math.round(window.innerWidth - rect.right) : 0;
+  document.documentElement.style.setProperty('--wiki-article-left', `${Math.max(0, left)}px`);
+  document.documentElement.style.setProperty('--wiki-article-right', `${Math.max(0, right)}px`);
+};
+// The renderer moves the column by animating it rather than by resizing a box, so a single read lands
+// mid-flight. Sampling a short burst of frames ends on the settled geometry without watching forever.
+let settleFrames = 0;
+const settle = () => {
+  applyArticleBox();
+  if (settleFrames-- > 0) requestAnimationFrame(settle);
+};
+const refreshArticleBox = () => {
+  settleFrames = 90;
+  requestAnimationFrame(settle);
+};
+applyArticleBox();
+// A late media-query switch can move the column without a resize event; observe the box and settle
+// once more shortly after load.
+for (const selector of ['main', '.page']) {
+  const target = document.querySelector(selector);
+  if (target && 'ResizeObserver' in window) new ResizeObserver(refreshArticleBox).observe(target);
+}
+setTimeout(refreshArticleBox, 300);
+window.addEventListener('load', refreshArticleBox);
+window.addEventListener('resize', refreshArticleBox, { passive: true });
+// The renderer animates the page wrapper's inline offset without changing its width, so a resize
+// observer sees nothing; a finished transition is the moment the column actually settles.
+document.addEventListener('transitionend', refreshArticleBox, true);
+new MutationObserver(refreshArticleBox).observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-wiki-chrome'] });
+
 if (panel) {
   document.body.append(panel);
+  // Opening the panel removes the document scrollbar, so the article column moves; re-read its edges.
+  new MutationObserver(refreshArticleBox).observe(panel, { attributes: true, attributeFilter: ['class'] });
   // Reuse the native toggle so dismissal also clears the search state in the fragment.
   const searchToggle = document.getElementById('mdbook-search-toggle');
   document.addEventListener('click', event => {

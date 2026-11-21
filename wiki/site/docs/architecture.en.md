@@ -62,6 +62,12 @@ mdBook owns HTML, heading IDs, navigation and search assets. Generated TOML disa
 
 A group label and the rows it opens share one vertical rhythm. Each row carries three pixels of its own padding, so a child list adds the same three pixels above its first row; without that, the first row would sit closer to the label that opened it than sibling rows sit to each other. A section break stays about twice a row gap, which is what distinguishes a new group from a new page.
 
+## Search Panel Geometry
+
+The open search panel centres on the article column rather than on the viewport, and its width is that column minus a declared reveal on each side: 32 pixels on a wide screen and 8 pixels on a narrow one. The reveal is what makes search read as an inset layer over the page instead of a narrow dialog, so the two margins must stay equal; centring on the viewport would instead shift the panel by half the sidebar or the scrollbar gutter.
+
+CSS cannot read the article's own edges, so `theme/wiki.js` publishes them as `--wiki-article-left` and `--wiki-article-right` before the stylesheet uses them. The values come from summing `offsetLeft` along the offset-parent chain of `main`, which is the layout box and not the painted one: the renderer slides the page wrapper with a transform while the sidebar opens, so a painted rectangle would report a half-finished transition. The measurement repeats on resize, on a `ResizeObserver` of the article and page wrapper, on a theme or chrome attribute change, and when the panel opens or closes, because opening it removes the document scrollbar and moves the column. Without scripting the panel falls back to the sidebar edge and the whole viewport, which the stylesheet's own fallback values already cover.
+
 ## Native Unicode Search
 
 The pinned renderer's [search indexer](https://github.com/rust-lang/mdBook/blob/v0.5.4/crates/mdbook-html/src/html_handlebars/search.rs) uses the default English Elasticlunr pipeline. Its `elasticlunr-rs` dependency's [trimmer](https://docs.rs/crate/elasticlunr-rs/3.0.2/source/src/lang/en.rs) admits ASCII digits/letters and underscores, dropping Cyrillic; the bundled browser trimmer is likewise ASCII-oriented. Setting the HTML language to `ru` does not prove usable Russian search. The real-browser `наблюдения` witness exposed this failure.
