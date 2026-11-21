@@ -6,7 +6,7 @@ Comprehensive test suite detalization synchronized with `/simulators/tmctol/test
 
 ## Test Structure Overview
 
-- Total Tests: 76
+- Total Tests: 79
 - Purpose: Formal verification of TMCTOL mathematical guarantees, component behavior, and emergent properties
 - Methodology: Mathematical Foundations → Core Components → Integration Flows → System Properties → Economic Security
 - Architecture Symmetry: Tests mirror TMCTOL system architecture for progressive comprehension
@@ -549,7 +549,7 @@ node ./simulators/tmctol/tests.js
 
 - Expected Output: Minimal statistics, error codes only for failures
 - Tolerance: Every `assertApprox` tolerance is relative PPB of `abs(expected)`; 10,000,000 PPB is 1%. Zero expected requires exact equality.
-- Coverage: 76 tests validating 13 system layers, the assertion contract and the second-order contour
+- Coverage: 79 tests validating 13 system layers, the assertion contract and the second-order contour
 - Documentation Standard: Each test includes Nature/Necessity/Validates/Failure Criteria
 
 ---
@@ -578,7 +578,7 @@ node ./simulators/tmctol/tests.js
 - Economic Security: 4 tests for attack resistance and capital efficiency (continuous deployment vs idle vaults)
 - Adaptive System Behaviors: 8 tests for intelligent system responses and two-phase reward routing
 - Reporting & Conformance Metrics: 5 tests for floor reporting, burn liveness, Zap accounting, and ledger conservation
-- Second-Order Contour: 9 tests for BLDR mint custody, bridge conservation, route attribution and conditional floors
+- Second-Order Contour: 12 tests for BLDR mint custody, bridge conservation, route attribution, conditional floors and structural floor ratios
 - Philosophy: Tests prove specifications; specifications guide implementation; implementation validates mathematics.
 
 ---
@@ -659,6 +659,50 @@ The `$BLDR` contour reuses the first-order TMC, XYK and Router with `$BLDR` as n
 - Validates: Floor in parent quote falls with payout pressure, falls further with correlated parent stress, and stays positive.
 - Failure Criteria: Added pressure raises the floor or collapses it to zero.
 
+### 15.10 Floor-to-Curve Ratio: One Sixth Second Order, One Third First Order
+
+- Nature: Mints repeatedly through both contours and compares the all-supply-sellable floor with the curve price.
+- Necessity: Pins the structural cost of the BLDR Treasury third, so no second-order floor claim borrows first-order figures.
+- Validates: After 60 mints the BLDR floor is within 1% of one sixth, and the first-order floor within 1% of one third, of the marginal curve price.
+- Failure Criteria: Either ratio leaves its 1% band, or both contours report the same ratio.
+
+### 15.11 Router Buying Pins the Pool at Three Times the Curve
+
+- Nature: Applies 200 consecutive 200-`$NTVE` router buys with router fees at zero.
+- Necessity: The recipient gets one third of a TMC mint, so the pool and the curve compete on a fixed price ratio.
+- Validates: Both routes are used and the pool price settles within 3% of three times the marginal curve price.
+- Failure Criteria: One route never wins or the ratio drifts outside the band.
+
+### 15.12 Bridge Trades Parent Floor for BLDR Floor
+
+- Nature: Runs ten bridge rounds, each releasing a tenth of the remaining Bucket B LP.
+- Necessity: The bridge moves parent capital into the second-order contour; its cost and benefit must both be visible.
+- Validates: The first-order floor-to-curve ratio falls by more than 5% and the BLDR ratio rises by more than 5%.
+- Failure Criteria: Either floor moves the wrong way or by less than the stated margin.
+
+### 15.R Research Notes (not tests)
+
+All figures are deterministic fixed-case runs of this simulator with the default curve (`price_initial = 0.001`, `slope = 0.000001`) unless stated. The floor basis treats the entire supply as sellable into the pool, which is a stress assumption and not a market guarantee.
+
+**Verified by tests 15.10–15.12**
+
+- Floor ratio. With `C` total collateral, `S` supply and `p` the marginal curve price, a linear curve with negligible `price_initial` gives `C = pS / 2`. The second-order pool holds `S / 3` `$BLDR` and `C` `$NTVE`, so the floor `k / S²` equals `p / 6`. The first-order TOL holds `2S / 3`, so its floor is `p / 3`. The BLDR Treasury third is liquid sellable supply, which halves the floor-to-curve ratio.
+- Ratio evidence. Over the slopes `1e-6`, `1e-5` and `1e-4`, the BLDR ratio is 0.167 at 20, 40 and 60 mints of 1,000 `$NTVE`, against 0.15 to 0.17 over the first ten mints because `price_initial` still matters. The first-order ratio is 0.334 at 20 and 60 mints.
+- Router regime. Buying `$BLDR` through the TMC returns one third of the mint, whereas the pool returns the whole pool output. The pool therefore wins until its price reaches about three times the marginal curve price. 200 router buys of 50, 200, 1,000 and 5,000 `$NTVE` used the TMC 143 to 151 times and the pool 49 to 57 times, with pool-to-curve ratios between 2.98 and 3.02.
+- Bridge trade-off. Ten rounds that release about 65% of Bucket B moved the first-order floor ratio from 0.334 to 0.266 and the BLDR ratio from 0.165 to 0.204. Early rounds were pool purchases that issued nothing and only burned; later rounds crossed to the TMC. A 0.5% router fee changed these figures by under 0.2 points.
+
+**Hypotheses, not tested**
+
+- Excluding BLDR Treasury balances from the sellable pressure would raise the BLDR floor toward the first-order ratio; the size depends on treasury spending policy.
+- Burn and recycling proportions other than one half would move the bridge trade-off; the contract fixes one half, so the simulator does not sweep it.
+- Whether a stable bridge pace exists, where the parent-floor loss is bounded by a stated target, needs an explicit instance policy and is not a DEOS kernel property.
+
+**Limits**
+
+- One buyer sequence, no competing sellers, no governance spending of Treasury balances and no Actor timing, retries or cooldowns.
+- Unbounded `BigInt`: runtime `U256` overflow behaviour is outside this model.
+- The all-supply floor is the model's convention; reported floors in other documents must name their own sellable-pressure basis.
+
 ## Test Codes Reference & Architecture Mapping
 
 - Each test has a hierarchical code based on its section and position, mapping to TMCTOL architecture:
@@ -675,5 +719,5 @@ The `$BLDR` contour reuses the first-order TMC, XYK and Router with `$BLDR` as n
 * `11.1-11.4`: Economic Security & Attack Resistance
 * `12.1-12.8`: Adaptive System Behaviors
 * `13.1-13.5`: Reporting & Conformance Metrics
-* `15.1-15.9`: Second-Order Contour ($BLDR)
+* `15.1-15.12`: Second-Order Contour ($BLDR)
 - Use these codes in error messages for quick reference to this documentation.

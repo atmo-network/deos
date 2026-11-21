@@ -7,7 +7,7 @@ This module is the **spec-side mathematical proving ground** used to:
 - Test tokenomic hypotheses before they become runtime contracts
 - Validate economic formulas before or alongside runtime implementation
 - Explore parameter behavior (`price_initial`, `slope`, fees, mint shares)
-- Exercise deterministic regression scenarios (`76` tests)
+- Exercise deterministic regression scenarios (`79` tests)
 
 ---
 
@@ -30,15 +30,15 @@ node ./simulators/tmctol/tests.js
 
 Expected output ends with:
 
-- `Total: 76`
-- `Passed: 76`
+- `Total: 79`
+- `Passed: 79`
 - `Failed: 0`
 
 ---
 
 ## Second-order `$BLDR` contour
 
-`create_builder_system` reuses the unchanged TMC, XYK and Router with `$BLDR` as native and `$NTVE` as foreign, so route choice by recipient output comes from the first-order Router. Only custody differs: `BuilderTol` splits the protocol share into floor half for BLDR Treasury and the rest, with all collateral, for BLDR Anchor. `anchor_support` counts the live LP claim only, and `bridge_round` runs one analytical round of the [Parent Capital Bridge](../../docs/deos/builder-economy.contract.en.md#6-parent-capital-bridge) that keeps reserve release, route, mint or market acquisition, burn, treasury funding and anchor effects separate. `Xyk.remove_liquidity` supplies the pro-rata release. Tests `15.x` cover conservation, route attribution and conditional floors (invoice-payout and correlated first-order stress) under stated assumptions; they are not a market guarantee, an Actor retry/scheduling model or runtime arithmetic parity.
+`create_builder_system` reuses the unchanged TMC, XYK and Router with `$BLDR` as native and `$NTVE` as foreign, so route choice by recipient output comes from the first-order Router. Only custody differs: `BuilderTol` splits the protocol share into floor half for BLDR Treasury and the rest, with all collateral, for BLDR Anchor. `anchor_support` counts the live LP claim only, and `bridge_round` runs one analytical round of the [Parent Capital Bridge](../../docs/deos/builder-economy.contract.en.md#6-parent-capital-bridge) that keeps reserve release, route, mint or market acquisition, burn, treasury funding and anchor effects separate. `Xyk.remove_liquidity` supplies the pro-rata release. Tests `15.x` cover conservation, route attribution, conditional floors (invoice-payout and correlated first-order stress) and structural floor ratios; the research findings and their limits are in `tests.md` §15.R, under stated assumptions; they are not a market guarantee, an Actor retry/scheduling model or runtime arithmetic parity.
 
 ---
 

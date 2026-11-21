@@ -203,7 +203,7 @@ const TEST_SECTIONS = [
   [12, 8], // Adaptive System Behaviors
   [13, 5], // Reporting & Conformance Metrics
   [14, 1], // Assertion contract
-  [15, 9], // Second-order contour ($BLDR)
+  [15, 12], // Second-order contour ($BLDR)
 ];
 
 let testCount = 0;
@@ -2382,6 +2382,62 @@ runTest("Composite Floor Falls With Invoice Payout and Parent Stress", () => {
   assert(invoice < calm, "Invoice-payout pressure lowers the floor");
   assert(correlated < invoice, "Correlated first-order stress lowers it further");
   assert(correlated > 0n, "The stressed floor stays positive");
+});
+
+runTest("Floor-to-Curve Ratio: One Sixth Second Order, One Third First Order", () => {
+  const parent = create_system();
+  const builder = create_builder_system();
+  for (let i = 0; i < 60; i++) {
+    parent.tmc.mint_native(1_000n * PRECISION);
+    builder.tmc.mint_native(1_000n * PRECISION);
+  }
+  const ratio = (/** @type {ReturnType<typeof create_system>} */ system) =>
+    BigMath.mul_div(
+      calculateFloorPriceFromState(system.xyk.reserve_native, system.xyk.reserve_foreign, system.tmc.supply),
+      PRECISION,
+      system.tmc.get_price(),
+    );
+  assertApprox(ratio(builder) * 6n, PRECISION, 10_000_000n, "BLDR floor is one sixth of the curve price");
+  assertApprox(ratio(parent) * 3n, PRECISION, 10_000_000n, "First-order floor is one third of the curve price");
+});
+
+runTest("Router Buying Pins the Pool at Three Times the Curve", () => {
+  const { builder } = buildEconomy(NO_ROUTER_FEE);
+  const routes = { TMC: 0, XYK: 0 };
+  for (let i = 0; i < 200; i++) {
+    const swap = builder.router.swap_foreign_to_native(200n * PRECISION);
+    routes[/** @type {"TMC" | "XYK"} */ (swap.route)]++;
+  }
+  assert(routes.TMC > 0 && routes.XYK > 0, "Both routes are used");
+  assertApprox(
+    builder.xyk.get_price(),
+    3n * builder.tmc.get_price(),
+    30_000_000n,
+    "Pool price settles at three times the curve price",
+  );
+});
+
+runTest("Bridge Trades Parent Floor for BLDR Floor", () => {
+  const parent = create_system();
+  const builder = create_builder_system();
+  parent.router.swap_foreign_to_native(20_000n * PRECISION);
+  for (let i = 0; i < 30; i++) {
+    parent.tmc.mint_native(1_000n * PRECISION);
+    builder.tmc.mint_native(1_000n * PRECISION);
+  }
+  const ratio = (/** @type {ReturnType<typeof create_system>} */ system) =>
+    BigMath.mul_div(
+      calculateFloorPriceFromState(system.xyk.reserve_native, system.xyk.reserve_foreign, system.tmc.supply),
+      PRECISION,
+      system.tmc.get_price(),
+    );
+  const parent_before = ratio(parent);
+  const builder_before = ratio(builder);
+  for (let i = 0; i < 10; i++) {
+    bridge_round(parent, builder, (bucketB(parent)?.lp_tokens ?? 0n) / 10n);
+  }
+  assert(ratio(parent) * 100n < parent_before * 95n, "Releasing Bucket B lowers the first-order floor by more than 5%");
+  assert(ratio(builder) * 100n > builder_before * 105n, "Acquisition and burn raise the BLDR floor by more than 5%");
 });
 
 // FINAL STATISTICS
