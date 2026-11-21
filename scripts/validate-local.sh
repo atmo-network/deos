@@ -16,7 +16,8 @@ Usage: validate-local.sh <framework|client|wiki|--self-test>
 
 Scopes (independent results):
   framework  Pinned Rust and Node setup, tool checks, TMCTOL tests, workspace
-             format/Clippy/tests/docs/check, no-std checks and isolated PVF host.
+             format/Clippy/tests/docs/check, the feature-enabled runtime
+             invariant reconciliation, no-std checks and isolated PVF host.
              No npm dependencies, browser workspace, Skills or Git checkout.
   client     Optional browser setup and smoke/build checks; does not run framework checks.
   wiki       Optional Wiki corpus/trust checks, pinned mdBook build, structural output checks and
@@ -84,6 +85,11 @@ run_framework_checks() {
     run_shell_step "Simulator tests" "" "node '$PROJECT_ROOT/simulators/tmctol/tests.js'"
     # Actual guest artifact generation/export are separate, explicit operations.
     SKIP_WASM_BUILD=1 run_script_step "Rust workspace CI" "ci-local.sh"
+    # Pallet `try_state` reconciliation hooks are compiled but never executed without the feature,
+    # so one feature-enabled runtime suite activates custody, proposal, payload and enactment
+    # invariants for about 7% more than the identical selection costs without it.
+    SKIP_WASM_BUILD=1 run_script_step "Runtime invariant reconciliation" "ci-local.sh" \
+        --only tests --package deos-runtime --features try-runtime
     local crate
     for crate in deos-runtime pallet-deos-actors-embedding-fixture pallet-deos-router-embedding-fixture pallet-oracle-embedding-fixture; do
         # The SDK Wasm builder sets this cfg to select its guest-only dependencies.
@@ -166,6 +172,13 @@ self_test() (
         [[ "$count" == 1 ]] || { log_error "Missing or duplicate canonical host route: $check"; return 1; }
     done
     [[ "${shell_steps[*]}" == *"cd '$TEMPLATE_DIR/tools/pvf-validation' && cargo fmt -- --check"* ]] || return 1
+    local reconciliation=0 item
+    for item in "${routed[@]}"; do
+        if [[ "$item" == "ci-local.sh --only tests --package deos-runtime --features try-runtime" ]]; then
+            reconciliation=$((reconciliation + 1))
+        fi
+    done
+    [[ "$reconciliation" == 1 ]] || { log_error "Missing or duplicate runtime invariant reconciliation route"; return 1; }
     local crate
     for crate in deos-runtime pallet-deos-actors-embedding-fixture pallet-deos-router-embedding-fixture pallet-oracle-embedding-fixture; do
         [[ " ${routed[*]} " == *" ci-local.sh --only check --package $crate --no-default-features --target wasm32v1-none "* ]] || return 1
