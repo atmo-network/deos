@@ -203,7 +203,7 @@ const TEST_SECTIONS = [
   [12, 8], // Adaptive System Behaviors
   [13, 5], // Reporting & Conformance Metrics
   [14, 1], // Assertion contract
-  [15, 12], // Second-order contour ($BLDR)
+  [15, 13], // Second-order contour ($BLDR)
 ];
 
 let testCount = 0;
@@ -2438,6 +2438,34 @@ runTest("Bridge Trades Parent Floor for BLDR Floor", () => {
   }
   assert(ratio(parent) * 100n < parent_before * 95n, "Releasing Bucket B lowers the first-order floor by more than 5%");
   assert(ratio(builder) * 100n > builder_before * 105n, "Acquisition and burn raise the BLDR floor by more than 5%");
+});
+
+runTest("Exit Slippage Scales With Thinner Second-Order Depth", () => {
+  const parent = create_system(NO_ROUTER_FEE);
+  const builder = create_builder_system(NO_ROUTER_FEE);
+  parent.router.swap_foreign_to_native(20_000n * PRECISION);
+  builder.router.swap_foreign_to_native(1_000n * PRECISION);
+  for (let i = 0; i < 30; i++) {
+    parent.tmc.mint_native(1_000n * PRECISION);
+    builder.tmc.mint_native(1_000n * PRECISION);
+  }
+  const ntve_price = parent.xyk.get_price();
+  const bldr_price = BigMath.mul_div(builder.xyk.get_price(), ntve_price, PRECISION);
+  const value = 100n * PRECISION; // the same parent-asset value is sold on each route
+  const slippage = (/** @type {bigint} */ received) => BigMath.mul_div(value - received, PPB, value);
+  const ntve_exit = slippage(parent.xyk.get_out_foreign(BigMath.mul_div(value, PRECISION, ntve_price)));
+  const bldr_to_ntve = builder.xyk.get_out_foreign(BigMath.mul_div(value, PRECISION, bldr_price));
+  const bldr_exit = slippage(parent.xyk.get_out_foreign(bldr_to_ntve));
+  const depth_ratio = BigMath.mul_div(
+    parent.xyk.reserve_foreign,
+    PRECISION,
+    BigMath.mul_div(builder.xyk.reserve_foreign * 2n, ntve_price, PRECISION * 2n),
+  );
+  assert(bldr_exit > ntve_exit, "Exiting BLDR loses more than exiting the base asset");
+  assert(
+    bldr_exit * PRECISION > ntve_exit * depth_ratio * 9n / 10n && bldr_exit * PRECISION < ntve_exit * depth_ratio * 13n / 10n,
+    "For a small sale the extra loss tracks the inverse depth ratio, with the second hop on top",
+  );
 });
 
 // FINAL STATISTICS

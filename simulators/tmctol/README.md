@@ -7,7 +7,7 @@ This module is the **spec-side mathematical proving ground** used to:
 - Test tokenomic hypotheses before they become runtime contracts
 - Validate economic formulas before or alongside runtime implementation
 - Explore parameter behavior (`price_initial`, `slope`, fees, mint shares)
-- Exercise deterministic regression scenarios (`79` tests)
+- Exercise deterministic regression scenarios (`80` tests)
 
 ---
 
@@ -30,8 +30,8 @@ node ./simulators/tmctol/tests.js
 
 Expected output ends with:
 
-- `Total: 79`
-- `Passed: 79`
+- `Total: 80`
+- `Passed: 80`
 - `Failed: 0`
 
 ---
