@@ -253,6 +253,27 @@ mod tests {
     });
   }
 
+  /// Resource-policy §2 requires all non-Actor fixed/context work to share one system
+  /// quarter-block ceiling. This witnesses the reproduced reference configuration exceeding it, so
+  /// the deviation stays exactly as recorded instead of drifting while P28-19 owns the correction.
+  #[test]
+  fn fixed_envelope_excess_over_the_normative_system_quarter_is_exactly_reproduced() {
+    let maximum = BlockResourceBudgetValue::get().maximum_block();
+    let quarter = Weight::from_parts(maximum.ref_time() / 4, maximum.proof_size() / 4);
+    assert_eq!(quarter, Weight::from_parts(500_000_000_000, 2_621_440));
+    let fixed = BlockResourceBudgetValue::get().fixed_envelope();
+    assert_eq!(fixed, Weight::from_parts(1_090_309_152_836, 2_988_132));
+    let excess = Weight::from_parts(
+      fixed.ref_time().saturating_sub(quarter.ref_time()),
+      fixed.proof_size().saturating_sub(quarter.proof_size()),
+    );
+    assert_eq!(excess, Weight::from_parts(590_309_152_836, 366_692));
+    assert!(
+      fixed.any_gt(quarter),
+      "the configured envelope still exceeds the normative quarter; P28-19 owns the correction"
+    );
+  }
+
   #[test]
   fn governance_vote_proof_charge_limits_frozen_shared_usage()
   -> Result<(), TransactionValidityError> {

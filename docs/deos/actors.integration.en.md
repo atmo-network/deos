@@ -500,6 +500,8 @@ The fixed envelope consists of other runtime hooks/FRAME `[886635782836,2978626]
 
 Resource-policy §2 additionally requires a system-quarter cap and settled-prefix freeze: the current configured envelope exceeds that quarter by `[590309152836,366692]` and the provider retains maxima. This is a reproduced reference-policy implementation nonconformance, not measured actual fixed work or a demonstrated common-block overrun. P28-19 owns its P0 correction after complete disjoint owner qualification; this diagnostic permits neither quarter-clipping nor reserve reclamation.
 
+`resource_meter.rs::fixed_envelope_excess_over_the_normative_system_quarter_is_exactly_reproduced` now recomputes this from the live configuration in CI: the quarter `[500000000000,2621440]`, the envelope `[1090309152836,2988132]` and the excess `[590309152836,366692]` are asserted as exact identities. A correction that changes any of them fails the witness instead of silently rewriting the record.
+
 The first blocked heads are System Actor 65 and User Actor 59, generation 1, Pending/Idle, latch true, no paid Run, `eligible_from=3`, `last_considered=2`. All 50/44 successful first-block Steps occur in Prepass. `service_canonical_round_head_inner` rejects its effectful branch at `can_consume(inspection_envelope + effectful_control, resources.effect)`, before Action-fee preparation/effect reservation. Required Control is `[7386507821,114141]`, effect `[3423784000,19253]`; total-meter and Control RefTime checks pass, but caller-owned Control ProofSize fails.
 
 | Block-3 boundary | System Control remaining | User Control remaining | Required proof / deficit System / User |
