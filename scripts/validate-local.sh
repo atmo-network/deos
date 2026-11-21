@@ -90,6 +90,17 @@ run_framework_checks() {
     # invariants for about 7% more than the identical selection costs without it.
     SKIP_WASM_BUILD=1 run_script_step "Runtime invariant reconciliation" "ci-local.sh" \
         --only tests --package deos-runtime --features try-runtime
+    # Each reusable pallet must compile as the independently consumable package it ships as. A
+    # workspace-wide check cannot prove that: feature unification hides an undeclared production
+    # feature, which is how a public `sp_core` re-export once only built inside the workspace.
+    # Eight standalone checks measured 54s with a warm target directory.
+    local pallet_manifest pallet_package
+    for pallet_manifest in "$TEMPLATE_DIR"/pallets/*/Cargo.toml; do
+        pallet_package="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$pallet_manifest" | head -n 1)"
+        [[ -n "$pallet_package" ]] || { log_error "Cannot read a package name from $pallet_manifest"; return 1; }
+        SKIP_WASM_BUILD=1 run_script_step "Independent pallet package $pallet_package" "ci-local.sh" \
+            --only check --package "$pallet_package"
+    done
     local crate
     for crate in deos-runtime pallet-deos-actors-embedding-fixture pallet-deos-router-embedding-fixture pallet-oracle-embedding-fixture; do
         # The SDK Wasm builder sets this cfg to select its guest-only dependencies.
@@ -179,6 +190,8 @@ self_test() (
         fi
     done
     [[ "$reconciliation" == 1 ]] || { log_error "Missing or duplicate runtime invariant reconciliation route"; return 1; }
+    [[ " ${routed[*]} " == *" ci-local.sh --only check --package pallet-deos-governance "* ]] || {
+        log_error "Missing independent pallet package route"; return 1; }
     local crate
     for crate in deos-runtime pallet-deos-actors-embedding-fixture pallet-deos-router-embedding-fixture pallet-oracle-embedding-fixture; do
         [[ " ${routed[*]} " == *" ci-local.sh --only check --package $crate --no-default-features --target wasm32v1-none "* ]] || return 1

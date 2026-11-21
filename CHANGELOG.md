@@ -4,6 +4,15 @@
 >
 > Each release keeps at most 8 outcome records of at most 512 characters.
 
+## 0.7.29: Blockchain Maturity
+
+- `Governance / Urgent Finalization`: Urgent authorization schedules a maturity touch at the urgent close, so an authorized proposal finalizes when its short window ends instead of waiting for the ordinary maturity, up to eight days late on the reference preset. Four regressions cover urgent finalization, the retained ordinary touch, a full urgent-close bucket and a later urgent close, and the baseline fails without the correction.
+- `Governance / Urgent Lock Horizon`: Urgent ballots lock only to the urgent close because urgent resolution never waits out the enactment delay, while ballots cast before authorization keep the longer ordinary horizon and aggregate custody keeps the maximum. `integrity_test` now rejects a configuration whose reachable urgent close outlasts the ordinary maturity.
+- `Governance / Integrity Contract`: The pallet integrity assertions that were compiled and never invoked now run against the mock configuration and inside every declared runtime preset, so the commissioned lead-in, voting, protection, urgent and enactment numbers are checked instead of assumed.
+- `Runtime / Reconciliation Routing`: The `framework` profile and the completion gate run the runtime suite with `try-runtime`, activating every pallet `try_state` assertion for about seven percent over the identical selection. Staking, Oracle, the minting curve and the asset registry gained runtime call sites plus a negative control proving the hooks are not vacuous.
+- `Packaging / Pallet Independence`: Governance could not compile on its own because it publicly re-exports `polkadot_sdk::sp_core::U256` while `sp-core` was only a dev-dependency feature, and workspace feature unification hid it. The feature is now declared for production and the `framework` profile checks each of the eight pallet packages standalone in 54 seconds.
+- `Documentation / Test Anchors`: Eight architecture and integration citations were re-anchored to the tests that actually execute them, and one stale shape description was corrected. Five remaining citations were proven by history search never to have had a Rust anchor, so they need withdrawal or an explicit unverified marking.
+
 ## 0.7.28: Downstream Framework Source
 
 - `Governance / Primary Power`: Replaced u32 saturation with U256 ballots/tallies and four-limb browser projections, preserving backing/custody/protection. Finite 3×4, 256/257th-refusal and voter-death fixtures, plus 48 ordinary/urgent close cases, pass. Locking part of `$VETO` prevents unanimity while locked; burning it lowers the threshold. Both regressions pass. Full histories, physical prices and production bindings stay unqualified.

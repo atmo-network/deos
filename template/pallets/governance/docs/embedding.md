@@ -6,6 +6,10 @@ This guide states the host-runtime obligations for embedding the reusable Govern
 
 The `0.7.22` package is fresh-genesis source only. It defines no migration from the `0.7.21` Governance storage baseline and must not be used to upgrade a deployed chain; a downstream live lineage owns its own explicit bounded migration before adopting this storage baseline.
 
+## Package Features
+
+- The crate publicly re-exports `polkadot_sdk::sp_core::U256`, so `sp-core` belongs to the production `polkadot-sdk` feature set and not only to the dev-dependency set. Without it the package builds inside this workspace, where feature unification supplies the re-export, but fails as the independently consumable package it ships as; `validate-local.sh framework` now checks every pallet package on its own for that reason.
+
 ## Authority and Payload Wiring
 
 - Bind `AdminOrigin` to an explicit privileged origin; never use an unrestricted signed origin.
