@@ -156,8 +156,13 @@ html.navy pre {
    the glyph is decorative: the title remains the readable, focusable text. The same mark repeats in
    the article heading and in any list entry that opens the article, so one silhouette identifies the
    page wherever it appears. */
+/* One geometry for every context: the box is wider than the glyph, so half of the slack plus the
+   trailing margin forms the gap in front of the text. Contexts then change only the scale, which
+   keeps the gap proportional and identical everywhere the mark appears. */
 .wiki-icon {
   display: inline-block;
+  inline-size: 1.35em;
+  margin-inline-end: 0.15em;
   text-align: center;
   font-style: normal;
   font-weight: 400;
@@ -165,32 +170,22 @@ html.navy pre {
   opacity: 0.9;
 }
 .sidebar .chapter .wiki-icon {
-  inline-size: 1.35em;
-  margin-inline-end: 0.15em;
   font-size: 0.95em;
 }
 .content h1 .wiki-icon {
-  inline-size: 1.1em;
-  margin-inline-end: 0.3em;
   font-size: 0.8em;
   vertical-align: 0.08em;
 }
 .content h2 .wiki-icon {
-  inline-size: 1.1em;
-  margin-inline-end: 0.3em;
   font-size: 0.85em;
   vertical-align: 0.04em;
 }
 .content main li .wiki-icon {
-  inline-size: 1.2em;
-  margin-inline-end: 0.3em;
   font-size: 0.95em;
 }
-/* An inline mention sits inside a sentence, so its mark is a shade smaller and tighter than a list
-   row's: it identifies the target without pushing the line apart. */
+/* An inline mention sits inside a sentence, so its mark is a shade smaller than a list row's; the
+   gap comes from the shared box, not from a context-specific margin. */
 .content main p .wiki-icon {
-  inline-size: 1em;
-  margin-inline-end: 0.15em;
   font-size: 0.9em;
   vertical-align: 0.02em;
   opacity: 0.85;
@@ -198,8 +193,6 @@ html.navy pre {
 /* The contents page and its section groups are navigation furniture, so their mark sits before the
    label with the same weight as the sidebar row it mirrors. */
 .sidebar .chapter .wiki-group > span[role='button'] > .wiki-icon {
-  inline-size: 1.35em;
-  margin-inline-end: 0.15em;
   font-size: 0.95em;
 }
 .sidebar .chapter li a.active {
