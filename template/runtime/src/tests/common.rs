@@ -689,3 +689,20 @@ pub fn setup_deos_router_infrastructure() -> Result<(), &'static str> {
   ));
   Ok(())
 }
+
+/// Runs the pallet `try_state` reconciliation hooks that no other runtime owner reaches.
+/// Governance, Actors, Router and Balances already have their own call sites; Staking, Oracle, the
+/// minting curve and the asset registry need one shared entry point, and it compiles only under
+/// `try-runtime` because FRAME exposes the hooks there.
+#[cfg(feature = "try-runtime")]
+pub fn assert_subsystem_reconciliation(block: crate::BlockNumber) {
+  use polkadot_sdk::frame_support::traits::Hooks;
+  assert_ok!(<crate::Staking as Hooks<crate::BlockNumber>>::try_state(
+    block
+  ));
+  assert_ok!(<crate::Oracle as Hooks<crate::BlockNumber>>::try_state(
+    block
+  ));
+  assert_ok!(<crate::TokenMintingCurve as Hooks<crate::BlockNumber>>::try_state(block));
+  assert_ok!(<crate::AssetRegistry as Hooks<crate::BlockNumber>>::try_state(block));
+}

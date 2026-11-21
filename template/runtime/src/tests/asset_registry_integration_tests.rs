@@ -44,6 +44,8 @@ fn register_foreign_asset_creates_mapping_and_metadata() {
     assert_eq!(stored_metadata.name, metadata.name);
     assert_eq!(stored_metadata.symbol, metadata.symbol);
     assert_eq!(stored_metadata.decimals, metadata.decimals);
+    #[cfg(feature = "try-runtime")]
+    crate::tests::common::assert_subsystem_reconciliation(crate::System::block_number());
   });
 }
 
@@ -254,5 +256,25 @@ fn convert_unknown_location_returns_none() {
   new_test_ext().execute_with(|| {
     let missing = sample_location(9999);
     assert_eq!(AssetRegistry::location_to_asset(missing), None);
+  });
+}
+
+#[cfg(feature = "try-runtime")]
+#[test]
+fn reconciliation_rejects_a_broken_reverse_mapping() {
+  use polkadot_sdk::frame_support::traits::Hooks;
+  new_test_ext().execute_with(|| {
+    let location = sample_location(1001);
+    assert_ok!(AssetRegistry::register_foreign_asset(
+      RuntimeOrigin::root(),
+      location.clone(),
+      sample_metadata(),
+      1,
+      true
+    ));
+    let stored_id = AssetRegistry::location_to_asset(location).expect("id stored");
+    assert_ok!(<AssetRegistry as Hooks<crate::BlockNumber>>::try_state(0));
+    pallet_asset_registry::ForeignAssetLocationByAssetId::<crate::Runtime>::remove(stored_id);
+    assert!(<AssetRegistry as Hooks<crate::BlockNumber>>::try_state(0).is_err());
   });
 }

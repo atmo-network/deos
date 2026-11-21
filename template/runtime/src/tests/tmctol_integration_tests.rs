@@ -150,6 +150,8 @@ fn tmctol_guarantee_state_reports_bldr_anchor_pool_when_initialized() {
     assert!(state.bldr_pool.reserve_a > 0);
     assert!(state.bldr_pool.reserve_b > 0);
     assert_eq!(state.bldr_pool.anchor_lp_balance, 1_000);
+    #[cfg(feature = "try-runtime")]
+    crate::tests::common::assert_subsystem_reconciliation(System::block_number());
   });
 }
 

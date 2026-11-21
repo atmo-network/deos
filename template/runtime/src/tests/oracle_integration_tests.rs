@@ -105,6 +105,8 @@ fn runtime_admits_and_publishes_typed_directional_feed() {
       ObservationState::Fresh(observation)
         if observation.value == 1_000_000_000_000 && observation.revision == 1
     ));
+    #[cfg(feature = "try-runtime")]
+    crate::tests::common::assert_subsystem_reconciliation(System::block_number());
   });
 }
 

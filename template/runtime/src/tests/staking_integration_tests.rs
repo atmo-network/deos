@@ -1298,6 +1298,8 @@ fn trusted_security_path_composes_liquid_receipt_donation_governance_and_exit() 
       Staking::native_security_view(),
       Ok(pallet_staking::NativeSecurityView::TrustedSet { .. })
     ));
+    #[cfg(feature = "try-runtime")]
+    crate::tests::common::assert_subsystem_reconciliation(System::block_number());
   });
 }
 
