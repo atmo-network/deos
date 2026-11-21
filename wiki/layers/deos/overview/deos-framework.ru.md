@@ -21,7 +21,6 @@ tags:
   - architecture
   - deos
 related:
-  - Первые шаги
   - Система Actors
   - AA-Актор
   - DEOS Router
@@ -89,8 +88,7 @@ DEOS лучше всего понимать как основу для испо�
 
 ## Связанные страницы
 
-- [Первые шаги](../getting-started/first-steps.ru.md)
-- [Создание форка DEOS](../usage/forking-deos.ru.md)
+- [Создание форка DEOS](../forking-deos.ru.md)
 - [Система Actors](actor-system.ru.md)
 - [AA-Актор](actor.ru.md)
 - [DEOS Router](router.ru.md)
@@ -103,4 +101,4 @@ DEOS лучше всего понимать как основу для испо�
 - [Координация с помощью токенов](../concepts/token-driven-automation.ru.md)
 - [Контур маршрутизации и эмиссии](../concepts/routing-and-minting-loop.ru.md)
 - [Эталонный клиент](reference-client.ru.md)
-- [Базовые термины](../glossary/core-terms.ru.md)
+- [Базовые термины](../core-terms.ru.md)

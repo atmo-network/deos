@@ -108,5 +108,5 @@ related:
 - [Экономика созидателей $BLDR](builder-economy.ru.md)
 - [Стейкинг](../overview/staking.ru.md)
 - [Разделение данных для чтения](read-model-split.ru.md)
-- [Экономическая физика прежде политики](../comparisons/physics-vs-politics.ru.md)
-- [Базовые термины](../glossary/core-terms.ru.md)
+- [Экономическая физика прежде политики](../physics-vs-politics.ru.md)
+- [Базовые термины](../core-terms.ru.md)

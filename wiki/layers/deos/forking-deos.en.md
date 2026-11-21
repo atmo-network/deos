@@ -9,14 +9,15 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../AGENTS.md
-  - resource: ../../../../README.md
-  - resource: ../../../../docs/deos/README.md
-  - resource: ../../../../template/pallets/actors/docs/embedding.md
-  - resource: ../../../../docs/deos/framework-instance.contract.en.md
-  - resource: ../../../../template/README.md
-  - resource: ../../../../web-client/README.md
-  - resource: ../../../../docs/deos/tmctol.specification.en.md
+  - resource: ../../../AGENTS.md
+  - resource: ../../../README.md
+  - resource: ../../../docs/deos/README.md
+  - resource: ../../../template/pallets/actors/docs/embedding.md
+  - resource: ../../../docs/deos/framework-instance.contract.en.md
+  - resource: ../../../template/README.md
+  - resource: ../../../web-client/README.md
+  - resource: ../../../docs/deos/tmctol.specification.en.md
+  - resource: ../../../simulators/tmctol/README.md
 status: stable
 audience: developer
 tags:
@@ -65,7 +66,9 @@ DEOS-owned surfaces are reusable mechanisms and safety contracts: primitives, in
 
 Instance-owned surfaces are concrete policy: brand, dApps, launch economics, founder allocation or no-founder-allocation choices, contributor culture, invoice etiquette, bucket names/percentages, marketing, and demand strategy.
 
-Builder invoices, bucketed capital flows, protocol-owned liquidity, governance protection, and System Actors topologies are mechanisms. A fork may keep, rename, reparameterize, disable, or replace policy choices as long as it preserves the guarantees it claims.
+Builder invoices, bucketed capital flows, protocol-owned liquidity, governance protection, and Actor Contracts are optional mechanisms. Which System Actors an assembly configures and how it connects them are choices of composition, not framework requirements.
+
+The DEOS reference composition assembles mechanisms, adapters, and genesis presets. It is not itself a chain: independent DEOS instances can use the same assembly with their own genesis, authorities, state, and policy. A fork may reuse or change that assembly as long as it preserves the guarantees it claims.
 
 ## What Should Stay Stable
 
@@ -114,6 +117,16 @@ If a row is undecided, the fork is still a prototype. If a row is decided but no
 8. Update scripts, metadata export, endpoints, and operator documentation.
 9. Run the smallest meaningful validation first, then escalate when math/runtime/client boundaries cross.
 
+## Test an economic change
+
+For a change to TMCTOL curve parameters or reserve allocation, model the change in the simulator before altering the runtime. Start with a baseline run from the repository root:
+
+```bash
+node ./simulators/tmctol/tests.js
+```
+
+Use [TMCTOL Formulas](tmctol-formulas.en.md) to choose the economic assertions the new scenario must preserve. A passing simulator run checks the math, not the runtime's execution or custody.
+
 ## What Can Flow Back Upstream
 
 Good upstream contributions are framework-hardening changes: tests, client read-model honesty, safer scripts, clearer docs/wiki, better adapter boundaries, benchmark fixes, and bug fixes in reusable pallets.
@@ -122,9 +135,9 @@ Downstream-specific business logic, dApp behavior, token narrative, and ecosyste
 
 ## Related
 
-- [DEOS Framework Overview](../overview/deos-framework.en.md)
-- [Repository Structure](../implementation/repository-structure.en.md)
-- [Tech Stack](../implementation/tech-stack.en.md)
-- [Parachain Context](../concepts/parachain-context.en.md)
-- [Token Surfaces](../concepts/token-surfaces.en.md)
-- [Three-Layer Validation](../development/three-layer-validation.en.md)
+- [DEOS Framework Overview](overview/deos-framework.en.md)
+- [Repository Structure](repository-structure.en.md)
+- [Tech Stack](tech-stack.en.md)
+- [Parachain Context](concepts/parachain-context.en.md)
+- [Token Surfaces](concepts/token-surfaces.en.md)
+- [Three-Layer Validation](three-layer-validation.en.md)

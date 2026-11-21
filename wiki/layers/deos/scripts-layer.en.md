@@ -9,7 +9,7 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../scripts/README.md
+  - resource: ../../../scripts/README.md
 status: stable
 audience: developer
 tags:
@@ -49,8 +49,8 @@ Numbered scripts perform specific leaf operations and do not orchestrate each ot
 
 Named workflow scripts compose atomic steps into larger developer flows:
 
-- `bootstrap-local-network.sh`: Build the runtime, generate the spec, and spin up the local chain and web client
-- `validate-local.sh`: Run the selected `fast`, `heavy`, or `full` validation profile; GitHub Actions runs heavy validation only through the required pull-request `validation-gate`, while local full validation owns pre-`1.0` release acceptance with checksum-verified binaries and regenerated production runtime and client artifacts
+- `bootstrap-local-network.sh`: Compose local binary/tool preparation, runtime build, chain-spec generation, and Zombienet startup only when each step's prerequisites hold. A matching version does not qualify a node or builder, and the script does not start the client. The accepted-input procedure is in [Start Here](getting-started/start-here.en.md).
+- `validate-local.sh`: Run one independent `framework`, `client`, or `wiki` profile. A framework pass checks source and independent consumers, not operator inputs or production artifacts.
 - `actors-assurance.sh`: Run heavy stress and capacity proofs for the Actors scheduler
 - `network-assurance-local.sh`: Compose topology, finality, failover, restart, and signed-transfer evidence; `SESSION_TRANSITION=1` adds the multi-hour session proof and `COMPOSED_PATH=1` adds finalized Router, Oracle, and Burn Actor evidence
 - `benchmarks.sh`: Run runtime benchmark compilation and weight-generation flows
@@ -93,8 +93,8 @@ They rely on `_common.sh` for logging, step tracking, and background process man
 
 ## Related
 
-- [Repository Structure](../implementation/repository-structure.en.md)
-- [DEOS Framework Overview](../overview/deos-framework.en.md)
-- [Tech Stack](../implementation/tech-stack.en.md)
-- [Three-Layer Validation](../development/three-layer-validation.en.md)
-- [Development Status](../development/status.en.md)
+- [Repository Structure](repository-structure.en.md)
+- [DEOS Framework Overview](overview/deos-framework.en.md)
+- [Tech Stack](tech-stack.en.md)
+- [Three-Layer Validation](three-layer-validation.en.md)
+- [Development Status](status.en.md)

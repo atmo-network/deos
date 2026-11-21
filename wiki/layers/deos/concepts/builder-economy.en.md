@@ -128,7 +128,7 @@ A production instance must still choose its launch allocation, create and fund t
 
 - [Token Surfaces](token-surfaces.en.md)
 - [Governance Domains](governance-domains.en.md)
-- [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
+- [Physics-First vs Politics-First](../physics-vs-politics.en.md)
 - [TMCTOL Standard](tmctol-standard.en.md)
 - [Actors System](../overview/actor-system.en.md)
 - [TOL Bucket Scenarios](tol-bucket-scenarios.en.md)

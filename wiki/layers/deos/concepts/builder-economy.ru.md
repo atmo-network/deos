@@ -129,7 +129,7 @@ TMC направляет две трети выпущенных `$BLDR` в `BLDR
 
 - [Роли токенов](token-surfaces.ru.md)
 - [Домены управления](governance-domains.ru.md)
-- [Экономическая физика прежде политики](../comparisons/physics-vs-politics.ru.md)
+- [Экономическая физика прежде политики](../physics-vs-politics.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
 - [Система Actors](../overview/actor-system.ru.md)
 - [Сценарии корзин TOL](tol-bucket-scenarios.ru.md)

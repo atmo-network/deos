@@ -3,13 +3,7 @@
   "audience": "newcomer",
   "default_locale": "en",
   "available_locales": ["en", "ru"],
-  "entrypoints": [
-    "start-here",
-    "deos-framework",
-    "first-steps",
-    "core-terms",
-    "newcomer-faq"
-  ],
+  "entrypoints": ["start-here", "deos-framework", "core-terms", "newcomer-faq"],
   "sections": [
     {
       "id": "start-here",
@@ -30,8 +24,8 @@
           },
           "page_type": "getting-started",
           "summary": {
-            "en": "Choose one route: understand DEOS in 10 minutes, run it locally, or fork and change the economy safely.",
-            "ru": "Короткий вводный маршрут: понять DEOS, запустить его локально или безопасно создать на его основе собственную экономику."
+            "en": "Build and inspect the runtime from source, or run a local network with separately accepted operator inputs.",
+            "ru": "Сборка среды исполнения из исходников и запуск локальной сети при наличии отдельно принятых операторских артефактов."
           }
         },
         {
@@ -99,51 +93,19 @@
           }
         },
         {
-          "id": "first-steps",
-          "title": {
-            "en": "First Steps",
-            "ru": "Первые шаги"
-          },
-          "path": {
-            "en": "getting-started/first-steps.en.md",
-            "ru": "getting-started/first-steps.ru.md"
-          },
-          "page_type": "getting-started",
-          "summary": {
-            "en": "Start with the docs hub, understand the framework-versus-standard split, then choose the right working surface for your task.",
-            "ru": "Короткий самостоятельный маршрут для знакомства с DEOS, выбора предметной области и подходящей проверки."
-          }
-        },
-        {
           "id": "core-terms",
           "title": {
             "en": "Core Terms",
             "ru": "Базовые термины"
           },
           "path": {
-            "en": "glossary/core-terms.en.md",
-            "ru": "glossary/core-terms.ru.md"
+            "en": "core-terms.en.md",
+            "ru": "core-terms.ru.md"
           },
           "page_type": "glossary",
           "summary": {
             "en": "A compact glossary for the main DEOS and TMCTOL terms, including framework, runtime, governance, read-model, frontend ownership, wiki vocabulary, and release/status document roles.",
             "ru": "Краткий словарь основных терминов DEOS и TMCTOL. Начните с этой страницы, если вам пока неясны словарь проекта, сокращения, различие между фреймворком и стандартом, устройство клиентской части, роль вики или сведения о состоянии разработки."
-          }
-        },
-        {
-          "id": "reading-paths",
-          "title": {
-            "en": "Reading Paths",
-            "ru": "Маршруты чтения"
-          },
-          "path": {
-            "en": "getting-started/reading-paths.en.md",
-            "ru": "getting-started/reading-paths.ru.md"
-          },
-          "page_type": "getting-started",
-          "summary": {
-            "en": "Role-based reading paths for newcomers, economics work, runtime changes, governance work, web-client changes, and local tooling.",
-            "ru": "Самостоятельные маршруты по вики для новичков, внешней оценки, экономики, среды исполнения, управления, клиента, состояния проекта и инструментов."
           }
         },
         {
@@ -153,8 +115,8 @@
             "ru": "Вопросы новичков"
           },
           "path": {
-            "en": "faq/newcomer-faq.en.md",
-            "ru": "faq/newcomer-faq.ru.md"
+            "en": "newcomer-faq.en.md",
+            "ru": "newcomer-faq.ru.md"
           },
           "page_type": "faq",
           "summary": {
@@ -185,6 +147,22 @@
           "summary": {
             "en": "The flagship tokenomic standard that combines a mint-only curve, treasury-owned liquidity, and fee burning.",
             "ru": "TMCTOL — флагманский экономический стандарт на базе DEOS: однонаправленная эмиссия, ликвидность во владении протокола и сжигание комиссий задают более явные правила защиты от снижения цены, чем обычный выпуск токена."
+          }
+        },
+        {
+          "id": "tmctol-formulas",
+          "title": {
+            "en": "TMCTOL Formulas",
+            "ru": "Формулы TMCTOL"
+          },
+          "path": {
+            "en": "tmctol-formulas.en.md",
+            "ru": "tmctol-formulas.ru.md"
+          },
+          "page_type": "math",
+          "summary": {
+            "en": "Mathematical models defining the Token Minting Curve and TOL.",
+            "ru": "Математические модели TMC и ликвидности TOL: цена выпуска, интегральный расчёт, XYK-инвариант и динамика предложения."
           }
         },
         {
@@ -233,6 +211,22 @@
           "summary": {
             "en": "One typed governance cell inside DEOS Governance: it binds together the governed subject, power surfaces, valid payload families, cadence, and execution authority.",
             "ru": "Домен управления — типизированная ячейка общей системы, связывающая предмет управления, основной и защитный контуры голосования, допустимые виды полезной нагрузки, временной режим и полномочия на исполнение."
+          }
+        },
+        {
+          "id": "physics-vs-politics",
+          "title": {
+            "en": "Physics-First vs Politics-First",
+            "ru": "Экономическая физика прежде политики"
+          },
+          "path": {
+            "en": "physics-vs-politics.en.md",
+            "ru": "physics-vs-politics.ru.md"
+          },
+          "page_type": "comparison",
+          "summary": {
+            "en": "The manifesto-level contrast between structural Economic Physics and politics-by-default.",
+            "ru": "Манифест DEOS отделяет явные механизмы протокола от обычного управления, чтобы политика задавала направление экономики, не пересматривая постоянно её основания."
           }
         },
         {
@@ -615,11 +609,7 @@
       ]
     },
     {
-      "id": "technical-implementation",
-      "title": {
-        "en": "Technical Implementation",
-        "ru": "Техническая реализация"
-      },
+      "id": "ungrouped",
       "items": [
         {
           "id": "repository-structure",
@@ -628,8 +618,8 @@
             "ru": "Структура репозитория"
           },
           "path": {
-            "en": "implementation/repository-structure.en.md",
-            "ru": "implementation/repository-structure.ru.md"
+            "en": "repository-structure.en.md",
+            "ru": "repository-structure.ru.md"
           },
           "page_type": "implementation",
           "summary": {
@@ -644,49 +634,15 @@
             "ru": "Технологический стек"
           },
           "path": {
-            "en": "implementation/tech-stack.en.md",
-            "ru": "implementation/tech-stack.ru.md"
+            "en": "tech-stack.en.md",
+            "ru": "tech-stack.ru.md"
           },
           "page_type": "implementation",
           "summary": {
             "en": "Overview of the underlying technologies that power the DEOS framework.",
             "ru": "Основные технологии фреймворка DEOS: Polkadot SDK, Rust, SvelteKit, JavaScript с BigInt и локальные средства автоматизации."
           }
-        }
-      ]
-    },
-    {
-      "id": "math",
-      "title": {
-        "en": "Mathematical Models",
-        "ru": "Математические модели"
-      },
-      "items": [
-        {
-          "id": "tmctol-formulas",
-          "title": {
-            "en": "TMCTOL Formulas",
-            "ru": "Формулы TMCTOL"
-          },
-          "path": {
-            "en": "math/tmctol-formulas.en.md",
-            "ru": "math/tmctol-formulas.ru.md"
-          },
-          "page_type": "math",
-          "summary": {
-            "en": "Mathematical models defining the Token Minting Curve and TOL.",
-            "ru": "Математические модели TMC и ликвидности TOL: цена выпуска, интегральный расчёт, XYK-инвариант и динамика предложения."
-          }
-        }
-      ]
-    },
-    {
-      "id": "usage",
-      "title": {
-        "en": "Practical Usage",
-        "ru": "Практическое использование"
-      },
-      "items": [
+        },
         {
           "id": "scripts-layer",
           "title": {
@@ -694,8 +650,8 @@
             "ru": "Слой скриптов"
           },
           "path": {
-            "en": "usage/scripts-layer.en.md",
-            "ru": "usage/scripts-layer.ru.md"
+            "en": "scripts-layer.en.md",
+            "ru": "scripts-layer.ru.md"
           },
           "page_type": "usage",
           "summary": {
@@ -710,8 +666,8 @@
             "ru": "Создание форка DEOS"
           },
           "path": {
-            "en": "usage/forking-deos.en.md",
-            "ru": "usage/forking-deos.ru.md"
+            "en": "forking-deos.en.md",
+            "ru": "forking-deos.ru.md"
           },
           "page_type": "usage",
           "summary": {
@@ -729,14 +685,30 @@
       },
       "items": [
         {
+          "id": "contributing",
+          "title": {
+            "en": "Contributing Guidelines",
+            "ru": "Руководство участника"
+          },
+          "path": {
+            "en": "contributing.en.md",
+            "ru": "contributing.ru.md"
+          },
+          "page_type": "process",
+          "summary": {
+            "en": "How to contribute to the DEOS framework, understand the philosophy, and navigate validation gates.",
+            "ru": "Как вносить вклад в DEOS, выбрав правильный домен, сохранив приоритет экономических законов и выполнив проверки нужного уровня."
+          }
+        },
+        {
           "id": "three-layer-validation",
           "title": {
             "en": "Three-Layer Validation",
             "ru": "Трёхуровневая проверка"
           },
           "path": {
-            "en": "development/three-layer-validation.en.md",
-            "ru": "development/three-layer-validation.ru.md"
+            "en": "three-layer-validation.en.md",
+            "ru": "three-layer-validation.ru.md"
           },
           "page_type": "process",
           "summary": {
@@ -751,63 +723,13 @@
             "ru": "Статус разработки"
           },
           "path": {
-            "en": "development/status.en.md",
-            "ru": "development/status.ru.md"
+            "en": "status.en.md",
+            "ru": "status.ru.md"
           },
           "page_type": "status",
           "summary": {
             "en": "Current implementation status with shipped framework, reference-client, wiki, and backlog boundaries summarized for newcomers without turning wiki into release notes.",
             "ru": "Текущее состояние реализации и открытые границы фреймворка DEOS без превращения вики в журнал релизов."
-          }
-        }
-      ]
-    },
-    {
-      "id": "philosophy-and-orientation",
-      "title": {
-        "en": "Philosophy and Orientation",
-        "ru": "Философия и ориентация"
-      },
-      "items": [
-        {
-          "id": "physics-vs-politics",
-          "title": {
-            "en": "Physics-First vs Politics-First",
-            "ru": "Экономическая физика прежде политики"
-          },
-          "path": {
-            "en": "comparisons/physics-vs-politics.en.md",
-            "ru": "comparisons/physics-vs-politics.ru.md"
-          },
-          "page_type": "comparison",
-          "summary": {
-            "en": "The manifesto-level contrast between structural Economic Physics and politics-by-default.",
-            "ru": "Манифест DEOS отделяет явные механизмы протокола от обычного управления, чтобы политика задавала направление экономики, не пересматривая постоянно её основания."
-          }
-        }
-      ]
-    },
-    {
-      "id": "community-and-governance",
-      "title": {
-        "en": "Community and Governance",
-        "ru": "Сообщество и управление"
-      },
-      "items": [
-        {
-          "id": "contributing",
-          "title": {
-            "en": "Contributing Guidelines",
-            "ru": "Руководство участника"
-          },
-          "path": {
-            "en": "community/contributing.en.md",
-            "ru": "community/contributing.ru.md"
-          },
-          "page_type": "process",
-          "summary": {
-            "en": "How to contribute to the DEOS framework, understand the philosophy, and navigate validation gates.",
-            "ru": "Как вносить вклад в DEOS, выбрав правильный домен, сохранив приоритет экономических законов и выполнив проверки нужного уровня."
           }
         }
       ]

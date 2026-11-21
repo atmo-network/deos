@@ -64,7 +64,7 @@ Randomness simplification narrows the launch contract:
 
 ## Related
 
-- [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
+- [Physics-First vs Politics-First](../physics-vs-politics.en.md)
 - [Governance](governance.en.md)
 - [AA-Actor](actor.en.md)
-- [Newcomer FAQ](../faq/newcomer-faq.en.md)
+- [Newcomer FAQ](../newcomer-faq.en.md)

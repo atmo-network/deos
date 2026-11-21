@@ -12,7 +12,7 @@ import { basePath, loadCorpus, localizeLinks, pageRoute } from '../src/corpus.mj
 import { parseFrontmatter, splitFrontmatter } from '../src/frontmatter.mjs';
 import { linearOrder, projectBooks, unifiedGraph } from '../src/projection.mjs';
 import { selectLayer } from '../src/layers.mjs';
-import { assertTrustedMarkdown } from '../src/trust.mjs';
+import { assertTrustedMarkdown, assertTrustedSvg } from '../src/trust.mjs';
 import { artifactFor, mdbook } from '../scripts/toolchain.mjs';
 import { checkOutput } from '../scripts/check-output.mjs';
 import { trimSearchToken, rebindSearchAsset, rebuildNativeSearch, nativeSections } from '../src/search.mjs';
@@ -94,6 +94,17 @@ test('navigation metadata, not semantic edge order or graph degree, owns the lin
   plane.navigation.sections[0].items.reverse();
   assert.notDeepEqual(unifiedGraph(changed).linear_order, projected.graph.linear_order);
   assert.equal(unifiedGraph(changed).edges.length, projected.graph.edges.length);
+});
+
+test('a titled navigation group needs three pages; an untitled run lists them at plane level', () => {
+  const plane = structuredClone(corpus.planes.find(item => item.pages.size > 0));
+  const group = plane.navigation.sections.find(section => section.title && section.items.length >= 3);
+  const flat = plane.navigation.sections.find(section => !section.title);
+  assert.ok(group && flat, 'fixture needs one titled group and one ungrouped run');
+  const book = projectBooks({ ...corpus, planes: corpus.planes.map(item => item.id === plane.id ? plane : item) }, assets).files.get('books/en/src/SUMMARY.md');
+  assert.ok(!book.includes(`[${flat.id}]()`) && book.includes('\n- [') );
+  const title = flat.items[0].title.en;
+  assert.ok(new RegExp(`\\n- \\[${title}\\]`).test(book), 'ungrouped page must sit at plane level');
 });
 
 test('unplaced graph pages fail rather than acquiring an invented priority', () => {
@@ -195,6 +206,43 @@ test('shared parser retains strict YAML and delimiter behavior', () => {
 test('reviewed Markdown guard still rejects HTML, embedded media and executable URLs', () => {
   for (const source of ['<div>raw</div>', 'text <iframe src="evil">', '[bad](javascript:alert)', '[bad](data:text/html,evil)', '<a onclick=evil>']) assert.throws(() => assertTrustedMarkdown(source));
   assert.doesNotThrow(() => assertTrustedMarkdown('```rust\nfn main() {}\n```\n\n[Page](page.en.md)'));
+});
+
+test('the Actor diagram is inert and projected next to both book chapters', () => {
+  const relative = 'deos/concepts/actor-wakeup.svg';
+  const svg = projected.files.get(`books/en/src/${relative}`);
+  assert.doesNotThrow(() => assertTrustedSvg(svg));
+  for (const locale of corpus.locales) {
+    assert.equal(projected.files.get(`books/${locale}/src/${relative}`), svg);
+    const chapter = projected.files.get(`books/${locale}/src/deos/concepts/end-to-end-flows.md`);
+    assert.match(chapter, /^!\[[^\]]+\]\(actor-wakeup\.svg\)$/m);
+  }
+  assert.ok(!projected.files.has(`books/root/src/${relative}`));
+  for (const source of [
+    svg.replace('<svg ', '<svg onload="run()" '),
+    svg.replace('</svg>', '  <script/>\n</svg>'),
+    svg.replace('</svg>', '  <image href="https://example.invalid/resource.svg"/>\n</svg>'),
+    '<!DOCTYPE svg>\n' + svg,
+  ]) assert.throws(() => assertTrustedSvg(source), /expected an inert local SVG diagram/);
+});
+
+test('native output validation refuses a missing localized SVG at the Pages prefix', () => {
+  const root = mkdtempSync(join(tmpdir(), 'deos-mdbook-diagram-'));
+  try {
+    writeFileSync(join(root, 'graph.json'), JSON.stringify({
+      base_path: '/deos/', nodes: [], edges: [], linear_order: [],
+    }));
+    for (const locale of ['en', 'ru']) {
+      const chapter = join(root, locale, 'deos', 'concepts');
+      mkdirSync(chapter, { recursive: true });
+      writeFileSync(join(chapter, 'flow.html'), '<img src="actor-wakeup.svg" alt="Diagram">');
+    }
+    const svg = projected.files.get('books/en/src/deos/concepts/actor-wakeup.svg');
+    writeFileSync(join(root, 'en/deos/concepts/actor-wakeup.svg'), svg);
+    assert.throws(() => checkOutput(root), /ru\/deos\/concepts\/flow\.html: missing output target \/deos\/ru\/deos\/concepts\/actor-wakeup\.svg/);
+    writeFileSync(join(root, 'ru/deos/concepts/actor-wakeup.svg'), svg);
+    assert.equal(checkOutput(root).localTargets, 2);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('native output validation rejects missing files, headings and executable destinations', () => {

@@ -100,4 +100,4 @@ DEOS provides that wider operating layer. TMCTOL is the current standard; DEOS i
 - [Routing and Minting Loop](routing-and-minting-loop.en.md)
 - [Governance Domains](governance-domains.en.md)
 - [Staking](../overview/staking.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
+- [Core Terms](../core-terms.en.md)

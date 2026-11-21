@@ -232,7 +232,7 @@ test("reports manifest display strings by escaped JSON Pointer", () => {
 test("guards reviewed Actors grammar and Russian formula explanations", () => {
   const actorsFiles = [
     "wiki/layers/deos/concepts/end-to-end-flows.ru.md",
-    "wiki/layers/deos/development/status.ru.md",
+    "wiki/layers/deos/status.ru.md",
     "wiki/layers/deos/concepts/token-driven-automation.ru.md",
   ];
   for (const path of actorsFiles) {
@@ -241,7 +241,7 @@ test("guards reviewed Actors grammar and Russian formula explanations", () => {
     assert.match(source, /разреженное состояние Continuation/u, path);
   }
   const status = readFileSync(
-    resolve(projectRoot, "wiki/layers/deos/development/status.ru.md"),
+    resolve(projectRoot, "wiki/layers/deos/status.ru.md"),
     "utf8",
   );
   assert.doesNotMatch(status, /конкретных источника субсидии/u);
@@ -271,7 +271,7 @@ test("guards reviewed Actors grammar and Russian formula explanations", () => {
   assert.match(staking, /Удалены общий механизм поблочных наград/u);
 
   const formulas = readFileSync(
-    resolve(projectRoot, "wiki/layers/deos/math/tmctol-formulas.ru.md"),
+    resolve(projectRoot, "wiki/layers/deos/tmctol-formulas.ru.md"),
     "utf8",
   );
   assert.match(
@@ -287,44 +287,19 @@ test("keeps reviewed Russian navigation labels equal to canonical page titles", 
   const fixtures = [
     [
       "wiki/layers/deos/index.ru.md",
-      "Токен-управляемая автоматизация",
-      "concepts/token-driven-automation.ru.md",
+      "Система Actors",
+      "overview/actor-system.ru.md",
     ],
     [
       "wiki/layers/deos/index.ru.md",
-      "Контур маршрутизации и эмиссии",
-      "concepts/routing-and-minting-loop.ru.md",
+      "Сквозные сценарии",
+      "concepts/end-to-end-flows.ru.md",
     ],
-    [
-      "wiki/layers/deos/index.ru.md",
-      "Token Minting Curve",
-      "overview/token-minting-curve.ru.md",
-    ],
-    ["wiki/layers/deos/index.ru.md", "Создание форка DEOS", "usage/forking-deos.ru.md"],
+    ["wiki/layers/deos/index.ru.md", "Создание форка DEOS", "forking-deos.ru.md"],
     [
       "wiki/layers/deos/index.ru.md",
       "Руководство участника",
-      "community/contributing.ru.md",
-    ],
-    [
-      "wiki/layers/deos/getting-started/reading-paths.ru.md",
-      "Токен-управляемая автоматизация",
-      "../concepts/token-driven-automation.ru.md",
-    ],
-    [
-      "wiki/layers/deos/getting-started/reading-paths.ru.md",
-      "Контур маршрутизации и эмиссии",
-      "../concepts/routing-and-minting-loop.ru.md",
-    ],
-    [
-      "wiki/layers/deos/getting-started/reading-paths.ru.md",
-      "Token Minting Curve",
-      "../overview/token-minting-curve.ru.md",
-    ],
-    [
-      "wiki/layers/deos/getting-started/reading-paths.ru.md",
-      "Создание форка DEOS",
-      "../usage/forking-deos.ru.md",
+      "contributing.ru.md",
     ],
     [
       "wiki/layers/deos/concepts/domain-map.ru.md",

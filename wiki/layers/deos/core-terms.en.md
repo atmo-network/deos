@@ -9,20 +9,20 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../README.md
-  - resource: ../../../../docs/deos/README.md
-  - resource: ../../../../BACKLOG.md
-  - resource: ../../../../CHANGELOG.md
-  - resource: ../../../../docs/deos/tmctol.specification.en.md
-  - resource: ../../../../docs/deos/core.architecture.en.md
-  - resource: ../../../../template/pallets/actors/docs/specification.en.md
-  - resource: ../../../../template/pallets/staking/docs/specification.en.md
-  - resource: ../../../../template/pallets/router/docs/specification.en.md
-  - resource: ../../../../template/pallets/governance/docs/specification.en.md
-  - resource: ../../../../template/pallets/governance/docs/architecture.en.md
-  - resource: ../../../../docs/deos/read-model.contract.en.md
-  - resource: ../../../../web-client/docs/architecture.en.md
-  - resource: ../../../../web-client/README.md
+  - resource: ../../../README.md
+  - resource: ../../../docs/deos/README.md
+  - resource: ../../../BACKLOG.md
+  - resource: ../../../CHANGELOG.md
+  - resource: ../../../docs/deos/tmctol.specification.en.md
+  - resource: ../../../docs/deos/core.architecture.en.md
+  - resource: ../../../template/pallets/actors/docs/specification.en.md
+  - resource: ../../../template/pallets/staking/docs/specification.en.md
+  - resource: ../../../template/pallets/router/docs/specification.en.md
+  - resource: ../../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../../template/pallets/governance/docs/architecture.en.md
+  - resource: ../../../docs/deos/read-model.contract.en.md
+  - resource: ../../../web-client/docs/architecture.en.md
+  - resource: ../../../web-client/README.md
 status: stable
 audience: newcomer
 tags:
@@ -37,7 +37,6 @@ related:
   - $BLDR Builder Economy
   - Read-Model Split
   - Generated Wiki
-  - Reading Paths
   - Development Status
   - Newcomer FAQ
 ---
@@ -184,7 +183,7 @@ The protection token used for the strategic constitutional surface on the curren
 
 ### `$BLDR`
 
-The flagship tactical governance and builder-coordination token on the current line. See [$BLDR Builder Economy](../concepts/builder-economy.en.md).
+The flagship tactical governance and builder-coordination token on the current line. See [$BLDR Builder Economy](concepts/builder-economy.en.md).
 
 ### `BLDR Anchor`
 
@@ -236,14 +235,13 @@ The wiki current-state map for baseline domains, active focus, open boundaries, 
 
 ## Related
 
-- [DEOS Framework Overview](../overview/deos-framework.en.md)
-- [TMCTOL Standard](../concepts/tmctol-standard.en.md)
-- [Token-Driven Automation](../concepts/token-driven-automation.en.md)
-- [Governance](../overview/governance.en.md)
-- [Governance Domains](../concepts/governance-domains.en.md)
-- [$BLDR Builder Economy](../concepts/builder-economy.en.md)
-- [Read-Model Split](../concepts/read-model-split.en.md)
-- [Generated Wiki](../concepts/generated-wiki.en.md)
-- [Reading Paths](../getting-started/reading-paths.en.md)
-- [Development Status](../development/status.en.md)
-- [Newcomer FAQ](../faq/newcomer-faq.en.md)
+- [DEOS Framework Overview](overview/deos-framework.en.md)
+- [TMCTOL Standard](concepts/tmctol-standard.en.md)
+- [Token-Driven Automation](concepts/token-driven-automation.en.md)
+- [Governance](overview/governance.en.md)
+- [Governance Domains](concepts/governance-domains.en.md)
+- [$BLDR Builder Economy](concepts/builder-economy.en.md)
+- [Read-Model Split](concepts/read-model-split.en.md)
+- [Generated Wiki](concepts/generated-wiki.en.md)
+- [Development Status](status.en.md)
+- [Newcomer FAQ](newcomer-faq.en.md)

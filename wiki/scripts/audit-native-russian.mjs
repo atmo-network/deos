@@ -171,6 +171,8 @@ export function stripNonProse(text, canonicalTerms = [], options = {}) {
       "gu",
     ),
   );
+  // A page at the plane root is a bare localized filename, not prose.
+  maskMatches(chars, /(?<![\p{L}\p{N}_.-])[A-Za-z0-9_-]+(?:-[A-Za-z0-9_]+)*\.(?:en|ru)\.md\b/gu);
   maskSourceFragments(chars);
   for (const term of [...canonicalTerms].sort(
     (left, right) => right.length - left.length,

@@ -212,13 +212,18 @@ export function projectBooks(corpus, assets, base = '/') {
       for (const section of plane.navigation.sections) {
         const ids = section.items.map(item => item.id).filter(id => !placed.has(id));
         if (!ids.length) continue;
-        const sectionTitle = section.title?.[locale] ?? section.title?.[plane.defaultLocale] ?? section.id;
-        summary.push(`${indent}- [${text(sectionTitle)}]()`);
-        contents.push(`${multiplePlanes ? '###' : '##'} ${text(sectionTitle)}`, '');
+        // An untitled section lists its pages at plane level, in order, without a foldable node.
+        const grouped = Boolean(section.title);
+        const sectionTitle = section.title?.[locale] ?? section.title?.[plane.defaultLocale];
+        const nest = grouped ? `${indent}  ` : indent;
+        if (grouped) {
+          summary.push(`${indent}- [${text(sectionTitle)}]()`);
+          contents.push(`${multiplePlanes ? '###' : '##'} ${text(sectionTitle)}`, '');
+        }
         for (const id of ids) {
           placed.add(id);
           const item = section.items.find(candidate => candidate.id === id);
-          summary.push(`${indent}  - ${link(pageOf(id).meta.title, pathOf(id))}`);
+          summary.push(`${nest}- ${link(pageOf(id).meta.title, pathOf(id))}`);
           contents.push(entry(id, item.summary?.[locale] ?? pageOf(id).meta.description));
         }
         contents.push('');
@@ -226,6 +231,7 @@ export function projectBooks(corpus, assets, base = '/') {
       if (order.some(id => !placed.has(id))) throw new Error(`${plane.id}: navigation sections do not place every page`);
       for (const id of order) {
         const page = pageOf(id), path = pathOf(id), node = byId.get(qualified(plane, id));
+        for (const [name, svg] of page.diagrams) files.set(`books/${locale}/src/${posix.join(posix.dirname(path), name)}`, svg);
         const status = locale === 'ru' ? { stable: 'Стабильно', draft: 'Черновик', deprecated: 'Устарело' }[page.meta.status ?? 'stable'] : page.meta.status ?? 'stable';
         markdown.push([path, `${layerTags(node, locale, path)}${localizeLinks(page.body, locale).trimEnd()}\n\n---\n\n<p class="wiki-meta">${labels.status}: ${status}. ${labels.sources}: ${page.meta.sources.length}.</p>\n`]);
       }

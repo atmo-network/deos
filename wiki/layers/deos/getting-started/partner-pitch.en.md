@@ -80,7 +80,7 @@ For a short partner pass, read three pages in order:
 
 1. [DEOS in 60 Seconds](deos-in-60-seconds.en.md) — core meme;
 2. [Executive Summary](executive-summary.en.md) — shipped state and adoption boundary;
-3. [Forking DEOS](../usage/forking-deos.en.md) — smallest credible fork shape and validation boundary.
+3. [Forking DEOS](../forking-deos.en.md) — smallest credible fork shape and validation boundary.
 
 ## What DEOS does not remove
 
@@ -89,4 +89,4 @@ DEOS does not remove market risk, product risk, community risk, launch execution
 ## Next pages
 
 - [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
-- [Forking DEOS](../usage/forking-deos.en.md)
+- [Forking DEOS](../forking-deos.en.md)

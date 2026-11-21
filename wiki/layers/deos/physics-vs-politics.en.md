@@ -9,9 +9,9 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../docs/deos/manifesto.en.md
-  - resource: ../../../../template/pallets/governance/docs/specification.en.md
-  - resource: ../../../../docs/deos/tmctol.specification.en.md
+  - resource: ../../../docs/deos/manifesto.en.md
+  - resource: ../../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../../docs/deos/tmctol.specification.en.md
 status: stable
 audience: newcomer
 tags:
@@ -79,7 +79,7 @@ Precise answers separate a protocol constitution from a governance narrative.
 
 ## Related
 
-- [DEOS Framework Overview](../overview/deos-framework.en.md)
-- [Governance Domains](../concepts/governance-domains.en.md)
-- [Newcomer FAQ](../faq/newcomer-faq.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
+- [DEOS Framework Overview](overview/deos-framework.en.md)
+- [Governance Domains](concepts/governance-domains.en.md)
+- [Newcomer FAQ](newcomer-faq.en.md)
+- [Core Terms](core-terms.en.md)

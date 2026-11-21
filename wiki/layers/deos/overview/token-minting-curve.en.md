@@ -74,5 +74,5 @@ Historical mint analytics and long-range dashboards belong to indexed or materia
 - [DEOS Router](router.en.md)
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
 - [TMCTOL Standard](../concepts/tmctol-standard.en.md)
-- [TMCTOL Formulas](../math/tmctol-formulas.en.md)
-- [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
+- [TMCTOL Formulas](../tmctol-formulas.en.md)
+- [Physics-First vs Politics-First](../physics-vs-politics.en.md)

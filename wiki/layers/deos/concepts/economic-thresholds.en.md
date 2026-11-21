@@ -75,7 +75,7 @@ Those are not interchangeable. A page, simulator test, or governance argument th
 ## Related
 
 - [TMCTOL Standard](tmctol-standard.en.md)
-- [TMCTOL Formulas](../math/tmctol-formulas.en.md)
+- [TMCTOL Formulas](../tmctol-formulas.en.md)
 - [Token Minting Curve](../overview/token-minting-curve.en.md)
 - [Routing and Minting Loop](routing-and-minting-loop.en.md)
 - [Token Surfaces](token-surfaces.en.md)

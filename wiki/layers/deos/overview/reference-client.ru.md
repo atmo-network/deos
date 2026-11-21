@@ -23,7 +23,6 @@ tags:
   - ui-kit
   - domain-dag
 related:
-  - Первые шаги
   - Разделение данных для чтения
   - Вопросы новичков
   - Базовые термины
@@ -67,8 +66,7 @@ related:
 
 ## Связанные страницы
 
-- [Первые шаги](../getting-started/first-steps.ru.md)
 - [Разделение данных для чтения](../concepts/read-model-split.ru.md)
 - [Собранная вики](../concepts/generated-wiki.ru.md)
-- [Вопросы новичков](../faq/newcomer-faq.ru.md)
-- [Базовые термины](../glossary/core-terms.ru.md)
+- [Вопросы новичков](../newcomer-faq.ru.md)
+- [Базовые термины](../core-terms.ru.md)

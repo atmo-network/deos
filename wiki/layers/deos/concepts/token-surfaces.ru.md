@@ -70,7 +70,7 @@ LP-токены удостоверяют позиции в пулах AMM. Не�
 
 Вики намеренно разделяет четыре вопроса:
 
-- **Математика эмиссии**: [Кривая эмиссии токенов](../overview/token-minting-curve.ru.md) и [Формулы TMCTOL](../math/tmctol-formulas.ru.md);
+- **Математика эмиссии**: [Кривая эмиссии токенов](../overview/token-minting-curve.ru.md) и [Формулы TMCTOL](../tmctol-formulas.ru.md);
 - **Полномочия управления**: [Домены управления](governance-domains.ru.md);
 - **Координация созидателей**: [Экономика созидателей $BLDR](builder-economy.ru.md);
 - **Стоимость квитанций**: [Стейкинг](../overview/staking.ru.md) и учёт позиций ликвидности.

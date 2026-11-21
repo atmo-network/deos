@@ -7,7 +7,7 @@ Excludes: HTML rendering, provenance inference and process orchestration.
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertTrustedMarkdown } from '../src/trust.mjs';
+import { assertTrustedMarkdown, assertTrustedSvg } from '../src/trust.mjs';
 
 function check(root) {
   let count = 0;
@@ -16,6 +16,7 @@ function check(root) {
     if (entry.isSymbolicLink()) throw new Error(`Symbolic content path is not supported: ${path}`);
     if (entry.isDirectory()) count += check(path);
     else if (entry.name.endsWith('.md')) { assertTrustedMarkdown(readFileSync(path, 'utf8'), path); count++; }
+    else if (entry.isFile() && entry.name.endsWith('.svg')) { assertTrustedSvg(readFileSync(path, 'utf8'), path); count++; }
   }
   return count;
 }
@@ -23,5 +24,5 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) console.log(
 else {
   const args = process.argv.slice(2);
   if (args.length && (args.length !== 2 || args[0] !== '--wiki-dir')) throw new Error('Use --wiki-dir PATH');
-  console.log(`Reviewed Wiki Markdown passed: ${check(resolve(args[1] ?? fileURLToPath(new URL('../../layers/deos/', import.meta.url))))} files.`);
+  console.log(`Reviewed Wiki content passed: ${check(resolve(args[1] ?? fileURLToPath(new URL('../../layers/deos/', import.meta.url))))} files.`);
 }

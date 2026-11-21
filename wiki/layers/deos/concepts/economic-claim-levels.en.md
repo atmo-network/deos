@@ -57,4 +57,4 @@ The repository-local alignment layer also tracks selected economic claims in `ec
 - [Economic Thresholds](economic-thresholds.en.md)
 - [Invariant Map](invariant-map.en.md)
 - [Invariant and Threat Map](invariant-map.en.md)
-- [Three-Layer Validation](../development/three-layer-validation.en.md)
+- [Three-Layer Validation](../three-layer-validation.en.md)

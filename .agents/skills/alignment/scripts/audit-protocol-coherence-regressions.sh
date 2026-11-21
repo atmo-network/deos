@@ -1036,23 +1036,23 @@ main() {
         "Parallel current SecurityEpoch, NativeSecurityMode, or Fee Sink terminology reintroduced" \
         "$TEMPLATE_DIR/pallets/staking/docs" "$TEMPLATE_DIR/pallets/staking/README.md" \
         "$PROJECT_ROOT/web-client/docs" "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/wiki"
-    require_anchor '^### Actor Contract$' "$PROJECT_ROOT/wiki/layers/deos/glossary/core-terms.en.md" \
+    require_anchor '^### Actor Contract$' "$PROJECT_ROOT/wiki/layers/deos/core-terms.en.md" \
         "Generated wiki glossary lacks canonical Actor Contract"
-    require_anchor '^### Step$' "$PROJECT_ROOT/wiki/layers/deos/glossary/core-terms.en.md" \
+    require_anchor '^### Step$' "$PROJECT_ROOT/wiki/layers/deos/core-terms.en.md" \
         "Generated wiki glossary lacks canonical Step"
-    require_anchor '^### Precondition$' "$PROJECT_ROOT/wiki/layers/deos/glossary/core-terms.en.md" \
+    require_anchor '^### Precondition$' "$PROJECT_ROOT/wiki/layers/deos/core-terms.en.md" \
         "Generated wiki glossary lacks canonical Precondition"
-    require_anchor '^### Predicate$' "$PROJECT_ROOT/wiki/layers/deos/glossary/core-terms.en.md" \
+    require_anchor '^### Predicate$' "$PROJECT_ROOT/wiki/layers/deos/core-terms.en.md" \
         "Generated wiki glossary lacks canonical Predicate"
-    require_anchor '^### `SecurityEpoch`$' "$PROJECT_ROOT/wiki/layers/deos/glossary/core-terms.en.md" \
+    require_anchor '^### `SecurityEpoch`$' "$PROJECT_ROOT/wiki/layers/deos/core-terms.en.md" \
         "Generated wiki glossary lacks canonical SecurityEpoch"
-    require_anchor '^### `NativeSecurityMode`$' "$PROJECT_ROOT/wiki/layers/deos/glossary/core-terms.en.md" \
+    require_anchor '^### `NativeSecurityMode`$' "$PROJECT_ROOT/wiki/layers/deos/core-terms.en.md" \
         "Generated wiki glossary lacks canonical NativeSecurityMode"
-    require_anchor '^### `FailureClass`$' "$PROJECT_ROOT/wiki/layers/deos/glossary/core-terms.en.md" \
+    require_anchor '^### `FailureClass`$' "$PROJECT_ROOT/wiki/layers/deos/core-terms.en.md" \
         "Generated wiki glossary lacks canonical FailureClass"
-    require_anchor '^### `RetryDisposition`$' "$PROJECT_ROOT/wiki/layers/deos/glossary/core-terms.en.md" \
+    require_anchor '^### `RetryDisposition`$' "$PROJECT_ROOT/wiki/layers/deos/core-terms.en.md" \
         "Generated wiki glossary lacks canonical RetryDisposition"
-    require_anchor '^### Fee Sink$' "$PROJECT_ROOT/wiki/layers/deos/glossary/core-terms.en.md" \
+    require_anchor '^### Fee Sink$' "$PROJECT_ROOT/wiki/layers/deos/core-terms.en.md" \
         "Generated wiki glossary lacks canonical Fee Sink"
     require_anchor '"Actor Contract": "actor-system"' "$PROJECT_ROOT/wiki/layers/deos/_meta/aliases.json" \
         "Generated wiki alias metadata lacks canonical Actor Contract navigation"

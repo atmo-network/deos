@@ -107,5 +107,5 @@ Read a governance domain through five questions:
 - [$BLDR Builder Economy](builder-economy.en.md)
 - [Staking](../overview/staking.en.md)
 - [Read-Model Split](read-model-split.en.md)
-- [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
+- [Physics-First vs Politics-First](../physics-vs-politics.en.md)
+- [Core Terms](../core-terms.en.md)

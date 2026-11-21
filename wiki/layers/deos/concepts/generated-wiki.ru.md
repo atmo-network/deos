@@ -28,7 +28,6 @@ tags:
 related:
   - Карта доменов
   - Эталонный клиент
-  - Первые шаги
   - Базовые термины
 ---
 
@@ -98,5 +97,4 @@ page id: token-surfaces
 
 - [Карта доменов](domain-map.ru.md)
 - [Эталонный клиент](../overview/reference-client.ru.md)
-- [Первые шаги](../getting-started/first-steps.ru.md)
-- [Базовые термины](../glossary/core-terms.ru.md)
+- [Базовые термины](../core-terms.ru.md)

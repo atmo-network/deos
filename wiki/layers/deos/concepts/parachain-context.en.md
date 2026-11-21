@@ -83,5 +83,5 @@ These are deployment responsibilities, not hidden product assumptions inside the
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [Runtime Patterns](../overview/runtime-patterns.en.md)
 - [Asset Identity](../overview/asset-identity.en.md)
-- [Tech Stack](../implementation/tech-stack.en.md)
+- [Tech Stack](../tech-stack.en.md)
 - [Randomness Strategy](../overview/randomness-strategy.en.md)

@@ -19,7 +19,6 @@ tags:
   - data
   - read-model
 related:
-  - Первые шаги
   - Обзор фреймворка DEOS
   - Домены управления
   - Эталонный клиент
@@ -72,8 +71,7 @@ DEOS явно делит данные для продуктов и операт�
 
 ## Связанные страницы
 
-- [Первые шаги](../getting-started/first-steps.ru.md)
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Домены управления](governance-domains.ru.md)
 - [Эталонный клиент](../overview/reference-client.ru.md)
-- [Базовые термины](../glossary/core-terms.ru.md)
+- [Базовые термины](../core-terms.ru.md)

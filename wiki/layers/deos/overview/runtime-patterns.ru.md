@@ -67,4 +67,4 @@ DEOS — не только набор экономических идей, но 
 - [Обзор фреймворка DEOS](deos-framework.ru.md)
 - [Идентичность активов](asset-identity.ru.md)
 - [Стратегия использования случайности](randomness-strategy.ru.md)
-- [Базовые термины](../glossary/core-terms.ru.md)
+- [Базовые термины](../core-terms.ru.md)

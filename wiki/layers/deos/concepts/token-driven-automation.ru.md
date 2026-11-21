@@ -87,4 +87,4 @@ Actors отделяет обычное зачисление средств от 
 - [AA-Актор](../overview/actor.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
 - [Разделение данных для чтения](read-model-split.ru.md)
-- [Базовые термины](../glossary/core-terms.ru.md)
+- [Базовые термины](../core-terms.ru.md)

@@ -9,10 +9,10 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../CHANGELOG.md
-  - resource: ../../../../web-client/README.md
-  - resource: ../../../../web-client/docs/architecture.en.md
-  - resource: ../../../../template/pallets/actors/docs/architecture.en.md
+  - resource: ../../../CHANGELOG.md
+  - resource: ../../../web-client/README.md
+  - resource: ../../../web-client/docs/architecture.en.md
+  - resource: ../../../template/pallets/actors/docs/architecture.en.md
 status: stable
 audience: newcomer
 tags:
@@ -38,7 +38,7 @@ DEOS combines a FRAME runtime, a browser reference client, development tools, an
 - **Reference client**: the SvelteKit client provides wallet/account selection, tracked-asset balances and transfers, swap, staking, governance, automation, wiki browsing, and transaction feedback.
 - **Development tools**: project scripts, benchmarks, metadata export, and package/runtime/client checks support development and validation.
 
-[Domain Map](../concepts/domain-map.en.md) explains how these areas relate.
+[Domain Map](concepts/domain-map.en.md) explains how these areas relate.
 
 ## Present limits
 
@@ -50,7 +50,7 @@ The presence of a feature or a validation command does not by itself establish p
 
 ## Related
 
-- [Domain Map](../concepts/domain-map.en.md)
+- [Domain Map](concepts/domain-map.en.md)
 - [Three-Layer Validation](three-layer-validation.en.md)
-- [Reference Client](../overview/reference-client.en.md)
-- [Generated Wiki](../concepts/generated-wiki.en.md)
+- [Reference Client](overview/reference-client.en.md)
+- [Generated Wiki](concepts/generated-wiki.en.md)

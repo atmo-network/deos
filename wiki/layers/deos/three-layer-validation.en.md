@@ -9,8 +9,8 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../AGENTS.md
-  - resource: ../../../../docs/deos/state-witness-accounting.contract.en.md
+  - resource: ../../../AGENTS.md
+  - resource: ../../../docs/deos/state-witness-accounting.contract.en.md
 status: stable
 audience: developer
 tags:
@@ -68,8 +68,8 @@ This layer tests how pallets and components coordinate inside the full Parachain
 
 ## Related
 
-- [Repository Structure](../implementation/repository-structure.en.md)
-- [Tech Stack](../implementation/tech-stack.en.md)
-- [TMCTOL Standard](../concepts/tmctol-standard.en.md)
-- [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
+- [Repository Structure](repository-structure.en.md)
+- [Tech Stack](tech-stack.en.md)
+- [TMCTOL Standard](concepts/tmctol-standard.en.md)
+- [Routing and Minting Loop](concepts/routing-and-minting-loop.en.md)
 - [Development Status](status.en.md)

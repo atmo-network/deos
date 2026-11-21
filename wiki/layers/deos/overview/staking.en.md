@@ -105,5 +105,5 @@ Generic non-native share-vault yield remains receipt appreciation after direct b
 
 - [Governance Domains](../concepts/governance-domains.en.md)
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
-- [Newcomer FAQ](../faq/newcomer-faq.en.md)
+- [Core Terms](../core-terms.en.md)
+- [Newcomer FAQ](../newcomer-faq.en.md)

@@ -3,10 +3,7 @@
   "mode": "incremental-sync",
   "source_root": "../../../docs",
   "default_locale": "en",
-  "available_locales": [
-    "en",
-    "ru"
-  ],
+  "available_locales": ["en", "ru"],
   "pages": {
     "index": {
       "path": {
@@ -21,14 +18,8 @@
       "status": "active",
       "audience": "newcomer",
       "sources": {
-        "en": [
-          "../../../docs/deos/README.md",
-          "../../../README.md"
-        ],
-        "ru": [
-          "../../../docs/deos/README.md",
-          "../../../README.md"
-        ]
+        "en": ["../../../docs/deos/README.md", "../../../README.md"],
+        "ru": ["../../../docs/deos/README.md", "../../../README.md"]
       }
     },
     "deos-framework": {
@@ -275,12 +266,8 @@
       "status": "active",
       "audience": "newcomer",
       "sources": {
-        "en": [
-          "../../../docs/deos/core.architecture.en.md"
-        ],
-        "ru": [
-          "../../../docs/deos/core.architecture.en.md"
-        ]
+        "en": ["../../../docs/deos/core.architecture.en.md"],
+        "ru": ["../../../docs/deos/core.architecture.en.md"]
       }
     },
     "reference-client": {
@@ -325,74 +312,14 @@
       "sources": {
         "en": [
           "../../../README.md",
-          "../../../docs/deos/README.md",
-          "../../../template/README.md",
+          "../../../docs/deos/framework-distribution.en.md",
           "../../../web-client/README.md",
-          "../../../scripts/README.md",
-          "../../../simulators/tmctol/README.md"
-        ],
-        "ru": [
-          "../../../README.md",
-          "../../../docs/deos/README.md",
-          "../../../template/README.md",
-          "../../../web-client/README.md",
-          "../../../scripts/README.md",
-          "../../../simulators/tmctol/README.md"
-        ]
-      }
-    },
-    "first-steps": {
-      "path": {
-        "en": "getting-started/first-steps.en.md",
-        "ru": "getting-started/first-steps.ru.md"
-      },
-      "page_type": "getting-started",
-      "title": {
-        "en": "First Steps",
-        "ru": "Первые шаги"
-      },
-      "status": "active",
-      "audience": "newcomer",
-      "sources": {
-        "en": [
-          "../../../README.md",
-          "../../../docs/deos/README.md",
-          "../../../docs/deos/read-model.contract.en.md"
-        ],
-        "ru": [
-          "../../../README.md",
-          "../../../docs/deos/README.md",
-          "../../../docs/deos/read-model.contract.en.md"
-        ]
-      }
-    },
-    "reading-paths": {
-      "path": {
-        "en": "getting-started/reading-paths.en.md",
-        "ru": "getting-started/reading-paths.ru.md"
-      },
-      "page_type": "getting-started",
-      "title": {
-        "en": "Reading Paths",
-        "ru": "Маршруты чтения"
-      },
-      "status": "active",
-      "audience": "newcomer",
-      "sources": {
-        "en": [
-          "../../../docs/deos/README.md",
-          "../../../README.md",
-          "../../../CHANGELOG.md",
-          "../../../web-client/README.md",
-          "../../../template/README.md",
           "../../../scripts/README.md"
         ],
         "ru": [
-          "../../../docs/deos/README.md",
           "../../../README.md",
-          "../../../CHANGELOG.md",
+          "../../../docs/deos/framework-distribution.en.md",
           "../../../web-client/README.md",
-          "../../../template/README.md",
           "../../../scripts/README.md"
         ]
       }
@@ -619,8 +546,8 @@
     },
     "physics-vs-politics": {
       "path": {
-        "en": "comparisons/physics-vs-politics.en.md",
-        "ru": "comparisons/physics-vs-politics.ru.md"
+        "en": "physics-vs-politics.en.md",
+        "ru": "physics-vs-politics.ru.md"
       },
       "page_type": "comparison",
       "title": {
@@ -644,8 +571,8 @@
     },
     "newcomer-faq": {
       "path": {
-        "en": "faq/newcomer-faq.en.md",
-        "ru": "faq/newcomer-faq.ru.md"
+        "en": "newcomer-faq.en.md",
+        "ru": "newcomer-faq.ru.md"
       },
       "page_type": "faq",
       "title": {
@@ -681,8 +608,8 @@
     },
     "status": {
       "path": {
-        "en": "development/status.en.md",
-        "ru": "development/status.ru.md"
+        "en": "status.en.md",
+        "ru": "status.ru.md"
       },
       "page_type": "status",
       "title": {
@@ -710,8 +637,8 @@
     },
     "core-terms": {
       "path": {
-        "en": "glossary/core-terms.en.md",
-        "ru": "glossary/core-terms.ru.md"
+        "en": "core-terms.en.md",
+        "ru": "core-terms.ru.md"
       },
       "page_type": "glossary",
       "title": {
@@ -900,8 +827,8 @@
     },
     "forking-deos": {
       "path": {
-        "en": "usage/forking-deos.en.md",
-        "ru": "usage/forking-deos.ru.md"
+        "en": "forking-deos.en.md",
+        "ru": "forking-deos.ru.md"
       },
       "page_type": "usage",
       "title": {
@@ -916,16 +843,22 @@
           "../../../README.md",
           "../../../docs/deos/README.md",
           "../../../template/pallets/actors/docs/embedding.md",
+          "../../../docs/deos/framework-instance.contract.en.md",
           "../../../template/README.md",
-          "../../../web-client/README.md"
+          "../../../web-client/README.md",
+          "../../../docs/deos/tmctol.specification.en.md",
+          "../../../simulators/tmctol/README.md"
         ],
         "ru": [
           "../../../AGENTS.md",
           "../../../README.md",
           "../../../docs/deos/README.md",
           "../../../template/pallets/actors/docs/embedding.md",
+          "../../../docs/deos/framework-instance.contract.en.md",
           "../../../template/README.md",
-          "../../../web-client/README.md"
+          "../../../web-client/README.md",
+          "../../../docs/deos/tmctol.specification.en.md",
+          "../../../simulators/tmctol/README.md"
         ]
       }
     },
@@ -1043,8 +976,8 @@
     },
     "repository-structure": {
       "path": {
-        "en": "implementation/repository-structure.en.md",
-        "ru": "implementation/repository-structure.ru.md"
+        "en": "repository-structure.en.md",
+        "ru": "repository-structure.ru.md"
       },
       "page_type": "implementation",
       "title": {
@@ -1070,8 +1003,8 @@
     },
     "tech-stack": {
       "path": {
-        "en": "implementation/tech-stack.en.md",
-        "ru": "implementation/tech-stack.ru.md"
+        "en": "tech-stack.en.md",
+        "ru": "tech-stack.ru.md"
       },
       "page_type": "implementation",
       "title": {
@@ -1097,8 +1030,8 @@
     },
     "tmctol-formulas": {
       "path": {
-        "en": "math/tmctol-formulas.en.md",
-        "ru": "math/tmctol-formulas.ru.md"
+        "en": "tmctol-formulas.en.md",
+        "ru": "tmctol-formulas.ru.md"
       },
       "page_type": "math",
       "title": {
@@ -1120,8 +1053,8 @@
     },
     "scripts-layer": {
       "path": {
-        "en": "usage/scripts-layer.en.md",
-        "ru": "usage/scripts-layer.ru.md"
+        "en": "scripts-layer.en.md",
+        "ru": "scripts-layer.ru.md"
       },
       "page_type": "usage",
       "title": {
@@ -1131,20 +1064,14 @@
       "status": "active",
       "audience": "developer",
       "sources": {
-        "en": [
-          "../../../scripts/README.md",
-          "../../../AGENTS.md"
-        ],
-        "ru": [
-          "../../../scripts/README.md",
-          "../../../AGENTS.md"
-        ]
+        "en": ["../../../scripts/README.md", "../../../AGENTS.md"],
+        "ru": ["../../../scripts/README.md", "../../../AGENTS.md"]
       }
     },
     "three-layer-validation": {
       "path": {
-        "en": "development/three-layer-validation.en.md",
-        "ru": "development/three-layer-validation.ru.md"
+        "en": "three-layer-validation.en.md",
+        "ru": "three-layer-validation.ru.md"
       },
       "page_type": "development",
       "title": {
@@ -1172,8 +1099,8 @@
     },
     "contributing": {
       "path": {
-        "en": "community/contributing.en.md",
-        "ru": "community/contributing.ru.md"
+        "en": "contributing.en.md",
+        "ru": "contributing.ru.md"
       },
       "page_type": "community",
       "title": {

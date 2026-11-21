@@ -10,8 +10,8 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../AGENTS.md
-  - resource: ../../../../docs/deos/state-witness-accounting.contract.en.md
+  - resource: ../../../AGENTS.md
+  - resource: ../../../docs/deos/state-witness-accounting.contract.en.md
 status: stable
 audience: developer
 tags:
@@ -72,8 +72,8 @@ related:
 
 ## Связанные страницы
 
-- [Структура репозитория](../implementation/repository-structure.ru.md)
-- [Технологический стек](../implementation/tech-stack.ru.md)
-- [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
-- [Контур маршрутизации и эмиссии](../concepts/routing-and-minting-loop.ru.md)
+- [Структура репозитория](repository-structure.ru.md)
+- [Технологический стек](tech-stack.ru.md)
+- [Стандарт TMCTOL](concepts/tmctol-standard.ru.md)
+- [Контур маршрутизации и эмиссии](concepts/routing-and-minting-loop.ru.md)
 - [Статус разработки](status.ru.md)

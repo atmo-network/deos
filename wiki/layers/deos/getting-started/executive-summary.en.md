@@ -79,12 +79,12 @@ DEOS needs a runtime-first environment where economic rules, assets, automation,
 
 ## Adoption path
 
-A partner team starts by reading the external entry pages, reviewing the fork profile inside [Forking DEOS](../usage/forking-deos.en.md), validating whether TMCTOL fits its ecosystem, and defining product-specific dApps and user-facing philosophy downstream.
+A partner team starts by reading the external entry pages, reviewing the fork profile inside [Forking DEOS](../forking-deos.en.md), validating whether TMCTOL fits its ecosystem, and defining product-specific dApps and user-facing philosophy downstream.
 
 ## Next pages
 
 - [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
 - [Partner Pitch](partner-pitch.en.md)
-- [Forking DEOS](../usage/forking-deos.en.md)
-- [Physics vs Politics](../comparisons/physics-vs-politics.en.md)
+- [Forking DEOS](../forking-deos.en.md)
+- [Physics vs Politics](../physics-vs-politics.en.md)
 - [Economic Claim Levels](../concepts/economic-claim-levels.en.md)

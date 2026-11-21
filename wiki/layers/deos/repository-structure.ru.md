@@ -10,8 +10,8 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../AGENTS.md
-  - resource: ../../../../README.md
+  - resource: ../../../AGENTS.md
+  - resource: ../../../README.md
 status: stable
 audience: developer
 tags:
@@ -79,7 +79,7 @@ related:
 ## Связанные страницы
 
 - [Технологический стек](tech-stack.ru.md)
-- [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
-- [Принципы среды исполнения](../overview/runtime-patterns.ru.md)
-- [Эталонный клиент](../overview/reference-client.ru.md)
-- [Слой скриптов](../usage/scripts-layer.ru.md)
+- [Обзор фреймворка DEOS](overview/deos-framework.ru.md)
+- [Принципы среды исполнения](overview/runtime-patterns.ru.md)
+- [Эталонный клиент](overview/reference-client.ru.md)
+- [Слой скриптов](scripts-layer.ru.md)

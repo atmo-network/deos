@@ -86,4 +86,4 @@ In the current reference line, TMCTOL uses Actors for recurring runtime automati
 - [AA-Actor](../overview/actor.en.md)
 - [TMCTOL Standard](tmctol-standard.en.md)
 - [Read-Model Split](read-model-split.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
+- [Core Terms](../core-terms.en.md)

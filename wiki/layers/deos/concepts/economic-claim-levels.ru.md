@@ -58,4 +58,4 @@ related:
 
 - [Экономические пороги](economic-thresholds.ru.md)
 - [Карта инвариантов и угроз](invariant-map.ru.md)
-- [Трёхуровневая проверка](../development/three-layer-validation.ru.md)
+- [Трёхуровневая проверка](../three-layer-validation.ru.md)

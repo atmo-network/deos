@@ -38,7 +38,7 @@ related:
 
 `DEOS Actors` names the whole runtime actor system: `pallet-deos-actors`, scheduler, lifecycle rules, fee model, actor accounts, and typed execution environment for bounded protocol flows.
 
-An [AA-Actor](actor.en.md) is one concrete instance inside that system. This page explains the system-level contract.
+An [AA-Actor](actor.en.md) is one concrete instance inside that system. The [Actor Wakeup Chain](../concepts/end-to-end-flows.en.md#actor-wakeup-chain) shows what happens between a configured trigger, an admitted cycle, and a possible handoff to another actor.
 
 ## System Contract
 
@@ -265,4 +265,4 @@ Within the existing task and adapter language, many workflow/topology changes ca
 - [Token-Driven Automation](../concepts/token-driven-automation.en.md)
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
 - [Governance](governance.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
+- [Core Terms](../core-terms.en.md)

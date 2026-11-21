@@ -76,7 +76,7 @@ TMCTOL использует несколько разных пороговых �
 ## Связанные страницы
 
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
-- [Формулы TMCTOL](../math/tmctol-formulas.ru.md)
+- [Формулы TMCTOL](../tmctol-formulas.ru.md)
 - [Кривая эмиссии токенов](../overview/token-minting-curve.ru.md)
 - [Контур маршрутизации и эмиссии](routing-and-minting-loop.ru.md)
 - [Роли токенов](token-surfaces.ru.md)

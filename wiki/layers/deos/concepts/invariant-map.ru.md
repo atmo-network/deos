@@ -75,6 +75,6 @@ related:
 ## Связанные страницы
 
 - [Уровни экономических утверждений](economic-claim-levels.ru.md)
-- [Трёхуровневая проверка](../development/three-layer-validation.ru.md)
+- [Трёхуровневая проверка](../three-layer-validation.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
 - [Домены управления](governance-domains.ru.md)

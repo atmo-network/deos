@@ -174,6 +174,14 @@ try {
     edgeIds.add(identity);
   }
 
+  // A storage directory is a group: it holds at least three distinct pages, otherwise its pages sit one level up.
+  const directoryPages = new Map();
+  for (const [key, { rel }] of pages) {
+    const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+    if (dir) directoryPages.set(dir, (directoryPages.get(dir) ?? new Set()).add(key.split('/')[0]));
+  }
+  for (const [dir, members] of directoryPages) if (members.size < 3) failures.push(`${dir}/: directory group has ${members.size} pages; a group needs at least three, otherwise move its pages one level up`);
+
   const stateIds = new Set(Object.keys(state.pages ?? {}));
   const localeIds = new Set(Object.keys(locales.pages ?? {}));
   for (const [name, manifestIds] of [['_meta/graph.json', graphIds], ['_meta/state.json', stateIds], ['_meta/locales.json', localeIds]]) {
@@ -190,6 +198,10 @@ try {
     }
   }
   collectItems(navigation.sections);
+  for (const section of navigation.sections ?? []) {
+    const count = new Set((section.items ?? []).map((item) => item.id)).size;
+    if (section.title && count < 3) failures.push(`_meta/navigation.json: titled group ${section.id} has ${count} pages; a group needs at least three, otherwise omit its title`);
+  }
   for (const [id, item] of navigationItems) if (!ids.has(id)) failures.push(`_meta/navigation.json: stale page ${id}`);
   for (const locale of ['en', 'ru']) {
     for (const [alias, target] of Object.entries(aliases.aliases?.[locale] ?? {})) {

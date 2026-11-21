@@ -89,4 +89,4 @@ DEOS Router предоставляет ограниченные котировк
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
 - [Токен-управляемая автоматизация](token-driven-automation.ru.md)
 - [Стейкинг](../overview/staking.ru.md)
-- [Базовые термины](../glossary/core-terms.ru.md)
+- [Базовые термины](../core-terms.ru.md)

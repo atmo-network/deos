@@ -1,7 +1,7 @@
 ---
 type: getting-started
 title: Start Here
-description: A short onboarding spine that routes newcomers into one of three paths - understand DEOS, run it locally, or fork it and change the economy safely.
+description: Build and inspect the DEOS runtime from source, or run a local reference network with separately accepted operator inputs.
 locale: en
 canonical_page_id: start-here
 translation_status: source
@@ -10,17 +10,14 @@ available_locales:
   - ru
 sources:
   - resource: ../../../../README.md
-  - resource: ../../../../docs/deos/README.md
-  - resource: ../../../../template/README.md
+  - resource: ../../../../docs/deos/framework-distribution.en.md
   - resource: ../../../../web-client/README.md
   - resource: ../../../../scripts/README.md
-  - resource: ../../../../simulators/tmctol/README.md
 status: stable
 audience: newcomer
 tags:
   - onboarding
   - getting-started
-  - forkability
   - validation
 related:
   - DEOS in 60 Seconds
@@ -30,141 +27,42 @@ related:
 
 # Start Here
 
-## Summary
+The source distribution can build and validate the reference runtime without a local relay chain or a browser client. Starting a network is a separate operator task.
 
-DEOS has deep runtime, economics, client, documentation, and agent-maintenance layers. You do not need to learn them all before you begin.
+## Build and inspect the runtime
 
-Choose the path that matches your intent. Each path gives you a short route, a clear done condition, and the smallest validation surface that proves you are moving in the right layer.
+On Linux x86-64 with the source package's native build prerequisites installed, run from the source root:
 
-You do not need to read `AGENTS.md` to evaluate or fork DEOS. Treat `AGENTS.md` as maintainer and agent operating context. Use this page, the wiki, and the local workspace README files for human onboarding.
-
-## Path A - Understand DEOS in 10 minutes
-
-Use this path if you are an ecosystem reader, partner, investor, or curious builder trying to decide whether DEOS is worth deeper evaluation.
-
-If you are evaluating a partnership or fork, start with [Partner Pitch](partner-pitch.en.md) first. It answers why DEOS matters before the deeper architecture route.
-
-Read:
-
-1. [Partner Pitch](partner-pitch.en.md), if you need the external adoption case
-2. [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
-3. [Physics vs Politics](../comparisons/physics-vs-politics.en.md)
-4. [TMCTOL Standard](../concepts/tmctol-standard.en.md), starting with the summary and core mechanics
-5. [Economic Claim Levels](../concepts/economic-claim-levels.en.md) if you need to distinguish mechanism claims from market promises
-
-Done when you can answer:
-
-- What does DEOS replace in discretionary DAO treasury management?
-- Why is TMCTOL a standard on top of DEOS rather than the whole framework?
-- Which claims are deterministic protocol behavior, and which claims still depend on market and liveness conditions?
-
-Next if still interested: continue with the evaluation route embedded in [Partner Pitch](partner-pitch.en.md).
-
-## Path B - Run DEOS locally in 30 minutes
-
-Use this path if you are a developer checking whether the repository can run on your machine.
-
-Prerequisites:
-
-- Rust installed
-- Node.js installed
-- Enough disk and build time for a Polkadot SDK runtime workspace
-
-Terminal 1 from the repository root:
-
-```sh
-./scripts/bootstrap-local-network.sh
+```bash
+./scripts/setup-environment.sh framework
+./scripts/03-build-runtime.sh --output "$PWD/deos-development.wasm"
+./scripts/export-papi-metadata.sh \
+  --wasm "$PWD/deos-development.wasm" --output "$PWD/deos.scale"
 ```
 
-Expected result:
+Choose a new Wasm output file. The exporter reads the selected Wasm's Metadata API and checks exact byte equality without falling back to native metadata. This produces a development Wasm and its metadata, not a qualified network artifact. Use `./scripts/validate-local.sh framework` to check the source and independent runtime consumers.
 
-- Local Polkadot SDK binaries are available
-- The reference runtime builds
-- A local chain spec is generated
-- Zombienet starts an Omni Node based local network
-- The parachain begins producing blocks
+## Run a qualified local network
 
-Terminal 2 from the repository root:
+Use the full repository and an independently accepted Linux operator bundle. A source build cannot supply that bundle. Check the bundle using Script 01's `--check-reference-bundle` and import it using `--import-reference-bundle` with `--bundle-output`. Select the bundle's exact Node, Zombienet CLI, Omni Node and raw chain spec with its accepted Wasm; install the separately pinned relay and worker binaries as well. Do not substitute version strings or a freshly built development Wasm for accepted inputs.
 
-```sh
-npm --prefix web-client install
+With those inputs selected, choose an existing owned work directory without a `zombienet-network` output and a fresh evidence path. See `./scripts/05-spawn-zombienet.sh --help` for the exact environment inputs. Run Script 05's default reference mode in the foreground, then use `./scripts/06-network-smoke.sh` against its configured local RPC endpoints from another terminal. The smoke check observes bounded finalized relay and parachain progress without submitting transactions.
+
+## Open the optional client
+
+With the repository-pinned Node and npm active in your shell, the full repository can also start a standalone development client:
+
+```bash
+./scripts/setup-environment.sh client
+npm --prefix web-client run papi:generate
 npm --prefix web-client run dev
 ```
 
-Expected result:
-
-- Vite prints a local URL
-- The reference client opens
-- The wiki surface loads
-- Wallet, chain status, and bounded live surfaces can connect once the local network is ready
-
-Optional local demo state:
-
-```sh
-./scripts/seed-web-client-state.sh
-```
-
-If you get stuck, use:
-
-- [Scripts Layer](../usage/scripts-layer.en.md) for what each script owns
-- [Three-Layer Validation](../development/three-layer-validation.en.md) for validation scope and escalation
-- `./scripts/teardown-local-network.sh` to stop local services
-- `./scripts/clean-local-artifacts.sh` to remove generated local artifacts
-
-Done when the local network is producing blocks and the web client loads against it.
-
-## Path C - Fork and change the economy safely
-
-Use this path if you are a partner team or protocol builder asking how to turn DEOS into a downstream ecosystem.
-
-Start with reading:
-
-1. [Forking DEOS](../usage/forking-deos.en.md)
-2. [TMCTOL Formulas](../math/tmctol-formulas.en.md)
-3. [Three-Layer Validation](../development/three-layer-validation.en.md)
-
-Then make the first economic experiment in the simulator before touching runtime code:
-
-```sh
-node simulators/tmctol/tests.js
-```
-
-Safe first-change map:
-
-| Change | Start | Then touch | Minimum validation |
-| --- | --- | --- | --- |
-| TMC price/slope | Simulator + formulas | Runtime config after math holds | Simulator, then TMC tests |
-| TOL split/reserves | TMCTOL spec + simulator | Actors topology, runtime config, docs | Simulator + runtime tests |
-| Router fee policy | DEOS Router | Router config, governance bounds | Router tests + claims |
-| Governance domains/payloads | Governance overview | Gov pallet/config, client | Governance + client checks |
-| UI copy/onboarding | `web-client/` + `wiki/` | Runtime only if data contract changes | Client validate + wiki trust |
-
-Do not casually change:
-
-- Launch-time curve physics after curve creation
-- Floor, compression, or guarantee wording without updating claim preconditions
-- Bucket accounting invariants
-- The read-model split between bounded on-chain projections and materialized/indexed views
-- Governance protection-track authority boundaries
-
-Done when you know which choices are product narrative, simulator parameters, runtime constants, governance policy, client presentation, or externally materialized data.
-
-## Minimum validation by path
-
-Use the smallest meaningful gate first. You do not need every gate for every change.
-
-| Path or change | Minimum validation |
-| --- | --- |
-| Understanding only | No command required |
-| Wiki/onboarding text | Editorial review of sources, links, locale parity, and provenance |
-| Optional client behavior | `./scripts/validate-local.sh client` |
-| Tokenomics/formulas | `node simulators/tmctol/tests.js` |
-| TMC runtime | `cargo test --manifest-path template/Cargo.toml -p pallet-deos-tmc --locked` |
-| Broad runtime | `cargo test --manifest-path template/Cargo.toml --workspace --locked` |
-| Framework source and embedding | `./scripts/validate-local.sh framework` |
+The client can open independently; live chain views require a reachable chain with compatible metadata.
 
 ## Related
 
 - [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
-- [Forking DEOS](../usage/forking-deos.en.md)
-- [Three-Layer Validation](../development/three-layer-validation.en.md)
+- [Scripts Layer](../scripts-layer.en.md)
+- [Forking DEOS](../forking-deos.en.md)
+- [Three-Layer Validation](../three-layer-validation.en.md)

@@ -74,8 +74,7 @@ Actors can run from schedules, manual triggers, or balance-ingress address event
 Common Actor Contract shapes include:
 
 - Timer-driven burning: swap collected fees into Native, then burn;
-- Balance-triggered liquidity: react to foreign collateral arrival, swap part of it, then add liquidity;
-- Graph node: receive an LP token from another actor, unwind it, then split outputs to treasury accounts.
+- Balance-triggered liquidity: react to foreign collateral arrival, swap part of it, then add liquidity.
 
 In all cases the actor remains inside the full Actors contract: deterministic scheduling, cooldowns, fee admission, lifecycle rules, and bounded execution.
 
@@ -83,7 +82,7 @@ In all cases the actor remains inside the full Actors contract: deterministic sc
 
 Actors turn economic coordination into explicit runtime behavior. They connect minting, routing, buckets, treasury actions, and governance-owned operations without forcing every recurring flow into custom pallet code.
 
-They also make actor graphs possible: one actor's balance outflow can become another actor's trigger message. Larger protocol behavior can be composed from small bounded pieces while staying inspectable as typed automation.
+The [Actor Wakeup Chain](../concepts/end-to-end-flows.en.md#actor-wakeup-chain) illustrates when one actor's transfer can signal another actor.
 
 ## Related
 
@@ -91,4 +90,4 @@ They also make actor graphs possible: one actor's balance outflow can become ano
 - [Token-Driven Automation](../concepts/token-driven-automation.en.md)
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
 - [Governance](governance.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
+- [Core Terms](../core-terms.en.md)

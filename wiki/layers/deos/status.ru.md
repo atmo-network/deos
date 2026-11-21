@@ -10,10 +10,10 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../CHANGELOG.md
-  - resource: ../../../../web-client/README.md
-  - resource: ../../../../web-client/docs/architecture.en.md
-  - resource: ../../../../template/pallets/actors/docs/architecture.en.md
+  - resource: ../../../CHANGELOG.md
+  - resource: ../../../web-client/README.md
+  - resource: ../../../web-client/docs/architecture.en.md
+  - resource: ../../../template/pallets/actors/docs/architecture.en.md
 status: stable
 audience: newcomer
 tags:
@@ -39,7 +39,7 @@ DEOS объединяет среду исполнения на FRAME, этало
 - **Эталонный клиент**: клиент на SvelteKit позволяет выбирать кошелёк и учётную запись, просматривать остатки отслеживаемых активов и переводить их, выполнять обмены, работать со стейкингом, управлением и автоматизацией, читать вики и следить за транзакциями.
 - **Инструменты разработки**: скрипты проекта, измерения производительности, экспорт метаданных и проверки пакетов, среды исполнения и клиента поддерживают разработку и проверку изменений.
 
-Связи между этими областями объясняет [Карта доменов](../concepts/domain-map.ru.md).
+Связи между этими областями объясняет [Карта доменов](concepts/domain-map.ru.md).
 
 ## Текущие ограничения
 
@@ -51,7 +51,7 @@ DEOS объединяет среду исполнения на FRAME, этало
 
 ## Связанные страницы
 
-- [Карта доменов](../concepts/domain-map.ru.md)
+- [Карта доменов](concepts/domain-map.ru.md)
 - [Трёхуровневая проверка](three-layer-validation.ru.md)
-- [Эталонный клиент](../overview/reference-client.ru.md)
-- [Собранная вики](../concepts/generated-wiki.ru.md)
+- [Эталонный клиент](overview/reference-client.ru.md)
+- [Собранная вики](concepts/generated-wiki.ru.md)

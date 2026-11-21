@@ -10,6 +10,8 @@ Graph nodes are qualified as `{plane}/{canonical_page_id}`. Authored typed edges
 
 The current metapriority is the explicit metadata order: plane declaration order, then the plane's index, then `_meta/navigation.json` sections/items in their authored array order. First occurrence selects a node's linear position; later navigation references do not duplicate the chapter. Every knowledge node must have an explicit position. Missing positions fail compilation rather than acquiring guessed priority from filenames, degree, dates or arbitrary numeric weights.
 
+A titled navigation section is a group and must hold at least three distinct pages; compilation fails otherwise. A section without a title is an ungrouped run: its pages appear at plane level in authored order, with no sidebar node or contents heading. Ungrouping changes neither identity, route nor position. The same minimum applies to storage directories under a plane: a directory with fewer than three distinct pages is not a group, so its pages live at the plane root. Because the directory is a route segment, moving a page there is a published source-path change and reconciles routes explicitly; order stays in navigation metadata, with the plane index always first.
+
 The generated `SUMMARY.md` is a disposable linear projection. It is not a source of knowledge, graph structure or priority. Locale mirrors retain the same sequence of canonical identities. A different metapriority rule requires an explicit metadata-contract change, not a hidden sort in the renderer.
 
 ## Semantic Layer Membership
@@ -73,5 +75,7 @@ A page includes its authored Markdown body, compiled locale/plane links, explici
 ## Trust and Isolation
 
 The reviewed-content guard, strict YAML parsing and provenance checks run before materialization. Native executable include/default preprocessors, automatic missing chapters and runnable Rust playgrounds are disabled. The corpus is reviewed repository content, not an untrusted Markdown service; these checks are not a generic sanitizer.
+
+A diagram uses a stand-alone Markdown image line with localized alternative text and a lowercase, hyphenated sibling SVG filename. Write a text equivalent in the article. The corpus loader admits regular sibling files only and verifies the closed inert geometry subset in `src/trust.mjs`; scripts, styles, external references and XML declarations are outside that subset. The projection stages each referenced asset beside its locale chapter, and mdBook emits it beside the rendered HTML. Static validation fails if an image target is missing from either locale under the selected site prefix.
 
 The generated website is static and needs no build tooling, wallet, RPC, parent window or authenticated session at runtime. Source compilation runs in the optional project Wiki profile, not in the framework build. Cross-origin iframe permissions, response CSP and production hosting remain separate integration contracts; successful static output does not certify them.

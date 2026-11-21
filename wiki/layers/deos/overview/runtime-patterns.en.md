@@ -66,4 +66,4 @@ These runtime patterns are infrastructure, but they support the whole economic l
 - [DEOS Framework Overview](deos-framework.en.md)
 - [Asset Identity](asset-identity.en.md)
 - [Randomness Strategy](randomness-strategy.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
+- [Core Terms](../core-terms.en.md)

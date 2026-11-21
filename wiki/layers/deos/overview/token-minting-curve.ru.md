@@ -75,5 +75,5 @@ TMC — лишь одна часть системы. В текущей этал�
 - [DEOS Router](router.ru.md)
 - [Контур маршрутизации и эмиссии](../concepts/routing-and-minting-loop.ru.md)
 - [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
-- [Формулы TMCTOL](../math/tmctol-formulas.ru.md)
-- [Экономическая физика прежде политики](../comparisons/physics-vs-politics.ru.md)
+- [Формулы TMCTOL](../tmctol-formulas.ru.md)
+- [Экономическая физика прежде политики](../physics-vs-politics.ru.md)

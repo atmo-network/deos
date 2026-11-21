@@ -88,4 +88,4 @@ Long-range route analytics or chart history remain separate materialized concern
 - [TMCTOL Standard](tmctol-standard.en.md)
 - [Token-Driven Automation](token-driven-automation.en.md)
 - [Staking](../overview/staking.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
+- [Core Terms](../core-terms.en.md)

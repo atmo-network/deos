@@ -84,5 +84,5 @@ Omni Node
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Принципы среды исполнения](../overview/runtime-patterns.ru.md)
 - [Идентичность активов](../overview/asset-identity.ru.md)
-- [Технологический стек](../implementation/tech-stack.ru.md)
+- [Технологический стек](../tech-stack.ru.md)
 - [Стратегия использования случайности](../overview/randomness-strategy.ru.md)

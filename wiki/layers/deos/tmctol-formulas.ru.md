@@ -10,9 +10,9 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../docs/deos/tmctol.specification.en.md
-  - resource: ../../../../docs/deos/builder-economy.contract.en.md
-  - resource: ../../../../simulators/tmctol/README.md
+  - resource: ../../../docs/deos/tmctol.specification.en.md
+  - resource: ../../../docs/deos/builder-economy.contract.en.md
+  - resource: ../../../simulators/tmctol/README.md
 status: stable
 audience: developer
 tags:
@@ -170,8 +170,8 @@ dS/dt = completed_mint_rate - completed_burn_rate
 
 ## Связанные страницы
 
-- [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
-- [Контур маршрутизации и эмиссии](../concepts/routing-and-minting-loop.ru.md)
-- [Кривая эмиссии токенов](../overview/token-minting-curve.ru.md)
-- [DEOS Router](../overview/router.ru.md)
-- [Трёхуровневая проверка](../development/three-layer-validation.ru.md)
+- [Стандарт TMCTOL](concepts/tmctol-standard.ru.md)
+- [Контур маршрутизации и эмиссии](concepts/routing-and-minting-loop.ru.md)
+- [Кривая эмиссии токенов](overview/token-minting-curve.ru.md)
+- [DEOS Router](overview/router.ru.md)
+- [Трёхуровневая проверка](three-layer-validation.ru.md)

@@ -28,7 +28,6 @@ tags:
 related:
   - Domain Map
   - Reference Client
-  - First Steps
   - Core Terms
 ---
 
@@ -98,5 +97,4 @@ When evolving the wiki, update the owner page first, replace duplicated explanat
 
 - [Domain Map](domain-map.en.md)
 - [Reference Client](../overview/reference-client.en.md)
-- [First Steps](../getting-started/first-steps.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
+- [Core Terms](../core-terms.en.md)

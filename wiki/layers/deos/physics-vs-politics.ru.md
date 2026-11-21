@@ -10,9 +10,9 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../docs/deos/manifesto.en.md
-  - resource: ../../../../template/pallets/governance/docs/specification.en.md
-  - resource: ../../../../docs/deos/tmctol.specification.en.md
+  - resource: ../../../docs/deos/manifesto.en.md
+  - resource: ../../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../../docs/deos/tmctol.specification.en.md
 status: stable
 audience: newcomer
 tags:
@@ -80,7 +80,7 @@ TMCTOL воплощает экономическую физику через о�
 
 ## Связанные страницы
 
-- [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
-- [Домены управления](../concepts/governance-domains.ru.md)
-- [Вопросы новичков](../faq/newcomer-faq.ru.md)
-- [Базовые термины](../glossary/core-terms.ru.md)
+- [Обзор фреймворка DEOS](overview/deos-framework.ru.md)
+- [Домены управления](concepts/governance-domains.ru.md)
+- [Вопросы новичков](newcomer-faq.ru.md)
+- [Базовые термины](core-terms.ru.md)

@@ -52,11 +52,11 @@ Owner pages: [Routing and Minting Loop](routing-and-minting-loop.en.md), [DEOS R
 
 ## Actor Wakeup Chain
 
-1. A System actor reaches its configured trigger: balance ingress for omnivorous actors or a bounded schedule for timer-driven actors.
-2. Actors scheduler admits the actor only if lifecycle, cooldown, fee, and bounded-execution rules allow it.
-3. The actor executes a typed plan such as swap, burn, add/remove liquidity, transfer, stake, or unstake. Distribution uses separate Transfer Steps with one captured volume for the Cycle.
-4. Its output may land on another ingress-driven actor account and latch readiness while that actor is Idle. Running/Suspended ingress updates custody without requesting another Cycle.
-5. A larger protocol behavior emerges from small bounded steps, but remains inspectable as an actor graph.
+![Actor wakeup: signal, readiness, Service eligibility and committed effect. A transfer can signal another actor; ingress while busy only credits its balance.](actor-wakeup.svg)
+
+**1 Signal → 2 readiness → 3 Service → 4 effect.** A configured timer or matching ingress can signal an `Idle` Actor in block `N`. A successful readiness check latches one pending cycle; repeated signals cannot queue another. Service eligibility begins no earlier than `N + 1`. Opening and Steps are separately admitted. The flow delivers useful work only when its intended effect commits, not just because readiness was latched or a cycle ended.
+
+**Handoff and 5 custody only.** A committed transfer can be matching ingress for another Actor and may latch readiness if that receiver is `Idle`. For a `Running` or `Suspended` receiver, successful ingress changes custody without requesting another cycle.
 
 Owner pages: [Actors System](../overview/actor-system.en.md), [AA-Actor](../overview/actor.en.md), [Token-Driven Automation](token-driven-automation.en.md).
 
@@ -84,7 +84,7 @@ Current cursor and attempt are bounded chain truth. A long attempt timeline belo
 4. Unwound assets move toward paired treasury lanes instead of collapsing all reserves into one undifferentiated account.
 5. Governance can reason about segmented treasury surfaces without owning the launch physics of the curve.
 
-This is intentionally a domain-level walkthrough. Bucket ratios and formulas belong to [TMCTOL Standard](tmctol-standard.en.md) and [TMCTOL Formulas](../math/tmctol-formulas.en.md).
+This is intentionally a domain-level walkthrough. Bucket ratios and formulas belong to [TMCTOL Standard](tmctol-standard.en.md) and [TMCTOL Formulas](../tmctol-formulas.en.md).
 
 ## Native Staking and Collator Security
 
@@ -106,7 +106,7 @@ When changing a flow, validate the highest affected layer:
 - Client presentation changed -> web-client validation and read-model honesty;
 - Wiki explanation changed -> trusted wiki validation.
 
-See [Three-Layer Validation](../development/three-layer-validation.en.md).
+See [Three-Layer Validation](../three-layer-validation.en.md).
 
 ## Related
 

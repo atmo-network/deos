@@ -62,5 +62,5 @@ The asset registry is therefore an identity layer that enables economic composit
 
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
 - [Staking](staking.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
-- [Newcomer FAQ](../faq/newcomer-faq.en.md)
+- [Core Terms](../core-terms.en.md)
+- [Newcomer FAQ](../newcomer-faq.en.md)

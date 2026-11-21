@@ -159,30 +159,6 @@
       }
     },
     {
-      "id": "first-steps",
-      "title": {
-        "en": "First Steps",
-        "ru": "Первые шаги"
-      },
-      "page_type": "getting-started",
-      "path": {
-        "en": "getting-started/first-steps.en.md",
-        "ru": "getting-started/first-steps.ru.md"
-      }
-    },
-    {
-      "id": "reading-paths",
-      "title": {
-        "en": "Reading Paths",
-        "ru": "Маршруты чтения"
-      },
-      "page_type": "getting-started",
-      "path": {
-        "en": "getting-started/reading-paths.en.md",
-        "ru": "getting-started/reading-paths.ru.md"
-      }
-    },
-    {
       "id": "tmctol-standard",
       "title": {
         "en": "TMCTOL Standard",
@@ -286,8 +262,8 @@
       },
       "page_type": "comparison",
       "path": {
-        "en": "comparisons/physics-vs-politics.en.md",
-        "ru": "comparisons/physics-vs-politics.ru.md"
+        "en": "physics-vs-politics.en.md",
+        "ru": "physics-vs-politics.ru.md"
       }
     },
     {
@@ -298,8 +274,8 @@
       },
       "page_type": "faq",
       "path": {
-        "en": "faq/newcomer-faq.en.md",
-        "ru": "faq/newcomer-faq.ru.md"
+        "en": "newcomer-faq.en.md",
+        "ru": "newcomer-faq.ru.md"
       }
     },
     {
@@ -310,8 +286,8 @@
       },
       "page_type": "status",
       "path": {
-        "en": "development/status.en.md",
-        "ru": "development/status.ru.md"
+        "en": "status.en.md",
+        "ru": "status.ru.md"
       }
     },
     {
@@ -322,8 +298,8 @@
       },
       "page_type": "glossary",
       "path": {
-        "en": "glossary/core-terms.en.md",
-        "ru": "glossary/core-terms.ru.md"
+        "en": "core-terms.en.md",
+        "ru": "core-terms.ru.md"
       }
     },
     {
@@ -394,8 +370,8 @@
       },
       "page_type": "usage",
       "path": {
-        "en": "usage/forking-deos.en.md",
-        "ru": "usage/forking-deos.ru.md"
+        "en": "forking-deos.en.md",
+        "ru": "forking-deos.ru.md"
       }
     },
     {
@@ -454,8 +430,8 @@
       },
       "page_type": "implementation",
       "path": {
-        "en": "implementation/repository-structure.en.md",
-        "ru": "implementation/repository-structure.ru.md"
+        "en": "repository-structure.en.md",
+        "ru": "repository-structure.ru.md"
       }
     },
     {
@@ -466,8 +442,8 @@
       },
       "page_type": "implementation",
       "path": {
-        "en": "implementation/tech-stack.en.md",
-        "ru": "implementation/tech-stack.ru.md"
+        "en": "tech-stack.en.md",
+        "ru": "tech-stack.ru.md"
       }
     },
     {
@@ -478,8 +454,8 @@
       },
       "page_type": "math",
       "path": {
-        "en": "math/tmctol-formulas.en.md",
-        "ru": "math/tmctol-formulas.ru.md"
+        "en": "tmctol-formulas.en.md",
+        "ru": "tmctol-formulas.ru.md"
       }
     },
     {
@@ -490,8 +466,8 @@
       },
       "page_type": "usage",
       "path": {
-        "en": "usage/scripts-layer.en.md",
-        "ru": "usage/scripts-layer.ru.md"
+        "en": "scripts-layer.en.md",
+        "ru": "scripts-layer.ru.md"
       }
     },
     {
@@ -502,8 +478,8 @@
       },
       "page_type": "development",
       "path": {
-        "en": "development/three-layer-validation.en.md",
-        "ru": "development/three-layer-validation.ru.md"
+        "en": "three-layer-validation.en.md",
+        "ru": "three-layer-validation.ru.md"
       }
     },
     {
@@ -514,8 +490,8 @@
       },
       "page_type": "community",
       "path": {
-        "en": "community/contributing.en.md",
-        "ru": "community/contributing.ru.md"
+        "en": "contributing.en.md",
+        "ru": "contributing.ru.md"
       }
     },
     {
@@ -564,11 +540,6 @@
     {
       "from": "index",
       "to": "deos-framework",
-      "type": "entrypoint"
-    },
-    {
-      "from": "index",
-      "to": "first-steps",
       "type": "entrypoint"
     },
     {
@@ -683,11 +654,6 @@
     },
     {
       "from": "deos-framework",
-      "to": "first-steps",
-      "type": "onboarding"
-    },
-    {
-      "from": "deos-framework",
       "to": "actor-system",
       "type": "explains-automation"
     },
@@ -745,21 +711,6 @@
       "from": "deos-framework",
       "to": "reference-client",
       "type": "explains-product"
-    },
-    {
-      "from": "first-steps",
-      "to": "tmctol-standard",
-      "type": "recommended-next"
-    },
-    {
-      "from": "first-steps",
-      "to": "read-model-split",
-      "type": "recommended-next"
-    },
-    {
-      "from": "first-steps",
-      "to": "reference-client",
-      "type": "recommended-next"
     },
     {
       "from": "actor-system",
@@ -928,11 +879,6 @@
     },
     {
       "from": "generated-wiki",
-      "to": "first-steps",
-      "type": "onboarding-entry"
-    },
-    {
-      "from": "generated-wiki",
       "to": "domain-map",
       "type": "defines-wiki-knowledge-graph"
     },
@@ -962,21 +908,6 @@
       "type": "maps-client-domain"
     },
     {
-      "from": "reading-paths",
-      "to": "first-steps",
-      "type": "expands-onboarding"
-    },
-    {
-      "from": "reading-paths",
-      "to": "generated-wiki",
-      "type": "explains-navigation-layer"
-    },
-    {
-      "from": "reading-paths",
-      "to": "status",
-      "type": "status-and-release-route"
-    },
-    {
       "from": "status",
       "to": "reference-client",
       "type": "current-product-surface"
@@ -985,11 +916,6 @@
       "from": "status",
       "to": "generated-wiki",
       "type": "current-documentation-surface"
-    },
-    {
-      "from": "status",
-      "to": "reading-paths",
-      "type": "onboarding-context"
     },
     {
       "from": "physics-vs-politics",
@@ -1062,11 +988,6 @@
       "type": "uses"
     },
     {
-      "from": "reading-paths",
-      "to": "end-to-end-flows",
-      "type": "recommends"
-    },
-    {
       "from": "newcomer-faq",
       "to": "end-to-end-flows",
       "type": "answers-with"
@@ -1100,11 +1021,6 @@
       "from": "architecture-diagrams",
       "to": "governance-domains",
       "type": "visualizes"
-    },
-    {
-      "from": "reading-paths",
-      "to": "architecture-diagrams",
-      "type": "recommends"
     },
     {
       "from": "newcomer-faq",
@@ -1147,19 +1063,9 @@
       "type": "answers-with"
     },
     {
-      "from": "reading-paths",
-      "to": "token-surfaces",
-      "type": "recommends"
-    },
-    {
       "from": "domain-map",
       "to": "builder-economy",
       "type": "guides"
-    },
-    {
-      "from": "reading-paths",
-      "to": "builder-economy",
-      "type": "recommends"
     },
     {
       "from": "token-surfaces",
@@ -1227,11 +1133,6 @@
       "type": "references"
     },
     {
-      "from": "reading-paths",
-      "to": "economic-thresholds",
-      "type": "recommends"
-    },
-    {
       "from": "deos-framework",
       "to": "forking-deos",
       "type": "frames"
@@ -1260,11 +1161,6 @@
       "from": "forking-deos",
       "to": "actor-system",
       "type": "embeds-runtime-kernel"
-    },
-    {
-      "from": "reading-paths",
-      "to": "forking-deos",
-      "type": "recommends"
     },
     {
       "from": "contributing",
@@ -1302,11 +1198,6 @@
       "type": "requires"
     },
     {
-      "from": "reading-paths",
-      "to": "parachain-context",
-      "type": "recommends"
-    },
-    {
       "from": "tol-bucket-scenarios",
       "to": "tmctol-standard",
       "type": "explains"
@@ -1337,11 +1228,6 @@
       "type": "guides"
     },
     {
-      "from": "reading-paths",
-      "to": "tol-bucket-scenarios",
-      "type": "recommends"
-    },
-    {
       "from": "invariant-map",
       "to": "economic-claim-levels",
       "type": "uses"
@@ -1370,16 +1256,6 @@
       "from": "economic-claim-levels",
       "to": "three-layer-validation",
       "type": "uses"
-    },
-    {
-      "from": "reading-paths",
-      "to": "invariant-map",
-      "type": "recommends"
-    },
-    {
-      "from": "reading-paths",
-      "to": "economic-claim-levels",
-      "type": "recommends"
     },
     {
       "from": "repository-structure",
@@ -1482,36 +1358,6 @@
       "type": "starts"
     },
     {
-      "from": "first-steps",
-      "to": "start-here",
-      "type": "starts"
-    },
-    {
-      "from": "first-steps",
-      "to": "deos-in-60-seconds",
-      "type": "starts"
-    },
-    {
-      "from": "reading-paths",
-      "to": "start-here",
-      "type": "recommends"
-    },
-    {
-      "from": "reading-paths",
-      "to": "deos-in-60-seconds",
-      "type": "recommends"
-    },
-    {
-      "from": "reading-paths",
-      "to": "reference-client",
-      "type": "recommends"
-    },
-    {
-      "from": "deos-in-60-seconds",
-      "to": "reading-paths",
-      "type": "routes"
-    },
-    {
       "from": "deos-in-60-seconds",
       "to": "partner-pitch",
       "type": "routes"
@@ -1520,11 +1366,6 @@
       "from": "partner-pitch",
       "to": "tmctol-standard",
       "type": "explains"
-    },
-    {
-      "from": "reading-paths",
-      "to": "partner-pitch",
-      "type": "recommends"
     },
     {
       "from": "index",
@@ -1555,11 +1396,6 @@
       "from": "executive-summary",
       "to": "status",
       "type": "summarizes"
-    },
-    {
-      "from": "reading-paths",
-      "to": "executive-summary",
-      "type": "recommends"
     },
     {
       "from": "index",

@@ -6,11 +6,13 @@ The Wiki domain owns this optional website pipeline. Its Bash entrypoint compose
 
 ## Data Flow
 
-`wiki/layers/_meta/planes.json` declares plane order and required/optional roots. `src/corpus.mjs` loads each declared bundle, locale/navigation/graph manifests, canonical page identities and structured provenance. It rejects missing required planes, malformed present planes, missing mirrors, identity/path drift and unsafe reviewed Markdown. The existing strict OKF method checks remain separately available through the Skill.
+`wiki/layers/_meta/planes.json` declares plane order and required/optional roots. `src/corpus.mjs` loads each declared bundle, locale/navigation/graph manifests, canonical page identities and structured provenance. It rejects missing required planes, malformed present planes, missing mirrors, identity/path drift and unsafe reviewed Markdown. The project Wiki profile also checks strict OKF before building the site.
 
 `src/projection.mjs::unifiedGraph` qualifies nodes by plane, preserves every authored typed edge and records localized URLs/provenance. `linearOrder` uses the plane index and authored section/item order, deduplicating references by first encounter. A graph page without a position fails; graph degree and edge iteration do not affect chapter order. `tests/projection.test.mjs` reverses graph order and metadata order independently to falsify accidental coupling.
 
 `projectBooks` produces Markdown bodies, a tree SUMMARY (plane landing, then one foldable draft node per navigation section), TOML configuration, theme partials, the content-free `site-index.html` redirect and one `projection.json`. It retains authored bodies and source-relative paths, and prepends static layer tags. Every generated link is relative to its source file. The EN/RU books share the same mdBook engine and graph; the Contents page and empty-state pages are not added as knowledge nodes. The graph stays behind the UI: no graph page, relation tables or graph links are emitted. Authored graph cycles remain valid.
+
+Local diagrams are loaded from a referenced regular sibling `.svg` with alt text, checked by `src/trust.mjs`, and staged in the owning chapter's locale-book directory. mdBook copies the asset beside the rendered article; `check-output.mjs` resolves the relative image source beneath the configured prefix. Projection fixtures exercise both locale copies and the refusal when one copy is absent. The [authoring contract](routing.contract.en.md#trust-and-isolation) owns the accepted SVG subset and the required text equivalent.
 
 ## Semantic Layer Views
 

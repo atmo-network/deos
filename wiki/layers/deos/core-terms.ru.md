@@ -10,20 +10,20 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../README.md
-  - resource: ../../../../docs/deos/README.md
-  - resource: ../../../../BACKLOG.md
-  - resource: ../../../../CHANGELOG.md
-  - resource: ../../../../docs/deos/tmctol.specification.en.md
-  - resource: ../../../../docs/deos/core.architecture.en.md
-  - resource: ../../../../template/pallets/actors/docs/specification.en.md
-  - resource: ../../../../template/pallets/staking/docs/specification.en.md
-  - resource: ../../../../template/pallets/router/docs/specification.en.md
-  - resource: ../../../../template/pallets/governance/docs/specification.en.md
-  - resource: ../../../../template/pallets/governance/docs/architecture.en.md
-  - resource: ../../../../docs/deos/read-model.contract.en.md
-  - resource: ../../../../web-client/docs/architecture.en.md
-  - resource: ../../../../web-client/README.md
+  - resource: ../../../README.md
+  - resource: ../../../docs/deos/README.md
+  - resource: ../../../BACKLOG.md
+  - resource: ../../../CHANGELOG.md
+  - resource: ../../../docs/deos/tmctol.specification.en.md
+  - resource: ../../../docs/deos/core.architecture.en.md
+  - resource: ../../../template/pallets/actors/docs/specification.en.md
+  - resource: ../../../template/pallets/staking/docs/specification.en.md
+  - resource: ../../../template/pallets/router/docs/specification.en.md
+  - resource: ../../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../../template/pallets/governance/docs/architecture.en.md
+  - resource: ../../../docs/deos/read-model.contract.en.md
+  - resource: ../../../web-client/docs/architecture.en.md
+  - resource: ../../../web-client/README.md
 status: stable
 audience: newcomer
 tags:
@@ -38,7 +38,6 @@ related:
   - Экономика созидателей $BLDR
   - Разделение данных для чтения
   - Собранная вики
-  - Маршруты чтения
   - Статус разработки
   - Вопросы новичков
 ---
@@ -185,7 +184,7 @@ related:
 
 ### `$BLDR`
 
-Флагманский токен тактического управления и координации созидателей в действующей линии. См. [Экономику созидателей $BLDR](../concepts/builder-economy.ru.md).
+Флагманский токен тактического управления и координации созидателей в действующей линии. См. [Экономику созидателей $BLDR](concepts/builder-economy.ru.md).
 
 ### `BLDR Anchor`
 
@@ -237,14 +236,13 @@ related:
 
 ## Связанные страницы
 
-- [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
-- [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
-- [Токен-управляемая автоматизация](../concepts/token-driven-automation.ru.md)
-- [Управление](../overview/governance.ru.md)
-- [Домены управления](../concepts/governance-domains.ru.md)
-- [Экономика созидателей $BLDR](../concepts/builder-economy.ru.md)
-- [Разделение данных для чтения](../concepts/read-model-split.ru.md)
-- [Собранная вики](../concepts/generated-wiki.ru.md)
-- [Маршруты чтения](../getting-started/reading-paths.ru.md)
-- [Статус разработки](../development/status.ru.md)
-- [Вопросы новичков](../faq/newcomer-faq.ru.md)
+- [Обзор фреймворка DEOS](overview/deos-framework.ru.md)
+- [Стандарт TMCTOL](concepts/tmctol-standard.ru.md)
+- [Токен-управляемая автоматизация](concepts/token-driven-automation.ru.md)
+- [Управление](overview/governance.ru.md)
+- [Домены управления](concepts/governance-domains.ru.md)
+- [Экономика созидателей $BLDR](concepts/builder-economy.ru.md)
+- [Разделение данных для чтения](concepts/read-model-split.ru.md)
+- [Собранная вики](concepts/generated-wiki.ru.md)
+- [Статус разработки](status.ru.md)
+- [Вопросы новичков](newcomer-faq.ru.md)

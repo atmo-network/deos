@@ -22,7 +22,6 @@ tags:
   - ui-kit
   - domain-dag
 related:
-  - First Steps
   - Read-Model Split
   - Newcomer FAQ
   - Core Terms
@@ -66,8 +65,7 @@ The web client renders generated wiki content as trusted repo-local markdown and
 
 ## Related
 
-- [First Steps](../getting-started/first-steps.en.md)
 - [Read-Model Split](../concepts/read-model-split.en.md)
 - [Generated Wiki](../concepts/generated-wiki.en.md)
-- [Newcomer FAQ](../faq/newcomer-faq.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
+- [Newcomer FAQ](../newcomer-faq.en.md)
+- [Core Terms](../core-terms.en.md)

@@ -20,7 +20,6 @@ tags:
   - architecture
   - deos
 related:
-  - First Steps
   - Actors System
   - AA-Actor
   - DEOS Router
@@ -88,8 +87,7 @@ In the current line, that model appears through:
 
 ## Related
 
-- [First Steps](../getting-started/first-steps.en.md)
-- [Forking DEOS](../usage/forking-deos.en.md)
+- [Forking DEOS](../forking-deos.en.md)
 - [Actors System](actor-system.en.md)
 - [AA-Actor](actor.en.md)
 - [DEOS Router](router.en.md)
@@ -102,4 +100,4 @@ In the current line, that model appears through:
 - [Token-Driven Automation](../concepts/token-driven-automation.en.md)
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
 - [Reference Client](reference-client.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
+- [Core Terms](../core-terms.en.md)

@@ -61,7 +61,8 @@ export type WikiNavigationItem = {
 
 export type WikiNavigationSection = {
   id: string;
-  title: LocalizedValue;
+  /** Absent for an ungrouped run of pages: a titled group needs at least three. */
+  title?: LocalizedValue;
   items: WikiNavigationItem[];
 };
 

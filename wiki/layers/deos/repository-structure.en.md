@@ -9,8 +9,8 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../AGENTS.md
-  - resource: ../../../../README.md
+  - resource: ../../../AGENTS.md
+  - resource: ../../../README.md
 status: stable
 audience: developer
 tags:
@@ -78,7 +78,7 @@ When dealing with core economic logic, the path shifts to validate math in `/sim
 ## Related
 
 - [Tech Stack](tech-stack.en.md)
-- [DEOS Framework Overview](../overview/deos-framework.en.md)
-- [Runtime Patterns](../overview/runtime-patterns.en.md)
-- [Reference Client](../overview/reference-client.en.md)
-- [Scripts Layer](../usage/scripts-layer.en.md)
+- [DEOS Framework Overview](overview/deos-framework.en.md)
+- [Runtime Patterns](overview/runtime-patterns.en.md)
+- [Reference Client](overview/reference-client.en.md)
+- [Scripts Layer](scripts-layer.en.md)

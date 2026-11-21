@@ -83,13 +83,13 @@ Use the governance wiki cluster in this order:
 
 1. `Governance` — why the domain exists;
 2. [Governance Domains](../concepts/governance-domains.en.md) — how one governance cell is typed;
-3. [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md) — why protocol physics stays protected;
+3. [Physics-First vs Politics-First](../physics-vs-politics.en.md) — why protocol physics stays protected;
 4. [Staking](staking.en.md) — where governance-conditioned reward signals meet staking;
-5. [Core Terms](../glossary/core-terms.en.md) — recurring vocabulary.
+5. [Core Terms](../core-terms.en.md) — recurring vocabulary.
 
 ## Related
 
 - [Governance Domains](../concepts/governance-domains.en.md)
-- [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
+- [Physics-First vs Politics-First](../physics-vs-politics.en.md)
 - [Staking](staking.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
+- [Core Terms](../core-terms.en.md)

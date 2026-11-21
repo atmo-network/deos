@@ -3,11 +3,11 @@ Domain: Wiki corpus and routes
 Owns: Declared plane loading, canonical page identity, localized manifests and build-time provenance.
 Excludes: HTML presentation, hosting, browser state and hosting policy.
 */
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFrontmatter, readConcept, splitFrontmatter } from './frontmatter.mjs';
-import { assertTrustedMarkdown } from './trust.mjs';
+import { assertTrustedMarkdown, assertTrustedSvg } from './trust.mjs';
 
 const atom = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const defaultWikiRoot = fileURLToPath(new URL('../../layers/', import.meta.url));
@@ -58,6 +58,20 @@ function concepts(root) {
   return paths;
 }
 
+function loadDiagrams(body, path) {
+  const diagrams = new Map();
+  for (const [, alt, name] of body.matchAll(/^!\[([^\]\r\n]*)\]\(([a-z0-9]+(?:-[a-z0-9]+)*\.svg)\)[ \t]*$/gm)) {
+    if (!alt.trim()) throw new Error(`${path}: empty diagram alternative text`);
+    if (diagrams.has(name)) continue;
+    const file = join(dirname(path), name);
+    if (!lstatSync(file).isFile()) throw new Error(`${file}: expected a regular sibling diagram`);
+    const svg = readFileSync(file, 'utf8');
+    assertTrustedSvg(svg, file);
+    diagrams.set(name, svg);
+  }
+  return diagrams;
+}
+
 function loadPlane(wikiRoot, declaration) {
   const id = requireAtom(declaration.id);
   if (typeof declaration.title !== 'string' || !declaration.title || typeof declaration.required !== 'boolean') throw new Error(`Invalid plane declaration: ${id}`);
@@ -95,7 +109,7 @@ function loadPlane(wikiRoot, declaration) {
     }
     const key = `${locale}/${pageId}`;
     if (plane.pages.has(key)) throw new Error(`${id}: duplicate page identity ${key}`);
-    const page = { id: pageId, locale, sourcePath, meta, body };
+    const page = { id: pageId, locale, sourcePath, meta, body, diagrams: loadDiagrams(body, path) };
     plane.pages.set(key, page);
     plane.byPath.set(sourcePath, page);
     identities.add(pageId);
@@ -113,6 +127,8 @@ function loadPlane(wikiRoot, declaration) {
   if (graphIds.size !== identities.size || plane.graph.nodes.length !== graphIds.size || [...graphIds].some(key => !identities.has(key))) throw new Error(`${id}: graph/page identity drift`);
   for (const edge of plane.graph.edges) if (!graphIds.has(edge.from) || !graphIds.has(edge.to) || typeof edge.type !== 'string' || !edge.type) throw new Error(`${id}: invalid graph edge`);
   for (const section of plane.navigation.sections) {
+    // A titled group needs at least three distinct pages; fewer are listed ungrouped, without a title.
+    if (section.title && new Set(section.items.map(item => item.id)).size < 3) throw new Error(`${id}: navigation group ${section.id} has fewer than three pages; remove its title`);
     for (const item of section.items) {
       for (const locale of plane.locales) {
         const page = plane.pages.get(`${locale}/${item.id}`);

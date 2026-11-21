@@ -18,7 +18,6 @@ tags:
   - data
   - read-model
 related:
-  - First Steps
   - DEOS Framework Overview
   - Governance Domains
   - Reference Client
@@ -71,8 +70,7 @@ That decision protects both protocol integrity and product honesty.
 
 ## Related
 
-- [First Steps](../getting-started/first-steps.en.md)
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [Governance Domains](governance-domains.en.md)
 - [Reference Client](../overview/reference-client.en.md)
-- [Core Terms](../glossary/core-terms.en.md)
+- [Core Terms](../core-terms.en.md)

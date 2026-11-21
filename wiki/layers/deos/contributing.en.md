@@ -9,8 +9,8 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../AGENTS.md
-  - resource: ../../../../docs/deos/README.md
+  - resource: ../../../AGENTS.md
+  - resource: ../../../docs/deos/README.md
 status: stable
 audience: developer
 tags:
@@ -34,13 +34,13 @@ Contributing to DEOS means changing a domain without weakening the rest of the g
 
 ### 1. Find the domain
 
-Use [Domain Map](../concepts/domain-map.en.md) first. Decide whether the change belongs to Economic Physics, autonomous actors, routing, governance, staking, read models, client UX, tooling, or future-gated work.
+Use [Domain Map](concepts/domain-map.en.md) first. Decide whether the change belongs to Economic Physics, autonomous actors, routing, governance, staking, read models, client UX, tooling, or future-gated work.
 
 ### 2. Respect physics-first design
 
 DEOS prefers bounded protocol-managed reactions over manual intervention. Governance can steer and authorize changes, but survival-critical economic behavior should remain explicit, deterministic, and validated.
 
-See [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md).
+See [Physics-First vs Politics-First](physics-vs-politics.en.md).
 
 ### 3. Keep forkability in mind
 
@@ -50,7 +50,7 @@ DEOS is a framework intended for downstream ecosystems. Upstream contributions s
 
 ### Pick the right validation layer
 
-Use [Three-Layer Validation](../development/three-layer-validation.en.md):
+Use [Three-Layer Validation](three-layer-validation.en.md):
 
 1. simulation for economic formulas and invariants;
 2. runtime behavior checks for pallets and integrations;
@@ -91,7 +91,7 @@ Risky contributions usually:
 
 ## Related
 
-- [Domain Map](../concepts/domain-map.en.md)
-- [Three-Layer Validation](../development/three-layer-validation.en.md)
-- [DEOS Framework Overview](../overview/deos-framework.en.md)
-- [Scripts Layer](../usage/scripts-layer.en.md)
+- [Domain Map](concepts/domain-map.en.md)
+- [Three-Layer Validation](three-layer-validation.en.md)
+- [DEOS Framework Overview](overview/deos-framework.en.md)
+- [Scripts Layer](scripts-layer.en.md)

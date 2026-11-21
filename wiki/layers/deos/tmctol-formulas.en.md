@@ -9,9 +9,9 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../docs/deos/tmctol.specification.en.md
-  - resource: ../../../../docs/deos/builder-economy.contract.en.md
-  - resource: ../../../../simulators/tmctol/README.md
+  - resource: ../../../docs/deos/tmctol.specification.en.md
+  - resource: ../../../docs/deos/builder-economy.contract.en.md
+  - resource: ../../../simulators/tmctol/README.md
 status: stable
 audience: developer
 tags:
@@ -169,8 +169,8 @@ Router fee volume can fund the Burn Actor, but actual burning depends on that ac
 
 ## Related
 
-- [TMCTOL Standard](../concepts/tmctol-standard.en.md)
-- [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
-- [Token Minting Curve](../overview/token-minting-curve.en.md)
-- [DEOS Router](../overview/router.en.md)
-- [Three-Layer Validation](../development/three-layer-validation.en.md)
+- [TMCTOL Standard](concepts/tmctol-standard.en.md)
+- [Routing and Minting Loop](concepts/routing-and-minting-loop.en.md)
+- [Token Minting Curve](overview/token-minting-curve.en.md)
+- [DEOS Router](overview/router.en.md)
+- [Three-Layer Validation](three-layer-validation.en.md)

@@ -101,4 +101,4 @@ DEOS предоставляет этот более широкий рабочи�
 - [Контур маршрутизации и эмиссии](routing-and-minting-loop.ru.md)
 - [Домены управления](governance-domains.ru.md)
 - [Стейкинг](../overview/staking.ru.md)
-- [Базовые термины](../glossary/core-terms.ru.md)
+- [Базовые термины](../core-terms.ru.md)

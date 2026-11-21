@@ -63,5 +63,5 @@ related:
 
 - [Контур маршрутизации и эмиссии](../concepts/routing-and-minting-loop.ru.md)
 - [Стейкинг](staking.ru.md)
-- [Базовые термины](../glossary/core-terms.ru.md)
-- [Вопросы новичков](../faq/newcomer-faq.ru.md)
+- [Базовые термины](../core-terms.ru.md)
+- [Вопросы новичков](../newcomer-faq.ru.md)

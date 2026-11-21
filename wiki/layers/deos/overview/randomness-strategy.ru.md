@@ -66,7 +66,7 @@ related:
 
 ## Связанные страницы
 
-- [Экономическая физика прежде политики](../comparisons/physics-vs-politics.ru.md)
+- [Экономическая физика прежде политики](../physics-vs-politics.ru.md)
 - [Управление](governance.ru.md)
 - [AA-Актор](actor.ru.md)
-- [Вопросы новичков](../faq/newcomer-faq.ru.md)
+- [Вопросы новичков](../newcomer-faq.ru.md)

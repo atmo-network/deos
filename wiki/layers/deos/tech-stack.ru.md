@@ -10,13 +10,13 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../../../docs/deos/core.architecture.en.md
-  - resource: ../../../../template/Cargo.toml
-  - resource: ../../../../template/runtime/src/lib.rs
-  - resource: ../../../../web-client/package.json
-  - resource: ../../../../web-client/docs/architecture.en.md
-  - resource: ../../../../simulators/tmctol/README.md
-  - resource: ../../../../scripts/README.md
+  - resource: ../../../docs/deos/core.architecture.en.md
+  - resource: ../../../template/Cargo.toml
+  - resource: ../../../template/runtime/src/lib.rs
+  - resource: ../../../web-client/package.json
+  - resource: ../../../web-client/docs/architecture.en.md
+  - resource: ../../../simulators/tmctol/README.md
+  - resource: ../../../scripts/README.md
 status: stable
 audience: developer
 tags:
@@ -76,7 +76,7 @@ DEOS использует архитектуру развёртывания Omni
 ## Связанные страницы
 
 - [Структура репозитория](repository-structure.ru.md)
-- [Принципы среды исполнения](../overview/runtime-patterns.ru.md)
-- [Трёхуровневая проверка](../development/three-layer-validation.ru.md)
-- [Эталонный клиент](../overview/reference-client.ru.md)
-- [Слой скриптов](../usage/scripts-layer.ru.md)
+- [Принципы среды исполнения](overview/runtime-patterns.ru.md)
+- [Трёхуровневая проверка](three-layer-validation.ru.md)
+- [Эталонный клиент](overview/reference-client.ru.md)
+- [Слой скриптов](scripts-layer.ru.md)

@@ -202,7 +202,7 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
   const sections: ResolvedWikiNavigationSection[] = $derived(
     wikiNavigation.sections.map((section) => ({
       id: section.id,
-      title: pickLocalized(section.title),
+      title: section.title ? pickLocalized(section.title) : '',
       items: section.items.map((item) => ({
         id: item.id,
         title: pickLocalized(item.title),
@@ -498,11 +498,13 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
           {:else}
             {#each filteredSections as section}
               <section class="grid gap-1">
-                <div
-                  class="font-semibold text-(--mono-text) mb-1 px-2 uppercase tracking-widest text-[10px]"
-                >
-                  {section.title}
-                </div>
+                {#if section.title}
+                  <div
+                    class="font-semibold text-(--mono-text) mb-1 px-2 uppercase tracking-widest text-[10px]"
+                  >
+                    {section.title}
+                  </div>
+                {/if}
                 <div class="grid gap-0.5 text-xs">
                   {#each section.items as item}
                     <Button

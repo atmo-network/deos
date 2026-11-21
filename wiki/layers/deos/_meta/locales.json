@@ -67,14 +67,6 @@
       "en": "getting-started/start-here.en.md",
       "ru": "getting-started/start-here.ru.md"
     },
-    "first-steps": {
-      "en": "getting-started/first-steps.en.md",
-      "ru": "getting-started/first-steps.ru.md"
-    },
-    "reading-paths": {
-      "en": "getting-started/reading-paths.en.md",
-      "ru": "getting-started/reading-paths.ru.md"
-    },
     "tmctol-standard": {
       "en": "concepts/tmctol-standard.en.md",
       "ru": "concepts/tmctol-standard.ru.md"
@@ -108,44 +100,44 @@
       "ru": "concepts/domain-map.ru.md"
     },
     "physics-vs-politics": {
-      "en": "comparisons/physics-vs-politics.en.md",
-      "ru": "comparisons/physics-vs-politics.ru.md"
+      "en": "physics-vs-politics.en.md",
+      "ru": "physics-vs-politics.ru.md"
     },
     "newcomer-faq": {
-      "en": "faq/newcomer-faq.en.md",
-      "ru": "faq/newcomer-faq.ru.md"
+      "en": "newcomer-faq.en.md",
+      "ru": "newcomer-faq.ru.md"
     },
     "core-terms": {
-      "en": "glossary/core-terms.en.md",
-      "ru": "glossary/core-terms.ru.md"
+      "en": "core-terms.en.md",
+      "ru": "core-terms.ru.md"
     },
     "repository-structure": {
-      "en": "implementation/repository-structure.en.md",
-      "ru": "implementation/repository-structure.ru.md"
+      "en": "repository-structure.en.md",
+      "ru": "repository-structure.ru.md"
     },
     "tech-stack": {
-      "en": "implementation/tech-stack.en.md",
-      "ru": "implementation/tech-stack.ru.md"
+      "en": "tech-stack.en.md",
+      "ru": "tech-stack.ru.md"
     },
     "tmctol-formulas": {
-      "en": "math/tmctol-formulas.en.md",
-      "ru": "math/tmctol-formulas.ru.md"
+      "en": "tmctol-formulas.en.md",
+      "ru": "tmctol-formulas.ru.md"
     },
     "scripts-layer": {
-      "en": "usage/scripts-layer.en.md",
-      "ru": "usage/scripts-layer.ru.md"
+      "en": "scripts-layer.en.md",
+      "ru": "scripts-layer.ru.md"
     },
     "three-layer-validation": {
-      "en": "development/three-layer-validation.en.md",
-      "ru": "development/three-layer-validation.ru.md"
+      "en": "three-layer-validation.en.md",
+      "ru": "three-layer-validation.ru.md"
     },
     "contributing": {
-      "en": "community/contributing.en.md",
-      "ru": "community/contributing.ru.md"
+      "en": "contributing.en.md",
+      "ru": "contributing.ru.md"
     },
     "status": {
-      "en": "development/status.en.md",
-      "ru": "development/status.ru.md"
+      "en": "status.en.md",
+      "ru": "status.ru.md"
     },
     "end-to-end-flows": {
       "en": "concepts/end-to-end-flows.en.md",
@@ -168,8 +160,8 @@
       "ru": "concepts/economic-thresholds.ru.md"
     },
     "forking-deos": {
-      "en": "usage/forking-deos.en.md",
-      "ru": "usage/forking-deos.ru.md"
+      "en": "forking-deos.en.md",
+      "ru": "forking-deos.ru.md"
     },
     "parachain-context": {
       "en": "concepts/parachain-context.en.md",

@@ -106,5 +106,5 @@ $NTVE + stNTVE
 
 - [Домены управления](../concepts/governance-domains.ru.md)
 - [Контур маршрутизации и эмиссии](../concepts/routing-and-minting-loop.ru.md)
-- [Базовые термины](../glossary/core-terms.ru.md)
-- [Вопросы новичков](../faq/newcomer-faq.ru.md)
+- [Базовые термины](../core-terms.ru.md)
+- [Вопросы новичков](../newcomer-faq.ru.md)

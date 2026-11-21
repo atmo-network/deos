@@ -43,13 +43,13 @@ Use this page as the map of the wiki knowledge graph.
 
 The framework domain explains what DEOS is: a forkable deterministic economic operating system for protocol economies. It separates DEOS, the framework, from TMCTOL, the current tokenomic standard.
 
-Start with [DEOS Framework Overview](../overview/deos-framework.en.md), then use [Core Terms](../glossary/core-terms.en.md) when vocabulary becomes dense.
+Start with [DEOS Framework Overview](../overview/deos-framework.en.md), then use [Core Terms](../core-terms.en.md) when vocabulary becomes dense.
 
 ### Economic physics
 
 The economic domain explains the managed token economy: minting curves, treasury-owned liquidity, floor/ceiling behavior, burn liveness, and compression claims.
 
-Read [TMCTOL Standard](tmctol-standard.en.md), [Token Surfaces](token-surfaces.en.md), [TOL Bucket Scenarios](tol-bucket-scenarios.en.md), [Economic Thresholds](economic-thresholds.en.md), [TMCTOL Formulas](../math/tmctol-formulas.en.md), [Token Minting Curve](../overview/token-minting-curve.en.md), and [Routing and Minting Loop](routing-and-minting-loop.en.md).
+Read [TMCTOL Standard](tmctol-standard.en.md), [Token Surfaces](token-surfaces.en.md), [TOL Bucket Scenarios](tol-bucket-scenarios.en.md), [Economic Thresholds](economic-thresholds.en.md), [TMCTOL Formulas](../tmctol-formulas.en.md), [Token Minting Curve](../overview/token-minting-curve.en.md), and [Routing and Minting Loop](routing-and-minting-loop.en.md).
 
 ### Autonomous actors
 
@@ -67,7 +67,7 @@ Read [DEOS Router](../overview/router.en.md), [Asset Identity](../overview/asset
 
 The governance domain explains who may change what. DEOS governance is domain-scoped: each governed area has a primary power surface, a protection surface, typed payloads, bounded execution authority, and explicit limits.
 
-Read [Governance](../overview/governance.en.md), [Governance Domains](governance-domains.en.md), and [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md).
+Read [Governance](../overview/governance.en.md), [Governance Domains](governance-domains.en.md), and [Physics-First vs Politics-First](../physics-vs-politics.en.md).
 
 ### Builder economy and useful work
 
@@ -79,7 +79,7 @@ Read [$BLDR Builder Economy](builder-economy.en.md), then use [Token Surfaces](t
 
 The staking domain explains share-vault receipts, native liquid staking, LP nomination, reward memory, and protocol donation into liquidity. It bridges economic security, user positions, and governance-conditioned rewards.
 
-Read [Staking](../overview/staking.en.md) and [Three-Layer Validation](../development/three-layer-validation.en.md).
+Read [Staking](../overview/staking.en.md) and [Three-Layer Validation](../three-layer-validation.en.md).
 
 ### Client and read model
 
@@ -91,28 +91,17 @@ Read [Reference Client](../overview/reference-client.en.md) and [Read-Model Spli
 
 The tooling domain explains how contributors and agents keep the system honest: simulator math, runtime checks, wiki trust validation, Domain DAG validation, and release gates.
 
-Read [Three-Layer Validation](../development/three-layer-validation.en.md), [Scripts Layer](../usage/scripts-layer.en.md), and [Development Status](../development/status.en.md).
+Read [Three-Layer Validation](../three-layer-validation.en.md), [Scripts Layer](../scripts-layer.en.md), and [Development Status](../status.en.md).
 
 ### Current limitations
 
 This domain explains what is not part of the current shipped baseline: permissionless collators, relay-beacon randomness, full indexed portfolio discovery, and richer materialized archives.
 
-Read [Randomness Strategy](../overview/randomness-strategy.en.md) and [Development Status](../development/status.en.md).
+Read [Randomness Strategy](../overview/randomness-strategy.en.md) and [Development Status](../status.en.md).
 
 ## How the domains connect
 
-A useful traversal is:
-
-1. Framework identity defines the product boundary.
-2. Economic physics defines the token laws.
-3. Autonomous actors execute recurring economic flows.
-4. Routing and asset identity connect users, assets, and protocol liquidity.
-5. Governance and protection decide which changes are allowed.
-6. Builder economy turns delegated capital into evaluated useful work.
-7. Staking and rewards connect users to security and incentives.
-8. Client and read model expose the system without inventing truth.
-9. Tooling and validation keep the graph synchronized.
-10. Current limitations distinguish available capabilities from unsupported ones.
+Economic rules constrain what a flow can do. Actors schedule and execute admitted work through the asset, routing, and liquidity mechanisms; governance can change only what the governing contract delegates. The client reports the result without acquiring execution authority. [End-to-End Flows](end-to-end-flows.en.md) shows those boundaries in concrete examples.
 
 ## Related
 
