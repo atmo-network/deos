@@ -407,6 +407,32 @@ test('search rebinding changes only the native head assignment and preserves doc
   assert.throws(() => rebindSearchAsset(head, 'different.js', 'new.js'), /Unexpected native/);
 });
 
+test('native output validation requires the loader a diagram page actually names', () => {
+  const root = mkdtempSync(join(tmpdir(), 'deos-mdbook-mermaid-'));
+  try {
+    writeFileSync(join(root, 'graph.json'), JSON.stringify({ nodes: [], edges: [], linear_order: [] }));
+    mkdirSync(join(root, 'theme/mermaid/chunks/mermaid.esm.min'), { recursive: true });
+    writeFileSync(join(root, 'theme/mermaid/mermaid.esm.min.js'), 'export default {};');
+    mkdirSync(join(root, 'en'), { recursive: true });
+    mkdirSync(join(root, 'en/theme'), { recursive: true });
+    const page = join(root, 'en/diagram.html');
+    const diagram = '<div class="wiki-mermaid" data-diagram="1">flowchart TD\n  A --&gt; B</div>';
+    const loader = '<script src="theme/wiki-mermaid-6e7c13bc.js"></script>';
+    writeFileSync(join(root, 'en/theme/wiki-mermaid-6e7c13bc.js'), '');
+    writeFileSync(page, `${loader}${diagram}`);
+    assert.equal(checkOutput(root).diagrams, 1);
+    // The class name alone is not evidence of a loader: the same substring also names the diagram.
+    writeFileSync(page, diagram);
+    assert.throws(() => checkOutput(root), /en\/diagram\.html: diagram page lost its loader script/);
+    // A loader the page names but that the build never staged is a broken page, not a diagram page.
+    writeFileSync(page, '<script src="theme/wiki-mermaid-00000000.js"></script>' + diagram);
+    assert.throws(() => checkOutput(root), /en\/diagram\.html: missing output target/);
+    writeFileSync(page, `${loader}${diagram}`);
+    rmSync(join(root, 'theme/mermaid/chunks'), { recursive: true, force: true });
+    assert.throws(() => checkOutput(root), /vendored distribution is incomplete/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('mdBook release and platform assets remain exact and unsupported targets fail closed', () => {
   assert.equal(mdbook.version, '0.5.4');
   for (const platform of Object.keys(mdbook.artifacts)) {

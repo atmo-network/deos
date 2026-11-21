@@ -8,6 +8,14 @@ the reader switches theme, so a diagram never keeps the colours of the theme it 
   const blocks = [...document.querySelectorAll('.wiki-mermaid')];
   if (!blocks.length) return;
 
+  // The authored source is captured once, before anything is drawn: rendering replaces the element's
+  // children with SVG, so reading the element again would feed the previous drawing back to Mermaid.
+  const diagrams = blocks.map(block => ({
+    block,
+    source: block.textContent,
+    id: `wiki-diagram-${block.dataset.diagram}`,
+  }));
+
   const palette = () => {
     const style = getComputedStyle(document.documentElement);
     const read = (name, fallback) => (style.getPropertyValue(name).trim() || fallback);
@@ -18,6 +26,13 @@ the reader switches theme, so a diagram never keeps the colours of the theme it 
       accent: read('--sidebar-active', read('--links', '#2b6cb0')),
       surface: read('--theme-hover', 'transparent'),
     };
+  };
+
+  // A theme switch changes the palette and nothing else that this loader observes, so the palette is
+  // the signature: an unrelated class change on <html> redraws nothing, and no real switch is skipped.
+  const signature = () => {
+    const { text, line, accent, surface } = palette();
+    return [document.documentElement.className, text, line, accent, surface].join('\u0000');
   };
 
   // The vendored distribution lives at the site root, once for every locale. The reader context knows
@@ -31,7 +46,11 @@ the reader switches theme, so a diagram never keeps the colours of the theme it 
   };
 
   let api = null;
-  const render = async (force) => {
+  let drawn = 0;
+  let drawnSignature = null;
+  let queue = Promise.resolve();
+
+  const draw = async () => {
     if (!api) api = (await import(distributionUrl().href)).default;
     const { text, line, accent, surface } = palette();
     api.initialize({
@@ -60,26 +79,40 @@ the reader switches theme, so a diagram never keeps the colours of the theme it 
         clusterBorder: line,
       },
     });
-    for (const block of blocks) {
-      const source = block.textContent;
-      const id = `wiki-diagram-${block.dataset.diagram}`;
+    const signatureNow = signature();
+    let failed = false;
+    for (const { block, source, id } of diagrams) {
       try {
-        const { svg } = await api.render(`${id}-${force ? 'again' : 'first'}`, source);
+        const { svg } = await api.render(`${id}-${++drawn}`, source);
         block.innerHTML = svg;
         block.dataset.rendered = 'true';
+        delete block.dataset.failed;
+        delete block.dataset.stale;
       } catch (error) {
-        // A diagram that cannot be drawn keeps its source visible: the page still says what it means.
-        block.dataset.failed = 'true';
+        failed = true;
+        // A diagram that cannot be drawn keeps its meaning: a page that never drew anything shows the
+        // authored source as text again, and a page that already drew one keeps the drawing and says
+        // that its colours belong to the previous theme.
+        if (block.dataset.rendered === 'true') block.dataset.stale = 'true';
+        else {
+          block.textContent = source;
+          block.dataset.failed = 'true';
+        }
         console.warn(`Mermaid diagram ${id} failed to render`, error);
       }
     }
+    drawnSignature = failed ? null : signatureNow;
   };
 
-  render(false).catch(error => console.warn('Mermaid is unavailable', error));
-  // The reader's theme switch only toggles a class on <html>, so watch that one attribute.
-  let rendered = false;
+  const redraw = () => {
+    if (signature() === drawnSignature) return queue;
+    queue = queue.then(draw, draw);
+    return queue;
+  };
+
+  queue = queue.then(draw, draw).catch(error => console.warn('Mermaid is unavailable', error));
+  // The reader's theme switch only changes attributes on <html>, so watch that one element.
   new MutationObserver(() => {
-    if (!rendered) { rendered = true; return; }
-    render(true).catch(() => {});
-  }).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    redraw().catch(error => console.warn('Mermaid could not follow the theme', error));
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
 })();

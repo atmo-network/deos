@@ -99,11 +99,18 @@ export function checkOutput(directory) {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  // A page with a diagram needs the loader and the distribution it resolves from the site root.
+  // A page with a diagram needs the loader it actually names and the distribution that loader resolves
+  // from the site root. The reference is the page's own script tag: matching the diagram's class name
+  // would only prove the diagram is there, which is the thing already being looked for.
   let diagrams = 0;
   for (const page of pages) {
     if (!page.endsWith('.html') || !source.get(page).includes('class="wiki-mermaid"')) continue;
-    if (!source.get(page).includes('wiki-mermaid')) throw new Error(`${relative(root, page)}: diagram page lost its loader`);
+    const owner = relative(root, page).replaceAll('\\', '/');
+    const loaders = [...source.get(page).matchAll(/<script\b[^>]*\bsrc="([^"]+)"[^>]*>/gi)]
+      .map(match => match[1])
+      .filter(reference => /(^|\/)wiki-mermaid(?:-[0-9a-z]+)?\.js$/.test(reference.split(/[?#]/)[0]));
+    if (!loaders.length) throw new Error(`${owner}: diagram page lost its loader script`);
+    for (const reference of loaders) targetFor(new URL(reference, new URL(owner, site)), owner);
     const entry = join(root, 'theme/mermaid/mermaid.esm.min.js');
     if (!statSync(entry, { throwIfNoEntry: false })?.isFile()) throw new Error('theme/mermaid/mermaid.esm.min.js: vendored distribution is missing');
     if (!statSync(join(root, 'theme/mermaid/chunks/mermaid.esm.min'), { throwIfNoEntry: false })?.isDirectory()) throw new Error('theme/mermaid/chunks: vendored distribution is incomplete');
