@@ -7,6 +7,7 @@ AUDIT_SCOPE="${AUDIT_SCOPE:-changed}"
 RUN_SIMULATOR="${RUN_SIMULATOR:-auto}"
 RUN_CARGO_CHECK="${RUN_CARGO_CHECK:-auto}"
 RUN_RUNTIME_TESTS="${RUN_RUNTIME_TESTS:-auto}"
+RUN_PALLET_TESTS="${RUN_PALLET_TESTS:-auto}"
 REQUIRE_CONTEXT_SYNC="${REQUIRE_CONTEXT_SYNC:-1}"
 LEDGER_DIR="$SKILL_DIR/ledgers"
 HALLUCINATIONS_FILE="$LEDGER_DIR/hallucinations.jsonl"
@@ -35,6 +36,7 @@ Environment:
   RUN_SIMULATOR=auto|0|1
   RUN_CARGO_CHECK=auto|0|1
   RUN_RUNTIME_TESTS=auto|0|1|release
+  RUN_PALLET_TESTS=auto|0|1
   REQUIRE_CONTEXT_SYNC=0|1
   DEOS_VERBOSE=0|1
   DEOS_FAILURE_TAIL_LINES=N
@@ -175,6 +177,34 @@ should_run_runtime_tests() {
         return 1
     fi
     has_changed_path '^template/runtime/src/.*\.rs$'
+}
+
+# A change confined to one pallet triggers neither the workspace tests nor the runtime suite, so the
+# canonical gate would check that package and never execute a single assertion in it.
+should_run_pallet_tests() {
+    if [[ "$RUN_PALLET_TESTS" == "1" ]]; then
+        return 0
+    fi
+    if [[ "$RUN_PALLET_TESTS" == "0" ]]; then
+        return 1
+    fi
+    has_changed_path '^template/pallets/[^/]+/src/.*\.rs$'
+}
+
+changed_pallet_packages() {
+    local path directory manifest package
+    local -A packages=()
+    for path in "${CHANGED_PATHS[@]}"; do
+        [[ "$path" =~ ^template/pallets/([^/]+)/ ]] || continue
+        directory="${BASH_REMATCH[1]}"
+        manifest="$TEMPLATE_DIR/pallets/$directory/Cargo.toml"
+        [[ -f "$manifest" ]] || continue
+        package="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$manifest" | head -n 1)"
+        [[ -n "$package" ]] || { log_error "Cannot read a package name from $manifest"; return 1; }
+        packages["$package"]=1
+    done
+    (( ${#packages[@]} > 0 )) && printf '%s\n' "${!packages[@]}"
+    return 0
 }
 
 should_run_shell_syntax_check() {
@@ -381,6 +411,22 @@ run_behavior_validation() {
         fi
     else
         log_warning "Skipping runtime unit tests because no runtime source files changed"
+    fi
+    if should_run_pallet_tests; then
+        local -a changed_pallets=()
+        mapfile -t changed_pallets < <(changed_pallet_packages)
+        if (( ${#changed_pallets[@]} == 0 )); then
+            log_warning "Skipping pallet unit tests because no pallet maps to the changed paths"
+        fi
+        local package
+        for package in "${changed_pallets[@]}"; do
+            if ! run_shell_step "cargo test -p $package --lib" "" "cd \"$TEMPLATE_DIR\" && cargo test -p $package --lib"; then
+                log_error "Pallet behavioral validation failed for $package"
+                exit 1
+            fi
+        done
+    else
+        log_warning "Skipping pallet unit tests because no pallet source files changed"
     fi
 }
 

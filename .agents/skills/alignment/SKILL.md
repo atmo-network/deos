@@ -140,3 +140,5 @@ Useful flags:
 ./.agents/skills/alignment/scripts/completion-gate.sh --skip-runtime-tests
 ./.agents/skills/alignment/scripts/completion-gate.sh --allow-no-context-sync
 ```
+
+The behavioral step selects its suites from the diff. Workspace `cargo check` runs for any changed Rust or manifest file, the runtime lib suite runs when runtime sources change, and each changed pallet package runs its own `cargo test --lib`, because a change confined to one pallet otherwise reached the gate as a compile check with no executed assertion. `RUN_PALLET_TESTS=0|1` overrides the automatic selection.
