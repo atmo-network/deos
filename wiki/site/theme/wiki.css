@@ -185,6 +185,11 @@ html.navy pre {
 /* One geometry for every context: the box is wider than the glyph, so half of the slack plus the
    trailing margin forms the gap in front of the text. Contexts then change only the scale, which
    keeps the gap proportional and identical everywhere the mark appears. */
+/* A glyph and the first word of its link are one breaking unit, so a wrapped title never leaves the
+   mark stranded at the end of the previous line. */
+.wiki-icon-first {
+  white-space: nowrap;
+}
 .wiki-icon {
   display: inline-block;
   inline-size: 1.35em;

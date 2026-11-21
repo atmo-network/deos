@@ -206,13 +206,26 @@ Excludes: Markdown rendering, membership inference, search ranking and parent-wi
     if (node) return node.icon;
     return locale && path === `${locale}/index.html` ? chrome.contents : undefined;
   }
+  // The glyph belongs to the first word of the link, never to the line alone: both are wrapped in one
+  // non-breaking unit, so a wrapped title keeps its mark beside the word it introduces.
   function decorate(link, glyph) {
-    if (!glyph || link.querySelector(':scope > .wiki-icon')) return;
+    if (!glyph || link.querySelector(':scope > .wiki-icon-first, :scope > .wiki-icon')) return;
+    const unit = document.createElement('span');
+    unit.className = 'wiki-icon-first';
     const icon = document.createElement('span');
     icon.className = 'wiki-icon';
     icon.setAttribute('aria-hidden', 'true');
     icon.textContent = glyph;
-    link.prepend(icon);
+    unit.append(icon);
+    // The first word may live inside a nested element, so the leading text node is found by walking.
+    const walker = document.createTreeWalker(link, NodeFilter.SHOW_TEXT);
+    const first = walker.nextNode();
+    const match = first ? first.textContent.match(/^\s*(\S+)/) : null;
+    if (match) {
+      first.textContent = first.textContent.slice(match[0].length);
+      unit.append(document.createTextNode(match[0].endsWith(' ') ? `${match[1]} ` : match[1]));
+    }
+    link.prepend(unit);
   }
   const contentsPage = locale !== null && currentPath === `${locale}/index.html`;
   for (const heading of main.querySelectorAll('h1 > a.header')) decorate(heading, current?.icon ?? (contentsPage ? chrome.contents : undefined));
