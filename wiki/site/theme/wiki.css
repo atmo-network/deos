@@ -3,6 +3,9 @@
 :root {
   /* Slightly wider than the reading default so multi-column tables keep their cells readable. */
   --content-max-width: 88ch;
+  /* The native 300px sidebar clips a title plus its glyph and chrome; 320px keeps nav rows on one
+     line without taking width from the article. The reader's own resize still wins once used. */
+  --sidebar-target-width: 320px;
 }
 .content {
   min-width: 0;
