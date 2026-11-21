@@ -283,13 +283,35 @@ test("guards reviewed Actors grammar and Russian formula explanations", () => {
     resolve(projectRoot, "wiki/layers/deos/tmctol-formulas.ru.md"),
     "utf8",
   );
-  assert.match(
-    formulas,
-    /Инвариант XYK: k = R_native × R_foreign \(постоянная величина\)/u,
+  // The page carries typeset notation, so the guard pins the formulas themselves rather than the ASCII
+  // transcription they replaced; a return to fenced text blocks would reopen the old presentation gap.
+  assert.ok(
+    formulas.includes(
+      "\\mathrm{spot\\_price}(S) = P_0 + \\frac{m \\cdot S}{\\mathrm{PRECISION}}",
+    ),
+    "the marginal-price formula lost its typeset form",
   );
-  assert.match(formulas, /После продажи ΔS нативных токенов:/u);
-  assert.match(formulas, /Цена = R_foreign' \/ R_native'/u);
+  assert.ok(
+    formulas.includes("k = R_{\\mathrm{native}} \\times R_{\\mathrm{foreign}}"),
+    "the XYK invariant lost its typeset form",
+  );
+  assert.match(formulas, /После продажи \$\\Delta S\$ нативных токенов:/u);
+  assert.ok(
+    formulas.includes("\\mathrm{completed\\_mint\\_rate}"),
+    "the supply identity lost its typeset form",
+  );
   assert.doesNotMatch(formulas, /XYK Invariant|After selling|\bPrice\s*=/u);
+  for (const locale of ["en", "ru"]) {
+    const page = readFileSync(
+      resolve(projectRoot, `wiki/layers/deos/tmctol-formulas.${locale}.md`),
+      "utf8",
+    );
+    assert.doesNotMatch(
+      page,
+      /^```text$/mu,
+      `${locale}: a formula fell back to a fenced text block`,
+    );
+  }
 });
 
 test("keeps reviewed Russian navigation labels equal to canonical page titles", () => {

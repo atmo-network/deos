@@ -65,30 +65,17 @@ The collateral payment is transferred separately to its resolved protocol destin
 
 The anchor/treasury TOL component of second-order `$BLDR` TMCTOL divides the protocol mint allocation equally between anchor liquidity and BLDR Treasury. With total issuance `M`, recipient output `U`, protocol output `T = M - U`, anchor allocation `A`, and direct treasury allocation `D`:
 
-```text
-A = T - floor(T/2)
-D = floor(T/2)
-U + A + D = M
-```
+$$\begin{aligned} A &= T - \left\lfloor \tfrac{T}{2} \right\rfloor \\ D &= \left\lfloor \tfrac{T}{2} \right\rfloor \\ U + A + D &= M \end{aligned}$$
 
 All `$NTVE` collateral is assigned to the anchor-liquidity lane. The first-order reference also assigns half of its two-thirds protocol issuance to Bucket A, so both orders direct approximately `M/3` issuance to immutable anchor liquidity. Their collateral rules differ: first-order Bucket A receives `C/2`, while BLDR Anchor receives all collateral `C`.
 
 Parent Bucket B recycling is route-dependent. If market acquisition returns `Q` existing `$BLDR`:
 
-```text
-burn = floor(Q/2)
-recycled_treasury = Q - burn
-net_issuance_change = -burn
-```
+$$\begin{aligned} \mathrm{burn} &= \left\lfloor \tfrac{Q}{2} \right\rfloor \\ \mathrm{recycled\_treasury} &= Q - \mathrm{burn} \\ \mathrm{net\_issuance\_change} &= -\mathrm{burn} \end{aligned}$$
 
 If the Router selects the `$BLDR` TMC and full new issuance is `M` with recipient output `U`:
 
-```text
-burn = floor(U/2)
-recycled_treasury = U - burn
-net_issuance_change = M - burn
-treasury_change = direct_treasury_allocation + recycled_treasury
-```
+$$\begin{aligned} \mathrm{burn} &= \left\lfloor \tfrac{U}{2} \right\rfloor \\ \mathrm{recycled\_treasury} &= U - \mathrm{burn} \\ \mathrm{net\_issuance\_change} &= M - \mathrm{burn} \\ \mathrm{treasury\_change} &= \mathrm{direct\_treasury\_allocation} + \mathrm{recycled\_treasury} \end{aligned}$$
 
 The same acquisition policy can therefore contract supply through XYK or expand collateralized supply through TMC while funding both the immutable anchor and treasury.
 
@@ -96,15 +83,9 @@ The same acquisition policy can therefore contract supply through XYK or expand 
 
 In the idealized positive-reserve XYK model, protocol-owned liquidity creates an asymptotic price curve that stays above zero for any finite sale. This statement does not guarantee a market price or pool liveness.
 
-```text
-XYK Invariant: k = R_native × R_foreign (constant)
+The invariant is $k = R_{\mathrm{native}} \times R_{\mathrm{foreign}}$ and stays constant. After selling $\Delta S$ native tokens:
 
-After selling ΔS native tokens:
-R_native' = R_native + ΔS
-R_foreign' = k / R_native'
-
-Price = R_foreign' / R_native'
-```
+$$\begin{aligned} R'_{\mathrm{native}} &= R_{\mathrm{native}} + \Delta S \\ R'_{\mathrm{foreign}} &= k / R'_{\mathrm{native}} \\ P &= R'_{\mathrm{foreign}} / R'_{\mathrm{native}} \end{aligned}$$
 
 Because $R_{foreign}'$ approaches zero asymptotically, the price can deteriorate indefinitely but never actually reaches zero for any finite $\Delta S$.
 
@@ -112,13 +93,9 @@ Because $R_{foreign}'$ approaches zero asymptotically, the price can deteriorate
 
 A public floor report applies a named sellable-pressure fraction `λ` to a stated supply basis and compares the stressed price with an explicit reference price:
 
-```text
-x_reported = λ_reported · S_support_scope
-P_stress(x) = k / (R_native + x)²
-P_xyk_ref = R_foreign / R_native
-reported_floor_ratio = P_stress(x_reported) / P_reference
-Default P_reference = P_xyk_ref
-```
+$$\begin{aligned} x_{\mathrm{reported}} &= \lambda_{\mathrm{reported}} \cdot S_{\mathrm{support\_scope}} \\ P_{\mathrm{stress}}(x) &= k / (R_{\mathrm{native}} + x)^2 \\ P_{\mathrm{xyk\_ref}} &= R_{\mathrm{foreign}} / R_{\mathrm{native}} \\ \mathrm{reported\_floor\_ratio} &= P_{\mathrm{stress}}(x_{\mathrm{reported}}) / P_{\mathrm{reference}} \end{aligned}$$
+
+The reference price defaults to $P_{\mathrm{xyk\_ref}}$.
 
 The report counts only the current proportional reserve claim of positive-LP anchor or explicitly active-support positions. Dormant LP does not count until explicitly activated. Historical contribution fields are cost-basis telemetry and cannot be added to the same live pool reserves. Missing live Bucket A anchor support sets `governance_state` to `degraded`. Named pressure presets derive from configured allocation shares rather than assumed default percentages.
 
@@ -128,10 +105,7 @@ The report must name the reference price, units and pre/post-trade state as well
 
 For fee-free XYK with fixed counted reserves during the sale, let `a = R_native/S_total` and `s = S_sold/S_total`:
 
-```text
-P_stress / P_xyk_ref = 1 / (1 + s/a)²
-P_stress / P_curve = (P_xyk_ref / P_curve) / (1 + s/a)²
-```
+$$\begin{aligned} P_{\mathrm{stress}} / P_{\mathrm{xyk\_ref}} &= 1 / (1 + s/a)^2 \\ P_{\mathrm{stress}} / P_{\mathrm{curve}} &= (P_{\mathrm{xyk\_ref}} / P_{\mathrm{curve}}) / (1 + s/a)^2 \end{aligned}$$
 
 | Scenario | Counted native / issuance | Sold / issuance | Post-sale spot / pre-sale XYK spot |
 | --- | --- | --- | --- |
@@ -147,9 +121,7 @@ For a fee-free empty-pool genesis seed, total mint `Q` costs `F = p₀·Q + μ·
 
 The theoretical backing price $P_{backing}$ where the curve-implied market cap equals foreign reserves is:
 
-```text
-P_backing ≈ √(R_foreign × m / PRECISION)
-```
+$$P_{\mathrm{backing}} \approx \sqrt{R_{\mathrm{foreign}} \cdot m / \mathrm{PRECISION}}$$
 
 This is an analytical reference point, not a runtime quote. Launch-time Economic Physics such as slope `m` is immutable on the current line; reserve scope and bucket policy must be stated explicitly when using a backing metric.
 
@@ -157,9 +129,7 @@ This is an analytical reference point, not a runtime quote. Launch-time Economic
 
 A simplified supply identity is:
 
-```text
-dS/dt = completed_mint_rate - completed_burn_rate
-```
+$$\frac{dS}{dt} = \mathrm{completed\_mint\_rate} - \mathrm{completed\_burn\_rate}$$
 
 Router fee volume can fund the Burn Actor, but actual burning depends on that actor remaining funded, configured, schedulable, and able to execute. With fixed reserves, burning does not itself change the current XYK spot price. It can improve a named stress-floor envelope only under explicit assumptions about counted reserves and sellable supply; ceiling, relative parity, absolute-gap compression, and arbitrage overtake remain distinct metrics.
 

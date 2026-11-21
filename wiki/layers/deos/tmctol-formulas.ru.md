@@ -66,30 +66,17 @@ $$F_{\mathrm{required}} = p_0 \cdot \Delta S + \mu \left( S_0 \cdot \Delta S + \
 
 Компонент TOL с независимыми опорой и казной в TMCTOL второго порядка для `$BLDR` поровну делит протокольную долю выпуска между опорной ликвидностью и `BLDR Treasury`. Пусть `M` — полный выпуск, `U` — доля адресата, `T = M - U` — доля протокола, `A` — опорная доля, а `D` — прямое пополнение казны:
 
-```text
-A = T - floor(T/2)
-D = floor(T/2)
-U + A + D = M
-```
+$$\begin{aligned} A &= T - \left\lfloor \tfrac{T}{2} \right\rfloor \\ D &= \left\lfloor \tfrac{T}{2} \right\rfloor \\ U + A + D &= M \end{aligned}$$
 
 Весь залог в `$NTVE` направляется в контур опорной ликвидности. Первичная эталонная топология также направляет половину своей протокольной доли выпуска в `Bucket A`, поэтому оба порядка передают около `M/3` в неизменяемую опорную ликвидность. Правила обеспечения различаются: первичный `Bucket A` получает `C/2`, а `BLDR Anchor` — весь объём `C`.
 
 Повторное использование капитала родительского `Bucket B` зависит от маршрута. Если рыночное приобретение возвращает `Q` существующих `$BLDR`:
 
-```text
-burn = floor(Q/2)
-recycled_treasury = Q - burn
-net_issuance_change = -burn
-```
+$$\begin{aligned} \mathrm{burn} &= \left\lfloor \tfrac{Q}{2} \right\rfloor \\ \mathrm{recycled\_treasury} &= Q - \mathrm{burn} \\ \mathrm{net\_issuance\_change} &= -\mathrm{burn} \end{aligned}$$
 
 Если маршрутизатор выбирает TMC для `$BLDR`, полный новый выпуск равен `M`, а доля адресата — `U`:
 
-```text
-burn = floor(U/2)
-recycled_treasury = U - burn
-net_issuance_change = M - burn
-treasury_change = direct_treasury_allocation + recycled_treasury
-```
+$$\begin{aligned} \mathrm{burn} &= \left\lfloor \tfrac{U}{2} \right\rfloor \\ \mathrm{recycled\_treasury} &= U - \mathrm{burn} \\ \mathrm{net\_issuance\_change} &= M - \mathrm{burn} \\ \mathrm{treasury\_change} &= \mathrm{direct\_treasury\_allocation} + \mathrm{recycled\_treasury} \end{aligned}$$
 
 Одна политика приобретения может сокращать предложение через XYK либо расширять обеспеченное предложение через TMC, одновременно пополняя неизменяемую опору и казну.
 
@@ -97,15 +84,9 @@ treasury_change = direct_treasury_allocation + recycled_treasury
 
 В идеализированной модели XYK с положительными резервами ликвидность во владении протокола задаёт асимптотическую ценовую кривую, которая остаётся выше нуля при любой конечной продаже. Это утверждение не гарантирует ни рыночную цену, ни работоспособность пула.
 
-```text
-Инвариант XYK: k = R_native × R_foreign (постоянная величина)
+Инвариант $k = R_{\mathrm{native}} \times R_{\mathrm{foreign}}$ остаётся постоянным. После продажи $\Delta S$ нативных токенов:
 
-После продажи ΔS нативных токенов:
-R_native' = R_native + ΔS
-R_foreign' = k / R_native'
-
-Цена = R_foreign' / R_native'
-```
+$$\begin{aligned} R'_{\mathrm{native}} &= R_{\mathrm{native}} + \Delta S \\ R'_{\mathrm{foreign}} &= k / R'_{\mathrm{native}} \\ P &= R'_{\mathrm{foreign}} / R'_{\mathrm{native}} \end{aligned}$$
 
 Поскольку $R_{foreign}'$ асимптотически приближается к нулю, цена может сколь угодно снижаться, но при конечном объёме продажи `ΔS` не достигает нуля.
 
@@ -113,13 +94,9 @@ R_foreign' = k / R_native'
 
 Публичный отчёт применяет явно заданную долю предложения, доступного для продажи, `λ` к указанной базе и сравнивает стрессовую цену с выбранным ориентиром:
 
-```text
-x_reported = λ_reported · S_support_scope
-P_stress(x) = k / (R_native + x)²
-P_xyk_ref = R_foreign / R_native
-reported_floor_ratio = P_stress(x_reported) / P_reference
-По умолчанию P_reference = P_xyk_ref
-```
+$$\begin{aligned} x_{\mathrm{reported}} &= \lambda_{\mathrm{reported}} \cdot S_{\mathrm{support\_scope}} \\ P_{\mathrm{stress}}(x) &= k / (R_{\mathrm{native}} + x)^2 \\ P_{\mathrm{xyk\_ref}} &= R_{\mathrm{foreign}} / R_{\mathrm{native}} \\ \mathrm{reported\_floor\_ratio} &= P_{\mathrm{stress}}(x_{\mathrm{reported}}) / P_{\mathrm{reference}} \end{aligned}$$
+
+По умолчанию ориентир — $P_{\mathrm{xyk\_ref}}$.
 
 В отчёте учитывают только текущую пропорциональную долю резервов позиций с положительным объёмом LP, отнесённых к опорным или явно действующим. Бездействующий LP не учитывается до явной активации. Исторические суммы взносов отражают учётную стоимость и не прибавляются к резервам того же пула. При отсутствии действующей опоры `Bucket A` поле `governance_state` принимает значение `degraded`. Явно заданные сценарии продаваемого объёма рассчитывают по настроенным долям распределения, а не по заранее заданным процентам.
 
@@ -129,10 +106,7 @@ reported_floor_ratio = P_stress(x_reported) / P_reference
 
 Для XYK без комиссий, при неизменном составе учитываемых резервов во время продажи, обозначим `a = R_native/S_total` и `s = S_sold/S_total`:
 
-```text
-P_stress / P_xyk_ref = 1 / (1 + s/a)²
-P_stress / P_curve = (P_xyk_ref / P_curve) / (1 + s/a)²
-```
+$$\begin{aligned} P_{\mathrm{stress}} / P_{\mathrm{xyk\_ref}} &= 1 / (1 + s/a)^2 \\ P_{\mathrm{stress}} / P_{\mathrm{curve}} &= (P_{\mathrm{xyk\_ref}} / P_{\mathrm{curve}}) / (1 + s/a)^2 \end{aligned}$$
 
 | Сценарий | Нативный резерв / выпуск | Продано / выпуск | Цена после продажи / цена XYK до продажи |
 | --- | --- | --- | --- |
@@ -148,9 +122,7 @@ P_stress / P_curve = (P_xyk_ref / P_curve) / (1 + s/a)²
 
 Теоретическая цена обеспечения $P_{backing}$, при которой подразумеваемая кривой капитализация совпадает с внешними резервами, равна приблизительно:
 
-```text
-P_backing ≈ √(R_foreign × m / PRECISION)
-```
+$$P_{\mathrm{backing}} \approx \sqrt{R_{\mathrm{foreign}} \cdot m / \mathrm{PRECISION}}$$
 
 Это аналитический ориентир, а не котировка среды исполнения. Экономическая физика запуска, включая наклон `m`, неизменна в текущей линии. При использовании этого показателя необходимо явно указать состав резервов и правила распределения по корзинам.
 
@@ -158,9 +130,7 @@ P_backing ≈ √(R_foreign × m / PRECISION)
 
 Упрощённое тождество предложения:
 
-```text
-dS/dt = completed_mint_rate - completed_burn_rate
-```
+$$\frac{dS}{dt} = \mathrm{completed\_mint\_rate} - \mathrm{completed\_burn\_rate}$$
 
 Торговые комиссии DEOS Router могут финансировать Burn Actor, но фактическое сжигание требует, чтобы актор был обеспечен средствами, настроен, допущен планировщиком и способен исполнить план. При неизменных резервах сжигание само по себе не меняет текущую цену XYK. Оно может улучшить именованный диапазон стрессовой нижней границы лишь при явных допущениях об учитываемых резервах и доступном для продажи предложении. Ценовой потолок, относительный паритет, сжатие абсолютного разрыва и арбитражное пересечение — разные показатели.
 
