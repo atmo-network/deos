@@ -193,6 +193,25 @@ Excludes: Markdown rendering, membership inference, search ranking and parent-wi
     }
     return any;
   }
+  // One glyph identifies an article everywhere it appears: the sidebar row, the article heading and
+  // a list entry that opens it. The mark is decoration inside the link, so the title stays the
+  // readable, focusable, searchable and linkable text.
+  function glyphFor(href) {
+    const path = relative(href);
+    return path === null ? undefined : paths.get(path)?.icon;
+  }
+  function decorate(link, glyph) {
+    if (!glyph || link.querySelector(':scope > .wiki-icon')) return;
+    const icon = document.createElement('span');
+    icon.className = 'wiki-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = glyph;
+    link.prepend(icon);
+  }
+  for (const heading of main.querySelectorAll('h1 > a.header')) decorate(heading, current?.icon);
+  // A list entry that opens an article is an identification row, not prose: mark it. Inline links
+  // inside running text keep their plain appearance.
+  for (const link of main.querySelectorAll('li > a:first-child')) decorate(link, glyphFor(link.href));
   const sidebar = document.querySelector('.sidebar-scrollbox .chapter');
   if (sidebar) {
     filterTree(sidebar);
@@ -200,16 +219,7 @@ Excludes: Markdown rendering, membership inference, search ranking and parent-wi
     // served without its trailing slash. The rendered chapter is known exactly, so mark it from that.
     for (const link of sidebar.querySelectorAll('.chapter-link-wrapper > a:not(.chapter-fold-toggle)')) {
       const path = relative(link.href);
-      // One glyph per page identity comes from the composed graph, so both locales show the same icon
-      // and the authored title stays the searchable, linkable text.
-      const glyph = path === null ? undefined : paths.get(path)?.icon;
-      if (glyph && !link.querySelector('.wiki-icon')) {
-        const icon = document.createElement('span');
-        icon.className = 'wiki-icon';
-        icon.setAttribute('aria-hidden', 'true');
-        icon.textContent = glyph;
-        link.prepend(icon);
-      }
+      decorate(link, glyphFor(link.href));
       const raw = link.getAttribute('href');
       if (!raw || raw.startsWith('#') || path !== currentPath || link.classList.contains('active')) continue;
       link.classList.add('active');
