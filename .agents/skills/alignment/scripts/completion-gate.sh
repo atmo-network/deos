@@ -179,8 +179,8 @@ should_run_runtime_tests() {
     has_changed_path '^template/runtime/src/.*\.rs$'
 }
 
-# A change confined to one pallet triggers neither the workspace tests nor the runtime suite, so the
-# canonical gate would check that package and never execute a single assertion in it.
+# A change confined to one crate triggers neither the workspace tests nor the runtime suite, so the
+# canonical gate would compile that package and never execute a single assertion in it.
 should_run_pallet_tests() {
     if [[ "$RUN_PALLET_TESTS" == "1" ]]; then
         return 0
@@ -188,19 +188,32 @@ should_run_pallet_tests() {
     if [[ "$RUN_PALLET_TESTS" == "0" ]]; then
         return 1
     fi
-    has_changed_path '^template/pallets/[^/]+/src/.*\.rs$'
+    has_changed_path '^template/.*\.rs$'
 }
 
-changed_pallet_packages() {
+# Maps each changed Rust file to the closest enclosing Cargo package. Excluded workspaces
+# (`tools/`, `vendor/`) keep their own locks and are covered by the framework profile, and the
+# runtime package already runs the superset suite with `try-runtime`.
+changed_crate_packages() {
     local path directory manifest package
     local -A packages=()
     for path in "${CHANGED_PATHS[@]}"; do
-        [[ "$path" =~ ^template/pallets/([^/]+)/ ]] || continue
-        directory="${BASH_REMATCH[1]}"
-        manifest="$TEMPLATE_DIR/pallets/$directory/Cargo.toml"
-        [[ -f "$manifest" ]] || continue
+        [[ "$path" =~ ^template/.*\.rs$ ]] || continue
+        [[ "$path" == template/tools/* || "$path" == template/vendor/* ]] && continue
+        manifest=""
+        directory="$(dirname "$TEMPLATE_DIR/${path#template/}")"
+        while : ; do
+            if [[ -f "$directory/Cargo.toml" ]]; then
+                manifest="$directory/Cargo.toml"
+                break
+            fi
+            [[ "$directory" == "$TEMPLATE_DIR" ]] && break
+            directory="$(dirname "$directory")"
+        done
+        [[ -n "$manifest" ]] || continue
         package="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$manifest" | head -n 1)"
         [[ -n "$package" ]] || { log_error "Cannot read a package name from $manifest"; return 1; }
+        [[ "$package" == "deos-runtime" ]] && continue
         packages["$package"]=1
     done
     (( ${#packages[@]} > 0 )) && printf '%s\n' "${!packages[@]}"
@@ -414,9 +427,9 @@ run_behavior_validation() {
     fi
     if should_run_pallet_tests; then
         local -a changed_pallets=()
-        mapfile -t changed_pallets < <(changed_pallet_packages)
+        mapfile -t changed_pallets < <(changed_crate_packages)
         if (( ${#changed_pallets[@]} == 0 )); then
-            log_warning "Skipping pallet unit tests because no pallet maps to the changed paths"
+            log_warning "Skipping crate unit tests because no changed path maps to an in-workspace package"
         fi
         local package
         for package in "${changed_pallets[@]}"; do
@@ -426,7 +439,7 @@ run_behavior_validation() {
             fi
         done
     else
-        log_warning "Skipping pallet unit tests because no pallet source files changed"
+        log_warning "Skipping crate unit tests because no Rust source files changed"
     fi
 }
 
