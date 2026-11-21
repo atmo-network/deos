@@ -19,7 +19,6 @@ It serves two coupled but distinct roles:
 
 1. `participation-memory kernel`
    It tracks bounded rolling winning-vote memory per `(domain, account)`, cumulative participation plus proposal-authorship totals for GovXP inputs, and exports a normalized `governance_participation_coefficient(domain, account)` plus raw GovXP counter inputs
-
 2. `proposal lifecycle kernel`
    It provides a bounded active proposal, ballot, resolution, rejection, auto-finalization, and recent finalized-outcome surface
 
@@ -32,16 +31,12 @@ It is a bounded runtime component whose main architectural job is to turn govern
 
 1. `Participation coefficient stays winning-memory-first`
    The exported governance participation coefficient is based on counted winning outcomes rather than raw vote count or mere turnout, while monotonic participation/authorship totals remain separate GovXP inputs
-
 2. `Bounded everywhere`
    live memory, per-epoch item sets, per-call account sets, active proposals, maturity buckets, finalized-outcome retention, and expiry servicing are all bounded
-
 3. `Runtime-as-Config`
    lookback width, per-epoch caps, vote weight, voting period, threshold, turnout floor, and retention are runtime policy, not pallet constants
-
 4. `Proposal lifecycle as participation ingress`
    proposal handling feeds bounded participation memory through a real lifecycle rather than leaving outcome accounting at manual admin injection forever
-
 5. `Recent observability over archival accumulation`
    active tallies, resolution-state, unified status, and recent finalized outcomes are queryable, but finalized history expires
 
@@ -184,78 +179,58 @@ Public read helpers now expose these governance-observability layers, and the sa
    - Cumulative total winning-side participation
    - Cumulative total authored proposals
    - Cumulative total successful authored proposals
-
 2. `recent_finalized_proposals(domain)`
    - Bounded per-domain recent-finalized proposal discovery
    - Newest-first records carrying explicit `ProposalIdentity { domain, item_id }` plus one canonical `FinalizedProposalRecord`
-
 3. `proposal_vote_tally(domain, item_id)`
    - Voter counts
    - Weighted primary-track `Aye / Nay / Amplify / Approve / Reduce`
    - Weighted protection-track `Veto / Pass`
    - Total primary turnout plus total protection turnout
-
 4. `proposal_vote_power_profile(domain, item_id, vote_kind)`
    - Runtime-declared power-profile identity for the live track family behind that vote kind
    - Current runtime returns `DecliningDirectStake` for ordinary `Aye / Nay`
    - Current runtime returns `DecliningVetoAsset` for protocol / network protection-track `Veto / Pass`
    - Current runtime returns `DecliningNativeStake` for `$BLDR`-domain protection-track `Veto / Pass`, backed by locked `$NTVE`, locked `stNTVE`, and locked `$NTVE/stNTVE` LP-derived `NativeVotePower`
-
 5. `proposal_resolution_state(domain, item_id)`
    - `VotingWindowOpen { current_epoch, maturity_epoch }`
    - `PassingAye`
    - `PassingAmplify / PassingApprove / PassingReduce` when family policy enables invoice-style primary resolution
    - `PassingNay`
    - `Rejected { reason }`
-
 6. `proposal_status(domain, item_id)`
    - `Active(ProposalResolutionState)` while proposal storage still exists
    - `PendingEnactment { approval: ProposalApproval { approved_epoch, winner_count }, enactment_epoch }` after successful finalization when a positive enactment delay is scheduled and not yet elapsed; the shape cannot nest a rejected or already executed outcome
    - `Finalized(FinalizedProposalOutcome)` once proposal state is gone and either no enactment delay exists or the pending window has elapsed; approved outcomes reuse one `ProposalApproval` and one typed enactment result
-
 7. `proposal_metadata(domain, item_id)`
    - Additive proposal-meaning scaffold over one item
    - `CadenceMode + ProposalPayloadKind + payload_hash`
    - Proposal submission now requires explicit cadence mode, payload kind, and payload hash at the extrinsic boundary; tests/helpers that want a shorthand must provide their own local wrapper above that contract
-
 8. `proposal_execution_authority(domain, item_id)`
    - Additive execution-scope scaffold derived from payload kind
    - Currently resolves to one of `Root`, `DomainTreasury`, `DomainParameters`, or `NonExecutable`
-
 9. `authorized_runtime_upgrade()`
    - Additive bounded runtime-upgrade authorization scaffold over the current chain state
    - Reports whether governance (via the system pallet) has already authorized one runtime code hash for later relay/application and whether the later apply step still requires version checking
    - The current operator/tooling line interprets that bounded view through three truthful phases: `awaiting-governance-authorization`, `authorized-hash-mismatch`, and `ready-to-relay-code`
-
 10. `proposal_admission_policy_view(domain, payload_kind)`
-
 - Canonical bounded classifier projection over one `(domain, payload_kind)` pair
 - Reports authority, `General | Strategic` capacity lane, domain lane limit, per-author limit, signed-preimage requirement, and opening fee from the same policy consumed by dispatch
 - Protocol / Native `L1RootAction`, `L2ParameterChange` and `Intent` are `PrimaryEligibleSigned`; non-protocol `Intent` plus tactical `$BLDR` `L2SignalToL1` and `L2TreasurySpend` are `Signed`; remaining combinations are `AdminOnly`
 - Opening fees apply only to signed combinations and provide economic friction without replacing structural domain, reserve, author, bucket, ballot, or service bounds
-
 11. `proposal_payload_availability(domain, item_id)`
-
 - Additive payload-readiness scaffold over one item
 - Reports whether the stored `payload_hash` currently has a registered preimage and whether that preimage is requested in the canonical runtime preimage subsystem
-
 12. `payload_hash_preimage_status(payload_hash)`
-
 - Additive preimage-status scaffold over one payload hash before proposal submission exists
 - Reports whether that exact hash already has a noted preimage, whether it is requested but not yet noted, and the noted payload length when available, so browser-side advisory composition can stay on canonical governance query surfaces instead of reading raw preimage storage layout directly
-
 13. `payload_preimage_note_cost(payload_len)`
-
 - Additive bounded preimage-note cost scaffold over one byte length
 - Reports the current runtime's generic preimage note deposit for that payload length so browser-side signed advisory composition can quote the optional `Preimage.note_preimage` path honestly without hardcoding runtime pricing constants
-
 14. `payload_admission_witness(payload_hash, (domain, payload_kind))`
-
 - Reports the compact typed evidence produced from the exact noted bytes by the bounded host validator
 - Binds encoded length, semantic domain/kind, derived execution authority, schema version, and runtime-spec compatibility without exposing or rereading the payload bytes
-
 15. `proposal_primary_track_family(domain, item_id)`
-
 - Additive primary-track contract scaffold over one proposal item
 - Reports whether the current runtime treats that proposal's primary lane as `Binary` or `Invoice`
 - The current reference runtime now returns `Invoice` for tactical `L2TreasurySpend` in the canonical `$BLDR` domain and `Binary` elsewhere on the current launch line
@@ -268,13 +243,10 @@ For invoice families it reports `Amplify / Approve / Reduce / Nay` weights, aggr
 It reports the already-selected winning primary option (`Aye / Nay / Amplify / Approve / Reduce`) while bounded finalized retention still exists, so delayed enactment, clients, and audits do not need to reconstruct winner identity from internal executor paths or raw tallies alone.
 
 15. `proposal_timing(domain, item_id)`
-
 - Additive timing scaffold over one active proposal
 - Submitted epoch, protection open/close, ordinary primary open/close
 - Optional urgent-open override and optional pending-enactment epoch
-
 16. `proposal_urgent_eligibility(domain, item_id)`
-
 - Additive urgent-policy scaffold over one proposal item
 - Reports whether that proposal's current `(domain, payload_kind)` combination is configured as expeditable by the runtime policy surface
 - Eligibility is supplied by the host's selected `ProposalUrgentPolicyProvider`; the package does not impose an all-false default on a nonunit binding
@@ -582,10 +554,8 @@ Its uniqueness guarantees are bounded by the currently relevant horizons:
 
 1. `ActiveProposals[(domain, item_id)]`
    prevents duplicate live active proposals for the same item
-
 2. `WinningVoteResolutionWindows[domain]`
    prevents the same resolved item from being credited twice while it remains inside the live reward-memory lookback horizon
-
 3. `FinalizedProposals[(domain, item_id)]`
    retains recent finalized status and typed execution detail under one bounded owner
 

@@ -50,6 +50,12 @@ try {
       .replace("|------------|---:|", "| --- | ---: |"),
   );
   const wideTableOutput = run([tableRoot], { withoutRootEnv: true });
+  // A hash-locked verbatim copy keeps its upstream formatting; the same body without the lock fails.
+  const lockedBody = "| A | B |\n|---|---|\n| 1 | 2 |\n\n- one\n\n- two\n";
+  fs.writeFileSync(path.join(tableRoot, "docs/table.md"), `---\nlock:\n  upstream:\n    source_sha256: ${"a".repeat(64)}\n---\n\n${lockedBody}`);
+  const lockedCopyOutput = run([tableRoot], { withoutRootEnv: true });
+  fs.writeFileSync(path.join(tableRoot, "docs/table.md"), lockedBody);
+  const unlockedCopyOutput = run([tableRoot], { withoutRootEnv: true });
   const tightListOutput = run([listRoot], { withoutRootEnv: true });
   fs.appendFileSync(
     path.join(listRoot, "docs/lists.md"),
@@ -66,6 +72,8 @@ try {
   checkCompactTableAndLatex(compactTableOutput);
   checkNonCompactTable(nonCompactTableOutput);
   checkWideTable(wideTableOutput);
+  assert(lockedCopyOutput.status === 0, "hash-locked verbatim copy keeps upstream table and list formatting");
+  assert(unlockedCopyOutput.status !== 0, "the same formatting without a lock fails validation");
   checkTightLists(tightListOutput);
   checkLooseLists(looseListOutput);
 } finally {

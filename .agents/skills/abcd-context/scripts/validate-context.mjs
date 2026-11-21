@@ -440,9 +440,14 @@ if (contextFile) {
 
 const docsDir = path.join(root, "docs");
 
+// A verbatim upstream copy pinned by a content hash cannot be reformatted without breaking its lock.
+const isHashLockedCopy = (file) =>
+  /^---\r?\n[\s\S]*?^ +source_sha256: [0-9a-f]{64}\s*$[\s\S]*?^---\r?\n/m.test(read(file).slice(0, 4096));
+const formatFiles = mdFiles.filter((file) => !isHashLockedCopy(file));
+
 progress("Checking Markdown lists...");
 let listIssue = false;
-for (const file of mdFiles) {
+for (const file of formatFiles) {
   const sourceSize = fs.statSync(file).size;
   if (sourceSize > markdownLinkScanMaxBytes) {
     info(
@@ -461,7 +466,7 @@ if (!listIssue) pass("Markdown list checks passed");
 
 progress("Checking Markdown tables...");
 let tableIssue = false;
-for (const file of mdFiles) {
+for (const file of formatFiles) {
   const lines = markdownLines(read(file));
   let table = null;
   const flushTable = () => {

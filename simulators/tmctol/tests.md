@@ -304,7 +304,6 @@ Mathematical guarantees and system-level properties that must never break.
 - Nature: Tests conservation laws after 1000+ operations
 - Necessity: Proves system stability under production load
 - Validates:
-
 * Total supply = sum of all balances
 * XYK invariant `k` only increases (fees)
 * TOL never decreases (locked forever)
@@ -334,12 +333,10 @@ Emergent behavior from concurrent interactions and chaos testing.
 - Nature: Simulates 100 random users, 500+ operations
 - Necessity: Reveals emergent properties invisible in isolated tests
 - Validates:
-
 * Conservation laws under chaos
 * Price ratchet acceleration (floor rises)
 * Deflation acceleration (burning compounds)
 * System stability (no deadlocks/livelocks)
-
 - Failure Criteria: Conservation error >0.01%, TOL balance reduction, XYK constant k decreases, system deadlock
 - Key Insight: Multi-user flows expose state interactions that unit tests cannot predict.
 
@@ -597,7 +594,6 @@ node ./simulators/tmctol/tests.js
 ## Test Codes Reference & Architecture Mapping
 
 - Each test has a hierarchical code based on its section and position, mapping to TMCTOL architecture:
-
 * `1.1-1.4`: Mathematical Foundations (Core Formulas)
 * `2.1-2.6`: System Parameters & Boundaries
 * `3.1-3.6`: Scaling Rules & Precision
@@ -611,5 +607,4 @@ node ./simulators/tmctol/tests.js
 * `11.1-11.4`: Economic Security & Attack Resistance
 * `12.1-12.8`: Adaptive System Behaviors
 * `13.1-13.5`: Reporting & Conformance Metrics
-
 - Use these codes in error messages for quick reference to this documentation.

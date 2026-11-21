@@ -497,10 +497,6 @@ The verified 0.7.28 starting basis is pinned above. The earlier source coordinat
 
 Pinned SDK source remains the implementation authority for host/recorder behavior. General FRAME documentation helps interpret benchmarking and proof reclaim; it cannot certify DEOS's current owners or replace examination of the pinned SDK and the real caller.
 
-## Context Validation — Separate Reconciliation
-
-- [ ] `Context/Validation`: Diagnose current full-tree failures from `.agents/skills/abcd-context/scripts/validate-context.mjs`, starting with an actual run and stable file/fixture or failing rule, not historical counts. Separate fixture exclusions and validator limitations from real owner defects; fix only the concrete failures, with a reproducer or negative control when changing a rule. Keep changed-scope completion, project Wiki and client validation at their current owners. This is distinct from Wiki acceptance and is not a prerequisite for independent runtime work.
-
 ## Wiki — 0.7.29 Consolidation and Onboarding
 
 The [Wiki publication contract](docs/deos/wiki-publication.contract.en.md) and [workspace entrypoint](wiki/README.md) own the existing single renderer, EN/RU parity and validation. This deliverable consolidates the working MVP, not a new renderer or a prescriptive reading guide.

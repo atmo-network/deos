@@ -505,7 +505,7 @@ run_audit() {
     check_fixed_reference "$PROJECT_ROOT/wiki/layers/deos/overview/router.en.md" "../../../../docs/deos/oracle.integration.en.md" "Oracle wiki-provenance drift"
     check_fixed_reference "$PROJECT_ROOT/wiki/layers/deos/overview/router.en.md" "canonical_page_id: router" "DEOS Router canonical-id drift"
     check_fixed_reference "$PROJECT_ROOT/wiki/layers/deos/overview/router.ru.md" "canonical_page_id: router" "DEOS Router canonical-id drift"
-    check_fixed_reference "$PROJECT_ROOT/wiki/layers/deos/index.en.md" "[DEOS Router](overview/router.en.md)" "DEOS Router wiki-entrypoint drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/layers/deos/_meta/navigation.json" '"id": "router"' "DEOS Router wiki-entrypoint drift"
     if ! "$SCRIPT_DIR/audit-router-identity.sh"; then
         log_error "DEOS Router identity drift"
         exit 1
@@ -528,7 +528,7 @@ run_audit() {
     fi
     check_fixed_reference "$PROJECT_ROOT/wiki/layers/deos/overview/typed-observations.en.md" "canonical_page_id: typed-observations" "Typed-observations canonical-id drift"
     check_fixed_reference "$PROJECT_ROOT/wiki/layers/deos/_meta/locales.json" '"typed-observations"' "Typed-observations locale-metadata drift"
-    check_fixed_reference "$PROJECT_ROOT/wiki/layers/deos/index.en.md" "[Typed Observations](overview/typed-observations.en.md)" "Typed-observations wiki-entrypoint drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/layers/deos/_meta/navigation.json" '"id": "typed-observations"' "Typed-observations wiki-entrypoint drift"
     for retired_wiki_page in ui-kit-and-domain-dag.en.md ui-kit-and-domain-dag.ru.md what-deos-is-not.en.md what-deos-is-not.ru.md; do
         if [[ -e "$PROJECT_ROOT/wiki/layers/deos/concepts/$retired_wiki_page" ]]; then
             log_error "Wiki focus drift: retired concept page exists: $retired_wiki_page"

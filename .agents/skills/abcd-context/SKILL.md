@@ -102,7 +102,7 @@ Run the Node validator from the project root or pass an explicit root:
 node "${SKILL_DIR}/scripts/validate-context.mjs" /path/to/project
 ```
 
-Output is human-readable. Markdown list items must remain contiguous: blank lines inside one list fail validation, including between multiline or nested items, while fenced examples are ignored. Markdown table checks always require compact delimiter cells such as `| --- | ---: | :--- |`; non-compact delimiters fail validation, while rows longer than 120 characters only warn without imposing a maximum length.
+Output is human-readable. Markdown files whose frontmatter carries a lock `source_sha256` are hash-pinned verbatim upstream copies and are exempt from list and table format checks. Markdown list items must remain contiguous: blank lines inside one list fail validation, including between multiline or nested items, while fenced examples are ignored. Markdown table checks always require compact delimiter cells such as `| --- | ---: | :--- |`; non-compact delimiters fail validation, while rows longer than 120 characters only warn without imposing a maximum length.
 
 Useful environment controls:
 
