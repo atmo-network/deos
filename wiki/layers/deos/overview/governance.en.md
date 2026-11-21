@@ -81,7 +81,7 @@ Governance can feed bounded participation-quality signals into staking rewards, 
 
 Use the governance wiki cluster in this order:
 
-1. `Governance` — why the domain exists;
+1. [Governance](governance.en.md) — why the domain exists;
 2. [Governance Domains](../concepts/governance-domains.en.md) — how one governance cell is typed;
 3. [Physics-First vs Politics-First](../physics-vs-politics.en.md) — why protocol physics stays protected;
 4. [Staking](staking.en.md) — where governance-conditioned reward signals meet staking;
