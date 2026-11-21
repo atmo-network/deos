@@ -55,7 +55,29 @@ That makes it a coordination layer, not just a convenience helper.
 
 The current implementation evaluates a small candidate set such as direct XYK routes, direct mint routes, and native-anchored multi-hop routes.
 
-It ranks exact-input routes by maximum recipient output and exact-output routes by minimum total input, with deterministic family/path tie-breaking. Price impact and fee fields on quotes stay informational. Execution prepares current route truth again, validates every actual XYK leg against its directional reference, and enforces the authored output floor or total-input ceiling against measured deltas. These checks remain local protection, not a fair-price proof or flash-loan, ordering, or sandwich immunity.
+It ranks exact-input routes by maximum recipient output and exact-output routes by minimum total input, with deterministic family/path tie-breaking.
+
+The selection step, stated as the runtime performs it:
+
+```pseudocode
+-- candidates are bounded; ties break by family order
+FOR EACH Candidate IN [XykDirect, TmcMint, NativeAnchored] DO
+  Quote = quoted_recipient_output(Candidate, Intent)
+
+  IF Intent.Mode = ExactIn THEN
+    KEEP Candidate WHEN Quote.Output >= Best.Output
+  ELSE
+    KEEP Candidate WHEN Quote.TotalInput <= Best.TotalInput
+  END
+
+  IF Quote.ReferenceDeviation > Tolerance THEN REJECT Candidate   -- typed refusal, not a retry
+END
+
+ASSERT Settlement.Output >= Intent.OutputFloor          -- measured delta, not the quote
+ASSERT Settlement.TotalInput <= Intent.InputCeiling
+COMMIT Best   -- price impact and fee fields stay informational
+```
+ Price impact and fee fields on quotes stay informational. Execution prepares current route truth again, validates every actual XYK leg against its directional reference, and enforces the authored output floor or total-input ceiling against measured deltas. These checks remain local protection, not a fair-price proof or flash-loan, ordering, or sandwich immunity.
 
 Directional pool observations live in the standalone Oracle pallet. Canonical pool admission creates both typed directions with immutable producer, scale, aggregation, and provenance; the Router publishes each actual XYK leg immediately before executing it in canonical order. Direct TMC mint publishes no XYK observation. Router-local EMA and tracked-asset storage no longer exist. Generalized feeds and unbounded on-chain history remain out of scope.
 

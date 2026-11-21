@@ -110,6 +110,14 @@ export function checkOutput(directory) {
     diagrams++;
   }
 
+  // Pseudocode needs the language definition, which the bundled highlighter does not ship.
+  let pseudocodePages = 0;
+  for (const page of pages) {
+    if (!page.endsWith('.html') || !source.get(page).includes('language-pseudocode')) continue;
+    if (!/wiki-code/.test(source.get(page))) throw new Error(`${relative(root, page)}: pseudocode page lost its language definition`);
+    pseudocodePages++;
+  }
+
   // A typeset formula needs the faces its stylesheet names, and the renderer copies only the
   // stylesheet. Every referenced font must exist beside it or the formula silently degrades.
   let mathFonts = 0;
@@ -137,7 +145,7 @@ export function checkOutput(directory) {
     if (!statSync(target).isFile()) throw new Error(`moved route ${route.from} forwards to missing ${route.to}`);
     movedStubs++;
   }
-  return { basePath, sitemapUrls, htmlPages: pages.length, localTargets: targets, movedStubs, mathFonts, diagrams, nodes: graph.nodes.length, edges: graph.edges.length };
+  return { basePath, sitemapUrls, htmlPages: pages.length, localTargets: targets, movedStubs, mathFonts, diagrams, pseudocodePages, nodes: graph.nodes.length, edges: graph.edges.length };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -155,6 +155,43 @@ html.navy pre {
   background: var(--theme-hover);
   text-decoration: none;
 }
+/* Fenced code keeps the bundled light palette; the dark theme needs its own contrast, because the
+   shared palette was tuned for a pale background. */
+html.navy .hljs-comment,
+html.navy .hljs-quote {
+  color: #7f8a9d;
+}
+html.navy .hljs-keyword,
+html.navy .hljs-selector-tag,
+html.navy .hljs-literal {
+  color: #82aaff;
+}
+html.navy .hljs-string,
+html.navy .hljs-symbol,
+html.navy .hljs-bullet {
+  color: #a8d8a0;
+}
+html.navy .hljs-number,
+html.navy .hljs-meta,
+html.navy .hljs-built_in,
+html.navy .hljs-builtin-name,
+html.navy .hljs-type,
+html.navy .hljs-params {
+  color: #d8b26a;
+}
+html.navy .hljs-title,
+html.navy .hljs-section,
+html.navy .hljs-name,
+html.navy .hljs-attr,
+html.navy .hljs-attribute,
+html.navy .hljs-variable,
+html.navy .hljs-template-variable {
+  color: #d5dce7;
+}
+html.navy .hljs-operator {
+  color: #9ecbff;
+}
+
 /* A diagram scales to the reading column and never widens the page. Until it renders, and if the
    renderer is unavailable, the block keeps its source as readable monospace text. */
 .content .wiki-diagram {

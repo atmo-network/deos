@@ -287,6 +287,13 @@ test('only a book with a diagram loads the Mermaid renderer', () => {
   assert.ok(projected.files.has('books/en/theme/wiki-mermaid.js'));
 });
 
+test('only a book with pseudocode loads its language definition', () => {
+  assert.match(projected.files.get('books/en/book.toml'), /theme\/wiki-code\.js/);
+  assert.doesNotMatch(projected.files.get('books/root/book.toml'), /wiki-code\.js/);
+  assert.ok(projected.files.has('books/en/theme/wiki-code.js'));
+  assert.match(projected.files.get('books/en/src/deos/overview/router.md'), /^\x60{3}pseudocode$/m);
+});
+
 test('the Actor diagram is inert and projected next to both book chapters', () => {
   const relative = 'deos/concepts/actor-wakeup.svg';
   const svg = projected.files.get(`books/en/src/${relative}`) ?? trustedSvg;

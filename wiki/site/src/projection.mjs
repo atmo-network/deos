@@ -8,6 +8,11 @@ import { posix } from 'node:path';
 import { basePath, bookSource, localizeLinks, pageRoute } from './corpus.mjs';
 import { renderMath } from './math.mjs';
 import { renderDiagrams, mermaidLoaderName } from './mermaid.mjs';
+
+// The corpus writes procedures as pseudocode, which the bundled highlighter does not know. A book that
+// contains none of it does not load the language definition at all.
+const pseudocodeFence = /^(?:\x60{3}|~{3})pseudo(?:code)?[ \t]*$/m;
+const codeLoaderName = 'wiki-code.js';
 import { katexAssets, katexFonts } from './math-assets.mjs';
 import { assignMemberships } from './layers.mjs';
 import { contextScript } from './context.mjs';
@@ -82,8 +87,8 @@ function relativeHref(from, to) {
   return posix.relative(posix.dirname(from), to) || posix.basename(to);
 }
 
-function bookConfig(locale, title, search, base, css = [], hasDiagram = false) {
-  return `[book]\ntitle = ${JSON.stringify(title)}\nlanguage = ${JSON.stringify(locale || 'en')}\nsrc = "src"\n\n[build]\ncreate-missing = false\nuse-default-preprocessors = false\n\n[output.html]\nsite-url = ${JSON.stringify(locale ? `${base}${locale}/` : base)}\nno-section-label = true\nsidebar-header-nav = false\ndefault-theme = "light"\npreferred-dark-theme = "navy"\nadditional-css = ${JSON.stringify(['theme/wiki.css', ...css])}\nadditional-js = ${JSON.stringify([...(locale ? [] : ['theme/root-context.js']), 'theme/wiki.js', 'theme/layers.js', ...(hasDiagram ? [`theme/${mermaidLoaderName}`] : [])])}\n\n[output.html.fold]\nenable = true\nlevel = 0\n\n[output.html.print]\nenable = false\n\n[output.html.search]\nenable = ${search}\nuse-boolean-and = true\n\n[output.html.playground]\nrunnable = false\n`;
+function bookConfig(locale, title, search, base, css = [], hasDiagram = false, hasPseudocode = false) {
+  return `[book]\ntitle = ${JSON.stringify(title)}\nlanguage = ${JSON.stringify(locale || 'en')}\nsrc = "src"\n\n[build]\ncreate-missing = false\nuse-default-preprocessors = false\n\n[output.html]\nsite-url = ${JSON.stringify(locale ? `${base}${locale}/` : base)}\nno-section-label = true\nsidebar-header-nav = false\ndefault-theme = "light"\npreferred-dark-theme = "navy"\nadditional-css = ${JSON.stringify(['theme/wiki.css', ...css])}\nadditional-js = ${JSON.stringify([...(locale ? [] : ['theme/root-context.js']), 'theme/wiki.js', 'theme/layers.js', ...(hasDiagram ? [`theme/${mermaidLoaderName}`] : []), ...(hasPseudocode ? [`theme/${codeLoaderName}`] : [])])}\n\n[output.html.fold]\nenable = true\nlevel = 0\n\n[output.html.print]\nenable = false\n\n[output.html.search]\nenable = ${search}\nuse-boolean-and = true\n\n[output.html.playground]\nrunnable = false\n`;
 }
 
 // Runs first in <head>: records the rendered chapter and repairs a directory index that a
@@ -182,12 +187,13 @@ export function projectBooks(corpus, assets, base = '/') {
   function addMathAssets(key) {
     for (const [name, content] of [...katexAssets, ...katexFonts]) files.set(`books/${key}/${name}`, content);
   }
-  function addBook(key, locale, title, search, markdown, summary, hasMath = false, hasDiagram = false) {
-    files.set(`books/${key}/book.toml`, bookConfig(locale, title, search, root, hasMath ? [mathStylesheet] : [], hasDiagram));
+  function addBook(key, locale, title, search, markdown, summary, hasMath = false, hasDiagram = false, hasPseudocode = false) {
+    files.set(`books/${key}/book.toml`, bookConfig(locale, title, search, root, hasMath ? [mathStylesheet] : [], hasDiagram, hasPseudocode));
     if (hasMath) addMathAssets(key);
     // The loader is this project's own file, not a caller-supplied asset, so the projection stages it
     // whenever it names it in the book configuration.
     if (hasDiagram) files.set(`books/${key}/theme/${mermaidLoaderName}`, readFileSync(new URL(`../theme/${mermaidLoaderName}`, import.meta.url), 'utf8'));
+    if (hasPseudocode) files.set(`books/${key}/theme/${codeLoaderName}`, readFileSync(new URL(`../theme/${codeLoaderName}`, import.meta.url), 'utf8'));
     files.set(`books/${key}/src/SUMMARY.md`, summary);
     for (const [path, content] of markdown) files.set(`books/${key}/src/${path}`, content);
     for (const [path, content] of Object.entries(assets)) files.set(`books/${key}/theme/${path}`, content);
@@ -216,6 +222,7 @@ export function projectBooks(corpus, assets, base = '/') {
     // loader, so each book is told once what it actually contains.
     const mathPages = new Set();
     const diagramPages = new Set();
+    const pseudocodePages = new Set();
     for (const plane of corpus.planes) {
       if (multiplePlanes) contents.push(`## ${text(plane.title)}`, '');
       if (plane.pages.size === 0) {
@@ -263,12 +270,13 @@ export function projectBooks(corpus, assets, base = '/') {
         const diagrams = renderDiagrams(typeset.markdown, `${page.sourcePath}`);
         if (typeset.hasMath) mathPages.add(path);
         if (diagrams.hasDiagram) diagramPages.add(path);
+        if (pseudocodeFence.test(page.body)) pseudocodePages.add(path);
         markdown.push([path, `${layerTags(node, locale, path)}${diagrams.markdown.trimEnd()}\n`]);
       }
     }
     contents.push('<!-- wiki-pages:end -->', '');
     markdown.unshift(['index.md', contents.join('\n')]);
-    addBook(locale, locale, labels.site(baseTitle), true, markdown, summary.join('\n'), mathPages.size > 0, diagramPages.size > 0);
+    addBook(locale, locale, labels.site(baseTitle), true, markdown, summary.join('\n'), mathPages.size > 0, diagramPages.size > 0, pseudocodePages.size > 0);
   }
   return { graph, files, locales: corpus.locales };
 }

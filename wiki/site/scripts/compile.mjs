@@ -21,7 +21,7 @@ if (mode === '--help' || mode === '-h') {
   const target = fileURLToPath(new URL('../target/', import.meta.url));
   const output = resolve(destination);
   if (!output.startsWith(target.endsWith(sep) ? target : target + sep)) throw new Error('Projection output must be beneath the Skill site/target');
-  const assets = Object.fromEntries(['wiki.css', 'wiki.js', 'layers.js', 'wiki-mermaid.js'].map(name => [name, readFileSync(new URL(`../theme/${name}`, import.meta.url), 'utf8')]));
+  const assets = Object.fromEntries(['wiki.css', 'wiki.js', 'layers.js', 'wiki-mermaid.js', 'wiki-code.js'].map(name => [name, readFileSync(new URL(`../theme/${name}`, import.meta.url), 'utf8')]));
   const projected = projectBooks(loadCorpus(), assets, process.env.WIKI_BASE_PATH || '/');
   for (const [path, content] of projected.files) {
     const file = join(output, path);
