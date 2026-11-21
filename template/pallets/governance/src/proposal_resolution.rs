@@ -468,6 +468,10 @@ impl<T: Config> Pallet<T> {
     }
   }
 
+  /// Governance lock horizon for ballots on one proposal. Urgent resolution executes without the
+  /// enactment delay, so an urgent proposal locks its ballots only until the urgent primary close,
+  /// the same epoch its payload may enact. Ballots cast before urgent authorization keep the longer
+  /// ordinary horizon; the asymmetry is deliberate and never releases power before the primary close.
   pub(crate) fn proposal_governance_lock_until(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
@@ -475,6 +479,9 @@ impl<T: Config> Pallet<T> {
   ) -> Result<T::Epoch, DispatchError> {
     let primary_close_epoch =
       Self::proposal_effective_primary_close_epoch(domain, item_id, submitted_epoch)?;
+    if ProposalUrgentAuthorizedAt::<T>::contains_key(domain, item_id) {
+      return Ok(primary_close_epoch);
+    }
     Self::add_epochs(primary_close_epoch, T::ProposalEnactmentDelay::get())
   }
 

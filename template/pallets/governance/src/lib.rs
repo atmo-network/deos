@@ -1976,6 +1976,25 @@ pub mod pallet {
           .is_some(),
         "maximum rolling winning-participation count must fit u32"
       );
+      // Urgent authorization stays available while the protection track is open, so the latest
+      // urgent close is one epoch before the protection close plus the urgent voting period. It must
+      // not outlast the ordinary maturity, or an urgent proposal would keep its primary window open
+      // past the very bucket that finalizes it.
+      let latest_urgent_close = Self::epoch_to_u32(T::ProposalProtectionPeriod::get())
+        .ok()
+        .map(|protection| protection.saturating_sub(1))
+        .zip(Self::epoch_to_u32(T::ProposalUrgentVotingPeriod::get()).ok())
+        .and_then(|(protection, urgent)| protection.checked_add(urgent));
+      let ordinary_close = Self::epoch_to_u32(T::ProposalLeadInPeriod::get())
+        .ok()
+        .zip(Self::epoch_to_u32(T::ProposalVotingPeriod::get()).ok())
+        .and_then(|(lead_in, voting)| lead_in.checked_add(voting));
+      assert!(
+        latest_urgent_close
+          .zip(ordinary_close)
+          .is_some_and(|(urgent, ordinary)| urgent <= ordinary),
+        "urgent close horizon must not outlast the ordinary close, and both periods must fit the u32 epoch domain"
+      );
     }
   }
 

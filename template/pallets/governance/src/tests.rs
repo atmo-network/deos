@@ -3701,6 +3701,96 @@ fn urgent_close_after_the_ordinary_close_adds_no_maturity_touch() {
 }
 
 #[test]
+fn urgent_ballots_lock_only_until_the_urgent_close_without_the_enactment_delay() {
+  new_test_ext().execute_with(|| {
+    ProposalEnactmentDelay::set(3);
+    submit_urgent_root_action(100, 6, 1);
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(10),
+      42,
+      100,
+      ProposalVoteKind::Pass,
+    ));
+    let timing = Governance::proposal_timing(42, 100).expect("active timing");
+    assert_eq!(timing.effective_primary_close_epoch, 2);
+    assert_eq!(timing.ordinary_primary_close_epoch, 9);
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(11),
+      42,
+      100,
+      ProposalVoteKind::Aye,
+    ));
+    assert_eq!(
+      Governance::governance_lock(11),
+      Some(crate::GovernanceLock { lock_until: 2 }),
+      "urgent resolution skips the enactment delay, so a post-authorization ballot locks only until the urgent close"
+    );
+  });
+}
+
+#[test]
+fn urgent_authorization_keeps_the_early_pass_voter_ordinary_horizon() {
+  new_test_ext().execute_with(|| {
+    ProposalEnactmentDelay::set(3);
+    submit_urgent_root_action(100, 6, 1);
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(10),
+      42,
+      100,
+      ProposalVoteKind::Pass,
+    ));
+    assert_eq!(
+      Governance::governance_lock(10),
+      Some(crate::GovernanceLock { lock_until: 12 }),
+      "the ballot that authorizes urgency locks before the authorization exists and keeps the ordinary horizon"
+    );
+  });
+}
+
+#[test]
+fn ordinary_ballots_keep_the_enactment_delay_in_their_lock_horizon() {
+  new_test_ext().execute_with(|| {
+    ProposalEnactmentDelay::set(3);
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    let timing = Governance::proposal_timing(7, 100).expect("active timing");
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(10),
+      7,
+      100,
+      ProposalVoteKind::Aye,
+    ));
+    assert_eq!(
+      Governance::governance_lock(10),
+      Some(crate::GovernanceLock {
+        lock_until: timing.ordinary_primary_close_epoch + 3
+      }),
+      "an ordinary proposal waits out its enactment delay, so its ballots stay locked through it"
+    );
+  });
+}
+
+#[test]
+#[should_panic(expected = "urgent close horizon must not outlast the ordinary close")]
+fn integrity_test_rejects_an_urgent_window_outlasting_the_ordinary_close() {
+  new_test_ext().execute_with(|| {
+    ProposalLeadInPeriod::set(0);
+    ProposalProtectionPeriod::set(5);
+    ProposalUrgentVotingPeriod::set(3);
+    Governance::integrity_test();
+  });
+}
+
+#[test]
+fn integrity_test_admits_the_reference_urgent_horizon() {
+  new_test_ext().execute_with(|| {
+    ProposalLeadInPeriod::set(7);
+    ProposalProtectionPeriod::set(7);
+    ProposalUrgentVotingPeriod::set(1);
+    Governance::integrity_test();
+  });
+}
+
+#[test]
 fn urgent_authorization_opens_primary_early_and_shortens_resolution_window() {
   new_test_ext().execute_with(|| {
     ProposalLeadInPeriod::set(2);
