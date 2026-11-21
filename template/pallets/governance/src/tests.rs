@@ -3770,6 +3770,13 @@ fn ordinary_ballots_keep_the_enactment_delay_in_their_lock_horizon() {
 }
 
 #[test]
+fn governance_integrity_test_holds_for_the_mock_configuration() {
+  new_test_ext().execute_with(|| {
+    Governance::integrity_test();
+  });
+}
+
+#[test]
 #[should_panic(expected = "urgent close horizon must not outlast the ordinary close")]
 fn integrity_test_rejects_an_urgent_window_outlasting_the_ordinary_close() {
   new_test_ext().execute_with(|| {

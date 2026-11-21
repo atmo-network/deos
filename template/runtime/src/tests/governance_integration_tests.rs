@@ -1512,6 +1512,19 @@ fn l2_parameter_allowlist_refuses_wrong_domains_calls_and_nonexact_bytes_without
 // This scenario requires the production vote-power provider; benchmarking replaces it with 1.
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
+fn declared_presets_satisfy_the_governance_integrity_contract() {
+  use polkadot_sdk::frame_support::traits::Hooks as _;
+
+  for preset in crate::genesis_config_presets::preset_names() {
+    let storage = super::production_block_replay::preset_genesis_storage(&[], &preset);
+    polkadot_sdk::sp_io::TestExternalities::new(storage).execute_with(|| {
+      Governance::integrity_test();
+    });
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
 fn signed_l2_actor_admission_enacts_after_real_ordinary_delay_on_declared_presets() {
   exercise_signed_l2_actor_admission(false);
 }
