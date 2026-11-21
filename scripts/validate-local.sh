@@ -100,6 +100,13 @@ run_framework_checks() {
         [[ -n "$pallet_package" ]] || { log_error "Cannot read a package name from $pallet_manifest"; return 1; }
         SKIP_WASM_BUILD=1 run_script_step "Independent pallet package $pallet_package" "ci-local.sh" \
             --only check --package "$pallet_package"
+        # The same package must also stay guest-buildable on its own; an accidental `std`
+        # dependency only appears without the workspace's unified feature set. Eight native checks
+        # measured 54s and eight guest checks 87s with a warm target directory.
+        SKIP_WASM_BUILD=1 CARGO_ENCODED_RUSTFLAGS=$'--cfg\x1fsubstrate_runtime' \
+            CC_wasm32v1_none="${CC_wasm32v1_none:-clang}" AR_wasm32v1_none="${AR_wasm32v1_none:-llvm-ar}" \
+            run_script_step "Independent pallet package $pallet_package guest no-std" "ci-local.sh" \
+            --only check --package "$pallet_package" --no-default-features --target wasm32v1-none
     done
     local crate
     for crate in deos-runtime pallet-deos-actors-embedding-fixture pallet-deos-router-embedding-fixture pallet-oracle-embedding-fixture; do
@@ -192,6 +199,8 @@ self_test() (
     [[ "$reconciliation" == 1 ]] || { log_error "Missing or duplicate runtime invariant reconciliation route"; return 1; }
     [[ " ${routed[*]} " == *" ci-local.sh --only check --package pallet-deos-governance "* ]] || {
         log_error "Missing independent pallet package route"; return 1; }
+    [[ " ${routed[*]} " == *" ci-local.sh --only check --package pallet-deos-governance --no-default-features --target wasm32v1-none "* ]] || {
+        log_error "Missing independent pallet package guest route"; return 1; }
     local crate
     for crate in deos-runtime pallet-deos-actors-embedding-fixture pallet-deos-router-embedding-fixture pallet-oracle-embedding-fixture; do
         [[ " ${routed[*]} " == *" ci-local.sh --only check --package $crate --no-default-features --target wasm32v1-none "* ]] || return 1
