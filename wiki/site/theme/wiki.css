@@ -1,7 +1,8 @@
 /* A small reading-layout extension; mdBook owns the document and navigation UI.
    Colors come from mdBook theme variables, so light and dark themes stay consistent. */
 :root {
-  --content-max-width: 78ch;
+  /* Slightly wider than the reading default so multi-column tables keep their cells readable. */
+  --content-max-width: 88ch;
 }
 .content {
   min-width: 0;
