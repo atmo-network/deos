@@ -46,6 +46,20 @@ window.addEventListener('resize', refreshArticleBox, { passive: true });
 document.addEventListener('transitionend', refreshArticleBox, true);
 new MutationObserver(refreshArticleBox).observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-wiki-chrome'] });
 
+// The reader can resize the sidebar, and the renderer keeps that width only in an inline custom
+// property that the next reload discards. The head partial restores it, so the value stored here is
+// the whole persistence layer: read after a drag, written back only when it actually changed.
+const storeSidebarWidth = () => {
+  const width = Number.parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-target-width'), 10);
+  if (!Number.isFinite(width) || width < 150 || width > 2000) return;
+  try {
+    if (localStorage.getItem('mdbook-sidebar-width') === String(width)) return;
+    localStorage.setItem('mdbook-sidebar-width', String(width));
+  } catch {}
+};
+window.addEventListener('mouseup', storeSidebarWidth, true);
+window.addEventListener('touchend', storeSidebarWidth, true);
+
 if (panel) {
   document.body.append(panel);
   // Opening the panel removes the document scrollbar, so the article column moves; re-read its edges.

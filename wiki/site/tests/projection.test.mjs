@@ -4,7 +4,7 @@ Owns: Real-corpus identity/order, source preservation, trust and mdBook-only bui
 Excludes: Browser/iframe acceptance, production headers and semantic source review.
 */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -221,6 +221,20 @@ test('no-script chrome uses the native header partial, never indexed article Mar
     assert.match(projected.files.get(`books/${locale}/theme/header.hbs`), /<noscript>/);
     for (const [path, content] of projected.files) if (path.startsWith(`books/${locale}/src/`)) assert.ok(!content.includes('Layer filters require JavaScript') && !content.includes('Без него доступны все материалы'));
   }
+});
+
+test('a reader-chosen sidebar width is restored before paint and stored under one key', () => {
+  const head = projected.files.get(`books/${corpus.locales[0]}/theme/header.hbs`);
+  const theme = readFileSync(new URL('../theme/wiki.js', import.meta.url), 'utf8');
+  const key = 'mdbook-sidebar-width';
+  assert.ok(head.includes(key), 'the head partial no longer restores the width');
+  assert.ok(theme.includes(key), 'the theme no longer stores the width under the same key');
+  assert.match(head, /--sidebar-target-width/);
+  // The restore clamps whatever storage hands back, so a stale or hostile value cannot widen the page.
+  assert.match(head, /width < 150 \|\| width > 2000/);
+  assert.match(head, /window\.innerWidth - 100/);
+  assert.match(theme, /mouseup/);
+  assert.match(theme, /touchend/);
 });
 
 test('source-route atoms cannot escape the declared locale/plane or become executable URLs', () => {

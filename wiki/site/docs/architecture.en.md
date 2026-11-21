@@ -62,6 +62,10 @@ mdBook owns HTML, heading IDs, navigation and search assets. Generated TOML disa
 
 A group label and the rows it opens share one vertical rhythm. Each row carries three pixels of its own padding, so a child list adds the same three pixels above its first row; without that, the first row would sit closer to the label that opened it than sibling rows sit to each other. A section break stays about twice a row gap, which is what distinguishes a new group from a new page.
 
+## Sidebar Width Memory
+
+The renderer lets a reader drag the sidebar to their own width, keeps that width only in an inline custom property, and drops it on the next page. The generated header partial restores a stored width before the page paints, so the column never jumps from three hundred and twenty pixels to the reader's choice, and the theme extension stores the value after a pointer or touch release instead of on every drag frame. Storage is clamped on the way in: a value outside 150 to 2000 pixels or wider than the viewport allows is discarded rather than trusted, because a hostile or stale entry must not widen the page. The renderer's own `min(…, 80vw)` bound keeps a wide stored value harmless on a phone. An unchanged value writes nothing, so a plain click leaves storage alone and a first visit stores nothing at all.
+
 ## Search Panel Geometry
 
 The open search panel centres on the article column rather than on the viewport, and its width is that column minus a declared reveal on each side: 32 pixels on a wide screen and 8 pixels on a narrow one. The reveal is what makes search read as an inset layer over the page instead of a narrow dialog, so the two margins must stay equal; centring on the viewport would instead shift the panel by half the sidebar or the scrollbar gutter.

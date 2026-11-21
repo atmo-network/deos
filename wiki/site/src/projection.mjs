@@ -109,10 +109,21 @@ const headPartial = `<script>
 </script>
 `;
 
-// mdBook hides the sidebar below 1080px; open it from 768px unless the reader chose otherwise.
+// mdBook hides the sidebar below 1080px; open it from 768px unless the reader chose otherwise. The
+// reader's own sidebar width is restored first, because the renderer keeps it only in an inline custom
+// property that a reload would otherwise drop.
 // Runs right after mdBook's own decision and before the page is painted.
 const sidebarDefault = `<script>
 (() => {
+  const clampWidth = value => {
+    const width = Number.parseInt(value, 10);
+    if (!Number.isFinite(width) || width < 150 || width > 2000) return null;
+    return Math.min(width, Math.max(150, window.innerWidth - 100));
+  };
+  try {
+    const savedWidth = clampWidth(localStorage.getItem('mdbook-sidebar-width'));
+    if (savedWidth !== null) document.documentElement.style.setProperty('--sidebar-target-width', savedWidth + 'px');
+  } catch {}
   const toggle = document.getElementById('mdbook-sidebar-toggle-anchor');
   let saved = null;
   try { saved = localStorage.getItem('mdbook-sidebar'); } catch {}
