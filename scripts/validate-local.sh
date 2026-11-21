@@ -81,7 +81,7 @@ run_framework_checks() {
     run_script_step "Corrected-node build contract self-test" "build-corrected-node.sh" --self-test
     run_script_step "Chain spec producer self-test" "04-generate-chain-spec.sh" --self-test
     run_script_step "Independent PVF wrapper self-test" "pvf-assurance.sh" --self-test
-    run_shell_step "Simulator tests" "" "node '$PROJECT_ROOT/simulators/tmctol/tests.js'"
+    run_shell_step "Simulator tests" "" "node '$PROJECT_ROOT/simulators/tmctol/tests.js' && node '$PROJECT_ROOT/simulators/tmctol/second-order.tests.js'"
     # Actual guest artifact generation/export are separate, explicit operations.
     SKIP_WASM_BUILD=1 run_script_step "Rust workspace CI" "ci-local.sh"
     local crate

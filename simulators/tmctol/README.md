@@ -17,6 +17,7 @@ This module is the **spec-side mathematical proving ground** used to:
 - `tests.js` — executable test suite
 - `tests.md` — verbose mirror/explanations for test sections
 - `types.d.ts` — simulator type shapes
+- `second-order.js` / `second-order.tests.js` — the `$BLDR` contour composed from the same primitives, with its own suite
 
 ---
 
@@ -33,6 +34,18 @@ Expected output ends with:
 - `Total: 67`
 - `Passed: 67`
 - `Failed: 0`
+
+---
+
+## Second-order `$BLDR` contour
+
+`second-order.js` reuses the unchanged TMC, XYK and Router with `$BLDR` as native and `$NTVE` as foreign, so route choice by recipient output comes from the first-order Router. Only custody differs: the protocol share splits floor half to BLDR Treasury and the rest, with all collateral, to BLDR Anchor. It adds `anchor_support` (live LP claim only), `stress_floor`/`composite_floor` (explicit pressure assumptions, including correlated first-order stress and invoice-payout pressure), and `bridge_round`, one analytical round of the [Parent Capital Bridge](../../docs/deos/builder-economy.contract.en.md#6-parent-capital-bridge) that keeps reserve release, route, mint or market acquisition, burn, treasury funding and anchor effects separate. `Xyk.remove_liquidity` supplies the pro-rata release.
+
+```bash
+node ./simulators/tmctol/second-order.tests.js
+```
+
+The suite runs 14 fixed deterministic cases. It proves formula and ledger conservation under stated assumptions; it is not a market guarantee, an Actor retry/scheduling model or runtime arithmetic parity.
 
 ---
 

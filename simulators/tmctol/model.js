@@ -573,6 +573,18 @@ export class Xyk {
     };
   }
 
+  remove_liquidity(/** @type {bigint} */ lp) {
+    if (lp <= 0n || lp > this.supply_lp) {
+      throw new Error("LP amount must be positive and within supply");
+    }
+    const native_out = BigMath.mul_div(this.reserve_native, lp, this.supply_lp);
+    const foreign_out = BigMath.mul_div(this.reserve_foreign, lp, this.supply_lp);
+    this.reserve_native -= native_out;
+    this.reserve_foreign -= foreign_out;
+    this.supply_lp -= lp;
+    return { native_out, foreign_out };
+  }
+
   swap_native_to_foreign(
     /** @type {bigint} */ native_in,
     /** @type {bigint} */ min_foreign_out = 0n,

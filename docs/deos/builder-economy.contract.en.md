@@ -126,7 +126,7 @@ Route accounting must remain explicit:
 - A `$BLDR` TMC route creates full issuance `M`; net issuance changes by `M - burn`, while its ordinary direct-treasury and anchor allocations remain separately attributable.
 - A report must not describe both branches as uniformly deflationary.
 
-Runtime execution must advance bounded portions and preserve retained custody across retries. Analytical evaluation may collapse the sequence into one economic round only when it preserves reserve release, route choice, mint or market acquisition, burn, treasury funding, and anchor effects independently; the current simulator carries no dedicated Builder bridge model.
+Runtime execution must advance bounded portions and preserve retained custody across retries. Analytical evaluation may collapse the sequence into one economic round only when it preserves reserve release, route choice, mint or market acquisition, burn, treasury funding, and anchor effects independently.
 
 ## 7. Governance Topology
 
