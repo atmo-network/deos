@@ -15001,10 +15001,10 @@ fn reference_idle_budget_converges_paged_wakeup_and_pure_close_pressure() {
   });
 }
 
-// --- Scheduler Stress FIFO (scheduled/nightly) ---
+// --- Scheduler Stress FIFO (manual release-mode opt-in) ---
 
 #[test]
-#[ignore] // Heavy: run in the scheduled nightly FIFO stress job (release mode)
+#[ignore] // Heavy: manual release-mode run only; no workflow selects ignored tests
 fn scheduler_stress_fifo_over_capacity_fairness_matrix() {
   let scenarios: [(u64, u32); 4] = [(48, 96), (100, 150), (1000, 252), (10_000, 2_500)];
   for (actors, blocks) in scenarios {
@@ -15015,7 +15015,7 @@ fn scheduler_stress_fifo_over_capacity_fairness_matrix() {
 }
 
 #[test]
-#[ignore] // Heavy topology matrix, run in the scheduled nightly FIFO stress job
+#[ignore] // Heavy topology matrix: manual release-mode run only; no workflow selects ignored tests
 fn scheduler_stress_fifo_dense_vs_sparse_topology_matrix() {
   let scenarios: [(u64, u32, u64); 3] = [(100, 200, 8), (1000, 300, 16), (5000, 1_500, 32)];
   for (actors, blocks, stride) in scenarios {
@@ -15068,7 +15068,7 @@ fn scheduler_stress_fifo_dense_vs_sparse_topology_matrix() {
 }
 
 #[test]
-#[ignore] // Heavy long-run sparse-liveness check, run in the scheduled nightly FIFO stress job
+#[ignore] // Heavy long-run sparse-liveness check: manual release-mode run only; no workflow selects ignored tests
 fn scheduler_stress_fifo_sparse_topology_long_run_liveness() {
   synthetic_actor_test_ext().execute_with(|| {
     System::set_block_number(1);
