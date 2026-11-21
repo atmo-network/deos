@@ -609,7 +609,11 @@
       ]
     },
     {
-      "id": "ungrouped",
+      "id": "development",
+      "title": {
+        "en": "Development",
+        "ru": "Разработка"
+      },
       "items": [
         {
           "id": "repository-structure",
@@ -660,31 +664,6 @@
           }
         },
         {
-          "id": "forking-deos",
-          "title": {
-            "en": "Forking DEOS",
-            "ru": "Создание форка DEOS"
-          },
-          "path": {
-            "en": "forking-deos.en.md",
-            "ru": "forking-deos.ru.md"
-          },
-          "page_type": "usage",
-          "summary": {
-            "en": "What downstream teams change, preserve, validate, and contribute back when turning DEOS into a concrete ecosystem.",
-            "ru": "Практическая карта решений, которые команда производной экосистемы должна изменить, сохранить и проверить, превращая DEOS в конкретный проект."
-          }
-        }
-      ]
-    },
-    {
-      "id": "development",
-      "title": {
-        "en": "Development",
-        "ru": "Разработка"
-      },
-      "items": [
-        {
           "id": "contributing",
           "title": {
             "en": "Contributing Guidelines",
@@ -730,6 +709,22 @@
           "summary": {
             "en": "Current implementation status with shipped framework, reference-client, wiki, and backlog boundaries summarized for newcomers without turning wiki into release notes.",
             "ru": "Текущее состояние реализации и открытые границы фреймворка DEOS без превращения вики в журнал релизов."
+          }
+        },
+        {
+          "id": "forking-deos",
+          "title": {
+            "en": "Forking DEOS",
+            "ru": "Создание форка DEOS"
+          },
+          "path": {
+            "en": "forking-deos.en.md",
+            "ru": "forking-deos.ru.md"
+          },
+          "page_type": "usage",
+          "summary": {
+            "en": "What downstream teams change, preserve, validate, and contribute back when turning DEOS into a concrete ecosystem.",
+            "ru": "Практическая карта решений, которые команда производной экосистемы должна изменить, сохранить и проверить, превращая DEOS в конкретный проект."
           }
         }
       ]

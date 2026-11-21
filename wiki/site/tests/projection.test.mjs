@@ -97,14 +97,19 @@ test('navigation metadata, not semantic edge order or graph degree, owns the lin
 });
 
 test('a titled navigation group needs three pages; an untitled run lists them at plane level', () => {
+  // The composition rule rejects a titled group of fewer than three pages and the projection lists
+  // an untitled run flat, so this fixture demotes the last two pages of one real group instead of
+  // depending on the live corpus happening to declare an untitled section.
   const plane = structuredClone(corpus.planes.find(item => item.pages.size > 0));
-  const group = plane.navigation.sections.find(section => section.title && section.items.length >= 3);
-  const flat = plane.navigation.sections.find(section => !section.title);
-  assert.ok(group && flat, 'fixture needs one titled group and one ungrouped run');
+  const group = plane.navigation.sections.find(section => section.title && section.items.length >= 5);
+  assert.ok(group, 'fixture needs one titled group of at least five pages');
+  const moved = group.items.splice(group.items.length - 2, 2);
+  plane.navigation.sections.push({ id: 'plane-flat-run', items: moved });
   const book = projectBooks({ ...corpus, planes: corpus.planes.map(item => item.id === plane.id ? plane : item) }, assets).files.get('books/en/src/SUMMARY.md');
-  assert.ok(!book.includes(`[${flat.id}]()`) && book.includes('\n- [') );
-  const title = flat.items[0].title.en;
-  assert.ok(new RegExp(`\\n- \\[${title}\\]`).test(book), 'ungrouped page must sit at plane level');
+  assert.ok(!book.includes('plane-flat-run'), 'an untitled run must not own a foldable node');
+  for (const item of moved) {
+    assert.ok(new RegExp(`\\n- \\[${item.title.en}\\]\\(`).test(book), `untitled page ${item.id} must sit at plane level`);
+  }
 });
 
 test('unplaced graph pages fail rather than acquiring an invented priority', () => {
