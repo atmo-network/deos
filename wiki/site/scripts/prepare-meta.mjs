@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /*
 Domain: Crawler-facing site metadata
-Owns: Page descriptions, canonical/hreflang links, robots.txt and sitemap.xml for the rendered artifact.
+Owns: Page descriptions, canonical/hreflang links, moved-path redirect stubs, robots.txt and sitemap.xml for the rendered artifact.
 Excludes: Markdown/HTML rendering, freshness claims, network access and hosting configuration.
 */
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { movedRoutes, resolveMovedRoutes } from '../src/routes.mjs';
 
 const contentsDescription = {
   en: 'Every published page of the wiki, grouped by section.',
@@ -71,6 +72,44 @@ export function sitemap(entries, siteUrl, defaultLocale) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">\n${urls.join('\n')}\n</urlset>\n`;
 }
 
+// A moved article keeps answering its published URL. The stub is deliberately not a rendered page:
+// it carries no body content, tells crawlers the real owner through canonical, and forwards the
+// fragment so a deep link survives the move.
+export function movedStub(route, siteUrl) {
+  const target = relative(dirname(route.from), route.to).split('\\').join('/');
+  const absolute = siteUrl ? new URL(route.to, siteUrl).href : '';
+  const canonical = absolute ? `<link rel="canonical" href="${escapeAttribute(absolute)}">\n` : '';
+  return `<!DOCTYPE html>
+<html lang="${route.locale}">
+<head>
+<meta charset="utf-8">
+<title>Moved — DEOS Wiki</title>
+<meta name="robots" content="noindex, follow">
+${canonical}<meta http-equiv="refresh" content="0; url=${escapeAttribute(target)}">
+<script>location.replace("${target}" + location.hash);</script>
+</head>
+<body>
+<p><a href="${escapeAttribute(target)}">${escapeAttribute(route.to)}</a></p>
+</body>
+</html>
+`;
+}
+
+export function writeMovedStubs(root, graph, entries, siteUrl) {
+  const written = [];
+  for (const route of resolveMovedRoutes(graph)) {
+    if (entries.has(route.from)) throw new Error(`Moved path ${route.from} is also a published page`);
+    if (!entries.has(route.to)) throw new Error(`Moved path ${route.from} points at unknown page ${route.to}`);
+    const file = join(root, route.from);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, movedStub(route, siteUrl));
+    written.push(route.from);
+  }
+  const expected = movedRoutes.length * (graph.locales?.length ?? 0);
+  if (written.length !== expected) throw new Error(`Wrote ${written.length} of ${expected} moved-path stubs`);
+  return written;
+}
+
 export function robots(siteUrl) {
   return `User-agent: *\nAllow: /\n${siteUrl ? `Sitemap: ${new URL('sitemap.xml', siteUrl).href}\n` : ''}`;
 }
@@ -106,9 +145,10 @@ export function prepareMeta(root, graph, siteUrl) {
     const entry = pageEntries(graph).find(item => item.path === landing.url[defaultLocale].slice((graph.base_path ?? '/').length));
     writeFileSync(index, readFileSync(index, 'utf8').replace('</head>', `${headLinks(entry, siteUrl, defaultLocale, 'sitemap.xml')}\n</head>`));
   }
+  const moved = writeMovedStubs(root, graph, entries, siteUrl);
   writeFileSync(join(root, 'robots.txt'), robots(siteUrl));
   if (siteUrl) writeFileSync(join(root, 'sitemap.xml'), sitemap([...entries.values()], siteUrl, defaultLocale));
-  return { annotated, sitemap: siteUrl ? entries.size : 0 };
+  return { annotated, sitemap: siteUrl ? entries.size : 0, moved: moved.length };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

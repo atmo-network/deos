@@ -5,8 +5,9 @@ Owns: Local document/asset targets, native heading fragments and published graph
 Excludes: Markdown rendering, network link checking and generic untrusted-HTML sanitization.
 */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { extname, join, relative, resolve, sep } from 'node:path';
+import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { resolveMovedRoutes } from '../src/routes.mjs';
 
 export function checkOutput(directory) {
   const root = resolve(directory), pages = [];
@@ -98,7 +99,20 @@ export function checkOutput(directory) {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  return { basePath, sitemapUrls, htmlPages: pages.length, localTargets: targets, nodes: graph.nodes.length, edges: graph.edges.length };
+  // A moved article must keep answering its published URL: the artifact owns one stub per former
+  // path, and the stub must forward to the page that owns the content now.
+  let movedStubs = 0;
+  for (const route of resolveMovedRoutes(graph)) {
+    const file = join(root, route.from);
+    if (!source.has(file)) throw new Error(`moved route ${route.from} has no redirect stub`);
+    const refresh = source.get(file).match(/<meta http-equiv="refresh" content="0; url=([^"]+)">/);
+    if (!refresh) throw new Error(`moved route ${route.from} has no redirect`);
+    const target = resolve(root, dirname(route.from), decodeURIComponent(refresh[1].replaceAll('&amp;', '&')));
+    if (target !== join(root, route.to)) throw new Error(`moved route ${route.from} forwards to ${relative(root, target)}, not ${route.to}`);
+    if (!statSync(target).isFile()) throw new Error(`moved route ${route.from} forwards to missing ${route.to}`);
+    movedStubs++;
+  }
+  return { basePath, sitemapUrls, htmlPages: pages.length, localTargets: targets, movedStubs, nodes: graph.nodes.length, edges: graph.edges.length };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

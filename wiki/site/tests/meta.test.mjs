@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { loadCorpus } from '../src/corpus.mjs';
 import { projectBooks } from '../src/projection.mjs';
-import { annotate, pageEntries, robots, siteUrlFor, sitemap } from '../scripts/prepare-meta.mjs';
+import { annotate, movedStub, pageEntries, robots, siteUrlFor, sitemap } from '../scripts/prepare-meta.mjs';
+import { movedRoutes, resolveMovedRoutes } from '../src/routes.mjs';
 
 const graph = projectBooks(loadCorpus(), {}, '/deos/').graph;
 const site = 'https://owner.github.io/deos/';
@@ -28,6 +29,26 @@ test('every published page has one entry with its language alternates and a desc
     assert.deepEqual(Object.keys(entry.alternates).sort(), [...graph.locales].sort());
     assert.equal(entry.alternates[entry.locale], entry.path);
   }
+});
+
+test('a moved article keeps answering its published path through one redirect stub per locale', () => {
+  const routes = resolveMovedRoutes(graph);
+  assert.equal(routes.length, movedRoutes.length * graph.locales.length);
+  const published = new Set(pageEntries(graph).map(entry => entry.path));
+  for (const route of routes) {
+    assert.ok(!published.has(route.from), `${route.from}: a moved path is never also a rendered page`);
+    assert.ok(published.has(route.to), `${route.from}: the stub forwards to a published page`);
+    const html = movedStub(route, site);
+    assert.match(html, /<meta http-equiv="refresh" content="0; url=[^"]+">/);
+    assert.match(html, /<meta name="robots" content="noindex, follow">/);
+    assert.match(html, new RegExp(`<link rel="canonical" href="${site}${route.to}">`));
+    assert.match(html, /location\.hash/, 'a deep link survives the move');
+  }
+  const glossary = routes.find(route => route.from === 'en/deos/glossary/core-terms.html');
+  assert.deepEqual(glossary, { locale: 'en', from: 'en/deos/glossary/core-terms.html', to: 'en/deos/core-terms.html', pageId: 'core-terms' });
+  assert.match(movedStub(glossary, ''), /url=\.\.\/core-terms\.html/, 'a build without a site URL stays relative');
+  assert.doesNotMatch(movedStub(glossary, ''), /canonical/, 'no absolute claim without a known site URL');
+  assert.deepEqual(resolveMovedRoutes({ ...graph, nodes: [] }), [], 'a probe artifact with no pages resolves no stubs');
 });
 
 test('page metadata fills the native description slot and adds absolute links only with a site URL', () => {

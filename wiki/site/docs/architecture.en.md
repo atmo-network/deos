@@ -46,6 +46,8 @@ mdBook owns HTML, heading IDs, navigation and search assets. Generated TOML disa
 
 `scripts/prepare-meta.mjs` runs after search preparation. It fills mdBook's empty description slot from page metadata, marks 404 and table-of-contents fragments `noindex, follow`, and writes `robots.txt`. With `WIKI_SITE_URL`, whose path must equal the base path, it also adds canonical and `hreflang`/`x-default` links, a sitemap link and `sitemap.xml` without invented `lastmod`. `check-output.mjs` resolves every sitemap entry to a real file beneath the base path.
 
+`src/routes.mjs` owns published route history. An article whose directory fell below the navigation minimum keeps its page id and moves to the plane root, so the artifact still answers its former path: `prepare-meta.mjs` writes one stub per former path and locale, carrying `noindex, follow`, a canonical link to the current owner, a zero-delay `refresh` and a fragment-preserving `location.replace`. The stub is not a rendered page and never appears in the sitemap. The producer requires one stub per ledger entry per locale, and `check-output.mjs` re-resolves every declared stub to the page that owns the content now.
+
 `../../scripts/publish-pages.sh` is the publication leaf. It re-runs `check-output.mjs`, can enforce the expected base path, and adds `.nojekyll` and an optional `CNAME`. It stages `dist` through a temporary Git index in the project object store and commits the tree on top of the remote branch tip, so no checkout or HEAD changes. It then pushes with a lease on that tip. An identical tree publishes nothing. Its `--self-test` covers a dry run, first, unchanged and changed publication, preserved history, refusals and an untouched checkout against a temporary bare remote.
 
 ## Native Unicode Search
