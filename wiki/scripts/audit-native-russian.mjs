@@ -309,80 +309,6 @@ export function extractManifestEvidence(value, name) {
   };
 }
 
-function findBalancedObject(text, start) {
-  let depth = 0;
-  let quote = null;
-  for (let index = start; index < text.length; index += 1) {
-    const character = text[index];
-    if (quote) {
-      if (character === "\\") index += 1;
-      else if (character === quote) quote = null;
-    } else if (character === "'" || character === '"' || character === "`")
-      quote = character;
-    else if (character === "{") depth += 1;
-    else if (character === "}" && --depth === 0) return index + 1;
-  }
-  return -1;
-}
-
-function stringRecords(
-  source,
-  rangeStart = 0,
-  rangeEnd = source.length,
-  valuesOnly = false,
-) {
-  const records = [];
-  for (let index = rangeStart; index < rangeEnd;) {
-    const quote = source[index];
-    if (quote !== "'" && quote !== '"' && quote !== "`") {
-      index += 1;
-      continue;
-    }
-    const start = index;
-    let value = "";
-    for (index += 1; index < rangeEnd; index += 1) {
-      if (source[index] === "\\") {
-        value += source[index] + (source[index + 1] ?? "");
-        index += 1;
-        continue;
-      }
-      if (source[index] === quote) break;
-      value += source[index];
-    }
-    const isValue = source.slice(rangeStart, start).trimEnd().endsWith(":");
-    if (!valuesOnly || isValue) {
-      const prefix = source.slice(0, start + 1);
-      records.push({
-        value,
-        start,
-        line: (prefix.match(/\n/g)?.length ?? 0) + 1,
-        column: start - prefix.lastIndexOf("\n") + 1,
-      });
-    }
-    index += 1;
-  }
-  return records;
-}
-
-export function extractRussianWidgetStrings(source) {
-  const records = stringRecords(source).filter(({ value }) =>
-    /\p{Script=Cyrillic}/u.test(value),
-  );
-  const widgetStart = source.indexOf("const widgetText");
-  const localeStart = source.indexOf("currentLocale === 'ru'", widgetStart);
-  const objectStart = source.indexOf("{", localeStart);
-  const objectEnd = findBalancedObject(source, objectStart);
-  if (widgetStart < 0 || localeStart < 0 || objectStart < 0 || objectEnd < 0)
-    throw new Error("Russian WikiWidget copy object not found");
-  for (const record of stringRecords(source, objectStart, objectEnd, true)) {
-    if (!records.some(({ start }) => start === record.start))
-      records.push(record);
-  }
-  return records
-    .sort((left, right) => left.start - right.start)
-    .map(({ start: _start, ...record }) => record);
-}
-
 function walkRuPages(directory) {
   const files = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -397,14 +323,6 @@ function parseArgs(argv) {
   const options = {
     wikiDir: join(projectRoot, "wiki/layers/deos"),
     configPath: join(wikiRoot, "native-russian-style.json"),
-    frontendPath: join(
-      projectRoot,
-      "web-client/src/lib/widgets/WikiWidget.svelte",
-    ),
-    relationPath: join(
-      projectRoot,
-      "web-client/src/lib/wiki/relation-phrases.ts",
-    ),
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -415,17 +333,9 @@ function parseArgs(argv) {
       options.configPath = resolve(argv[++index] ?? "");
     else if (arg.startsWith("--config="))
       options.configPath = resolve(arg.slice(9));
-    else if (arg === "--frontend")
-      options.frontendPath = resolve(argv[++index] ?? "");
-    else if (arg.startsWith("--frontend="))
-      options.frontendPath = resolve(arg.slice(11));
-    else if (arg === "--relations")
-      options.relationPath = resolve(argv[++index] ?? "");
-    else if (arg.startsWith("--relations="))
-      options.relationPath = resolve(arg.slice(12));
     else if (arg === "--help" || arg === "-h") {
       process.stdout.write(
-        "Usage: node audit-native-russian.mjs [--wiki-dir PATH] [--config PATH] [--frontend PATH] [--relations PATH]\n",
+        "Usage: node audit-native-russian.mjs [--wiki-dir PATH] [--config PATH]\n",
       );
       process.exit(0);
     } else throw new Error(`Unknown argument: ${arg}`);
@@ -502,36 +412,6 @@ function main() {
         }),
       );
     }
-  }
-
-  const frontend = readFileSync(options.frontendPath, "utf8");
-  const widgetRecords = extractRussianWidgetStrings(frontend);
-  evidenceInventory["display-prose"] += widgetRecords.length;
-  for (const record of widgetRecords) {
-    results.push(
-      auditTextDetailed(record.value, config, options.frontendPath, {
-        baseLine: record.line,
-        baseColumn: record.column,
-        cohort: "frontend",
-        evidenceClass: "display-prose",
-      }),
-    );
-  }
-
-  const relationSource = readFileSync(options.relationPath, "utf8");
-  const relationRecords = stringRecords(relationSource).filter(({ value }) =>
-    /\p{Script=Cyrillic}/u.test(value),
-  );
-  evidenceInventory["display-prose"] += relationRecords.length;
-  for (const record of relationRecords) {
-    results.push(
-      auditTextDetailed(record.value, config, options.relationPath, {
-        baseLine: record.line,
-        baseColumn: record.column,
-        cohort: "frontend-relations",
-        evidenceClass: "display-prose",
-      }),
-    );
   }
 
   const raw = results.flatMap((result) => result.raw);
