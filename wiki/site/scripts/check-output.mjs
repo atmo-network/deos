@@ -99,6 +99,17 @@ export function checkOutput(directory) {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
+  // A page with a diagram needs the loader and the distribution it resolves from the site root.
+  let diagrams = 0;
+  for (const page of pages) {
+    if (!page.endsWith('.html') || !source.get(page).includes('class="wiki-mermaid"')) continue;
+    if (!source.get(page).includes('wiki-mermaid')) throw new Error(`${relative(root, page)}: diagram page lost its loader`);
+    const entry = join(root, 'theme/mermaid/mermaid.esm.min.js');
+    if (!statSync(entry, { throwIfNoEntry: false })?.isFile()) throw new Error('theme/mermaid/mermaid.esm.min.js: vendored distribution is missing');
+    if (!statSync(join(root, 'theme/mermaid/chunks/mermaid.esm.min'), { throwIfNoEntry: false })?.isDirectory()) throw new Error('theme/mermaid/chunks: vendored distribution is incomplete');
+    diagrams++;
+  }
+
   // A typeset formula needs the faces its stylesheet names, and the renderer copies only the
   // stylesheet. Every referenced font must exist beside it or the formula silently degrades.
   let mathFonts = 0;
@@ -126,7 +137,7 @@ export function checkOutput(directory) {
     if (!statSync(target).isFile()) throw new Error(`moved route ${route.from} forwards to missing ${route.to}`);
     movedStubs++;
   }
-  return { basePath, sitemapUrls, htmlPages: pages.length, localTargets: targets, movedStubs, mathFonts, nodes: graph.nodes.length, edges: graph.edges.length };
+  return { basePath, sitemapUrls, htmlPages: pages.length, localTargets: targets, movedStubs, mathFonts, diagrams, nodes: graph.nodes.length, edges: graph.edges.length };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

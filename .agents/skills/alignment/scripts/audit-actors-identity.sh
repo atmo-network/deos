@@ -203,6 +203,7 @@ check_retired_identity() {
         -g '!template/vendor/**' \
         -g '!template/tools/pvf-validation/vendor/**' \
         -g '!wiki/site/theme/katex/**' \
+        -g '!wiki/site/theme/mermaid/**' \
         -g '!.agents/skills/release-assurance/config/dependency-provenance-exceptions.json' 2>/dev/null || true)"
     if [[ -f "$policy" ]]; then
         policy_matches="$(policy_identity_matches "$policy")" || return 1
@@ -212,7 +213,8 @@ check_retired_identity() {
     path_matches="$(git -C "$PROJECT_ROOT" ls-files -co --exclude-standard -- \
         ':(exclude)template/vendor/**' \
         ':(exclude)template/tools/pvf-validation/vendor/**' \
-        ':(exclude)wiki/site/theme/katex/**' | rg '[Aa]{3}' || true)"
+        ':(exclude)wiki/site/theme/katex/**' \
+        ':(exclude)wiki/site/theme/mermaid/**' | rg '[Aa]{3}' || true)"
     if [[ -n "$content_matches" || -n "$path_matches" ]]; then
         log_error "Retired actor-runtime identity remains"
         [[ -z "$path_matches" ]] || printf '%s\n' "$path_matches"

@@ -52,7 +52,15 @@ Owner pages: [Routing and Minting Loop](routing-and-minting-loop.en.md), [DEOS R
 
 ## Actor Wakeup Chain
 
-![Actor wakeup: signal, readiness, Service eligibility and committed effect. A transfer can signal another actor; ingress while busy only credits its balance.](actor-wakeup.svg)
+```mermaid
+flowchart TD
+  T["Timer or matching ingress"] --> R{"Actor Idle?"}
+  R -->|yes| L["One pending cycle latched"]
+  R -->|no| C["Custody credited, no cycle"]
+  L --> S["Service turn at N+1 or later"]
+  S --> E["Effect committed"]
+  E --> H["Transfer can signal another Actor"]
+```
 
 **1 Signal → 2 readiness → 3 Service → 4 effect.** A configured timer or matching ingress can signal an `Idle` Actor in block `N`. A successful readiness check latches one pending cycle; repeated signals cannot queue another. Service eligibility begins no earlier than `N + 1`. Opening and Steps are separately admitted. The flow delivers useful work only when its intended effect commits, not just because readiness was latched or a cycle ended.
 

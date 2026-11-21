@@ -152,6 +152,32 @@ html.navy pre {
   background: var(--theme-hover);
   text-decoration: none;
 }
+/* A diagram scales to the reading column and never widens the page. Until it renders, and if the
+   renderer is unavailable, the block keeps its source as readable monospace text. */
+.content .wiki-diagram {
+  margin-block: 1.5em;
+  max-width: 100%;
+}
+.content .wiki-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+.content .wiki-diagram .wiki-mermaid:not([data-rendered]) {
+  white-space: pre-wrap;
+  font-family: var(--mono-font-family, monospace);
+  font-size: 0.85em;
+  padding: 0.8em;
+  border-inline-start: 3px solid var(--table-border-color, #7a8699);
+  color: var(--fg);
+}
+.content .wiki-diagram .wiki-mermaid[data-failed]::before {
+  content: 'Diagram source:';
+  display: block;
+  margin-block-end: 0.4em;
+  font-family: inherit;
+  opacity: 0.7;
+}
+
 /* Each article owns one glyph. A fixed inline box keeps a wide emoji from shifting the label, and
    the glyph is decorative: the title remains the readable, focusable text. The same mark repeats in
    the article heading and in any list entry that opens the article, so one silhouette identifies the

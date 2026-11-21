@@ -166,6 +166,18 @@ build() {
             fi
         fi
     done <<< "$locales"
+    # Mermaid is a browser dependency resolved from the site root, so one vendored copy serves every
+    # locale instead of being duplicated into each book.
+    if grep -q 'theme/wiki-mermaid.js' "$STAGE"/books/*/book.toml; then
+        if [[ ! -f "$SITE_DIR/theme/mermaid/mermaid.esm.min.js" || ! -d "$SITE_DIR/theme/mermaid/chunks/mermaid.esm.min" ]]; then
+            log_error "Vendored Mermaid distribution is missing"
+            exit 1
+        fi
+        if ! mkdir -p "$STAGE/html/theme/mermaid/chunks" || ! cp "$SITE_DIR/theme/mermaid/mermaid.esm.min.js" "$STAGE/html/theme/mermaid/" || ! cp -r "$SITE_DIR/theme/mermaid/chunks/mermaid.esm.min" "$STAGE/html/theme/mermaid/chunks/"; then
+            log_error "Failed to publish the vendored Mermaid distribution"
+            exit 1
+        fi
+    fi
     cp "$STAGE/projection.json" "$STAGE/html/graph.json"
     run_command_step "Prepare crawler metadata" "" node "$SITE_DIR/scripts/prepare-meta.mjs" "$STAGE/html" "$STAGE/projection.json"
     run_command_step "Validate native mdBook destinations" "" node "$SITE_DIR/scripts/check-output.mjs" "$STAGE/html"

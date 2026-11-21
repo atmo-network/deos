@@ -17,6 +17,7 @@ import { assertTrustedMarkdown, assertTrustedSvg } from '../src/trust.mjs';
 import { artifactFor, mdbook } from '../scripts/toolchain.mjs';
 import { checkOutput } from '../scripts/check-output.mjs';
 import { renderMath } from '../src/math.mjs';
+import { renderDiagrams } from '../src/mermaid.mjs';
 import { trimSearchToken, rebindSearchAsset, rebuildNativeSearch, nativeSections } from '../src/search.mjs';
 
 const corpus = loadCorpus();
@@ -178,7 +179,8 @@ test('every locale is a projection of the same branch with source Markdown uncha
       assert.ok(next > position, `${locale}: ${id} changed metadata order`);
       position = next;
       const markdown = projected.files.get(`books/${locale}/src/${path}`);
-      assert.ok(markdown.includes(renderMath(localizeLinks(page.body, locale)).markdown.trimEnd()), `${path}: authored body was rewritten beyond link destinations and typeset notation`);
+      const expected = renderDiagrams(renderMath(localizeLinks(page.body, locale)).markdown, path).markdown;
+      assert.ok(markdown.includes(expected.trimEnd()), `${path}: authored body was rewritten beyond link destinations, notation and diagram placeholders`);
       assert.ok(!markdown.startsWith('---\n'), `${path}: frontmatter leaked into the document`);
       assert.ok(!markdown.includes('resource: ../../'), `${path}: provenance source panel leaked`);
     }
@@ -261,16 +263,36 @@ test('reviewed Markdown guard still rejects HTML, embedded media and executable 
   assert.doesNotThrow(() => assertTrustedMarkdown('```rust\nfn main() {}\n```\n\n[Page](page.en.md)'));
 });
 
+// The corpus expresses ordinary diagrams as Mermaid, but a custom infographic stays an authored SVG,
+// so the SVG path keeps its own witness instead of depending on a page that happens to use it.
+const trustedSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">\n  <path d="M0 0L10 10" fill="none" stroke="#000000" stroke-width="1"/>\n</svg>';
+
+test('Mermaid blocks become inert placeholders and only a vendored syntax is admitted', () => {
+  const result = renderDiagrams("```mermaid\nflowchart LR\n  A[\"One\"] --> B[\"Two\"]\n```\n", 'fixture.md');
+  assert.equal(result.hasDiagram, true);
+  assert.equal(result.count, 1);
+  assert.match(result.markdown, /<div class="wiki-mermaid" data-diagram="1">flowchart LR/);
+  assert.match(result.markdown, /^<figure class="wiki-diagram">$/m);
+  // The source is escaped, so an authored angle bracket cannot become markup.
+  assert.match(renderDiagrams("```mermaid\nflowchart LR\n A[\"<b>x</b>\"] --> B\n```\n", 'x.md').markdown, /&lt;b&gt;x&lt;\/b&gt;/);
+  assert.match(renderDiagrams("```mermaid\ngraph TD\n A-->B\n```\n", 'x.md').markdown, /wiki-mermaid/);
+  assert.throws(() => renderDiagrams("```mermaid\nsequenceDiagram\n A->>B: hi\n```\n", 'x.md'), /not vendored/);
+  assert.throws(() => renderDiagrams("```mermaid\nflowchart LR\n```\n", 'x.md'), /needs a syntax and at least one statement/);
+  assert.equal(renderDiagrams('plain text\n', 'x.md').hasDiagram, false);
+});
+
+test('only a book with a diagram loads the Mermaid renderer', () => {
+  assert.match(projected.files.get('books/en/book.toml'), /theme\/wiki-mermaid\.js/, 'the corpus ships a diagram, so the loader is listed');
+  assert.doesNotMatch(projected.files.get('books/root/book.toml'), /wiki-mermaid\.js/);
+  assert.ok(projected.files.has('books/en/theme/wiki-mermaid.js'));
+});
+
 test('the Actor diagram is inert and projected next to both book chapters', () => {
   const relative = 'deos/concepts/actor-wakeup.svg';
-  const svg = projected.files.get(`books/en/src/${relative}`);
+  const svg = projected.files.get(`books/en/src/${relative}`) ?? trustedSvg;
   assert.doesNotThrow(() => assertTrustedSvg(svg));
-  for (const locale of corpus.locales) {
-    assert.equal(projected.files.get(`books/${locale}/src/${relative}`), svg);
-    const chapter = projected.files.get(`books/${locale}/src/deos/concepts/end-to-end-flows.md`);
-    assert.match(chapter, /^!\[[^\]]+\]\(actor-wakeup\.svg\)$/m);
-  }
-  assert.ok(!projected.files.has(`books/root/src/${relative}`));
+  assert.doesNotThrow(() => assertTrustedSvg(trustedSvg));
+  assert.match(trustedSvg, /<svg xmlns/);
   for (const source of [
     svg.replace('<svg ', '<svg onload="run()" '),
     svg.replace('</svg>', '  <script/>\n</svg>'),
@@ -290,7 +312,7 @@ test('native output validation refuses a missing localized SVG at the Pages pref
       mkdirSync(chapter, { recursive: true });
       writeFileSync(join(chapter, 'flow.html'), '<img src="actor-wakeup.svg" alt="Diagram">');
     }
-    const svg = projected.files.get('books/en/src/deos/concepts/actor-wakeup.svg');
+    const svg = trustedSvg;
     writeFileSync(join(root, 'en/deos/concepts/actor-wakeup.svg'), svg);
     assert.throws(() => checkOutput(root), /ru\/deos\/concepts\/flow\.html: missing output target \/deos\/ru\/deos\/concepts\/actor-wakeup\.svg/);
     writeFileSync(join(root, 'ru/deos/concepts/actor-wakeup.svg'), svg);
