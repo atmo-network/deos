@@ -186,6 +186,15 @@ html.navy pre {
   margin-inline-end: 0.3em;
   font-size: 0.95em;
 }
+/* An inline mention sits inside a sentence, so its mark is a shade smaller and tighter than a list
+   row's: it identifies the target without pushing the line apart. */
+.content main p .wiki-icon {
+  inline-size: 1em;
+  margin-inline-end: 0.15em;
+  font-size: 0.9em;
+  vertical-align: 0.02em;
+  opacity: 0.85;
+}
 /* The contents page and its section groups are navigation furniture, so their mark sits before the
    label with the same weight as the sidebar row it mirrors. */
 .sidebar .chapter .wiki-group > span[role='button'] > .wiki-icon {

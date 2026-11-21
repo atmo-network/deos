@@ -218,9 +218,21 @@ Excludes: Markdown rendering, membership inference, search ranking and parent-wi
   for (const heading of main.querySelectorAll('h1 > a.header')) decorate(heading, current?.icon ?? (contentsPage ? chrome.contents : undefined));
   // On the contents page every section heading opens a group of pages, so each carries the folder.
   if (contentsPage) for (const heading of main.querySelectorAll('h2 > a.header')) decorate(heading, chrome.group);
-  // A list entry that opens an article is an identification row, not prose: mark it. Inline links
-  // inside running text keep their plain appearance.
-  for (const link of main.querySelectorAll('li > a:first-child')) decorate(link, glyphFor(link.href));
+  // Every mention of an article carries that article's glyph, in a list row and in running text
+  // alike: the mark answers "which page is this" wherever the link appears. Heading anchors and
+  // layer tags are not article mentions, so they stay plain.
+  for (const link of main.querySelectorAll('a[href]')) {
+    if (link.classList.contains('header') || link.classList.contains('wiki-tag')) continue;
+    decorate(link, glyphFor(link.href));
+  }
+  // Search results name articles as well, and the renderer rebuilds them on every query, so the mark
+  // follows the rendered list instead of a one-time pass.
+  const results = document.getElementById('mdbook-searchresults');
+  if (results) {
+    const mark = () => { for (const link of results.querySelectorAll('a[href]')) decorate(link, glyphFor(link.href)); };
+    new MutationObserver(mark).observe(results, { childList: true, subtree: true });
+    mark();
+  }
   const sidebar = document.querySelector('.sidebar-scrollbox .chapter');
   if (sidebar) {
     filterTree(sidebar);
