@@ -16,6 +16,7 @@ import { selectLayer } from '../src/layers.mjs';
 import { assertTrustedMarkdown, assertTrustedSvg } from '../src/trust.mjs';
 import { artifactFor, mdbook } from '../scripts/toolchain.mjs';
 import { checkOutput } from '../scripts/check-output.mjs';
+import { renderMath } from '../src/math.mjs';
 import { trimSearchToken, rebindSearchAsset, rebuildNativeSearch, nativeSections } from '../src/search.mjs';
 
 const corpus = loadCorpus();
@@ -165,6 +166,8 @@ test('unplaced graph pages fail rather than acquiring an invented priority', () 
 });
 
 test('every locale is a projection of the same branch with source Markdown unchanged', () => {
+  // Two rewrites are contractual: link destinations are localized and notation becomes typeset
+  // markup. Anything else must leave the authored bytes alone.
   for (const plane of corpus.planes) for (const locale of plane.locales) {
     const summary = projected.files.get(`books/${locale}/src/SUMMARY.md`);
     let position = -1;
@@ -175,7 +178,7 @@ test('every locale is a projection of the same branch with source Markdown uncha
       assert.ok(next > position, `${locale}: ${id} changed metadata order`);
       position = next;
       const markdown = projected.files.get(`books/${locale}/src/${path}`);
-      assert.ok(markdown.includes(localizeLinks(page.body, locale).trimEnd()), `${path}: authored body was rewritten beyond link destinations`);
+      assert.ok(markdown.includes(renderMath(localizeLinks(page.body, locale)).markdown.trimEnd()), `${path}: authored body was rewritten beyond link destinations and typeset notation`);
       assert.ok(!markdown.startsWith('---\n'), `${path}: frontmatter leaked into the document`);
       assert.ok(!markdown.includes('resource: ../../'), `${path}: provenance source panel leaked`);
     }

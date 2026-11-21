@@ -5,6 +5,8 @@ Excludes: Markdown/HTML rendering, filesystem publication, hosting and runtime/w
 */
 import { posix } from 'node:path';
 import { basePath, bookSource, localizeLinks, pageRoute } from './corpus.mjs';
+import { renderMath } from './math.mjs';
+import { katexAssets, katexFonts } from './math-assets.mjs';
 import { assignMemberships } from './layers.mjs';
 import { contextScript } from './context.mjs';
 
@@ -78,8 +80,8 @@ function relativeHref(from, to) {
   return posix.relative(posix.dirname(from), to) || posix.basename(to);
 }
 
-function bookConfig(locale, title, search, base) {
-  return `[book]\ntitle = ${JSON.stringify(title)}\nlanguage = ${JSON.stringify(locale || 'en')}\nsrc = "src"\n\n[build]\ncreate-missing = false\nuse-default-preprocessors = false\n\n[output.html]\nsite-url = ${JSON.stringify(locale ? `${base}${locale}/` : base)}\nno-section-label = true\nsidebar-header-nav = false\ndefault-theme = "light"\npreferred-dark-theme = "navy"\nadditional-css = ["theme/wiki.css"]\nadditional-js = ${JSON.stringify([...(locale ? [] : ['theme/root-context.js']), 'theme/wiki.js', 'theme/layers.js'])}\n\n[output.html.fold]\nenable = true\nlevel = 0\n\n[output.html.print]\nenable = false\n\n[output.html.search]\nenable = ${search}\nuse-boolean-and = true\n\n[output.html.playground]\nrunnable = false\n`;
+function bookConfig(locale, title, search, base, css = []) {
+  return `[book]\ntitle = ${JSON.stringify(title)}\nlanguage = ${JSON.stringify(locale || 'en')}\nsrc = "src"\n\n[build]\ncreate-missing = false\nuse-default-preprocessors = false\n\n[output.html]\nsite-url = ${JSON.stringify(locale ? `${base}${locale}/` : base)}\nno-section-label = true\nsidebar-header-nav = false\ndefault-theme = "light"\npreferred-dark-theme = "navy"\nadditional-css = ${JSON.stringify(['theme/wiki.css', ...css])}\nadditional-js = ${JSON.stringify([...(locale ? [] : ['theme/root-context.js']), 'theme/wiki.js', 'theme/layers.js'])}\n\n[output.html.fold]\nenable = true\nlevel = 0\n\n[output.html.print]\nenable = false\n\n[output.html.search]\nenable = ${search}\nuse-boolean-and = true\n\n[output.html.playground]\nrunnable = false\n`;
 }
 
 // Runs first in <head>: records the rendered chapter and repairs a directory index that a
@@ -172,8 +174,15 @@ export function projectBooks(corpus, assets, base = '/') {
   const files = new Map([['projection.json', JSON.stringify(graph, null, 2) + '\n']]);
   const landingNode = byId.get(qualified({ id: corpus.defaultPlane }, 'index'));
   const landing = Object.fromEntries(corpus.locales.map(locale => [locale, landingNode?.url[locale] ? landingNode.url[locale].slice(root.length) : `${locale}/index.html`]));
-  function addBook(key, locale, title, search, markdown, summary) {
-    files.set(`books/${key}/book.toml`, bookConfig(locale, title, search, root));
+  // The stylesheet ships only into a book that actually typesets notation; the fonts stay beside it,
+  // because a browser fetches just the faces a displayed formula references.
+  const mathStylesheet = 'theme/katex/katex.min.css';
+  function addMathAssets(key) {
+    for (const [name, content] of [...katexAssets, ...katexFonts]) files.set(`books/${key}/${name}`, content);
+  }
+  function addBook(key, locale, title, search, markdown, summary, hasMath = false) {
+    files.set(`books/${key}/book.toml`, bookConfig(locale, title, search, root, hasMath ? [mathStylesheet] : []));
+    if (hasMath) addMathAssets(key);
     files.set(`books/${key}/src/SUMMARY.md`, summary);
     for (const [path, content] of markdown) files.set(`books/${key}/src/${path}`, content);
     for (const [path, content] of Object.entries(assets)) files.set(`books/${key}/theme/${path}`, content);
@@ -198,6 +207,8 @@ export function projectBooks(corpus, assets, base = '/') {
     const summary = ['# Summary', '', link(labels.contents, 'index.md'), ''];
     const contents = [`# ${labels.contents}`, '', labels.intro, '', '<!-- wiki-pages:start -->', ''];
     const markdown = [['404.md', `# 404\n\n${labels.unknown}\n\n${link(labels.home, relativeHref('404.md', bookPath(`${root}${landing[locale]}`, root, locale)))}\n`]];
+    // Only pages that typeset something need the stylesheet, so the book is told once it has one.
+    const mathPages = new Set();
     for (const plane of corpus.planes) {
       if (multiplePlanes) contents.push(`## ${text(plane.title)}`, '');
       if (plane.pages.size === 0) {
@@ -241,12 +252,14 @@ export function projectBooks(corpus, assets, base = '/') {
       for (const id of order) {
         const page = pageOf(id), path = pathOf(id), node = byId.get(qualified(plane, id));
         for (const [name, svg] of page.diagrams) files.set(`books/${locale}/src/${posix.join(posix.dirname(path), name)}`, svg);
-        markdown.push([path, `${layerTags(node, locale, path)}${localizeLinks(page.body, locale).trimEnd()}\n`]);
+        const typeset = renderMath(localizeLinks(page.body, locale));
+        if (typeset.hasMath) mathPages.add(path);
+        markdown.push([path, `${layerTags(node, locale, path)}${typeset.markdown.trimEnd()}\n`]);
       }
     }
     contents.push('<!-- wiki-pages:end -->', '');
     markdown.unshift(['index.md', contents.join('\n')]);
-    addBook(locale, locale, labels.site(baseTitle), true, markdown, summary.join('\n'));
+    addBook(locale, locale, labels.site(baseTitle), true, markdown, summary.join('\n'), mathPages.size > 0);
   }
   return { graph, files, locales: corpus.locales };
 }

@@ -33,9 +33,7 @@ The TMCTOL standard relies on explicit mathematical formulas to define its econo
 
 The curve marginal price `P` is the cost per unit of total issuance, before distribution to the recipient and TOL. It increases with curve-accounted minted supply `S`, which need not equal live issuance after burns.
 
-```text
-spot_price(S) = P₀ + m·S/PRECISION
-```
+$$\mathrm{spot\_price}(S) = P_0 + \frac{m \cdot S}{\mathrm{PRECISION}}$$
 
 where:
 
@@ -48,9 +46,7 @@ where:
 
 Use unscaled token quantities and coefficients to make the continuous integral's units explicit. Define `p₀ = P₀/PRECISION` in foreign/native and `μ = m/PRECISION` in foreign/native²:
 
-```text
-F_required = p₀·ΔS + μ·(S₀·ΔS + ΔS²/2)
-```
+$$F_{\mathrm{required}} = p_0 \cdot \Delta S + \mu \left( S_0 \cdot \Delta S + \frac{\Delta S^2}{2} \right)$$
 
 Here `S₀` is curve-accounted supply before mint, `ΔS` is total new issuance, and `F_required` is payment in whole foreign tokens. Both terms have foreign-token units. Executable balances also have their own fixed-point scale; integer execution applies its specified rounding rather than treating this continuous formula as bit-exact.
 

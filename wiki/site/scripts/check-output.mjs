@@ -16,7 +16,7 @@ export function checkOutput(directory) {
       const file = join(path, entry.name);
       if (entry.isSymbolicLink()) throw new Error(`Unexpected output symlink: ${file}`);
       if (entry.isDirectory()) walk(file);
-      else if (extname(file) === '.html') pages.push(file);
+      else if (extname(file) === '.html' || extname(file) === '.css') pages.push(file);
     }
   }
   walk(root);
@@ -99,6 +99,20 @@ export function checkOutput(directory) {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
+  // A typeset formula needs the faces its stylesheet names, and the renderer copies only the
+  // stylesheet. Every referenced font must exist beside it or the formula silently degrades.
+  let mathFonts = 0;
+  for (const page of pages) {
+    if (!page.includes('/theme/katex/')) continue;
+    if (!page.endsWith('.css')) continue;
+    for (const [, url] of source.get(page).matchAll(/url\(\s*['"]?(fonts\/[^'")]+)['"]?\s*\)/g)) {
+      const font = join(dirname(page), decodeURIComponent(url));
+      if (!statSync(font, { throwIfNoEntry: false })?.isFile()) throw new Error(`${relative(root, page)}: missing font ${url}`);
+      if (!font.endsWith('.woff2')) throw new Error(`${relative(root, page)}: unexpected font format ${url}`);
+      mathFonts++;
+    }
+  }
+
   // A moved article must keep answering its published URL: the artifact owns one stub per former
   // path, and the stub must forward to the page that owns the content now.
   let movedStubs = 0;
@@ -112,7 +126,7 @@ export function checkOutput(directory) {
     if (!statSync(target).isFile()) throw new Error(`moved route ${route.from} forwards to missing ${route.to}`);
     movedStubs++;
   }
-  return { basePath, sitemapUrls, htmlPages: pages.length, localTargets: targets, movedStubs, nodes: graph.nodes.length, edges: graph.edges.length };
+  return { basePath, sitemapUrls, htmlPages: pages.length, localTargets: targets, movedStubs, mathFonts, nodes: graph.nodes.length, edges: graph.edges.length };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
