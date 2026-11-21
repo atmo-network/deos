@@ -39,6 +39,7 @@ export function unifiedGraph(corpus, base = '/') {
     for (const id of linearOrder(plane, plane.defaultLocale)) {
       const mirrors = [...plane.pages.values()].filter(page => page.id === id);
       nodes.push({ id: qualified(plane, id), plane: plane.id, canonical_page_id: id,
+        icon: plane.icons.get(id),
         title: Object.fromEntries(mirrors.map(page => [page.locale, page.meta.title])),
         description: Object.fromEntries(mirrors.map(page => [page.locale, page.meta.description])),
         url: Object.fromEntries(mirrors.map(page => [page.locale, pageRoute(page.locale, plane.id, page.sourcePath, base_path)])),

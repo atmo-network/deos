@@ -8,7 +8,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { basePath, loadCorpus, localizeLinks, pageRoute } from '../src/corpus.mjs';
+import { assertPageIcons, basePath, loadCorpus, localizeLinks, pageRoute } from '../src/corpus.mjs';
+import { contextScript } from '../src/context.mjs';
 import { parseFrontmatter, splitFrontmatter } from '../src/frontmatter.mjs';
 import { linearOrder, projectBooks, unifiedGraph } from '../src/projection.mjs';
 import { selectLayer } from '../src/layers.mjs';
@@ -21,6 +22,29 @@ const corpus = loadCorpus();
 const extended = { ...corpus, planes: [...corpus.planes, { id: 'example', title: 'Example fixture', pages: new Map(), graph: { edges: [] }, locales: [] }] };
 const assets = { 'wiki.css': '', 'wiki.js': '' };
 const projected = projectBooks(corpus, assets);
+
+test('every page identity owns one unique glyph that the reader carries into the sidebar', () => {
+  const graph = unifiedGraph(corpus, '/deos/');
+  const glyphs = graph.nodes.map(node => node.icon);
+  assert.equal(glyphs.length, graph.nodes.length);
+  for (const [index, glyph] of glyphs.entries()) {
+    assert.equal(typeof glyph, 'string', `${graph.nodes[index].canonical_page_id}: missing icon`);
+    assert.ok(glyph.trim().length > 0 && glyph.trim().length <= 8, `${graph.nodes[index].canonical_page_id}: unusable icon`);
+  }
+  assert.equal(new Set(glyphs).size, glyphs.length, 'two pages never share one glyph');
+  // The reader embeds a reduced graph; the glyph must survive that reduction or the sidebar is silent.
+  const script = contextScript(graph, 'en', {});
+  for (const glyph of glyphs) assert.ok(script.includes(glyph), `${glyph}: dropped from the reader context`);
+});
+
+test('a missing, duplicated or invented page glyph is refused', () => {
+  const identities = new Set(['alpha', 'beta']);
+  assert.throws(() => assertPageIcons('deos', identities, new Map([['alpha', '🏠']])), /icon\/page identity drift/);
+  assert.throws(() => assertPageIcons('deos', identities, new Map([['alpha', '🏠'], ['beta', '🏠']])), /duplicate page icon/);
+  assert.throws(() => assertPageIcons('deos', identities, new Map([['alpha', '🏠'], ['beta', ''], ['gamma', '🚪']])), /icon\/page identity drift/);
+  assert.throws(() => assertPageIcons('deos', identities, new Map([['alpha', '🏠'], ['beta', '  ']])), /invalid icon for beta/);
+  assert.deepEqual([...assertPageIcons('deos', identities, new Map([['alpha', '🏠'], ['beta', '🚪']])).keys()], ['alpha', 'beta']);
+});
 
 test('one composed graph retains every authored typed edge and localized identity', () => {
   const expectedEdges = corpus.planes.flatMap(plane => plane.graph.edges.map(edge => ({ from: `${plane.id}/${edge.from}`, to: `${plane.id}/${edge.to}`, type: edge.type })));

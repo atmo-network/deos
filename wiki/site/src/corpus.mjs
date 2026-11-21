@@ -123,6 +123,8 @@ function loadPlane(wikiRoot, declaration) {
   for (const locale of plane.locales) if (!plane.pages.has(`${locale}/index`)) throw new Error(`${id}: missing ${locale} landing`);
   plane.navigation = json(join(root, '_meta/navigation.json'));
   plane.graph = json(join(root, '_meta/graph.json'));
+  plane.icons = new Map(Object.entries(json(join(root, '_meta/icons.json')).pages ?? {}));
+  assertPageIcons(id, identities, plane.icons);
   const graphIds = new Set(plane.graph.nodes.map(node => node.id));
   if (graphIds.size !== identities.size || plane.graph.nodes.length !== graphIds.size || [...graphIds].some(key => !identities.has(key))) throw new Error(`${id}: graph/page identity drift`);
   for (const edge of plane.graph.edges) if (!graphIds.has(edge.from) || !graphIds.has(edge.to) || typeof edge.type !== 'string' || !edge.type) throw new Error(`${id}: invalid graph edge`);
@@ -137,6 +139,16 @@ function loadPlane(wikiRoot, declaration) {
     }
   }
   return plane;
+}
+
+// One presentation glyph per page identity: unique, complete and never invented for a page that does
+// not exist. The glyph travels with the page id, so both locales show the same icon.
+export function assertPageIcons(planeId, identities, icons) {
+  const glyphs = [...icons.values()];
+  if (glyphs.length !== identities.size || [...identities].some(id => !icons.has(id))) throw new Error(`${planeId}: icon/page identity drift`);
+  if (new Set(glyphs).size !== glyphs.length) throw new Error(`${planeId}: duplicate page icon`);
+  for (const [pageId, glyph] of icons) if (typeof glyph !== 'string' || !glyph.trim() || glyph.trim().length > 8) throw new Error(`${planeId}: invalid icon for ${pageId}`);
+  return icons;
 }
 
 export function loadCorpus(wikiRoot = defaultWikiRoot) {

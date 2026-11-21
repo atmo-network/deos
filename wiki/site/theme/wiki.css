@@ -149,6 +149,17 @@ html.navy pre {
   background: var(--theme-hover);
   text-decoration: none;
 }
+/* Each article owns one glyph. A fixed inline box keeps a wide emoji from shifting the label, and
+   the glyph is decorative: the title remains the readable, focusable text. */
+.sidebar .chapter .wiki-icon {
+  display: inline-block;
+  inline-size: 1.35em;
+  margin-inline-end: 0.15em;
+  text-align: center;
+  font-size: 0.95em;
+  line-height: 1;
+  opacity: 0.9;
+}
 .sidebar .chapter li a.active {
   font-weight: 600;
   background: color-mix(in srgb, var(--sidebar-active) 12%, transparent);

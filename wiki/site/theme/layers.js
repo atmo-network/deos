@@ -199,8 +199,19 @@ Excludes: Markdown rendering, membership inference, search ranking and parent-wi
     // mdBook marks the current chapter by comparing against location, which misses a directory index
     // served without its trailing slash. The rendered chapter is known exactly, so mark it from that.
     for (const link of sidebar.querySelectorAll('.chapter-link-wrapper > a:not(.chapter-fold-toggle)')) {
+      const path = relative(link.href);
+      // One glyph per page identity comes from the composed graph, so both locales show the same icon
+      // and the authored title stays the searchable, linkable text.
+      const glyph = path === null ? undefined : paths.get(path)?.icon;
+      if (glyph && !link.querySelector('.wiki-icon')) {
+        const icon = document.createElement('span');
+        icon.className = 'wiki-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = glyph;
+        link.prepend(icon);
+      }
       const raw = link.getAttribute('href');
-      if (!raw || raw.startsWith('#') || relative(link.href) !== currentPath || link.classList.contains('active')) continue;
+      if (!raw || raw.startsWith('#') || path !== currentPath || link.classList.contains('active')) continue;
       link.classList.add('active');
       for (let parent = link.parentElement; parent; parent = parent.parentElement) if (parent.matches?.('li.chapter-item')) parent.classList.add('expanded');
     }
