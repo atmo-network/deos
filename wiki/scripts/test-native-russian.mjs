@@ -112,6 +112,15 @@ test("masks fenced and inline code without changing length or newline positions"
   );
 });
 
+test("masks typeset notation instead of reading it as prose", () => {
+  const source =
+    "Формула $$F_{\\mathrm{required}} = p_0 \\cdot \\Delta S$$ и строка $x^2 + y^2$ готовы; долг остаётся.";
+  const masked = stripNonProse(source, config.canonical_terms);
+  assert.equal(masked.length, source.length);
+  assert.deepEqual(matches(source).filter((value) => value !== "долг"), []);
+  assert.ok(masked.includes("долг"), "Russian prose around notation is still audited");
+});
+
 test("masks nested Markdown link destinations while retaining displayed labels", () => {
   const source =
     "[runtime routing [onboarding](docs/onboarding.md)](../read-model.en.md)";

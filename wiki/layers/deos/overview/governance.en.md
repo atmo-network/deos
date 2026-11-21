@@ -27,15 +27,9 @@ related:
 
 # Governance
 
-Pending execution and terminal history now have separate lifetimes. Approval reserves bounded pending and discovery capacity; rotating service preserves the original due epoch when an executor is unavailable. Cleanup admission precedes the effect, and execution/result/pending release commit atomically. Terminal retention starts at actual completion. Generic tests cover recovery and failure rollback. Native signed User-admission enactment passes on both named presets through ordinary maturity and the unchanged delay; this supplies minimal prepass context and does not prove complete consensus blocks or exact Wasm.
-
-Native signed freeze/thaw also passes both presets without Root recovery, including thaw submission while frozen and the ordinary delay from actual approval. Disabled User admission, System identity and ledger-only fee collection are preserved. Full machine freeze and physical resource bindings remain open.
-
-Four linked complete blocks per preset now pass native author/import replay around actual Governance thaw. Frozen Fee Sink state and its Deadline survive, the approved thaw commits, and cadence service resumes with User admission disabled and System identity preserved. The preceding history remains native preparation with a constructed parent, not a complete chain; exact Wasm, maximum geometry and physical qualification remain open.
-
 ## Summary
 
-DEOS Governance is the framework's bounded constitutional layer. It does not replace protocol physics with politics-by-default; it governs the strategic, tactical, and social surfaces that remain after the economic kernel mechanizes what it can.
+Governance is the process by which a DEOS economy authorizes the decisions its economic kernel cannot mechanize: parameter changes, treasury and liquidity policy, protocol upgrades, and admission of the actors allowed to participate. It is a bounded constitutional layer rather than a second economic engine — each decision belongs to a typed [governance domain](../concepts/governance-domains.en.md), runs on a primary and a protection track with explicit power and cadence, executes only through its declared payload authority, and can be stopped by `$VETO` without granting that veto any agenda-setting power. Everything the protocol can decide by mechanism stays outside politics.
 
 The whole subsystem is easiest to read through three separations:
 
@@ -86,6 +80,16 @@ Use the governance wiki cluster in this order:
 3. [Physics-First vs Politics-First](../physics-vs-politics.en.md) — why protocol physics stays protected;
 4. [Staking](staking.en.md) — where governance-conditioned reward signals meet staking;
 5. [Core Terms](../core-terms.en.md) — recurring vocabulary.
+
+## Current Limits
+
+These are boundaries of what the current source and its evidence establish, not promises about a deployed network.
+
+Pending execution and terminal history now have separate lifetimes. Approval reserves bounded pending and discovery capacity; rotating service preserves the original due epoch when an executor is unavailable. Cleanup admission precedes the effect, and execution/result/pending release commit atomically. Terminal retention starts at actual completion. Generic tests cover recovery and failure rollback. Native signed User-admission enactment passes on both named presets through ordinary maturity and the unchanged delay; this supplies minimal prepass context and does not prove complete consensus blocks or exact Wasm.
+
+Native signed freeze/thaw also passes both presets without Root recovery, including thaw submission while frozen and the ordinary delay from actual approval. Disabled User admission, System identity and ledger-only fee collection are preserved. Full machine freeze and physical resource bindings remain open.
+
+Four linked complete blocks per preset now pass native author/import replay around actual Governance thaw. Frozen Fee Sink state and its Deadline survive, the approved thaw commits, and cadence service resumes with User admission disabled and System identity preserved. The preceding history remains native preparation with a constructed parent, not a complete chain; exact Wasm, maximum geometry and physical qualification remain open.
 
 ## Related
 

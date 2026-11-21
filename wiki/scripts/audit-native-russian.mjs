@@ -43,6 +43,15 @@ function maskFences(chars) {
   }
 }
 
+// Typeset notation is mathematics, not prose: its identifiers are canonical symbols, so `$...$` and
+// display `$$...$$` spans are masked like code before any Russian prose rule runs.
+function maskMath(chars) {
+  const text = chars.join("");
+  for (const match of text.matchAll(/\$\$[\s\S]*?\$\$|\$(?!\s)[^$\n]*?[^\s$]\$/g)) {
+    maskRange(chars, match.index, match.index + match[0].length);
+  }
+}
+
 function maskInlineCode(chars) {
   const text = chars.join("");
   for (let index = 0; index < text.length;) {
@@ -161,6 +170,7 @@ export function stripNonProse(text, canonicalTerms = [], options = {}) {
     maskFrontmatterNonDisplayFields(chars, options.exactFieldTerms ?? []);
   maskFences(chars);
   maskInlineCode(chars);
+  maskMath(chars);
   maskExactLinkLabels(chars, options.exactFieldTerms ?? []);
   maskLinkDestinations(chars);
   maskMatches(chars, /\b(?:https?|file):\/\/[^\s<>"')\]]+/giu);

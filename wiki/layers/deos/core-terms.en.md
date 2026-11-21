@@ -141,6 +141,10 @@ The bounded route-selection mechanism for protocol trades and fee flow.
 
 The token-driven trigger where assets arriving in the system can drive the next deterministic state transition.
 
+### Governance
+
+The bounded process by which a DEOS economy authorizes what its economic kernel cannot mechanize: parameters, treasury and liquidity policy, upgrades, and participant admission. Each decision runs inside a typed domain on a primary and a protection track, executes only within its declared payload authority, and never overrides protocol physics.
+
 ### Governance Domain
 
 One typed governance cell binding subject, power surface, payload family, cadence, and execution authority.
