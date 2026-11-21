@@ -27,6 +27,8 @@ Provenance presentation belongs to the website and must preserve the repository'
 
 A column that exists to label rows rather than to explain them carries the shortest unambiguous form: an enumerated scale reads `L0`, `L1`, `L2` and not `Level 0` under a `Level` heading, because the long form repeats the heading inside every cell and wraps where the label is the whole value. Once a page names the scale that way, prose on the same page uses the same token instead of a spelled-out ordinal, and the enclosing table or section states what the tokens mean.
 
+A glyph legend or icon index is not a separate surface. Every mention of an article already carries its mark beside the title, in navigation and in running text, so a legend would restate one mapping in a second place and present the reading graph as something a reader must decode rather than simply follow.
+
 ## MVP and Priority Boundary
 
 The DEOS-only EN/RU MVP requires working static reading, navigation/deep links, locale switching, search and layer filtering, with preserved identities, typed edges and provenance. Typed edges remain in the composed graph and its published `graph.json`; the reader UI does not present graph traversal, which only confused readers. Local generated-site structural and native-search evidence plus manual inspection decide this boundary; no downstream projection, production domain or iframe is required.
