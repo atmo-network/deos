@@ -54,7 +54,15 @@ export function unifiedGraph(corpus, base = '/') {
   const duplicate = routes.find((route, index) => routes.indexOf(route) !== index);
   if (duplicate) throw new Error(`Two pages share the route ${duplicate}`);
   const layers = corpus.planes.map(({ id, title }) => ({ id, title }));
-  return { schema_version: 1, base_path, layers, locales: corpus.locales, default_locale: corpus.defaultLocale, nodes: assignMemberships(nodes, layers, corpus.memberships), edges, linear_order: linear };
+  // Navigation furniture glyphs are shared, so a plane that declares them must agree with the first.
+  const chrome = {};
+  for (const plane of corpus.planes) {
+    for (const [key, glyph] of Object.entries(plane.chrome ?? {})) {
+      if (chrome[key] !== undefined && chrome[key] !== glyph) throw new Error(`Two planes disagree on the ${key} chrome icon`);
+      chrome[key] = glyph;
+    }
+  }
+  return { schema_version: 1, base_path, layers, locales: corpus.locales, default_locale: corpus.defaultLocale, chrome, nodes: assignMemberships(nodes, layers, corpus.memberships), edges, linear_order: linear };
 }
 
 // Book-relative path of a composed route (`{base}{locale}/...`).

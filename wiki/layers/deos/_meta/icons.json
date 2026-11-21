@@ -1,6 +1,10 @@
 {
   "updated_at": "2026-11-21",
-  "goal": "Give every article one presentation glyph so a reader can find a page in the sidebar by shape before reading its title. Glyphs are page identity, not content: they never claim status, freshness or ownership, and they carry no meaning that the article body does not already state.",
+  "goal": "Give every article one presentation glyph so a reader can find a page by shape before reading its title, and give the contents page and its section groups their own navigation marks. Glyphs are identity, not content: they never claim status, freshness or ownership, and they carry no meaning that the article body does not already state.",
+  "chrome": {
+    "contents": "📚",
+    "group": "🗂️"
+  },
   "pages": {
     "index": "🏠",
     "start-here": "🚪",

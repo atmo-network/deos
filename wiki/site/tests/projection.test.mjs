@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { assertPageIcons, basePath, loadCorpus, localizeLinks, pageRoute } from '../src/corpus.mjs';
+import { assertChromeIcons, assertPageIcons, basePath, loadCorpus, localizeLinks, pageRoute } from '../src/corpus.mjs';
 import { contextScript } from '../src/context.mjs';
 import { parseFrontmatter, splitFrontmatter } from '../src/frontmatter.mjs';
 import { linearOrder, projectBooks, unifiedGraph } from '../src/projection.mjs';
@@ -35,6 +35,27 @@ test('every page identity owns one unique glyph that the reader carries into the
   // The reader embeds a reduced graph; the glyph must survive that reduction or the sidebar is silent.
   const script = contextScript(graph, 'en', {});
   for (const glyph of glyphs) assert.ok(script.includes(glyph), `${glyph}: dropped from the reader context`);
+});
+
+test('the contents page and its groups own navigation glyphs that no article reuses', () => {
+  const graph = unifiedGraph(corpus, '/deos/');
+  assert.deepEqual(Object.keys(graph.chrome ?? {}).sort(), ['contents', 'group']);
+  assert.notEqual(graph.chrome.contents, graph.chrome.group);
+  const pageGlyphs = new Set(graph.nodes.map(node => node.icon));
+  for (const glyph of Object.values(graph.chrome)) assert.ok(!pageGlyphs.has(glyph), `${glyph}: chrome glyph must not mark an article`);
+  // The reader needs both: the contents entry is not a graph node, so the glyph travels separately.
+  const script = contextScript(graph, 'en', {});
+  for (const glyph of Object.values(graph.chrome)) assert.ok(script.includes(glyph), `${glyph}: dropped from the reader context`);
+});
+
+test('incomplete, colliding or ambiguous navigation glyphs are refused', () => {
+  const pages = new Map([['alpha', '🏠'], ['beta', '🚪']]);
+  assert.throws(() => assertChromeIcons('deos', { contents: '📚' }, pages), /must declare exactly contents\/group/);
+  assert.throws(() => assertChromeIcons('deos', { contents: '📚', group: '🗂️', extra: '📦' }, pages), /must declare exactly contents\/group/);
+  assert.throws(() => assertChromeIcons('deos', { contents: '📚', group: '📚' }, pages), /distinct icons/);
+  assert.throws(() => assertChromeIcons('deos', { contents: '🏠', group: '🗂️' }, pages), /collides with a page icon/);
+  assert.throws(() => assertChromeIcons('deos', { contents: '', group: '🗂️' }, pages), /invalid contents chrome icon/);
+  assert.deepEqual(assertChromeIcons('deos', { contents: '📚', group: '🗂️' }, pages), { contents: '📚', group: '🗂️' });
 });
 
 test('a missing, duplicated or invented page glyph is refused', () => {

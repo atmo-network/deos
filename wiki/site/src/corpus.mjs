@@ -123,7 +123,9 @@ function loadPlane(wikiRoot, declaration) {
   for (const locale of plane.locales) if (!plane.pages.has(`${locale}/index`)) throw new Error(`${id}: missing ${locale} landing`);
   plane.navigation = json(join(root, '_meta/navigation.json'));
   plane.graph = json(join(root, '_meta/graph.json'));
-  plane.icons = new Map(Object.entries(json(join(root, '_meta/icons.json')).pages ?? {}));
+  const iconManifest = json(join(root, '_meta/icons.json'));
+  plane.icons = new Map(Object.entries(iconManifest.pages ?? {}));
+  plane.chrome = assertChromeIcons(id, iconManifest.chrome, plane.icons);
   assertPageIcons(id, identities, plane.icons);
   const graphIds = new Set(plane.graph.nodes.map(node => node.id));
   if (graphIds.size !== identities.size || plane.graph.nodes.length !== graphIds.size || [...graphIds].some(key => !identities.has(key))) throw new Error(`${id}: graph/page identity drift`);
@@ -143,6 +145,23 @@ function loadPlane(wikiRoot, declaration) {
 
 // One presentation glyph per page identity: unique, complete and never invented for a page that does
 // not exist. The glyph travels with the page id, so both locales show the same icon.
+// Navigation furniture is not an article: the contents page reads as an article to a reader, so it
+// carries its own mark, and a section group carries a folder. Neither may reuse a page glyph, or a
+// page would look like furniture.
+export function assertChromeIcons(planeId, chrome, icons) {
+  const required = ['contents', 'group'];
+  const keys = Object.keys(chrome ?? {});
+  if (keys.length !== required.length || required.some(key => !keys.includes(key))) throw new Error(`${planeId}: chrome icons must declare exactly ${required.join('/')}`);
+  for (const key of required) {
+    const glyph = chrome[key];
+    if (typeof glyph !== 'string' || !glyph.trim() || glyph.trim().length > 8) throw new Error(`${planeId}: invalid ${key} chrome icon`);
+  }
+  if (chrome.contents === chrome.group) throw new Error(`${planeId}: contents and group need distinct icons`);
+  const shared = [...icons.values()].filter(glyph => required.some(key => chrome[key] === glyph));
+  if (shared.length) throw new Error(`${planeId}: chrome icon ${shared[0]} collides with a page icon`);
+  return { contents: chrome.contents, group: chrome.group };
+}
+
 export function assertPageIcons(planeId, identities, icons) {
   const glyphs = [...icons.values()];
   if (glyphs.length !== identities.size || [...identities].some(id => !icons.has(id))) throw new Error(`${planeId}: icon/page identity drift`);

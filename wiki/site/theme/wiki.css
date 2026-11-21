@@ -172,9 +172,22 @@ html.navy pre {
   font-size: 0.8em;
   vertical-align: 0.08em;
 }
+.content h2 .wiki-icon {
+  inline-size: 1.1em;
+  margin-inline-end: 0.3em;
+  font-size: 0.85em;
+  vertical-align: 0.04em;
+}
 .content main li .wiki-icon {
   inline-size: 1.2em;
   margin-inline-end: 0.3em;
+  font-size: 0.95em;
+}
+/* The contents page and its section groups are navigation furniture, so their mark sits before the
+   label with the same weight as the sidebar row it mirrors. */
+.sidebar .chapter .wiki-group > span[role='button'] > .wiki-icon {
+  inline-size: 1.35em;
+  margin-inline-end: 0.15em;
   font-size: 0.95em;
 }
 .sidebar .chapter li a.active {

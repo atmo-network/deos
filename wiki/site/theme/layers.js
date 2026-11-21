@@ -196,9 +196,15 @@ Excludes: Markdown rendering, membership inference, search ranking and parent-wi
   // One glyph identifies an article everywhere it appears: the sidebar row, the article heading and
   // a list entry that opens it. The mark is decoration inside the link, so the title stays the
   // readable, focusable, searchable and linkable text.
+  // The contents page reads as an article to a reader, so it answers with its own mark; a section
+  // group answers with the folder, because it opens a set of pages rather than one page.
+  const chrome = graph.chrome ?? {};
   function glyphFor(href) {
     const path = relative(href);
-    return path === null ? undefined : paths.get(path)?.icon;
+    if (path === null) return undefined;
+    const node = paths.get(path);
+    if (node) return node.icon;
+    return locale && path === `${locale}/index.html` ? chrome.contents : undefined;
   }
   function decorate(link, glyph) {
     if (!glyph || link.querySelector(':scope > .wiki-icon')) return;
@@ -208,13 +214,17 @@ Excludes: Markdown rendering, membership inference, search ranking and parent-wi
     icon.textContent = glyph;
     link.prepend(icon);
   }
-  for (const heading of main.querySelectorAll('h1 > a.header')) decorate(heading, current?.icon);
+  const contentsPage = locale !== null && currentPath === `${locale}/index.html`;
+  for (const heading of main.querySelectorAll('h1 > a.header')) decorate(heading, current?.icon ?? (contentsPage ? chrome.contents : undefined));
+  // On the contents page every section heading opens a group of pages, so each carries the folder.
+  if (contentsPage) for (const heading of main.querySelectorAll('h2 > a.header')) decorate(heading, chrome.group);
   // A list entry that opens an article is an identification row, not prose: mark it. Inline links
   // inside running text keep their plain appearance.
   for (const link of main.querySelectorAll('li > a:first-child')) decorate(link, glyphFor(link.href));
   const sidebar = document.querySelector('.sidebar-scrollbox .chapter');
   if (sidebar) {
     filterTree(sidebar);
+    for (const label of sidebar.querySelectorAll('.wiki-group > span[role="button"]')) decorate(label, chrome.group);
     // mdBook marks the current chapter by comparing against location, which misses a directory index
     // served without its trailing slash. The rendered chapter is known exactly, so mark it from that.
     for (const link of sidebar.querySelectorAll('.chapter-link-wrapper > a:not(.chapter-fold-toggle)')) {
