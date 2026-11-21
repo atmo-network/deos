@@ -228,7 +228,11 @@ Excludes: Markdown rendering, membership inference, search ranking and parent-wi
     link.prepend(unit);
   }
   const contentsPage = locale !== null && currentPath === `${locale}/index.html`;
-  for (const heading of main.querySelectorAll('h1 > a.header')) decorate(heading, current?.icon ?? (contentsPage ? chrome.contents : undefined));
+  // The tab, the window list and the history entry name the same article the reader is in, so they
+  // carry the same identity mark instead of a second, unmarked name for it.
+  const pageGlyph = current?.icon ?? (contentsPage ? chrome.contents : undefined);
+  if (pageGlyph && !document.title.includes(pageGlyph)) document.title = `${pageGlyph} ${document.title}`;
+  for (const heading of main.querySelectorAll('h1 > a.header')) decorate(heading, pageGlyph);
   // On the contents page every section heading opens a group of pages, so each carries the folder.
   if (contentsPage) for (const heading of main.querySelectorAll('h2 > a.header')) decorate(heading, chrome.group);
   // Every mention of an article carries that article's glyph, in a list row and in running text
@@ -266,12 +270,19 @@ Excludes: Markdown rendering, membership inference, search ranking and parent-wi
     const position = sequence.indexOf(currentPath);
     for (const [direction, offset] of [['previous', -1], ['next', 1]]) {
       const destination = position < 0 ? undefined : sequence[position + offset];
+      // A generic "next chapter" says nothing about where the reader lands, so the label names the
+      // destination under the same glyph that page carries everywhere else. Graph titles are per
+      // locale, and a destination outside the graph keeps the plain direction word.
+      const target = destination ? paths.get(destination) : undefined;
+      const label = direction === 'next' ? labels.next : labels.previous;
+      const targetTitle = typeof target?.title === 'string' ? target.title : target?.title?.[locale];
+      const described = targetTitle ? `${label} — ${target.icon ? `${target.icon} ` : ''}${targetTitle}` : label;
       for (const link of document.querySelectorAll(`.nav-chapters.${direction}, .mobile-nav-chapters.${direction}`)) {
         if (!destination) link.remove();
         else {
           link.href = withLayer(resolve(destination), selection);
-          link.title = direction === 'next' ? labels.next : labels.previous;
-          link.setAttribute('aria-label', link.title);
+          link.title = described;
+          link.setAttribute('aria-label', described);
         }
       }
     }
