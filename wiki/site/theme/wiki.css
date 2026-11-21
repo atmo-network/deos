@@ -359,11 +359,6 @@ html:not([data-wiki-layer="error"], [data-wiki-layer="outside"]):has(> body > #m
 .content main ul:has(.wiki-summary) > li {
   margin-block: 0.35em;
 }
-.wiki-meta {
-  font-size: 0.9em;
-  color: var(--icons);
-}
-
 [data-wiki-layer-exit]::after {
   content: " ↗ " attr(data-wiki-layer-exit);
   font-size: 0.8em;

@@ -70,7 +70,7 @@ Each localized book presents native navigation, search feedback and help in its 
 
 DEOS is the required and sole default plane. Additional planes are generic opt-in metadata, not a particular downstream brand. An explicitly declared optional plane with an absent content directory yields an honest empty landing and zero invented graph nodes; a present but malformed plane fails closed. The same composed graph supplies the EN/RU books; language switches use canonical page identity to find the real localized destination. Plane entry links open their landing rather than assuming equal IDs mean equivalent knowledge.
 
-A page includes its authored Markdown body, compiled locale/plane links, explicit status, recorded-source count and direction-preserving graph links. Source-document provenance remains structured non-rendered metadata in `graph.json`, not a repository-path panel. Compilation adds no verification or freshness claims.
+A page includes its authored Markdown body and compiled locale/plane links; the direction-preserving graph links, explicit status and recorded-source count stay structured metadata in `graph.json` and are never rendered as a page footer, because a closing status line invites a freshness claim the corpus does not make. Source-document provenance remains structured non-rendered metadata in `graph.json`, not a repository-path panel. Compilation adds no verification or freshness claims.
 
 ## Trust and Isolation
 

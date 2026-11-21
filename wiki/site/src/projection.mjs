@@ -9,8 +9,8 @@ import { assignMemberships } from './layers.mjs';
 import { contextScript } from './context.mjs';
 
 const ui = {
-  en: { site: title => `${title} Wiki`, contents: 'Contents', intro: 'Every published page, grouped by section. Press S to search.', status: 'Status', sources: 'Recorded sources', empty: 'No pages are published in this plane.', fallback: 'Layer filters require JavaScript. Without it, reading is unfiltered.', unknown: 'Page not found.', home: 'Open the wiki', layer: 'Knowledge layer' },
-  ru: { site: title => `Вики ${title}`, contents: 'Содержание', intro: 'Все опубликованные страницы, сгруппированные по разделам. Нажмите S для поиска.', status: 'Статус', sources: 'Указано источников', empty: 'В этой плоскости пока нет опубликованных страниц.', fallback: 'Для фильтрации по слоям нужен JavaScript. Без него доступны все материалы.', unknown: 'Страница не найдена.', home: 'Открыть вики', layer: 'Слой знаний' },
+  en: { site: title => `${title} Wiki`, contents: 'Contents', intro: 'Every published page, grouped by section. Press S to search.', empty: 'No pages are published in this plane.', fallback: 'Layer filters require JavaScript. Without it, reading is unfiltered.', unknown: 'Page not found.', home: 'Open the wiki', layer: 'Knowledge layer' },
+  ru: { site: title => `Вики ${title}`, contents: 'Содержание', intro: 'Все опубликованные страницы, сгруппированные по разделам. Нажмите S для поиска.', empty: 'В этой плоскости пока нет опубликованных страниц.', fallback: 'Для фильтрации по слоям нужен JavaScript. Без него доступны все материалы.', unknown: 'Страница не найдена.', home: 'Открыть вики', layer: 'Слой знаний' },
 };
 const languageNames = { en: 'English', ru: 'Русский' };
 
@@ -232,8 +232,7 @@ export function projectBooks(corpus, assets, base = '/') {
       for (const id of order) {
         const page = pageOf(id), path = pathOf(id), node = byId.get(qualified(plane, id));
         for (const [name, svg] of page.diagrams) files.set(`books/${locale}/src/${posix.join(posix.dirname(path), name)}`, svg);
-        const status = locale === 'ru' ? { stable: 'Стабильно', draft: 'Черновик', deprecated: 'Устарело' }[page.meta.status ?? 'stable'] : page.meta.status ?? 'stable';
-        markdown.push([path, `${layerTags(node, locale, path)}${localizeLinks(page.body, locale).trimEnd()}\n\n---\n\n<p class="wiki-meta">${labels.status}: ${status}. ${labels.sources}: ${page.meta.sources.length}.</p>\n`]);
+        markdown.push([path, `${layerTags(node, locale, path)}${localizeLinks(page.body, locale).trimEnd()}\n`]);
       }
     }
     contents.push('<!-- wiki-pages:end -->', '');
