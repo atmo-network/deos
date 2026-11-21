@@ -232,6 +232,11 @@ html.navy .hljs-operator {
 .wiki-icon-first {
   white-space: nowrap;
 }
+/* A table's first column labels its rows, so a one-word header must not be split to fit a column that
+   the short row labels keep narrow. */
+.content table th:first-child {
+  white-space: nowrap;
+}
 .wiki-icon {
   display: inline-block;
   inline-size: 1.35em;

@@ -25,6 +25,8 @@ The project-owned `scripts/validate-local.sh wiki` profile checks OKF, provenanc
 
 Provenance presentation belongs to the website and must preserve the repository's epistemic rules: no invented freshness, verification or confidence. Source-document provenance remains structured non-rendered metadata, not a second repository-document navigation panel. Published articles contain established facts and current limitations, not implementation plans or backlog tasks. An article opens with its Summary, whose first paragraph names and defines the article's own term in the reader's language; current limitations appear in a named section after the substantive body rather than before the summary, where a reader meets status prose instead of the subject.
 
+A column that exists to label rows rather than to explain them carries the shortest unambiguous form: an enumerated scale reads `L0`, `L1`, `L2` and not `Level 0` under a `Level` heading, because the long form repeats the heading inside every cell and wraps where the label is the whole value. Once a page names the scale that way, prose on the same page uses the same token instead of a spelled-out ordinal, and the enclosing table or section states what the tokens mean.
+
 ## MVP and Priority Boundary
 
 The DEOS-only EN/RU MVP requires working static reading, navigation/deep links, locale switching, search and layer filtering, with preserved identities, typed edges and provenance. Typed edges remain in the composed graph and its published `graph.json`; the reader UI does not present graph traversal, which only confused readers. Local generated-site structural and native-search evidence plus manual inspection decide this boundary; no downstream projection, production domain or iframe is required.

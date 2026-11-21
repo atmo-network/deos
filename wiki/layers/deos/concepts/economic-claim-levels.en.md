@@ -36,17 +36,17 @@ DEOS/TMCTOL claims should not mix math, simulation, implementation, governance, 
 
 | Level | Meaning | Example |
 | --- | --- | --- |
-| Level 0 | Formula-defined | TMC price follows the curve equation |
-| Level 1 | Simulator-supported | Threshold holds in vectors |
-| Level 2 | Runtime-enforced | Tests pin the transition |
-| Level 3 | Governance-dependent | True inside bounded policy |
-| Level 4 | Market assumption | Depends on users/liquidity/demand |
+| L0 | Formula-defined | TMC price follows the curve equation |
+| L1 | Simulator-supported | Threshold holds in vectors |
+| L2 | Runtime-enforced | Tests pin the transition |
+| L3 | Governance-dependent | True inside bounded policy |
+| L4 | Market assumption | Depends on users/liquidity/demand |
 
 ## Reading Rule
 
-A stronger-looking phrase is not a stronger claim. If a statement depends on market behavior, call it Level 4 even if the underlying formula is Level 0.
+A stronger-looking phrase is not a stronger claim. If a statement depends on market behavior, call it L4 even if the underlying formula is L0.
 
-Example: floor mechanics can be formula-defined and simulator-supported, but user demand, arbitrage timing, or liquidity-provider behavior may still be Level 4 assumptions.
+Example: floor mechanics can be formula-defined and simulator-supported, but user demand, arbitrage timing, or liquidity-provider behavior may still be L4 assumptions.
 
 ## Audit Inventory
 
