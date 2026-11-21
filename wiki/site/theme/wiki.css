@@ -140,6 +140,9 @@ html.navy pre {
 .sidebar .chapter ol.section {
   margin-inline-start: 0.35em;
   padding-inline-start: 0.8em;
+  /* A link row carries 3px of its own padding, so the first row after a group label would otherwise
+     sit 3px closer to that label than sibling rows sit to each other. This restores the same rhythm. */
+  padding-block-start: 3px;
   border-inline-start: 1px solid var(--sidebar-spacer);
 }
 .sidebar .chapter li.chapter-item > .chapter-link-wrapper > a:not(.chapter-fold-toggle) {

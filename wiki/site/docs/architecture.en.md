@@ -56,6 +56,10 @@ mdBook owns HTML, heading IDs, navigation and search assets. Generated TOML disa
 
 `../../scripts/publish-pages.sh` is the publication leaf. It re-runs `check-output.mjs`, can enforce the expected base path, and adds `.nojekyll` and an optional `CNAME`. It stages `dist` through a temporary Git index in the project object store and commits the tree on top of the remote branch tip, so no checkout or HEAD changes. It then pushes with a lease on that tip. An identical tree publishes nothing. Its `--self-test` covers a dry run, first, unchanged and changed publication, preserved history, refusals and an untouched checkout against a temporary bare remote.
 
+## Sidebar Rhythm
+
+A group label and the rows it opens share one vertical rhythm. Each row carries three pixels of its own padding, so a child list adds the same three pixels above its first row; without that, the first row would sit closer to the label that opened it than sibling rows sit to each other. A section break stays about twice a row gap, which is what distinguishes a new group from a new page.
+
 ## Native Unicode Search
 
 The pinned renderer's [search indexer](https://github.com/rust-lang/mdBook/blob/v0.5.4/crates/mdbook-html/src/html_handlebars/search.rs) uses the default English Elasticlunr pipeline. Its `elasticlunr-rs` dependency's [trimmer](https://docs.rs/crate/elasticlunr-rs/3.0.2/source/src/lang/en.rs) admits ASCII digits/letters and underscores, dropping Cyrillic; the bundled browser trimmer is likewise ASCII-oriented. Setting the HTML language to `ru` does not prove usable Russian search. The real-browser `наблюдения` witness exposed this failure.
