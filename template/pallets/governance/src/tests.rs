@@ -3569,6 +3569,137 @@ fn unanimous_pass_executes_root_action_immediately() {
   });
 }
 
+fn maturity_bucket_entries() -> u32 {
+  (0..=16u64)
+    .map(|epoch| Governance::proposal_maturity_bucket(epoch).len() as u32)
+    .sum()
+}
+
+fn submit_urgent_root_action(item_id: u32, ordinary_lead_in: u64, urgent_period: u64) {
+  ProposalLeadInPeriod::set(ordinary_lead_in);
+  ProposalProtectionPeriod::set(4);
+  ProposalUrgentVotingPeriod::set(urgent_period);
+  set_veto_total_issuance(100);
+  set_veto_vote_weight(10, 60);
+  set_vote_weight(11, 5);
+  set_vote_weight(12, 5);
+  assert_ok!(Governance::submit_proposal(
+    RuntimeOrigin::root(),
+    42,
+    item_id,
+    DEFAULT_PROPOSER,
+    ProposalCadenceMode::Ordinary,
+    ProposalPayloadKind::L1RootAction,
+    Default::default(),
+  ));
+}
+
+#[test]
+fn urgent_authorization_schedules_finalization_at_the_urgent_close() {
+  new_test_ext().execute_with(|| {
+    submit_urgent_root_action(100, 6, 1);
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(10),
+      42,
+      100,
+      ProposalVoteKind::Pass
+    ));
+    let timing = Governance::proposal_timing(42, 100).expect("active timing");
+    assert_eq!(timing.effective_primary_close_epoch, 2);
+    assert!(timing.effective_primary_close_epoch < timing.ordinary_primary_close_epoch);
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(11),
+      42,
+      100,
+      ProposalVoteKind::Aye
+    ));
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(12),
+      42,
+      100,
+      ProposalVoteKind::Aye
+    ));
+    assert_eq!(
+      Governance::proposal_maturity_bucket(timing.effective_primary_close_epoch).len(),
+      1,
+      "the urgent close owns one maturity touch"
+    );
+    System::set_block_number(2);
+    service_governance_through(2);
+    assert!(
+      !ActiveProposals::<Test>::contains_key(42, 100),
+      "the proposal finalizes when its urgent window closes, not at the ordinary close"
+    );
+    assert!(Governance::finalized_proposal_outcome(42, 100).is_some());
+  });
+}
+
+#[test]
+fn ordinary_proposals_keep_exactly_one_maturity_touch() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(10),
+      7,
+      100,
+      ProposalVoteKind::Aye
+    ));
+    assert_eq!(maturity_bucket_entries(), 1);
+    assert_eq!(Governance::proposal_maturity_bucket(3).len(), 1);
+  });
+}
+
+#[test]
+fn full_urgent_close_bucket_leaves_the_vote_and_ordinary_maturity_intact() {
+  new_test_ext().execute_with(|| {
+    submit_urgent_root_action(100, 6, 1);
+    let filler = (900..904u32)
+      .map(|item_id| crate::MaturingProposalTouch { domain: 1, item_id })
+      .collect::<Vec<_>>();
+    crate::ProposalMaturityBuckets::<Test>::insert(
+      2,
+      BoundedVec::try_from(filler).expect("filler fills the per-epoch bucket exactly"),
+    );
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(10),
+      42,
+      100,
+      ProposalVoteKind::Pass
+    ));
+    assert_eq!(ProposalUrgentAuthorizedAt::<Test>::get(42, 100), Some(1));
+    assert!(
+      Governance::proposal_maturity_bucket(2)
+        .iter()
+        .all(|touch| touch.domain != 42)
+    );
+    assert_eq!(
+      Governance::proposal_maturity_bucket(9).len(),
+      1,
+      "ordinary maturity still owns the proposal"
+    );
+  });
+}
+
+#[test]
+fn urgent_close_after_the_ordinary_close_adds_no_maturity_touch() {
+  new_test_ext().execute_with(|| {
+    submit_urgent_root_action(100, 0, 5);
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(10),
+      42,
+      100,
+      ProposalVoteKind::Pass
+    ));
+    let timing = Governance::proposal_timing(42, 100).expect("active timing");
+    assert!(timing.effective_primary_close_epoch > timing.ordinary_primary_close_epoch);
+    assert_eq!(
+      maturity_bucket_entries(),
+      1,
+      "only the ordinary touch exists"
+    );
+  });
+}
+
 #[test]
 fn urgent_authorization_opens_primary_early_and_shortens_resolution_window() {
   new_test_ext().execute_with(|| {

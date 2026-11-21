@@ -870,6 +870,7 @@ impl<T: Config> Pallet<T> {
     urgent_authorization: UrgentAuthorization,
   ) {
     ProposalUrgentAuthorizedAt::<T>::insert(domain, item_id, authorization_epoch);
+    Self::schedule_urgent_maturity(domain, item_id, authorization_epoch);
     Self::deposit_event(Event::ProposalUrgentAuthorized {
       domain,
       item_id,
@@ -877,6 +878,35 @@ impl<T: Config> Pallet<T> {
       pass_weight: urgent_authorization.pass_weight,
       total_protection_supply: urgent_authorization.total_protection_supply,
     });
+  }
+
+  /// The urgent primary window closes before the ordinary maturity, so the proposal owns a second
+  /// maturity touch at the urgent close and finalizes when that window ends. The ordinary touch stays
+  /// as the fallback: a full urgent-close bucket must not fail the vote that authorized urgency, and
+  /// service skips a touch whose proposal has already finalized.
+  fn schedule_urgent_maturity(
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+    authorization_epoch: T::Epoch,
+  ) {
+    let Some(proposal) = ActiveProposals::<T>::get(domain, item_id) else {
+      return;
+    };
+    let Ok(ordinary_close) = Self::proposal_ordinary_primary_close_epoch(proposal.submitted_epoch)
+    else {
+      return;
+    };
+    let Ok(urgent_close) = Self::proposal_urgent_primary_close_epoch(authorization_epoch) else {
+      return;
+    };
+    // An epoch already served would never be revisited, so schedule no earlier than the next epoch.
+    let Ok(next_epoch) = Self::add_epochs(authorization_epoch, 1u32.into()) else {
+      return;
+    };
+    let service_epoch = urgent_close.max(next_epoch);
+    if service_epoch < ordinary_close {
+      let _ = Self::schedule_proposal_maturity_at(service_epoch, domain, item_id);
+    }
   }
 
   pub(crate) fn proposal_has_any_votes(
