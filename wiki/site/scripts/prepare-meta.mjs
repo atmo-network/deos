@@ -42,15 +42,23 @@ export function pageEntries(graph) {
   return entries;
 }
 
+function publicPageLinks(entry, siteUrl, defaultLocale) {
+  const alternates = Object.entries(entry.alternates);
+  if (entry.alternates[defaultLocale]) alternates.push(['x-default', entry.alternates[defaultLocale]]);
+  return {
+    canonical: new URL(entry.path, siteUrl).href,
+    alternates: alternates.map(([locale, path]) => [locale, new URL(path, siteUrl).href]),
+  };
+}
+
 export function headLinks(entry, siteUrl, defaultLocale, sitemapHref) {
-  const links = [];
-  if (siteUrl) {
-    links.push(`<link rel="canonical" href="${escapeAttribute(new URL(entry.path, siteUrl).href)}">`);
-    for (const [locale, path] of Object.entries(entry.alternates)) links.push(`<link rel="alternate" hreflang="${locale}" href="${escapeAttribute(new URL(path, siteUrl).href)}">`);
-    if (entry.alternates[defaultLocale]) links.push(`<link rel="alternate" hreflang="x-default" href="${escapeAttribute(new URL(entry.alternates[defaultLocale], siteUrl).href)}">`);
-    links.push(`<link rel="sitemap" type="application/xml" title="Sitemap" href="${escapeAttribute(sitemapHref)}">`);
-  }
-  return links.join('\n        ');
+  if (!siteUrl) return '';
+  const { canonical, alternates } = publicPageLinks(entry, siteUrl, defaultLocale);
+  return [
+    `<link rel="canonical" href="${escapeAttribute(canonical)}">`,
+    ...alternates.map(([locale, href]) => `<link rel="alternate" hreflang="${locale}" href="${escapeAttribute(href)}">`),
+    `<link rel="sitemap" type="application/xml" title="Sitemap" href="${escapeAttribute(sitemapHref)}">`,
+  ].join('\n        ');
 }
 
 export function annotate(html, entry, siteUrl, defaultLocale, sitemapHref) {
@@ -64,10 +72,10 @@ export function annotate(html, entry, siteUrl, defaultLocale, sitemapHref) {
 
 export function sitemap(entries, siteUrl, defaultLocale) {
   const urls = entries.map(entry => {
-    const alternates = Object.entries(entry.alternates).map(([locale, path]) => `    <xhtml:link rel="alternate" hreflang="${locale}" href="${escapeXml(new URL(path, siteUrl).href)}"/>`);
-    if (entry.alternates[defaultLocale]) alternates.push(`    <xhtml:link rel="alternate" hreflang="x-default" href="${escapeXml(new URL(entry.alternates[defaultLocale], siteUrl).href)}"/>`);
+    const { canonical, alternates } = publicPageLinks(entry, siteUrl, defaultLocale);
+    const links = alternates.map(([locale, href]) => `    <xhtml:link rel="alternate" hreflang="${locale}" href="${escapeXml(href)}"/>`);
     // No <lastmod>: the wiki records no page freshness, so none is invented here.
-    return `  <url>\n    <loc>${escapeXml(new URL(entry.path, siteUrl).href)}</loc>\n${alternates.join('\n')}\n  </url>`;
+    return `  <url>\n    <loc>${escapeXml(canonical)}</loc>\n${links.join('\n')}\n  </url>`;
   });
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">\n${urls.join('\n')}\n</urlset>\n`;
 }
@@ -142,7 +150,7 @@ export function prepareMeta(root, graph, siteUrl) {
   const index = join(root, 'index.html');
   const landing = graph.nodes.find(node => node.id.endsWith('/index'));
   if (siteUrl && landing) {
-    const entry = pageEntries(graph).find(item => item.path === landing.url[defaultLocale].slice((graph.base_path ?? '/').length));
+    const entry = entries.get(landing.url[defaultLocale].slice((graph.base_path ?? '/').length));
     writeFileSync(index, readFileSync(index, 'utf8').replace('</head>', `${headLinks(entry, siteUrl, defaultLocale, 'sitemap.xml')}\n</head>`));
   }
   const moved = writeMovedStubs(root, graph, entries, siteUrl);

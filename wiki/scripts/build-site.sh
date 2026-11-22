@@ -157,14 +157,6 @@ build() {
     while IFS= read -r locale; do
         run_command_step "Render Wiki locale $locale" "" "$MDBOOK" build "$STAGE/books/$locale" --dest-dir "$STAGE/html/$locale"
         run_command_step "Prepare native Unicode/layer search $locale" "" node "$SITE_DIR/scripts/prepare-search.mjs" "$STAGE/html/$locale" "$STAGE/projection.json" "$locale"
-        # The renderer copies the stylesheet it is told about but not the faces that stylesheet names,
-        # so a book that typesets notation gets its font files published beside it.
-        if [[ -d "$STAGE/html/$locale/theme/katex" ]]; then
-            if ! mkdir -p "$STAGE/html/$locale/theme/katex/fonts" || ! cp "$SITE_DIR/theme/katex/fonts/"*.woff2 "$STAGE/html/$locale/theme/katex/fonts/"; then
-                log_error "Failed to publish math fonts for $locale"
-                exit 1
-            fi
-        fi
     done <<< "$locales"
     # Mermaid is a browser dependency resolved from the site root, so one vendored copy serves every
     # locale instead of being duplicated into each book.

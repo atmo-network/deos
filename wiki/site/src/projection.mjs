@@ -8,14 +8,14 @@ import { posix } from 'node:path';
 import { basePath, bookSource, localizeLinks, pageRoute } from './corpus.mjs';
 import { renderMath } from './math.mjs';
 import { renderDiagrams, mermaidLoaderName } from './mermaid.mjs';
+import { katexStylesheet, katexFonts } from './math-assets.mjs';
+import { assignMemberships } from './layers.mjs';
+import { contextScript } from './context.mjs';
 
 // The corpus writes procedures as pseudocode, which the bundled highlighter does not know. A book that
 // contains none of it does not load the language definition at all.
 const pseudocodeFence = /^(?:\x60{3}|~{3})pseudo(?:code)?[ \t]*$/m;
 const codeLoaderName = 'wiki-code.js';
-import { katexAssets, katexFonts } from './math-assets.mjs';
-import { assignMemberships } from './layers.mjs';
-import { contextScript } from './context.mjs';
 
 const ui = {
   en: { site: title => `${title} Wiki`, contents: 'Contents', intro: 'Every published page, grouped by section. Press S to search.', empty: 'No pages are published in this plane.', fallback: 'Layer filters require JavaScript. Without it, reading is unfiltered.', unknown: 'Page not found.', home: 'Open the wiki', layer: 'Knowledge layer' },
@@ -87,8 +87,8 @@ function relativeHref(from, to) {
   return posix.relative(posix.dirname(from), to) || posix.basename(to);
 }
 
-function bookConfig(locale, title, search, base, css = [], hasDiagram = false, hasPseudocode = false) {
-  return `[book]\ntitle = ${JSON.stringify(title)}\nlanguage = ${JSON.stringify(locale || 'en')}\nsrc = "src"\n\n[build]\ncreate-missing = false\nuse-default-preprocessors = false\n\n[output.html]\nsite-url = ${JSON.stringify(locale ? `${base}${locale}/` : base)}\nno-section-label = true\nsidebar-header-nav = false\ndefault-theme = "light"\npreferred-dark-theme = "navy"\nadditional-css = ${JSON.stringify(['theme/wiki.css', ...css])}\nadditional-js = ${JSON.stringify([...(locale ? [] : ['theme/root-context.js']), 'theme/wiki.js', 'theme/layers.js', ...(hasDiagram ? [`theme/${mermaidLoaderName}`] : []), ...(hasPseudocode ? [`theme/${codeLoaderName}`] : [])])}\n\n[output.html.fold]\nenable = true\nlevel = 0\n\n[output.html.print]\nenable = false\n\n[output.html.search]\nenable = ${search}\nuse-boolean-and = true\n\n[output.html.playground]\nrunnable = false\n`;
+function bookConfig(locale, title, search, base, css, featureScripts) {
+  return `[book]\ntitle = ${JSON.stringify(title)}\nlanguage = ${JSON.stringify(locale || 'en')}\nsrc = "src"\n\n[build]\ncreate-missing = false\nuse-default-preprocessors = false\n\n[output.html]\nsite-url = ${JSON.stringify(locale ? `${base}${locale}/` : base)}\nno-section-label = true\nsidebar-header-nav = false\ndefault-theme = "light"\npreferred-dark-theme = "navy"\nadditional-css = ${JSON.stringify(['theme/wiki.css', ...css])}\nadditional-js = ${JSON.stringify([...(locale ? [] : ['theme/root-context.js']), 'theme/wiki.js', 'theme/layers.js', ...featureScripts])}\n\n[output.html.fold]\nenable = true\nlevel = 0\n\n[output.html.print]\nenable = false\n\n[output.html.search]\nenable = ${search}\nuse-boolean-and = true\n\n[output.html.playground]\nrunnable = false\n`;
 }
 
 // Runs first in <head>: records the rendered chapter and repairs a directory index that a
@@ -192,19 +192,18 @@ export function projectBooks(corpus, assets, base = '/') {
   const files = new Map([['projection.json', JSON.stringify(graph, null, 2) + '\n']]);
   const landingNode = byId.get(qualified({ id: corpus.defaultPlane }, 'index'));
   const landing = Object.fromEntries(corpus.locales.map(locale => [locale, landingNode?.url[locale] ? landingNode.url[locale].slice(root.length) : `${locale}/index.html`]));
-  // The stylesheet ships only into a book that actually typesets notation; the fonts stay beside it,
-  // because a browser fetches just the faces a displayed formula references.
-  const mathStylesheet = 'theme/katex/katex.min.css';
-  function addMathAssets(key) {
-    for (const [name, content] of [...katexAssets, ...katexFonts]) files.set(`books/${key}/${name}`, content);
-  }
   function addBook(key, locale, title, search, markdown, summary, hasMath = false, hasDiagram = false, hasPseudocode = false) {
-    files.set(`books/${key}/book.toml`, bookConfig(locale, title, search, root, hasMath ? [mathStylesheet] : [], hasDiagram, hasPseudocode));
-    if (hasMath) addMathAssets(key);
-    // The loader is this project's own file, not a caller-supplied asset, so the projection stages it
-    // whenever it names it in the book configuration.
-    if (hasDiagram) files.set(`books/${key}/theme/${mermaidLoaderName}`, readFileSync(new URL(`../theme/${mermaidLoaderName}`, import.meta.url), 'utf8'));
-    if (hasPseudocode) files.set(`books/${key}/theme/${codeLoaderName}`, readFileSync(new URL(`../theme/${codeLoaderName}`, import.meta.url), 'utf8'));
+    const [mathStylesheet, mathCss] = katexStylesheet;
+    const featureScripts = [];
+    if (hasDiagram) featureScripts.push(`theme/${mermaidLoaderName}`);
+    if (hasPseudocode) featureScripts.push(`theme/${codeLoaderName}`);
+    files.set(`books/${key}/book.toml`, bookConfig(locale, title, search, root, hasMath ? [mathStylesheet] : [], featureScripts));
+    if (hasMath) {
+      files.set(`books/${key}/${mathStylesheet}`, mathCss);
+      // mdBook copies non-Markdown source assets to the same relative output paths as the CSS uses.
+      for (const [name, content] of katexFonts) files.set(`books/${key}/src/${name}`, content);
+    }
+    for (const path of featureScripts) files.set(`books/${key}/${path}`, readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'));
     files.set(`books/${key}/src/SUMMARY.md`, summary);
     for (const [path, content] of markdown) files.set(`books/${key}/src/${path}`, content);
     for (const [path, content] of Object.entries(assets)) files.set(`books/${key}/theme/${path}`, content);

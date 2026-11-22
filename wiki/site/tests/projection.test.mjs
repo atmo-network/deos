@@ -18,7 +18,7 @@ import { artifactFor, mdbook } from '../scripts/toolchain.mjs';
 import { checkOutput } from '../scripts/check-output.mjs';
 import { renderMath } from '../src/math.mjs';
 import { renderDiagrams } from '../src/mermaid.mjs';
-import { trimSearchToken, rebindSearchAsset, rebuildNativeSearch, nativeSections } from '../src/search.mjs';
+import { trimSearchToken, rebuildNativeSearch, nativeSections } from '../src/search.mjs';
 
 const corpus = loadCorpus();
 const extended = { ...corpus, planes: [...corpus.planes, { id: 'example', title: 'Example fixture', pages: new Map(), graph: { edges: [] }, locales: [] }] };
@@ -87,6 +87,20 @@ test('the default bilingual MVP declares only DEOS and membership follows owners
   assert.match(projected.files.get('books/root/book.toml'), /DEOS Wiki/);
   assert.match(projected.files.get('books/ru/book.toml'), /Вики DEOS/);
   for (const node of projected.graph.nodes) assert.deepEqual(node.layers, [node.plane]);
+});
+
+test('math-enabled books let mdBook copy font assets beside the additional stylesheet', () => {
+  const stylesheet = 'theme/katex/katex.min.css';
+  for (const locale of corpus.locales) {
+    const book = `books/${locale}/`;
+    assert.ok(projected.files.get(`${book}book.toml`).includes(`"${stylesheet}"`));
+    const css = projected.files.get(`${book}${stylesheet}`);
+    const faces = [...css.matchAll(/url\(fonts\/([^)]+)\)/g)].map(([, name]) => name);
+    assert.ok(faces.length > 0);
+    for (const name of faces) assert.ok(projected.files.has(`${book}src/theme/katex/fonts/${name}`));
+    assert.ok(![...projected.files.keys()].some(path => path.startsWith(`${book}theme/katex/fonts/`)));
+  }
+  assert.ok(![...projected.files.keys()].some(path => path.startsWith('books/root/') && path.includes('/katex/')));
 });
 
 test('explicit mixed membership shares one identity across locales without changing the graph', () => {
@@ -219,7 +233,7 @@ test('mdBook alone owns HTML and optional executable preprocessors are disabled'
 test('no-script chrome uses the native header partial, never indexed article Markdown', () => {
   for (const locale of corpus.locales) {
     assert.match(projected.files.get(`books/${locale}/theme/header.hbs`), /<noscript>/);
-    for (const [path, content] of projected.files) if (path.startsWith(`books/${locale}/src/`)) assert.ok(!content.includes('Layer filters require JavaScript') && !content.includes('Без него доступны все материалы'));
+    for (const [path, content] of projected.files) if (path.startsWith(`books/${locale}/src/`) && path.endsWith('.md')) assert.ok(!content.includes('Layer filters require JavaScript') && !content.includes('Без него доступны все материалы'));
   }
 });
 
@@ -265,7 +279,7 @@ test('a deployment base path prefixes every projected route without changing sto
     assert.ok(!prefixed.files.has(`books/${locale}/src/graph.md`), 'the knowledge graph stays behind the reader UI');
     assert.ok(prefixed.files.get(`books/${locale}/src/index.md`).includes('(deos/index.'));
     assert.ok(prefixed.files.get(`books/${locale}/theme/header.hbs`).includes('href="{{ path_to_root }}../'));
-    for (const [path, content] of prefixed.files) if (path.startsWith(`books/${locale}/src/`)) assert.doesNotMatch(content, /\]\(\//, `${path}: root-absolute link`);
+    for (const [path, content] of prefixed.files) if (path.startsWith(`books/${locale}/src/`) && path.endsWith('.md')) assert.doesNotMatch(content, /\]\(\//, `${path}: root-absolute link`);
   }
   assert.equal(prefixed.files.get('site-index.html'), root.files.get('site-index.html'));
   assert.match(prefixed.files.get('books/root/book.toml'), /site-url = "\/deos\/"/);
@@ -301,16 +315,15 @@ test('Mermaid blocks become inert placeholders and only a vendored syntax is adm
   assert.equal(renderDiagrams('plain text\n', 'x.md').hasDiagram, false);
 });
 
-test('only a book with a diagram loads the Mermaid renderer', () => {
-  assert.match(projected.files.get('books/en/book.toml'), /theme\/wiki-mermaid\.js/, 'the corpus ships a diagram, so the loader is listed');
-  assert.doesNotMatch(projected.files.get('books/root/book.toml'), /wiki-mermaid\.js/);
-  assert.ok(projected.files.has('books/en/theme/wiki-mermaid.js'));
-});
-
-test('only a book with pseudocode loads its language definition', () => {
-  assert.match(projected.files.get('books/en/book.toml'), /theme\/wiki-code\.js/);
-  assert.doesNotMatch(projected.files.get('books/root/book.toml'), /wiki-code\.js/);
-  assert.ok(projected.files.has('books/en/theme/wiki-code.js'));
+test('optional scripts are staged and listed only for books that use them', () => {
+  for (const script of ['theme/wiki-mermaid.js', 'theme/wiki-code.js']) {
+    for (const locale of corpus.locales) {
+      assert.ok(projected.files.get(`books/${locale}/book.toml`).includes(`"${script}"`));
+      assert.ok(projected.files.has(`books/${locale}/${script}`));
+    }
+    assert.ok(!projected.files.get('books/root/book.toml').includes(script));
+    assert.ok(!projected.files.has(`books/root/${script}`));
+  }
   assert.match(projected.files.get('books/en/src/deos/overview/router.md'), /^\x60{3}pseudocode$/m);
 });
 
@@ -395,16 +408,6 @@ test('native section eligibility precedes any result cap and preserves sparse re
   assert.throws(() => nativeSections(data, ['shared.html']), /must be a Set/);
   assert.throws(() => nativeSections({ ...data, doc_urls: [] }), /disagree/);
   assert.throws(() => nativeSections({ index: { documentStore: { docs: { x: {} } } }, doc_urls: ['shared.html'] }), /section reference/);
-});
-
-test('search rebinding changes only the native head assignment and preserves document text', () => {
-  const head = '<script>const path_to_root = "../../";\nwindow.path_to_searchindex_js = "../../searchindex-old.js";</script>';
-  const body = '<main><code>searchindex-old.js</code></main><script>const sample = "searchindex-old.js";</script>';
-  const rebound = rebindSearchAsset(head + body, 'searchindex-old.js', 'searchindex-new.js');
-  assert.equal(rebound.bindings, 1);
-  assert.ok(rebound.content.endsWith(body));
-  assert.ok(rebound.content.includes('../../searchindex-new.js'));
-  assert.throws(() => rebindSearchAsset(head, 'different.js', 'new.js'), /Unexpected native/);
 });
 
 test('native output validation requires the loader a diagram page actually names', () => {

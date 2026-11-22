@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { loadCorpus } from '../src/corpus.mjs';
 import { projectBooks } from '../src/projection.mjs';
-import { annotate, movedStub, pageEntries, robots, siteUrlFor, sitemap } from '../scripts/prepare-meta.mjs';
+import { annotate, headLinks, movedStub, pageEntries, robots, siteUrlFor, sitemap } from '../scripts/prepare-meta.mjs';
 import { movedRoutes, resolveMovedRoutes } from '../src/routes.mjs';
 
 const graph = projectBooks(loadCorpus(), {}, '/deos/').graph;
@@ -63,6 +63,23 @@ test('page metadata fills the native description slot and adds absolute links on
   assert.match(absolute, /hreflang="x-default"/);
   assert.match(absolute, /<link rel="sitemap" type="application\/xml" title="Sitemap" href="..\/..\/..\/sitemap.xml">/);
   assert.throws(() => annotate('<head></head>', entry, site, 'en', 'sitemap.xml'), /description slot/);
+});
+
+test('HTML and sitemap publish the same canonical and ordered alternate targets', () => {
+  const en = 'en/page.html?a=1&b=2', ru = 'ru/page.html';
+  const entry = { path: ru, alternates: { en, ru } };
+  const readAlternates = markup => [...markup.matchAll(/hreflang="([^"]+)" href="([^"]+)"/g)].map(([, locale, href]) => [locale, href]);
+  const enHref = `${site}en/page.html?a=1&amp;b=2`;
+  const ruHref = `${site}${ru}`;
+  for (const [defaultLocale, fallback] of [['en', [['x-default', enHref]]], ['absent', []]]) {
+    const html = headLinks(entry, site, defaultLocale, 'sitemap.xml');
+    const xml = sitemap([entry], site, defaultLocale);
+    const expected = [['en', enHref], ['ru', ruHref], ...fallback];
+    assert.ok(html.includes(`<link rel="canonical" href="${ruHref}">`));
+    assert.ok(xml.includes(`<loc>${ruHref}</loc>`));
+    assert.deepEqual(readAlternates(html), expected);
+    assert.deepEqual(readAlternates(xml), expected);
+  }
 });
 
 test('sitemap lists absolute alternates without invented freshness, and robots points to it', () => {

@@ -9,7 +9,7 @@ import test from 'node:test';
 import { loadCorpus } from '../src/corpus.mjs';
 import { readHashState } from '../src/hash-state.mjs';
 import { unifiedGraph } from '../src/projection.mjs';
-import { bindLayerContext, chapterOrder, contextScript, readLayerSelection, withLayer } from '../src/context.mjs';
+import { bindNativeSearchContext, chapterOrder, contextScript, readLayerSelection, withLayer } from '../src/context.mjs';
 
 const corpus = loadCorpus();
 const graph = unifiedGraph({ ...corpus, planes: [...corpus.planes, { id: 'example', title: 'Example fixture', pages: new Map(), graph: { edges: [] }, locales: [] }] });
@@ -60,12 +60,17 @@ test('context data selects the native index before reader initialization without
   }
 });
 
-test('native context binding gates the reader in the head and never rewrites article text', () => {
-  const head = '<script>const path_to_root = "../../"; window.path_to_searchindex_js = "../../searchindex-old.js";</script>';
-  const body = '<main><code>window.path_to_searchindex_js = "example.js";</code></main>';
-  const result = bindLayerContext(head + body, 'layer-context-12345678.js');
-  assert.equal(result.bindings, 1);
-  assert.ok(result.content.includes('wikiRequiresContext = true'));
-  assert.ok(result.content.includes('<script src="../../layer-context-12345678.js"></script>'));
-  assert.ok(result.content.endsWith(body));
+test('native head binding pairs the index and early context without rewriting article text', () => {
+  const assets = ['searchindex-old.js', 'searchindex-new.js', 'layer-context-12345678.js'];
+  const body = '<main><code>searchindex-old.js</code></main><script>window.path_to_searchindex_js = "example.js";</script>';
+  const head = (directory, indexes) => `<script>const path_to_root = "${directory}";\n${indexes.map(name => `window.path_to_searchindex_js = "${directory}${name}";\n`).join('')}</script>`;
+  for (const directory of ['', '../../']) {
+    const result = bindNativeSearchContext(head(directory, [assets[0]]) + body, ...assets);
+    assert.equal(result.bindings, 1);
+    assert.equal(result.content, head(directory, [assets[1]]).replace('</script>', `window.wikiRequiresContext = true;\n document.documentElement.dataset.wikiLayer = "pending";\n</script><script src="${directory}${assets[2]}"></script>`) + body);
+  }
+  const unbound = head('../../', []) + body;
+  assert.deepEqual(bindNativeSearchContext(unbound, ...assets), { content: unbound, bindings: 0 });
+  assert.throws(() => bindNativeSearchContext(head('../../', ['different.js']), ...assets), /Unexpected native search asset/);
+  assert.throws(() => bindNativeSearchContext(head('../../', [assets[0], assets[0]]), ...assets), /Duplicate native search asset/);
 });

@@ -6,7 +6,7 @@ Excludes: What a formula claims, typographic review and browser layout.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { renderMath, assertTypesetMarkup, typesetDisplay, typesetInline } from '../src/math.mjs';
-import { katexAssets, katexFonts } from '../src/math-assets.mjs';
+import { katexStylesheet, katexFonts } from '../src/math-assets.mjs';
 
 test('inline and display notation are typeset, and both are counted', () => {
   const result = renderMath('A curve with $x^2 + y^2$ and a block:\n\n$$F = \\frac{m}{1 - \\lambda}$$\n');
@@ -56,9 +56,8 @@ test('typeset markup is inert and paints no background of its own', () => {
   assert.throws(() => assertTypesetMarkup('<img src="https://example.invalid/x.png">'), /must stay inert/);
 });
 
-test('the vendored distribution publishes its stylesheet and every face it names', () => {
-  assert.equal(katexAssets.length, 1);
-  const [path, css] = katexAssets[0];
+test('the vendored stylesheet names only available WOFF2 faces', () => {
+  const [path, css] = katexStylesheet;
   assert.equal(path, 'theme/katex/katex.min.css');
   const faces = [...css.matchAll(/url\(fonts\/([^)]+)\)/g)].map(match => match[1]);
   assert.ok(faces.length >= 20, 'the stylesheet names the KaTeX faces');

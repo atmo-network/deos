@@ -10,7 +10,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 const root = new URL('../theme/katex/', import.meta.url);
 const read = name => readFileSync(new URL(name, root), 'utf8');
 
-export const katexAssets = [['theme/katex/katex.min.css', read('katex.min.css')]];
+export const katexStylesheet = ['theme/katex/katex.min.css', read('katex.min.css')];
 
 export const katexFonts = readdirSync(new URL('fonts/', root))
   .filter(name => name.endsWith('.woff2'))

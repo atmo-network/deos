@@ -9,10 +9,10 @@ import { lstatSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFi
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Script } from 'node:vm';
-import { rebuildNativeSearch, rebindSearchAsset } from '../src/search.mjs';
+import { rebuildNativeSearch } from '../src/search.mjs';
 import { rewriteNativeSearchUrls, rebindScriptAsset } from '../src/search-url.mjs';
 import { selectLayer } from '../src/layers.mjs';
-import { bindLayerContext, contextScript } from '../src/context.mjs';
+import { bindNativeSearchContext, contextScript } from '../src/context.mjs';
 import { localizeBookScript, localizeReaderChrome, localizeSearchScript } from '../src/locale.mjs';
 
 function prepareSearch(directory, projection, locale) {
@@ -63,7 +63,7 @@ function prepareSearch(directory, projection, locale) {
   const book = localizeBookScript(readFileSync(join(root, previousBook), 'utf8'), locale);
   new Script(book);
   const nextBook = `book-reader-${createHash('sha256').update(book).digest('hex').slice(0, 8)}.js`;
-  let bindings = 0, uiBindings = 0, contextBindings = 0, bookBindings = 0;
+  let bindings = 0, uiBindings = 0, bookBindings = 0;
   function walk(path) {
     for (const entry of readdirSync(path, { withFileTypes: true })) {
       const file = join(path, entry.name);
@@ -71,15 +71,13 @@ function prepareSearch(directory, projection, locale) {
       if (entry.isDirectory()) walk(file);
       else if (entry.name.endsWith('.html')) {
         const localized = localizeReaderChrome(readFileSync(file, 'utf8'), locale);
-        const rebound = rebindSearchAsset(localized, previous, next);
-        const ui = rebindScriptAsset(rebound.content, previousUi, nextUi);
+        const contextual = bindNativeSearchContext(localized, previous, next, contextAsset);
+        const ui = rebindScriptAsset(contextual.content, previousUi, nextUi);
         const book = rebindScriptAsset(ui.content, previousBook, nextBook);
-        const contextual = bindLayerContext(book.content, contextAsset);
-        bindings += rebound.bindings;
+        bindings += contextual.bindings;
         uiBindings += ui.bindings;
-        contextBindings += contextual.bindings;
         bookBindings += book.bindings;
-        if (rebound.bindings || ui.bindings) writeFileSync(file, contextual.content);
+        if (contextual.bindings || ui.bindings) writeFileSync(file, book.content);
       }
     }
   }
@@ -87,7 +85,7 @@ function prepareSearch(directory, projection, locale) {
   writeFileSync(join(root, nextUi), reader);
   writeFileSync(join(root, nextBook), book);
   walk(root);
-  if (!bindings || !uiBindings || contextBindings !== bindings || bookBindings !== bindings) throw new Error('Native search/context assets had missing HTML bindings');
+  if (!bindings || !uiBindings || bookBindings !== bindings) throw new Error('Native search/context assets had missing HTML bindings');
   unlinkSync(join(root, previous));
   unlinkSync(join(root, previousUi));
   unlinkSync(join(root, previousBook));

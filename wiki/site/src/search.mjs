@@ -52,16 +52,3 @@ export function rebuildNativeSearch(library, indexScript, eligibleDocuments) {
     sections: sections.length,
   };
 }
-
-export function rebindSearchAsset(html, previous, next) {
-  let bindings = 0;
-  const content = html.replace(/<script>([\s\S]*?)<\/script>/g, (script, body) => {
-    if (!body.includes('const path_to_root = ')) return script;
-    return script.replace(/(window\.path_to_searchindex_js = ")([^"]+)(";)/g, (assignment, prefix, path, suffix) => {
-      if (!path.endsWith('/' + previous) && path !== previous) throw new Error('Unexpected native search asset binding');
-      bindings++;
-      return prefix + path.slice(0, -previous.length) + next + suffix;
-    });
-  });
-  return { content, bindings };
-}
