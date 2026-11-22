@@ -1842,8 +1842,14 @@ mod benches {
     assert_eq!(LastProcessedEpoch::<T>::get(), current_epoch);
   }
 
+  // `n` counts proposals serviced by one call in this single-domain fixture.
   #[benchmark]
-  fn service_maturing_proposals(n: Linear<1, 3>) {
+  fn service_maturing_proposals(
+    n: Linear<
+      1,
+      { T::MaxMaturingProposalsPerBlock::get().min(T::MaxActiveProposalsPerDomain::get()) },
+    >,
+  ) {
     let domain = benchmark_domain_id::<T>();
     let current_epoch_u32 = T::ProposalLeadInPeriod::get()
       .saturated_into::<u32>()

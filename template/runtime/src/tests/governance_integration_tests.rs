@@ -3040,6 +3040,39 @@ fn independent_full_indices_refusal_preserves_pending_and_commits_cleanup() {
 
 #[cfg(feature = "runtime-benchmarks")]
 #[test]
+fn maturity_benchmark_advertises_and_serves_the_reference_range() {
+  use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, Benchmarking};
+  let name = b"service_maturing_proposals";
+  let benchmark = <Governance as Benchmarking>::benchmarks(false)
+    .into_iter()
+    .find(|entry| entry.name == name)
+    .unwrap();
+  let limit = crate::configs::governance_config::MaxGovernanceMaturingProposalsPerBlock::get();
+  assert_eq!(
+    benchmark.components,
+    vec![(BenchmarkParameter::n, 1, limit)]
+  );
+  for n in 1..=limit {
+    super::common::with_benchmarking_host(
+      super::common::benchmarking_storage(new_test_ext()),
+      |_| {
+        let rows = <Governance as Benchmarking>::run_benchmark(
+          name,
+          &[(BenchmarkParameter::n, n)],
+          &[],
+          true,
+          1,
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].components, vec![(BenchmarkParameter::n, n)]);
+      },
+    );
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
 fn full_index_value_classes_metadata_is_extra_only() {
   use polkadot_sdk::frame_benchmarking::{BenchmarkParameter, Benchmarking};
   let name = b"on_initialize_full_index_value_classes";
