@@ -233,6 +233,13 @@ fn seed_full_binary_resolution_votes<T: Config>(
   });
 }
 
+fn benchmark_maturity_epoch<T: Config>() -> u32 {
+  T::ProposalLeadInPeriod::get()
+    .saturated_into::<u32>()
+    .saturating_add(T::ProposalVotingPeriod::get().saturated_into::<u32>())
+    .saturating_add(1)
+}
+
 fn seed_maturing_proposals<T: Config>(domain: T::DomainId, current_epoch: T::Epoch, n: u32)
 where
   T::Epoch: From<u32>,
@@ -1851,10 +1858,7 @@ mod benches {
     >,
   ) {
     let domain = benchmark_domain_id::<T>();
-    let current_epoch_u32 = T::ProposalLeadInPeriod::get()
-      .saturated_into::<u32>()
-      .saturating_add(T::ProposalVotingPeriod::get().saturated_into::<u32>())
-      .saturating_add(1);
+    let current_epoch_u32 = benchmark_maturity_epoch::<T>();
     let current_epoch: T::Epoch = current_epoch_u32.into();
     seed_maturing_proposals::<T>(domain, current_epoch, n);
     let previous_epoch: T::Epoch = current_epoch_u32.saturating_sub(1).into();
@@ -1872,6 +1876,52 @@ mod benches {
       ));
     }
   }
+
+  #[benchmark(extra)]
+  fn service_maturing_proposals_with_remainder() -> Result<(), BenchmarkError> {
+    let capacity = T::MaxMaturingProposalsPerEpoch::get();
+    let limit = T::MaxMaturingProposalsPerBlock::get();
+    if limit == 0
+      || limit >= capacity
+      || capacity > T::MaxActiveProposalsPerDomain::get()
+      || !T::ProposalConfirmPeriod::get().is_zero()
+    {
+      return Err(BenchmarkError::Skip);
+    }
+    let domain = benchmark_domain_id::<T>();
+    let epoch_u32 = benchmark_maturity_epoch::<T>();
+    let epoch: T::Epoch = epoch_u32.into();
+    seed_maturing_proposals::<T>(domain, epoch, capacity);
+    frame_system::Pallet::<T>::set_block_number(epoch_u32.into());
+    let original_bucket = ProposalMaturityBuckets::<T>::get(epoch);
+    assert_eq!(original_bucket.len(), capacity as usize);
+    let tail = &original_bucket[limit as usize..];
+    let retained_ballots = tail
+      .iter()
+      .map(|touch| ProposalVotesByItem::<T>::get(touch.domain, touch.item_id).encode())
+      .collect::<Vec<_>>();
+
+    #[block]
+    {
+      let _ = Pallet::<T>::service_maturing_proposals(epoch_u32.saturating_sub(1), epoch);
+    }
+
+    let remaining = ProposalMaturityBuckets::<T>::get(epoch);
+    assert_eq!(remaining.as_slice().encode(), tail.encode());
+    for touch in &original_bucket[..limit as usize] {
+      let (domain, id) = (touch.domain, touch.item_id);
+      assert!(!ActiveProposals::<T>::contains_key(domain, id));
+      assert!(FinalizedProposals::<T>::contains_key(domain, id));
+    }
+    for (touch, ballots) in tail.iter().zip(retained_ballots) {
+      let (domain, id) = (touch.domain, touch.item_id);
+      assert!(ActiveProposals::<T>::contains_key(domain, id));
+      assert!(!FinalizedProposals::<T>::contains_key(domain, id));
+      assert_eq!(ProposalVotesByItem::<T>::get(domain, id).encode(), ballots);
+    }
+    Ok(())
+  }
+
   #[benchmark]
   fn service_pending_enactments(n: Linear<1, 4>) -> Result<(), BenchmarkError> {
     let current_epoch = Pallet::<T>::add_epochs(1u32.into(), T::ProposalEnactmentDelay::get())?;

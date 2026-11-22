@@ -3052,23 +3052,32 @@ fn maturity_benchmark_advertises_and_serves_the_reference_range() {
     benchmark.components,
     vec![(BenchmarkParameter::n, 1, limit)]
   );
-  for n in 1..=limit {
+  let verify = |name: &[u8], components: &[(BenchmarkParameter, u32)]| {
     super::common::with_benchmarking_host(
       super::common::benchmarking_storage(new_test_ext()),
       |_| {
-        let rows = <Governance as Benchmarking>::run_benchmark(
-          name,
-          &[(BenchmarkParameter::n, n)],
-          &[],
-          true,
-          1,
-        )
-        .unwrap();
+        let rows =
+          <Governance as Benchmarking>::run_benchmark(name, components, &[], true, 1).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].components, vec![(BenchmarkParameter::n, n)]);
+        assert_eq!(rows[0].components.as_slice(), components);
       },
     );
+  };
+  for n in 1..=limit {
+    verify(name, &[(BenchmarkParameter::n, n)]);
   }
+  let remainder = b"service_maturing_proposals_with_remainder";
+  assert!(
+    !<Governance as Benchmarking>::benchmarks(false)
+      .iter()
+      .any(|entry| entry.name == remainder)
+  );
+  let extra = <Governance as Benchmarking>::benchmarks(true)
+    .into_iter()
+    .find(|entry| entry.name == remainder)
+    .unwrap();
+  assert!(extra.components.is_empty());
+  verify(remainder, &[]);
 }
 
 #[cfg(feature = "runtime-benchmarks")]

@@ -674,7 +674,9 @@ Current runtime policy values:
 
 The two-proposal maturity bound limits per-hook visits and preserves bounded continuation across later blocks. It does not independently establish complete joint-domain ProofSize or fixed-envelope fit; generated coefficients, host callbacks and enclosing fixed owners require their own qualification. Changing the bound requires re-evaluating `FixedBlockWeight` and maximum signed-call fit.
 
-The `service_maturing_proposals(n)` benchmark seeds one domain with `n` due proposals and verifies they all leave Active in one call. Its advertised upper endpoint is the smaller of the host's per-call limit and per-domain active capacity; the per-call limit is checked against the epoch bucket capacity by `integrity_test`. The reference range is 1–2, not the mock's 1–3. This fixture does not cover a full bucket with a retained FIFO remainder, a joint hook upper bound, or new production coefficients.
+The `service_maturing_proposals(n)` benchmark seeds one domain with `n` due proposals and verifies they all leave Active in one call. Its advertised upper endpoint is the smaller of the host's per-call limit and per-domain active capacity; the per-call limit is checked against the epoch bucket capacity by `integrity_test`. The reference range is 1–2, not the mock's 1–3. This ordinary fixture does not cover a full bucket with a retained FIFO remainder.
+
+Extra `service_maturing_proposals_with_remainder` sets up one full same-domain bucket when it can exceed the per-call limit and confirmation is disabled. It brackets the same maturity helper and checks a finalized FIFO prefix and a still-active tail with byte-identical ballots and unchanged order. It is not part of default Weight generation and does not observe the full initialization hook, joint resource maxima, or a new production coefficient.
 
 Ordinary and invoice-family resolution consume exactly the fixed `ProposalApprovalThreshold` and `ProposalMinimumTurnout`. No adaptive ceiling, progress, or decay policy is reconstructed in views or resolution.
 
