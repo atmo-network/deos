@@ -2209,6 +2209,20 @@ The guard is early relative to the context body, not all work: initialization, r
 
 **Q-3 dependency:** accepted/early/late refusal arithmetic, sender traversal/allocation and every separately invoked API/runtime check belong to the existing complete outer/fixed owner once per actual invocation. Counts reject before sender traversal; later sender refusal can allocate129 entries, while an admitted input can visit131072 horizontal entries. Shared code does not make repeated work free. Pre-guard decode/staging/proof, rollback/root, callbacks, delta_z, outstanding fixed work and invocation-time Drain floor remain required. No price, Weight coefficient, surcharge, second settlement/refund, F−P credit, growing reserve or allocator is supplied; the complete chronological inequality remains open.
 
+#### Context producer and checker invocation units
+
+At `096f0f5dfcdb88df8e7667ebe09471be8ea2bb67`, `apis.rs`, `configs/unsigned.rs` and the context limits in `configs/mod.rs` are byte-identical to `7cf52668`. This source reconciliation uses selected Parachain System 0.32.0, FRAME Support 49.1.0 and its procedural 41.0.1 `expand/inherent.rs`. It does not repeat the retained Q-1 tests or qualify their native profile as a physical upper.
+
+| Actual invocation | Parachain System construction | DEOS geometry work |
+| --- | --- | --- |
+| `BlockBuilder::inherent_extrinsics` | Generated `create_extrinsics` invokes the Parachain System constructor once | None in this production API; the returned call has separate admission |
+| `BlockBuilder::check_inherents` | `validate_context_inherent_geometry` invokes it once; generated `check_extrinsics` calls the pallet's default `check_inherent` and `is_inherent_required`, not its constructor | At most one check of the reconstructed operand and one check of the actual validation-data operand after generated checking succeeds |
+| Bare application | No reconstruction from provider data in `RuntimeUnsignedValidator::pre_dispatch` | One check on each reached exact `set_validation_data` call |
+
+One constructor invocation tries versioned provider data with legacy fallback and normalizes at most one decoded operand. It reads the relay-block and processed-message cursors, queries remaining frame budget, drops already-processed data, and retains full payload prefixes while hashing the remainder. The prefix budget is not a bound on incoming encoded provider data or normalization work. Measure the original producer operand separately from the retained call's packet/payload counts. Generated FRAME checking walks its own leading inherent prefix before the local four-extrinsic order check; `take(4)` is not a bound on that earlier pass.
+
+This separates constructor, reconstruction validation, generated prefix checking and executed-call admission for Q-2/Q-3. Their multiplicities are per actual invocation, not one shared allowance per logical message or accepted block. The producer's pre-normalization input envelope and end-to-end chronological containment remain open. No new consensus cap, context coefficient, queue change, or Host transfer follows.
+
 **Source/caller conservation:** independent exact-binding review permits only five existing Root runtime file hashes and the canonical Root trust pin d8621710…->e57f37578494a178660b33461b0be13c91f2ab5994371ef87383f7b019cd17e0. It verifies all23951 slots/638 inventories, with 23946 unchanged, six callers and unchanged role/compiler/cfg/profile/graph/expiry premises. Old proof correctly refuses changed apis.rs. Installed policy SHA256 `854624a918edc598865c3bcce7e66d7f4a5f305e49f610a762d27e7b1506fdac`, helper `f01add7b904d6aa78aa95ffc9624ea7df71c026d7527a1ffc37c075d67b36488`; actual Root entry passes0/50 at 2026-11-15T15:31:49.936Z–15:32:15.684Z and standard guard self-tests pass. This is finite normal/build/public-operand source applicability, not dev/test crypto clearance or release approval. Native/Host anchors and exclusive pre2026-12-12T00:00:00Z entry cutoff are unchanged; Native0387 remains RED.
 
 | Changed runtime source | SHA256 |
