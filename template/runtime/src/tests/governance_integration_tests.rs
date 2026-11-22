@@ -275,7 +275,25 @@ fn production_custodied_voter_death_preserves_ballot_and_natural_unlock() {
       assert!(!frame_system::Account::<Runtime>::contains_key(BOB));
     };
     reject_early();
-    advance(close);
+    advance(close - 1);
+    System::set_block_number(close);
+    // Observe exact close before bounded service removes the Active item.
+    assert!(pallet_governance::ActiveProposals::<Runtime>::contains_key(
+      0, 0
+    ));
+    assert_eq!(Governance::finalized_proposal_outcome(0, 0), None);
+    let events_before = System::events();
+    assert_noop!(
+      Governance::cast_vote(RuntimeOrigin::signed(ALICE), 0, 0, ProposalVoteKind::Nay),
+      pallet_governance::Error::<Runtime>::ProposalPrimaryTrackNotOpen
+    );
+    assert_eq!(System::events(), events_before);
+    assert_eq!(
+      Governance::proposal_votes(0, 0).unwrap().encode(),
+      frozen_votes
+    );
+    assert_eq!(economics(), locked_economics);
+    Governance::on_initialize(close);
     assert_eq!(
       Governance::finalized_proposal_outcome(0, 0),
       Some(approved_outcome(
