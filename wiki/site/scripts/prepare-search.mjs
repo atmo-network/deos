@@ -63,7 +63,7 @@ function prepareSearch(directory, projection, locale) {
   const book = localizeBookScript(readFileSync(join(root, previousBook), 'utf8'), locale);
   new Script(book);
   const nextBook = `book-reader-${createHash('sha256').update(book).digest('hex').slice(0, 8)}.js`;
-  let bindings = 0, uiBindings = 0, bookBindings = 0;
+  let bindings = 0;
   function walk(path) {
     for (const entry of readdirSync(path, { withFileTypes: true })) {
       const file = join(path, entry.name);
@@ -71,13 +71,18 @@ function prepareSearch(directory, projection, locale) {
       if (entry.isDirectory()) walk(file);
       else if (entry.name.endsWith('.html')) {
         const localized = localizeReaderChrome(readFileSync(file, 'utf8'), locale);
-        const contextual = bindNativeSearchContext(localized, previous, next, contextAsset);
+        let contextual;
+        try {
+          contextual = bindNativeSearchContext(localized, { index: previous, nextIndex: next, context: contextAsset, ui: previousUi, book: previousBook });
+        } catch (error) {
+          throw new Error(`${file}: ${error.message}`, { cause: error });
+        }
+        if (!contextual.bindings) continue;
         const ui = rebindScriptAsset(contextual.content, previousUi, nextUi);
         const book = rebindScriptAsset(ui.content, previousBook, nextBook);
-        bindings += contextual.bindings;
-        uiBindings += ui.bindings;
-        bookBindings += book.bindings;
-        if (contextual.bindings || ui.bindings) writeFileSync(file, book.content);
+        if (ui.bindings !== 1 || book.bindings !== 1) throw new Error(`${file}: Native search companion rebinding failed`);
+        writeFileSync(file, book.content);
+        bindings++;
       }
     }
   }
@@ -85,11 +90,11 @@ function prepareSearch(directory, projection, locale) {
   writeFileSync(join(root, nextUi), reader);
   writeFileSync(join(root, nextBook), book);
   walk(root);
-  if (!bindings || !uiBindings || bookBindings !== bindings) throw new Error('Native search/context assets had missing HTML bindings');
+  if (!bindings) throw new Error('Native search/context assets had no search-bearing pages');
   unlinkSync(join(root, previous));
   unlinkSync(join(root, previousUi));
   unlinkSync(join(root, previousBook));
-  console.log(`Native Unicode search: ${rebuilt.sections} stored sections; ${bindings} index/${uiBindings} UI bindings; ${next}; ${nextUi}`);
+  console.log(`Native Unicode search: ${rebuilt.sections} stored sections; ${bindings} page bindings; ${next}; ${nextUi}`);
   console.log(`Native layer sections: ${JSON.stringify(Object.fromEntries(Object.entries(indexes).map(([id, entry]) => [id, entry.sections])))}`);
 }
 

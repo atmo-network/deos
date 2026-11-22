@@ -532,6 +532,58 @@ parameter_types! {
   pub static ProposalProtectionPeriod: Epoch = 2;
   pub static ProposalUrgentVotingPeriod: Epoch = 1;
   pub static ProposalEnactmentDelay: Epoch = 0;
+  pub static MockProtectionCustody: bool = false;
+}
+
+pub const PROTECTION_CUSTODY_ACCOUNT: AccountId = 129;
+
+pub struct MockVotePowerCustody;
+impl crate::VotePowerCustody<AccountId, DomainId, DomainId, u128> for MockVotePowerCustody {
+  fn lock_id(domain: DomainId, track: crate::ProposalTrackFamily) -> Option<DomainId> {
+    (MockProtectionCustody::get() && domain == 42 && track == crate::ProposalTrackFamily::Veto)
+      .then_some(domain)
+  }
+
+  fn target_amount(
+    _domain: DomainId,
+    _track: crate::ProposalTrackFamily,
+    _account: &AccountId,
+    _current_locked: u128,
+  ) -> Result<u128, polkadot_sdk::sp_runtime::DispatchError> {
+    Ok(1)
+  }
+
+  fn lock(
+    account: &AccountId,
+    _lock_id: DomainId,
+    amount: u128,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    use polkadot_sdk::frame_support::traits::{Currency, ExistenceRequirement};
+    <Balances as Currency<AccountId>>::transfer(
+      account,
+      &PROTECTION_CUSTODY_ACCOUNT,
+      amount,
+      ExistenceRequirement::KeepAlive,
+    )
+  }
+
+  fn unlock(
+    account: &AccountId,
+    _lock_id: DomainId,
+    amount: u128,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    use polkadot_sdk::frame_support::traits::{Currency, ExistenceRequirement};
+    <Balances as Currency<AccountId>>::transfer(
+      &PROTECTION_CUSTODY_ACCOUNT,
+      account,
+      amount,
+      ExistenceRequirement::KeepAlive,
+    )
+  }
+
+  fn custodied_amount(_lock_id: DomainId) -> Option<u128> {
+    Some(Balances::free_balance(PROTECTION_CUSTODY_ACCOUNT).saturating_sub(1))
+  }
 }
 
 impl pallet_balances::Config for Test {
@@ -560,7 +612,7 @@ impl pallet_governance::Config for Test {
   type ProposalFeeRecipient = ProposalFeeRecipient;
   type DomainId = DomainId;
   type VotePowerLockId = DomainId;
-  type VotePowerCustody = ();
+  type VotePowerCustody = MockVotePowerCustody;
   type WinningVoteItemId = u32;
   type Epoch = Epoch;
   type EpochProvider = MockEpochProvider;
@@ -718,6 +770,7 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
     ProposalProtectionPeriod::set(2);
     ProposalUrgentVotingPeriod::set(1);
     ProposalEnactmentDelay::set(0);
+    MockProtectionCustody::set(false);
     System::set_block_number(1);
   });
   ext

@@ -60,17 +60,42 @@ test('context data selects the native index before reader initialization without
   }
 });
 
+const assets = { index: 'searchindex-old.js', nextIndex: 'searchindex-new.js', context: 'layer-context-12345678.js', ui: 'searcher-old.js', book: 'book-old.js' };
+const assignment = (directory, index = assets.index) => `<script>const path_to_root = "${directory}";\nwindow.path_to_searchindex_js = "${directory}${index}";\n</script>`;
+const resource = (directory, asset) => `<script src="${directory}${asset}"></script>`;
+const article = '<main><code>searchindex-old.js</code></main>';
+const page = (head, body) => `<html><head>${head}</head><body>${body}</body></html>`;
+const renderedPage = directory => page(assignment(directory), article + resource(directory, assets.ui) + resource(directory, assets.book));
+
 test('native head binding pairs the index and early context without rewriting article text', () => {
-  const assets = ['searchindex-old.js', 'searchindex-new.js', 'layer-context-12345678.js'];
-  const body = '<main><code>searchindex-old.js</code></main><script>window.path_to_searchindex_js = "example.js";</script>';
-  const head = (directory, indexes) => `<script>const path_to_root = "${directory}";\n${indexes.map(name => `window.path_to_searchindex_js = "${directory}${name}";\n`).join('')}</script>`;
   for (const directory of ['', '../../']) {
-    const result = bindNativeSearchContext(head(directory, [assets[0]]) + body, ...assets);
-    assert.equal(result.bindings, 1);
-    assert.equal(result.content, head(directory, [assets[1]]).replace('</script>', `window.wikiRequiresContext = true;\n document.documentElement.dataset.wikiLayer = "pending";\n</script><script src="${directory}${assets[2]}"></script>`) + body);
+    const result = bindNativeSearchContext(renderedPage(directory), assets);
+    const head = assignment(directory, assets.nextIndex).replace('</script>', `window.wikiRequiresContext = true;\n document.documentElement.dataset.wikiLayer = "pending";\n</script>`) + resource(directory, assets.context);
+    assert.deepEqual(result, { content: page(head, article + resource(directory, assets.ui) + resource(directory, assets.book)), bindings: 1 });
   }
-  const unbound = head('../../', []) + body;
-  assert.deepEqual(bindNativeSearchContext(unbound, ...assets), { content: unbound, bindings: 0 });
-  assert.throws(() => bindNativeSearchContext(head('../../', ['different.js']), ...assets), /Unexpected native search asset/);
-  assert.throws(() => bindNativeSearchContext(head('../../', [assets[0], assets[0]]), ...assets), /Duplicate native search asset/);
+  const unbound = page('', '<nav>Native TOC</nav>');
+  assert.deepEqual(bindNativeSearchContext(unbound, assets), { content: unbound, bindings: 0 });
+});
+
+test('native head contract rejects duplicate, misplaced and unexpected assignments', () => {
+  const valid = renderedPage('../../');
+  const index = assignment('../../');
+  assert.throws(() => bindNativeSearchContext(valid.replace(index, index + index), assets), /exactly one native search index assignment/);
+  assert.throws(() => bindNativeSearchContext(valid.replace('</script>', index.split('\n')[1] + '\n</script>'), assets), /exactly one native search index assignment/);
+  assert.throws(() => bindNativeSearchContext(valid.replace(index, '').replace('<body>', '<body>' + index), assets), /inline script in the head/);
+  assert.throws(() => bindNativeSearchContext(valid.replace(assets.index, 'different.js'), assets), /Unexpected native search asset/);
+  assert.throws(() => bindNativeSearchContext(valid.replace(index, index + resource('../../', assets.context)), assets), /pre-existing native search context/);
+});
+
+test('every search-bearing page needs its own ordered companions, regardless of totals', () => {
+  const valid = renderedPage('../../');
+  const search = resource('../../', assets.ui), book = resource('../../', assets.book);
+  for (const companion of [search, book]) {
+    const pages = [valid.replace(companion, companion + companion), valid.replace(companion, ''), renderedPage('')];
+    assert.throws(() => pages.map(html => bindNativeSearchContext(html, assets)), /Duplicate native .* asset binding/);
+    pages[0] = valid;
+    assert.throws(() => pages.map(html => bindNativeSearchContext(html, assets)), /Missing or unexpected native search UI\/book reader companion/);
+  }
+  assert.throws(() => bindNativeSearchContext(valid.replace(search + book, book + search), assets), /Expected native search context before search UI and book reader/);
+  assert.throws(() => bindNativeSearchContext(valid.replace(assignment('../../'), search + assignment('../../')).replace(search + book, book), assets), /Expected native search context before search UI and book reader/);
 });

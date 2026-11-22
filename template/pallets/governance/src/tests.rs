@@ -3652,7 +3652,14 @@ fn ordinary_proposals_keep_exactly_one_maturity_touch() {
 #[test]
 fn full_urgent_close_bucket_leaves_the_vote_and_ordinary_maturity_intact() {
   new_test_ext().execute_with(|| {
+    MockProtectionCustody::set(true);
+    ProposalEnactmentDelay::set(2);
+    drop(Balances::deposit_creating(&PROTECTION_CUSTODY_ACCOUNT, 1));
+    set_payload_preimage_state(H256::default(), true, false);
+    set_payload_executor_enabled(true);
     submit_urgent_root_action(100, 6, 1);
+    let voter_balance = Balances::free_balance(10);
+    let custody_balance = Balances::free_balance(PROTECTION_CUSTODY_ACCOUNT);
     let filler = (900..904u32)
       .map(|item_id| crate::MaturingProposalTouch { domain: 1, item_id })
       .collect::<Vec<_>>();
@@ -3677,6 +3684,79 @@ fn full_urgent_close_bucket_leaves_the_vote_and_ordinary_maturity_intact() {
       1,
       "ordinary maturity still owns the proposal"
     );
+    for voter in [11, 12] {
+      assert_ok!(Governance::cast_vote(
+        RuntimeOrigin::signed(voter),
+        42,
+        100,
+        ProposalVoteKind::Aye,
+      ));
+    }
+    let custody = || crate::VotePowerCustodyByAccount::<Test>::get(10, 42);
+    let position = crate::VotePowerCustodyPosition {
+      amount: 1,
+      lock_until: 11,
+    };
+    assert_eq!(custody(), Some(position.clone()));
+    assert_eq!(Balances::free_balance(10), voter_balance - 1);
+    assert_eq!(
+      Balances::free_balance(PROTECTION_CUSTODY_ACCOUNT),
+      custody_balance + 1
+    );
+
+    for epoch in 2..9 {
+      System::set_block_number(epoch);
+      service_governance_through(epoch);
+      assert!(ActiveProposals::<Test>::contains_key(42, 100));
+      assert_eq!(Governance::finalized_proposal_outcome(42, 100), None);
+      assert_eq!(payload_execution_calls(), 0);
+    }
+    assert_noop!(
+      Governance::unlock_vote_power(RuntimeOrigin::signed(10), 42),
+      Error::<Test>::VotePowerCustodyLockActive
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
+
+    System::set_block_number(9);
+    service_governance_through(9);
+    assert!(Governance::proposal_maturity_bucket(9).is_empty());
+    assert!(!ActiveProposals::<Test>::contains_key(42, 100));
+    assert!(!ProposalVotesByItem::<Test>::contains_key(42, 100));
+    assert!(!ProposalUrgentAuthorizedAt::<Test>::contains_key(42, 100));
+    assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(42, 100));
+    let outcome = Some(approved_outcome(
+      9,
+      2,
+      crate::ProposalEnactmentOutcome::Enacted { epoch: 9 },
+    ));
+    assert_eq!(Governance::finalized_proposal_outcome(42, 100), outcome);
+    assert_eq!(payload_execution_calls(), 1);
+    assert_eq!(custody(), Some(position));
+    assert_noop!(
+      Governance::unlock_vote_power(RuntimeOrigin::signed(10), 42),
+      Error::<Test>::VotePowerCustodyLockActive
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
+
+    System::set_block_number(11);
+    assert_ok!(Governance::unlock_vote_power(RuntimeOrigin::signed(10), 42));
+    assert_noop!(
+      Governance::unlock_vote_power(RuntimeOrigin::signed(10), 42),
+      Error::<Test>::VotePowerCustodyNotFound
+    );
+    service_governance_through(11);
+    assert_eq!(Governance::finalized_proposal_outcome(42, 100), outcome);
+    assert_eq!(payload_execution_calls(), 1);
+    assert_eq!(custody(), None);
+    assert_eq!(Balances::free_balance(10), voter_balance);
+    assert_eq!(
+      Balances::free_balance(PROTECTION_CUSTODY_ACCOUNT),
+      custody_balance
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
   });
 }
 

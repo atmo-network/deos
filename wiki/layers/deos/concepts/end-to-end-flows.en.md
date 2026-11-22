@@ -54,11 +54,15 @@ Owner pages: [Routing and Minting Loop](routing-and-minting-loop.en.md), [DEOS R
 
 ```mermaid
 flowchart TD
-  T["Timer or matching ingress"] --> R{"Actor Idle?"}
-  R -->|yes| L["One pending cycle latched"]
-  R -->|no| C["Custody credited, no cycle"]
+  T["Timer at N"] --> R{"Idle and readiness check succeeds?"}
+  I["Successful ingress at N"] --> C["Custody credited"]
+  C -->|matching ingress| R
+  R -->|no| Q["No new cycle"]
+  R -->|yes| L["Readiness latched for one cycle"]
   L --> S["Service turn at N+1 or later"]
-  S --> E["Effect committed"]
+  S --> O["Opening admitted"]
+  O --> P["Step admitted separately"]
+  P -->|effect succeeds| E["Effect committed"]
   E --> H["Transfer can signal another Actor"]
 ```
 

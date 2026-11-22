@@ -9,6 +9,13 @@ RUN_CARGO_CHECK="${RUN_CARGO_CHECK:-auto}"
 RUN_RUNTIME_TESTS="${RUN_RUNTIME_TESTS:-auto}"
 RUN_PALLET_TESTS="${RUN_PALLET_TESTS:-auto}"
 REQUIRE_CONTEXT_SYNC="${REQUIRE_CONTEXT_SYNC:-1}"
+BASE_REF=""
+BASE_COMMIT=""
+SELECTED_RANGE="HEAD -> worktree (including untracked paths)"
+PLAN_ONLY=0
+WORKSPACE_WIDE=0
+CRATE_PACKAGES=""
+STANDALONE_PACKAGES=""
 LEDGER_DIR="$SKILL_DIR/ledgers"
 HALLUCINATIONS_FILE="$LEDGER_DIR/hallucinations.jsonl"
 
@@ -23,13 +30,21 @@ Diff-aware DEOS completion gate for local delivery slices.
 It validates the smallest meaningful scope for the current pass and blocks the next loop until the touched layer is green.
 
 Options:
-  --self-test             Check audit routing without running project validation
+  --self-test              Check routing without running project validation
+  --base REF               Compare REF to committed HEAD; requires a clean checkout
+  --plan                   Print the selected scope without running validation
   --all-rust               Run architecture audit against the full pallet tree
   --skip-simulator         Do not run simulator validation
   --skip-cargo-check       Do not run cargo check validation
   --skip-runtime-tests     Do not run runtime unit tests
   --allow-no-context-sync  Warn instead of failing when context files were not updated
   -h, --help               Show this help message
+
+Changes to template/Cargo.toml or Cargo.lock select workspace library tests
+(excluding the runtime, which runs with try-runtime) and all standalone pallet
+checks. Package manifest changes select that package and, for a pallet, its
+standalone native feature check. Guest checks, tools and vendor are owned by
+the unpacked framework profile.
 
 Environment:
   AUDIT_SCOPE=changed|all
@@ -46,6 +61,14 @@ EOF
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --base)
+                [[ $# -ge 2 && -n "$2" ]] || { log_error "Missing value for --base"; exit 1; }
+                BASE_REF="$2"
+                shift
+                ;;
+            --plan)
+                PLAN_ONLY=1
+                ;;
             --all-rust)
                 AUDIT_SCOPE="all"
                 ;;
@@ -78,18 +101,34 @@ parse_args() {
 collect_changed_paths() {
     CHANGED_PATHS=()
     CHANGED_SHELL_PATHS=()
-    local tracked
-    local untracked
-    local path
-    tracked="$(git -C "$PROJECT_ROOT" diff --name-only HEAD || true)"
-    untracked="$(git -C "$PROJECT_ROOT" ls-files --others --exclude-standard || true)"
-    while IFS= read -r path; do
-        [[ -z "$path" ]] && continue
+    local candidate status path listing
+    local -A seen=()
+    local -a revs=(HEAD)
+    if [[ -n "$BASE_REF" ]]; then
+        BASE_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse --verify --end-of-options "$BASE_REF^{commit}")" || return 1
+        candidate="$(git -C "$PROJECT_ROOT" rev-parse --verify HEAD^{commit})" || return 1
+        status="$(git -C "$PROJECT_ROOT" status --porcelain --untracked-files=normal)" || return 1
+        [[ -z "$status" ]] || { log_error "--base requires a clean candidate checkout"; return 1; }
+        revs=("$BASE_COMMIT" "$candidate")
+        SELECTED_RANGE="$BASE_COMMIT..$candidate"
+    fi
+    listing="$(mktemp)" || return 1
+    # Disable rename pairing so a move selects both source and destination owners.
+    if ! git -C "$PROJECT_ROOT" diff --no-renames --name-only -z "${revs[@]}" -- > "$listing" ||
+        { [[ -z "$BASE_REF" ]] && ! git -C "$PROJECT_ROOT" ls-files -z --others --exclude-standard >> "$listing"; }; then
+        rm -f -- "$listing"
+        log_error "Cannot collect Git paths for $SELECTED_RANGE"
+        return 1
+    fi
+    while IFS= read -r -d '' path; do
+        [[ -n "${seen[$path]:-}" ]] && continue
+        seen["$path"]=1
         CHANGED_PATHS+=("$path")
         if [[ "$path" =~ \.sh$ && -f "$PROJECT_ROOT/$path" ]]; then
             CHANGED_SHELL_PATHS+=("$PROJECT_ROOT/$path")
         fi
-    done < <(printf '%s\n%s\n' "$tracked" "$untracked" | awk 'NF' | sort -u)
+    done < "$listing"
+    rm -f -- "$listing"
 }
 
 has_changed_path() {
@@ -159,65 +198,77 @@ should_run_protocol_coherence_mutation_tests() {
     has_changed_path '^\.agents/skills/alignment/scripts/audit-protocol-coherence-regressions\.sh$'
 }
 
+is_workspace_change() {
+    [[ "$1" =~ ^template/.*\.rs$ || "$1" =~ ^template/(.*/)?Cargo\.toml$ || "$1" == template/Cargo.lock ]] &&
+        [[ "$1" != template/tools/* && "$1" != template/vendor/* ]]
+}
+
 should_run_cargo_check() {
-    if [[ "$RUN_CARGO_CHECK" == "1" ]]; then
-        return 0
-    fi
-    if [[ "$RUN_CARGO_CHECK" == "0" ]]; then
-        return 1
-    fi
-    has_changed_path '^template/.*\.(rs|toml)$' || has_changed_path '^template/Cargo.lock$'
+    [[ "$RUN_CARGO_CHECK" != 0 ]] || return 1
+    [[ "$RUN_CARGO_CHECK" != 1 ]] || return 0
+    local path
+    for path in "${CHANGED_PATHS[@]}"; do
+        if is_workspace_change "$path"; then return 0; fi
+    done
+    return 1
 }
 
 should_run_runtime_tests() {
-    if [[ "$RUN_RUNTIME_TESTS" == "1" || "$RUN_RUNTIME_TESTS" == "release" ]]; then
-        return 0
-    fi
-    if [[ "$RUN_RUNTIME_TESTS" == "0" ]]; then
-        return 1
-    fi
-    has_changed_path '^template/runtime/src/.*\.rs$'
+    [[ "$RUN_RUNTIME_TESTS" != 0 ]] || return 1
+    [[ "$RUN_RUNTIME_TESTS" == 1 || "$RUN_RUNTIME_TESTS" == release || "$WORKSPACE_WIDE" == 1 ]] ||
+        has_changed_path '^template/runtime/(.*\.rs|Cargo\.toml)$'
 }
 
-# A change confined to one crate triggers neither the workspace tests nor the runtime suite, so the
-# canonical gate would compile that package and never execute a single assertion in it.
-should_run_pallet_tests() {
-    if [[ "$RUN_PALLET_TESTS" == "1" ]]; then
-        return 0
-    fi
-    if [[ "$RUN_PALLET_TESTS" == "0" ]]; then
-        return 1
-    fi
-    has_changed_path '^template/.*\.rs$'
+package_name() {
+    local manifest="$1" name
+    name="$(awk '
+        /^[[:space:]]*\[/ { in_package = ($0 ~ /^[[:space:]]*\[package\][[:space:]]*(#.*)?$/) }
+        in_package && /^[[:space:]]*name[[:space:]]*=/ {
+            value = $0
+            sub(/^[[:space:]]*name[[:space:]]*=[[:space:]]*/, "", value)
+            if (value !~ /^"[A-Za-z0-9][A-Za-z0-9_-]*"[[:space:]]*(#.*)?$/) exit 1
+            sub(/^"/, "", value)
+            sub(/".*$/, "", value)
+            name = value
+            count++
+        }
+        END { if (count != 1) exit 1; print name }
+    ' "$manifest")" && [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] ||
+        { log_error "Cannot map crate to a package in $manifest"; return 1; }
+    printf '%s\n' "$name"
 }
 
-# Maps each changed Rust file to the closest enclosing Cargo package. Excluded workspaces
-# (`tools/`, `vendor/`) keep their own locks and are covered by the framework profile, and the
-# runtime package already runs the superset suite with `try-runtime`.
-changed_crate_packages() {
-    local path directory manifest package
-    local -A packages=()
+resolve_package_plan() {
+    local path directory package manifest
+    local -A packages=() standalone=()
+    WORKSPACE_WIDE=0
+    if has_changed_path '^template/Cargo\.(toml|lock)$'; then WORKSPACE_WIDE=1; fi
+    CRATE_PACKAGES=""
+    STANDALONE_PACKAGES=""
     for path in "${CHANGED_PATHS[@]}"; do
-        [[ "$path" =~ ^template/.*\.rs$ ]] || continue
-        [[ "$path" == template/tools/* || "$path" == template/vendor/* ]] && continue
-        manifest=""
+        is_workspace_change "$path" || continue
+        [[ "$path" != template/Cargo.toml && "$path" != template/Cargo.lock ]] || continue
         directory="$(dirname "$TEMPLATE_DIR/${path#template/}")"
-        while : ; do
-            if [[ -f "$directory/Cargo.toml" ]]; then
-                manifest="$directory/Cargo.toml"
-                break
-            fi
-            [[ "$directory" == "$TEMPLATE_DIR" ]] && break
-            directory="$(dirname "$directory")"
-        done
-        [[ -n "$manifest" ]] || continue
-        package="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$manifest" | head -n 1)"
-        [[ -n "$package" ]] || { log_error "Cannot read a package name from $manifest"; return 1; }
-        [[ "$package" == "deos-runtime" ]] && continue
-        packages["$package"]=1
+        if [[ "$path" == */Cargo.toml ]]; then
+            manifest="$directory/Cargo.toml"
+        else
+            while [[ "$directory" != "$TEMPLATE_DIR" && ! -f "$directory/Cargo.toml" ]]; do
+                directory="$(dirname "$directory")"
+            done
+            manifest="$directory/Cargo.toml"
+        fi
+        package="$(package_name "$manifest")" || return 1
+        if [[ "$package" != "deos-runtime" ]]; then packages["$package"]=1; fi
+        if [[ "$path" =~ ^template/pallets/[^/]+/Cargo\.toml$ ]]; then standalone["$package"]=1; fi
     done
-    (( ${#packages[@]} > 0 )) && printf '%s\n' "${!packages[@]}"
-    return 0
+    if [[ "$WORKSPACE_WIDE" == 1 ]]; then
+        for manifest in "$TEMPLATE_DIR"/pallets/*/Cargo.toml; do
+            package="$(package_name "$manifest")" || return 1
+            standalone["$package"]=1
+        done
+    fi
+    if (( ${#packages[@]} )); then CRATE_PACKAGES="$(printf '%s\n' "${!packages[@]}" | LC_ALL=C sort)" || return 1; fi
+    if (( ${#standalone[@]} )); then STANDALONE_PACKAGES="$(printf '%s\n' "${!standalone[@]}" | LC_ALL=C sort)" || return 1; fi
 }
 
 should_run_shell_syntax_check() {
@@ -304,7 +355,85 @@ CASES
     run_knowledge_sync >/dev/null
     CHANGED_PATHS=(scripts/_common.sh)
     REQUIRE_CONTEXT_SYNC=0 run_knowledge_sync >/dev/null
-    log_success "Completion audit and knowledge-sync routing self-test passed"
+    run_behavior_routing_self_test
+    log_success "Completion audit, behavioral and knowledge-sync routing self-test passed"
+)
+
+run_behavior_routing_self_test() (
+    local RUN_CARGO_CHECK=auto RUN_RUNTIME_TESTS=auto BASE_REF=""
+    local path check runtime wide crates standalone expected actual
+    while IFS='|' read -r path check runtime wide crates standalone; do
+        CHANGED_PATHS=("$path")
+        resolve_package_plan
+        actual="0|"
+        if should_run_cargo_check; then actual="1|"; fi
+        if should_run_runtime_tests; then actual+="1|"; else actual+="0|"; fi
+        expected="$check|$runtime|$wide"
+        if [[ "$actual$WORKSPACE_WIDE" != "$expected" ]]; then
+            log_error "Behavioral routing mismatch for $path: $actual$WORKSPACE_WIDE != $expected"
+            return 1
+        fi
+        [[ "$CRATE_PACKAGES" == "$crates" ]] || { log_error "Wrong crate tests for $path"; return 1; }
+        if [[ "$wide" == 1 ]]; then
+            [[ "$STANDALONE_PACKAGES" == *pallet-deos-governance* && "$STANDALONE_PACKAGES" == *pallet-deos-actors* ]] ||
+                { log_error "Missing workspace standalone checks for $path"; return 1; }
+        else
+            [[ "$STANDALONE_PACKAGES" == "$standalone" ]] || { log_error "Wrong standalone checks for $path"; return 1; }
+        fi
+    done <<'CASES'
+template/pallets/governance/Cargo.toml|1|0|0|pallet-deos-governance|pallet-deos-governance
+template/runtime/Cargo.toml|1|1|0||
+template/Cargo.toml|1|1|1||
+template/Cargo.lock|1|1|1||
+template/pallets/actors/src/execution.rs|1|0|0|pallet-deos-actors|
+template/runtime/src/lib.rs|1|1|0||
+template/runtime/build.rs|1|1|0||
+docs/deos/core.architecture.en.md|0|0|0||
+template/tools/pvf-validation/src/lib.rs|0|0|0||
+template/vendor/pallet-assets/Cargo.toml|0|0|0||
+CASES
+    CHANGED_PATHS=(template/runtime/Cargo.toml)
+    resolve_package_plan
+    if RUN_RUNTIME_TESTS=0 should_run_runtime_tests || RUN_CARGO_CHECK=0 should_run_cargo_check; then
+        log_error "Explicit behavioral skip did not override routing"
+        return 1
+    fi
+
+    local fixture
+    fixture="$(mktemp -d)"
+    trap 'rm -rf -- "$fixture"' EXIT
+    local PROJECT_ROOT="$fixture" TEMPLATE_DIR="$fixture/template"
+    git -C "$fixture" -c init.defaultBranch=main init -q
+    local -a commit=(git -C "$fixture" -c core.hooksPath=/dev/null -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit -qm)
+    "${commit[@]}" base --allow-empty
+    mkdir -p "$TEMPLATE_DIR/pallets/governance"
+    local manifest="$TEMPLATE_DIR/pallets/governance/Cargo.toml"
+    printf '[package]\nname = "pallet-deos-governance"\n' > "$manifest"
+    git -C "$fixture" add .
+    "${commit[@]}" candidate
+    collect_changed_paths
+    [[ ${#CHANGED_PATHS[@]} == 0 ]] || { log_error "Fixture worktree is not clean"; return 1; }
+    BASE_REF=HEAD^
+    collect_changed_paths
+    resolve_package_plan
+    if [[ "${CHANGED_PATHS[*]}" != template/pallets/governance/Cargo.toml || "$CRATE_PACKAGES" != pallet-deos-governance ]] || ! should_run_cargo_check; then
+        log_error "Clean committed diff failed to select Governance tests"
+        return 1
+    fi
+    if (git() {
+        if [[ "$3" == diff ]]; then return 128; fi
+        command git "$@"
+    }; collect_changed_paths) >/dev/null 2>&1; then
+        log_error "Git diff failure accepted as a valid selection"
+        return 1
+    fi
+    printf '[package]\n[lib]\nname = "not-the-package"\n' > "$manifest"
+    BASE_REF=""
+    collect_changed_paths
+    if resolve_package_plan >/dev/null 2>&1; then
+        log_error "Malformed crate mapping accepted as a valid selection"
+        return 1
+    fi
 )
 
 should_run_backlog_audit() {
@@ -313,30 +442,21 @@ should_run_backlog_audit() {
 
 check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
-    require_directory "$PROJECT_ROOT/.git" "Git repository"
     require_directory "$SKILL_DIR" "Skill directory"
     hydrate_local_tool_paths
     require_commands git
-    mkdir -p "$LEDGER_DIR"
-    touch "$HALLUCINATIONS_FILE"
     collect_changed_paths
+    resolve_package_plan
+    if [[ "$PLAN_ONLY" == 0 ]]; then
+        mkdir -p "$LEDGER_DIR"
+        touch "$HALLUCINATIONS_FILE"
+    fi
     log_success "Gate prerequisites checked"
 }
 
 plan() {
     phase_banner "DEOS completion gate"
-    log_info "Layer 0: Architecture audit"
-    log_info "Layer 1: Changed shell syntax"
-    log_info "Layer 2: Mathematical truth"
-    log_info "Layer 3: Behavioral truth"
-    log_info "Layer 4: Markdown quality"
-    log_info "Layer 5: Wiki trust"
-    log_info "Layer 6: Economic claim integrity"
-    log_info "Layer 7: Strategic governance ingress"
-    log_info "Layer 8: Protocol coherence regressions"
-    log_info "Layer 9: Release-line consistency"
-    log_info "Layer 10: Backlog open-work shape"
-    log_info "Layer 11: Knowledge sync"
+    log_info "Selected range: $SELECTED_RANGE"
     log_info "Audit scope: $AUDIT_SCOPE"
     log_info "Changed paths: ${#CHANGED_PATHS[@]}"
     log_info "Changed shell scripts: ${#CHANGED_SHELL_PATHS[@]}"
@@ -344,6 +464,27 @@ plan() {
     log_info "Cargo check mode: $RUN_CARGO_CHECK"
     log_info "Runtime tests mode: $RUN_RUNTIME_TESTS"
     log_info "Require context sync: $REQUIRE_CONTEXT_SYNC"
+    if should_run_cargo_check; then
+        log_info "Select workspace cargo check"
+        if should_run_runtime_tests; then log_info "Select runtime library tests (try-runtime)"; else log_info "Skip runtime library tests"; fi
+        if [[ "$RUN_PALLET_TESTS" == 0 ]]; then
+            log_info "Skip crate library tests (explicit override)"
+        elif [[ "$WORKSPACE_WIDE" == 1 ]]; then
+            log_info "Select workspace library tests (excluding deos-runtime)"
+        elif [[ -n "$CRATE_PACKAGES" ]]; then
+            log_info "Select crate library tests: ${CRATE_PACKAGES//$'\n'/, }"
+        else
+            log_info "Skip crate library tests (no mapped package)"
+        fi
+        if [[ -n "$STANDALONE_PACKAGES" ]]; then
+            log_info "Select standalone native checks: ${STANDALONE_PACKAGES//$'\n'/, }"
+        else
+            log_info "Skip standalone native checks"
+        fi
+    else
+        log_info "Skip behavioral layer (no affected workspace input or explicit override)"
+    fi
+    log_info "Separate profiles: Wiki and unpacked framework (including guest, vendor and tools)"
 }
 
 run_architecture_audit() {
@@ -359,7 +500,7 @@ run_architecture_audit() {
         fi
         return 0
     fi
-    if ! "$SCRIPT_DIR/auditor.sh"; then
+    if ! "$SCRIPT_DIR/auditor.sh" --since "${BASE_COMMIT:-HEAD}"; then
         log_error "Architecture audit failed"
         exit 1
     fi
@@ -372,10 +513,13 @@ run_shell_syntax_validation() {
         return 0
     fi
     require_commands bash
-    if ! bash -n "${CHANGED_SHELL_PATHS[@]}"; then
-        log_error "Shell syntax validation failed"
-        exit 1
-    fi
+    local path
+    for path in "${CHANGED_SHELL_PATHS[@]}"; do
+        if ! bash -n "$path"; then
+            log_error "Shell syntax validation failed: $path"
+            exit 1
+        fi
+    done
     log_success "Shell syntax validation passed"
 }
 
@@ -396,12 +540,12 @@ run_simulator_validation() {
 run_behavior_validation() {
     phase_banner "Step 5: Behavioral truth"
     if ! should_run_cargo_check; then
-        log_warning "Skipping cargo check because no Rust workspace files changed"
+        log_warning "Skipping cargo check because no affected workspace input was selected or an explicit override skipped it"
         return 0
     fi
     require_directory "$TEMPLATE_DIR" "Template directory"
     require_commands cargo
-    if ! run_shell_step "cargo check --workspace" "" "cd \"$TEMPLATE_DIR\" && cargo check --workspace"; then
+    if ! run_shell_step "cargo check --workspace" "" "cd \"$TEMPLATE_DIR\" && cargo check --locked --workspace"; then
         log_error "Behavioral validation failed"
         exit 1
     fi
@@ -418,28 +562,28 @@ run_behavior_validation() {
         # into executable form; without it those assertions are dead weight. Measured on this tree at
         # 390s against 363s for the identical selection, so the gate pays about 7% for the whole
         # invariant layer instead of running the suite twice.
-        if ! run_shell_step "cargo test -p deos-runtime --lib --features try-runtime$runtime_label" "" "cd \"$TEMPLATE_DIR\" && cargo test $runtime_profile -p deos-runtime --lib --features try-runtime"; then
+        if ! run_shell_step "cargo test -p deos-runtime --lib --features try-runtime$runtime_label" "" "cd \"$TEMPLATE_DIR\" && cargo test --locked $runtime_profile -p deos-runtime --lib --features try-runtime"; then
             log_error "Runtime behavioral validation failed"
             exit 1
         fi
-    else
-        log_warning "Skipping runtime unit tests because no runtime source files changed"
     fi
-    if should_run_pallet_tests; then
-        local -a changed_pallets=()
-        mapfile -t changed_pallets < <(changed_crate_packages)
-        if (( ${#changed_pallets[@]} == 0 )); then
-            log_warning "Skipping crate unit tests because no changed path maps to an in-workspace package"
+    local package
+    if [[ "$RUN_PALLET_TESTS" != 0 ]]; then
+        if [[ "$WORKSPACE_WIDE" == 1 ]]; then
+            run_shell_step "Workspace library tests (excluding deos-runtime)" "" \
+                "cd \"$TEMPLATE_DIR\" && cargo test --locked --workspace --exclude deos-runtime --lib"
+        elif [[ -n "$CRATE_PACKAGES" ]]; then
+            while IFS= read -r package; do
+                run_shell_step "cargo test -p $package --lib" "" \
+                    "cd \"$TEMPLATE_DIR\" && cargo test --locked -p $package --lib"
+            done <<< "$CRATE_PACKAGES"
         fi
-        local package
-        for package in "${changed_pallets[@]}"; do
-            if ! run_shell_step "cargo test -p $package --lib" "" "cd \"$TEMPLATE_DIR\" && cargo test -p $package --lib"; then
-                log_error "Pallet behavioral validation failed for $package"
-                exit 1
-            fi
-        done
-    else
-        log_warning "Skipping crate unit tests because no Rust source files changed"
+    fi
+    if [[ -n "$STANDALONE_PACKAGES" ]]; then
+        while IFS= read -r package; do
+            run_command_step "Independent pallet package $package" "" \
+                "$PROJECT_ROOT/scripts/ci-local.sh" --only check --package "$package"
+        done <<< "$STANDALONE_PACKAGES"
     fi
 }
 
@@ -585,9 +729,10 @@ run_knowledge_sync() {
 
 main() {
     parse_args "$@"
-    run_self_test
     check_prerequisites
     plan
+    if [[ "$PLAN_ONLY" == 1 ]]; then return; fi
+    run_self_test
     run_architecture_audit
     run_shell_syntax_validation
     run_simulator_validation
@@ -606,28 +751,10 @@ main() {
     log_success "Completion gate passed"
 }
 
-run_entrypoint() {
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     if [[ $# == 1 && "$1" == "--self-test" ]]; then
         run_self_test
-        return
-    fi
-    if [[ "${1:-}" == "--internal" ]]; then
-        shift
+    else
         main "$@"
-        return
     fi
-    local arg
-    for arg in "$@"; do
-        if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
-            main "$@"
-            return
-        fi
-    done
-    local script_path
-    script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-    run_command_step "DEOS completion gate" "" "$script_path" --internal "$@"
-}
-
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    run_entrypoint "$@"
 fi
