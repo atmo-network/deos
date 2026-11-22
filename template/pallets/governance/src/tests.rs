@@ -3595,6 +3595,70 @@ fn submit_urgent_root_action(item_id: u32, ordinary_lead_in: u64, urgent_period:
 }
 
 #[test]
+fn full_terminal_bucket_rolls_back_unanimous_urgent_vote_until_next_epoch() {
+  new_test_ext().execute_with(|| {
+    MockProtectionCustody::set(true);
+    drop(Balances::deposit_creating(&PROTECTION_CUSTODY_ACCOUNT, 1));
+    set_payload_preimage_state(H256::default(), true, false);
+    set_payload_executor_enabled(true);
+    submit_urgent_root_action(100, 6, 1);
+    set_veto_vote_weight(10, 100);
+    for item_id in 0..<Test as crate::Config>::MaxFinalizedProposalOutcomesPerEpoch::get() {
+      assert_ok!(Governance::record_finalized_proposal_outcome(
+        8,
+        item_id,
+        rejected_outcome(1, ProposalRejectionReason::AdminRejected),
+        1,
+      ));
+    }
+    let voter_balance = Balances::free_balance(10);
+    let custody_balance = Balances::free_balance(PROTECTION_CUSTODY_ACCOUNT);
+    let ordinary_maturity = Governance::proposal_maturity_bucket(9);
+    assert_eq!(ordinary_maturity.len(), 1);
+    let vote = || Governance::cast_vote(RuntimeOrigin::signed(10), 42, 100, ProposalVoteKind::Pass);
+
+    assert_noop!(
+      vote(),
+      Error::<Test>::FinalizedProposalOutcomeExpiryBucketFull
+    );
+    assert_eq!(payload_execution_calls(), 0);
+    assert!(ActiveProposals::<Test>::contains_key(42, 100));
+    assert!(Governance::proposal_votes(42, 100).is_none());
+    assert!(Governance::governance_lock(10).is_none());
+    assert_eq!(Governance::govxp_counters(42, 10).total_participations, 0);
+    assert!(!ProposalUrgentAuthorizedAt::<Test>::contains_key(42, 100));
+    assert!(Governance::proposal_maturity_bucket(2).is_empty());
+    assert_eq!(Governance::proposal_maturity_bucket(9), ordinary_maturity);
+    assert_eq!(Balances::free_balance(10), voter_balance);
+    assert_eq!(
+      Balances::free_balance(PROTECTION_CUSTODY_ACCOUNT),
+      custody_balance
+    );
+
+    System::set_block_number(2);
+    service_governance_through(2);
+    assert_ok!(vote());
+    assert_eq!(payload_execution_calls(), 1);
+    assert_eq!(
+      Governance::finalized_proposal_outcome(42, 100),
+      Some(approved_outcome(
+        2,
+        0,
+        crate::ProposalEnactmentOutcome::Enacted { epoch: 2 },
+      ))
+    );
+    assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(42, 100));
+    assert_eq!(Balances::free_balance(10), voter_balance - 1);
+    assert_eq!(
+      Balances::free_balance(PROTECTION_CUSTODY_ACCOUNT),
+      custody_balance + 1
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Governance::do_try_state());
+  });
+}
+
+#[test]
 fn urgent_authorization_schedules_finalization_at_the_urgent_close() {
   new_test_ext().execute_with(|| {
     submit_urgent_root_action(100, 6, 1);
