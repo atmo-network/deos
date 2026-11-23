@@ -811,7 +811,7 @@ async function enforceHostSources(entries, reference, findings, metadata, repoRo
 // A finite public-input/initialization source case, never package-wide crypto or
 // Native artifact clearance. Updating this reviewed identity requires a new review;
 // neither a caller-supplied digest nor an environment override can bless a snapshot.
-const rootCallerProofSha256 = '98f9bc42f7bca92a66f60f6caadc80db8f8d7d6bf7d32c575b4ac27b3b9d2b4e';
+const rootCallerProofSha256 = '3f64b10cbdce1d08f012e5c1fa9d55fa1665c5f71830efc62784c7b04743ef97';
 const rootCallerRole = { ...rootRole, purpose: 'finite-public-operand-source-case', toolchain: '1.94.1',
   profile: 'release: opt3, unwind; production: fat LTO, codegen-units 1',
   support: 'Root source roles; both Wasm targets; native runtime; isolated PVF host excluded; macOS acquisition retained; no native binary clearance' };
