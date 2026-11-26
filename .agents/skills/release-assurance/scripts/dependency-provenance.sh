@@ -15,7 +15,12 @@ LEDGER="$SKILL_DIR/config/dependency-provenance-exceptions.json"
 usage() {
     cat <<'EOF'
 Usage: dependency-provenance.sh <--framework|--root|--host|--client|--self-test>
+       dependency-provenance.sh --host-c-link-evidence RECEIPT_DIR
 
+  --host-c-link-evidence DIR
+               Offline verification of the exact reviewed zstd-sys native C/link receipt and emitted ELF.
+               Requires the installed repository-pinned Node on PATH; does not fetch tools.
+               No advisory disposition or Host policy approval. Does not build or execute the artifact.
   --framework  Report both selected Cargo roles independently; fail if either fails.
   --root       Root Cargo licenses/sources, actual and version-view advisory decisions.
   --host       Isolated Linux PVF Cargo role and pinned workers (not producer clearance).
@@ -86,6 +91,16 @@ review_client() {
 }
 
 main() {
+    if [[ ${1:-} == --host-c-link-evidence ]]; then
+        [[ $# -eq 2 ]] || { usage; return 1; }
+        require_commands node
+        [[ "$(node --version)" == "v$(<"$PROJECT_ROOT/.node-version")" ]] || {
+            log_error "Select the installed repository-pinned Node on PATH; no bootstrap in offline evidence mode"
+            return 1
+        }
+        node "$VALIDATOR" --host-c-link-evidence "$2"
+        return
+    fi
     [[ $# -eq 1 ]] || { usage; return 1; }
     case "$1" in
         --self-test) activate_pinned_node; node "$VALIDATOR" --self-test; return ;;

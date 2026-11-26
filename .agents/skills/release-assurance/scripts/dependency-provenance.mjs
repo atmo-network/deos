@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { lstat, mkdtemp, open, readdir, readFile, readlink, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, readdir, readFile, readlink, realpath, rm, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir, tmpdir, userInfo } from 'node:os';
@@ -648,6 +648,97 @@ async function enforceNativePreparation(entries, reference, findings, metadata, 
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
+}
+
+// Consume one reviewed artifact receipt without entering any advisory-policy path.
+// This is not a generic manifest trust grant or a test of the live Host source tree.
+const hostCLinkArtifact = 'target/x86_64-unknown-linux-gnu/debug/deos-pvf-validation';
+const hostCLinkEvidence = Object.freeze({
+  receipt: '8db8a2aa9a1d1783ecefb69e35b7e2586a738f6a52f452872a563caf59d8865b',
+  rows: 40,
+  archive: 'cee987a2cd441391910f90257c7ca249181ef21398ee5990bf1da2fd207e1994',
+  elf: 'c588a6f2e4ba6ae9cb15d05f27a1736ae7881ea7e1ff1017fa43d749956170e1',
+});
+const hostCLinkOutputs = ['out/elf-host.sha256', 'out/elf.sha256', 'out/source-identity.txt',
+  'out/status', 'out/verification.status'];
+async function hostCLinkDigest(root, file) {
+  const path = await regularOwnerFile(root, file);
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    assert.ok((await handle.stat()).isFile(), `Host C/link input is not regular: ${file}`);
+    const hash = createHash('sha256');
+    for await (const chunk of handle.createReadStream({ autoClose: false })) hash.update(chunk);
+    return hash.digest('hex');
+  } finally {
+    await handle.close();
+  }
+}
+async function verifyHostCLinkEvidence(root, proof = hostCLinkEvidence) {
+  root = resolve(root);
+  assert.equal(await realpath(root), root, 'Host C/link receipt root substitution');
+  const manifest = await regularOwnerFile(root, 'out/SHA256SUMS');
+  assert.ok((await lstat(manifest)).size <= 8192, 'oversized Host C/link receipt');
+  const bytes = await readFile(manifest, 'utf8');
+  assert.equal(sha256(bytes), proof.receipt, 'unreviewed Host C/link receipt');
+  const rows = bytes.trimEnd().split('\n').map(line => {
+    const row = /^([a-f0-9]{64})  (out\/[A-Za-z0-9][A-Za-z0-9_.+-]*)$/.exec(line);
+    assert.ok(row && row[2] !== 'out/SHA256SUMS', 'invalid Host C/link output path');
+    return [row[2], row[1]];
+  });
+  const files = new Map(rows);
+  assert.equal(files.size, rows.length, 'duplicate Host C/link output');
+  assert.equal(files.size, proof.rows, 'incomplete Host C/link receipt');
+  for (const file of hostCLinkOutputs) assert.ok(files.has(file), `missing Host C/link output: ${file}`);
+  for (const [file, expected] of files)
+    assert.equal(await hostCLinkDigest(root, file), expected, `Host C/link output drift: ${file}`);
+  for (const file of ['out/status', 'out/verification.status'])
+    assert.equal(await readFile(await regularOwnerFile(root, file), 'utf8'), '0\n', `Host C/link stage failed: ${file}`);
+  assert.equal(await readFile(await regularOwnerFile(root, 'out/elf-host.sha256'), 'utf8'),
+    `${proof.elf}  ${hostCLinkArtifact}\n`, 'unbound Host ELF claim');
+  assert.equal(await readFile(await regularOwnerFile(root, 'out/elf.sha256'), 'utf8'),
+    `${proof.elf}  /fresh-target/${hostCLinkArtifact.slice('target/'.length)}\n`, 'unbound container ELF claim');
+  assert.equal(await hostCLinkDigest(root, 'source.tar'), proof.archive, 'Host source archive drift');
+  assert.equal(await hostCLinkDigest(root, hostCLinkArtifact), proof.elf, 'actual Host ELF drift');
+}
+
+async function selfTestHostCLinkEvidence(directory) {
+  const root = join(directory, 'host-c-link-evidence');
+  const output = name => join(root, 'out', name);
+  const artifact = join(root, hostCLinkArtifact);
+  await mkdir(dirname(artifact), { recursive: true });
+  await mkdir(join(root, 'out'));
+  const fixture = { archive: sha256('source fixture'), elf: sha256('ELF fixture'), rows: hostCLinkOutputs.length };
+  await writeFile(join(root, 'source.tar'), 'source fixture');
+  await writeFile(artifact, 'ELF fixture');
+  await writeFile(output('status'), '0\n');
+  await writeFile(output('verification.status'), '0\n');
+  await writeFile(output('source-identity.txt'), 'source identity fixture\n');
+  await writeFile(output('elf-host.sha256'), `${fixture.elf}  ${hostCLinkArtifact}\n`);
+  await writeFile(output('elf.sha256'), `${fixture.elf}  /fresh-target/${hostCLinkArtifact.slice('target/'.length)}\n`);
+  async function seal(rows) {
+    const manifest = rows ?? (await Promise.all(hostCLinkOutputs.map(async file =>
+      `${sha256(await readFile(join(root, file)))}  ${file}\n`))).join('');
+    await writeFile(output('SHA256SUMS'), manifest);
+    return { ...fixture, receipt: sha256(manifest) };
+  }
+  const proof = await seal();
+  await verifyHostCLinkEvidence(root, proof);
+  await writeFile(artifact, 'changed ELF');
+  await assert.rejects(verifyHostCLinkEvidence(root, proof), /actual Host ELF drift/);
+  await writeFile(artifact, 'ELF fixture');
+  await writeFile(join(root, 'source.tar'), 'changed source');
+  await assert.rejects(verifyHostCLinkEvidence(root, proof), /Host source archive drift/);
+  await writeFile(join(root, 'source.tar'), 'source fixture');
+  await writeFile(output('verification.status'), '1\n');
+  await assert.rejects(verifyHostCLinkEvidence(root, proof), /Host C\/link output drift/);
+  await assert.rejects(verifyHostCLinkEvidence(root, await seal()), /Host C\/link stage failed/);
+  const manifest = await readFile(output('SHA256SUMS'), 'utf8');
+  await assert.rejects(verifyHostCLinkEvidence(root, await seal(manifest + manifest.split('\n')[0] + '\n')),
+    /duplicate Host C\/link output/);
+  await assert.rejects(verifyHostCLinkEvidence(root, await seal(manifest.replace('out/status', 'out/../status'))),
+    /invalid Host C\/link output path/);
+  await assert.rejects(verifyHostCLinkEvidence(root, proof), /unreviewed Host C\/link receipt/);
+  console.log('[SUCCESS] Host C/link exact-evidence self-test: 1 positive, 7 negative; no advisory approval');
 }
 
 // Installed finite Host source decision. This fixed anchor grants neither
@@ -1817,6 +1908,7 @@ if (process.argv[2] === '--self-test') {
   selfTestGitProjection();
   await selfTestNativePreparation(directory);
   await selfTestHostSources(directory);
+  await selfTestHostCLinkEvidence(directory);
   await selfTestNativeConfiguration(directory);
   selfTestNativeInstances();
   await selfTestRootCaller(directory, process.argv[3]);
@@ -2230,6 +2322,13 @@ function projectLock(lock, metadata, externalWorkspace = false) {
     versionView = versionView.replaceAll(source, registrySource);
   }
   return { projected: versionView, locals };
+}
+
+if (process.argv[2] === '--host-c-link-evidence') {
+  assert.equal(process.argv.length, 4, 'Usage: --host-c-link-evidence RECEIPT_DIR');
+  await verifyHostCLinkEvidence(process.argv[3]);
+  console.log('[SUCCESS] Exact native zstd-sys C/link receipt verified; no Rust caller, advisory, Host policy, worker or release approval');
+  process.exit(0);
 }
 
 if (process.argv[2] === '--check-cargo-environment') {
