@@ -4805,8 +4805,50 @@ fn author_complete_block_after_with_expected_dispatch(
     for (call_index, (call_signer, call_nonce, call)) in signed_calls.iter().enumerate() {
       let extrinsic =
         actors_integration_tests::signed_extrinsic(call_signer, *call_nonce, (*call).clone());
-      let result = Executive::apply_extrinsic(extrinsic.clone())
-        .unwrap_or_else(|error| panic!("valid scripted call {call_index} rejected: {error:?}"));
+      let result = Executive::apply_extrinsic(extrinsic.clone()).unwrap_or_else(|error| {
+        if error == InvalidTransaction::Payment.into() {
+          use polkadot_sdk::{
+            frame_support::traits::tokens::{Fortitude, Preservation, fungible::Inspect},
+            pallet_transaction_payment::NextFeeMultiplier,
+            sp_core::hexdisplay::HexDisplay,
+          };
+          let payer = crate::AccountId::from(call_signer.public());
+          let encoded = extrinsic.encode();
+          let fee = crate::TransactionPayment::query_info(
+            extrinsic.clone(),
+            u32::try_from(encoded.len()).unwrap(),
+          )
+          .partial_fee;
+          eprintln!(
+            "Scripted payment refusal: block={block_number} parent={:?} index={call_index} payer={payer:?} scripted_nonce={call_nonce} payer_after={:?} reducible_after={} quoted_fee_after={fee} can_withdraw_after={:?} multiplier_after={} extrinsic={:?}",
+            parent.hash(),
+            System::account(&payer),
+            Balances::reducible_balance(&payer, Preservation::Preserve, Fortitude::Polite),
+            Balances::can_withdraw(&payer, fee),
+            NextFeeMultiplier::<Runtime>::get().into_inner(),
+            HexDisplay::from(&encoded),
+          );
+          if let Some(directory) = std::env::var_os("DEOS_SCRIPTED_PAYMENT_FAILURE_DIR") {
+            use std::io::Write;
+            // Keep parent TOP, inherents, applied prefix and the exact rejected bytes together.
+            if pre_state.children_default.is_empty() {
+              let path = std::path::PathBuf::from(directory)
+                .join(format!("{block_number}-{:?}-{call_index}.scale", parent.hash()));
+              let capture = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .and_then(|mut file| {
+                  file.write_all(
+                    &(parent, &pre_state.top, wasm, &inherent_data, &extrinsics, &encoded).encode(),
+                  )
+                });
+              eprintln!("Scripted payment refusal input {path:?}: {capture:?}");
+            }
+          }
+        }
+        panic!("valid scripted call {call_index} rejected: {error:?}")
+      });
       if let Some(expected) = expected_dispatch {
         assert_eq!(
           result, expected[call_index],

@@ -161,7 +161,7 @@ fn configured_fixed_envelope_has_exact_owner_ledger() {
     ),
     (
       "xcm_version_discovery",
-      "outstanding idle maximum",
+      "initialization maximum (discovery only)",
       XcmVersionDiscoveryFixedWeight::get(),
     ),
     ("timestamp", "context plus prepaid finalization", timestamp),
