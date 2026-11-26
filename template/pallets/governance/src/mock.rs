@@ -631,6 +631,7 @@ impl pallet_governance::Config for Test {
   type StrategicProposalReserve = ConstU32<1>;
   type MaxActiveProposalsPerAuthor = ConstU32<8>;
   type MaxMaturingProposalsPerEpoch = ConstU32<4>;
+  type MaxMaturityReservationWindow = ConstU32<4>;
   type MaxPendingEnactments = ConstU32<8>;
   type ProposalVotingPeriod = ConstU64<2>;
   type ProposalLeadInPeriod = ProposalLeadInPeriod;

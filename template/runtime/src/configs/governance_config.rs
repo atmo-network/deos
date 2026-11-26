@@ -23,7 +23,12 @@ parameter_types! {
   pub const MaxActiveProposalsPerDomain: u32 = 128;
   pub const StrategicProposalReserve: u32 = 1;
   pub const MaxActiveProposalsPerAuthor: u32 = 16;
+  /// Admission capacity per maturity epoch. The service rate is
+  /// `MaxGovernanceMaturingProposalsPerBlock`, so capacity above that rate admits a backlog
+  /// that only the separate maturation budget can make stable; that is an open schedule issue.
   pub const MaxMaturingProposalsPerEpoch: u32 = 4;
+  /// Bounded forward window for moving a live maturity reservation to a later epoch.
+  pub const MaxMaturityReservationWindow: u32 = 4;
   pub const MaxPendingEnactments: u32 = 128;
   pub const ProposalVotingPeriod: BlockNumber = 7 * 24 * HOURS;
   pub const ProposalLeadInPeriod: BlockNumber = 3 * 24 * HOURS;
@@ -1428,6 +1433,7 @@ impl pallet_governance::Config for Runtime {
   type StrategicProposalReserve = StrategicProposalReserve;
   type MaxActiveProposalsPerAuthor = MaxActiveProposalsPerAuthor;
   type MaxMaturingProposalsPerEpoch = MaxMaturingProposalsPerEpoch;
+  type MaxMaturityReservationWindow = MaxMaturityReservationWindow;
   type MaxPendingEnactments = MaxPendingEnactments;
   type ProposalVotingPeriod = ProposalVotingPeriod;
   type ProposalLeadInPeriod = ProposalLeadInPeriod;

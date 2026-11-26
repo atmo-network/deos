@@ -342,6 +342,58 @@ impl<T: Config> Pallet<T> {
     })
   }
 
+  /// Move a live maturity reservation to a new epoch, or leave it exactly where it is.
+  ///
+  /// The target is reserved first, so a full bucket can never cost a live proposal its
+  /// current deadline, and the previous touch is removed only after that reserve succeeds.
+  /// One proposal therefore owns at most one live reservation, which is what makes the
+  /// per-epoch bound on charged maturity visits enforceable.
+  pub(crate) fn move_proposal_maturity(
+    from_epoch: T::Epoch,
+    to_epoch: T::Epoch,
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+  ) -> DispatchResult {
+    if from_epoch == to_epoch {
+      return Self::schedule_proposal_maturity_at(to_epoch, domain, item_id);
+    }
+    Self::schedule_proposal_maturity_at(to_epoch, domain, item_id)?;
+    ProposalMaturityBuckets::<T>::mutate(from_epoch, |bucket| {
+      if let Some(index) = bucket
+        .iter() // deos-bypass: bounded-iter — MaxMaturitiesPerEpoch bucket
+        .position(|entry| entry.domain == domain && entry.item_id == item_id)
+      {
+        bucket.remove(index);
+      }
+    });
+    Ok(())
+  }
+
+  /// Reserve the first epoch from `natural` onwards that still has room for this touch,
+  /// inside a bounded window, and drop the previous reservation. Returns the epoch reserved.
+  ///
+  /// The window is the same bounded catch-up window that limits epoch traversal, so a live
+  /// proposal never searches without bound and never silently loses its pending deadline
+  /// while any neighbouring epoch can still hold it.
+  pub(crate) fn reserve_forward(
+    from_epoch: T::Epoch,
+    natural: T::Epoch,
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+  ) -> Option<T::Epoch> {
+    let mut candidate_u32 = Self::epoch_to_u32(natural).ok()?;
+    for _ in 0..T::MaxMaturityReservationWindow::get() {
+      let Ok(candidate) = Self::epoch_from_u32(candidate_u32) else {
+        return None;
+      };
+      if Self::move_proposal_maturity(from_epoch, candidate, domain, item_id).is_ok() {
+        return Some(candidate);
+      }
+      candidate_u32 = candidate_u32.checked_add(1)?;
+    }
+    None
+  }
+
   pub(crate) fn insert_active_proposal_id(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
@@ -385,8 +437,16 @@ impl<T: Config> Pallet<T> {
       .checked_add(1)
       .ok_or(Error::<T>::EpochArithmeticOverflow)?
       .max(Self::epoch_to_u32(natural_maturity_epoch)?);
-    let maturity_epoch = Self::epoch_from_u32(target_epoch_u32)?;
-    Self::schedule_proposal_maturity_at(maturity_epoch, domain, item_id)?;
+    let target_epoch = Self::epoch_from_u32(target_epoch_u32)?;
+    // The administrative recovery takes the same bounded forward window as an automatic
+    // continuation, so a full natural epoch does not make the proposal unrecoverable.
+    let maturity_epoch = Self::reserve_forward(
+      natural_maturity_epoch,
+      target_epoch,
+      domain,
+      item_id,
+    )
+    .ok_or(Error::<T>::ProposalMaturityBucketFull)?;
     Self::deposit_event(Event::ProposalAutoFinalizationRequeued {
       domain,
       item_id,
@@ -550,7 +610,14 @@ impl<T: Config> Pallet<T> {
       return Weight::zero();
     };
     let mut processed_entries = 0u32;
-    for epoch_u32 in first_epoch_u32..=current_epoch_u32 {
+    // The traversal of empty epochs is bounded independently of the productive visits, so a
+    // deep cursor cannot turn one service call into an unbounded scan.
+    let scan_epochs = T::MaxEpochCatchUpPerBlock::get();
+    let scan_through_u32 = first_epoch_u32
+      .saturating_add(scan_epochs)
+      .saturating_sub(1)
+      .min(current_epoch_u32);
+    for epoch_u32 in first_epoch_u32..=scan_through_u32 {
       let Ok(epoch) = Self::epoch_from_u32(epoch_u32) else {
         return Weight::zero();
       };
@@ -593,14 +660,10 @@ impl<T: Config> Pallet<T> {
               let confirm_end_epoch = epoch_u32
                 .checked_add(confirm_period)
                 .and_then(|confirm_end| Self::epoch_from_u32(confirm_end).ok());
-              if let Some(confirm_end_epoch) = confirm_end_epoch
-                && Self::schedule_proposal_maturity_at(
-                  confirm_end_epoch,
-                  touch.domain,
-                  touch.item_id,
-                )
-                .is_ok()
-              {
+              let reserved = confirm_end_epoch.and_then(|confirm_end_epoch| {
+                Self::reserve_forward(epoch, confirm_end_epoch, touch.domain, touch.item_id)
+              });
+              if let Some(confirm_end_epoch) = reserved {
                 ProposalConfirmStartedAt::<T>::insert(touch.domain, touch.item_id, epoch);
                 Self::deposit_event(Event::ProposalConfirmStarted {
                   domain: touch.domain,
@@ -623,12 +686,19 @@ impl<T: Config> Pallet<T> {
             }
           }
         }
-        let rescheduled = epoch_u32
+        // A live proposal must not silently lose its pending deadline. Reserve the natural
+        // continuation, or the first later epoch inside a bounded window that still has room.
+        // The touch itself always leaves the bucket so the epoch cursor can advance; when no
+        // epoch in the window can be reserved the deferral is reported and the proposal stays
+        // active for the administrative requeue recovery path.
+        let natural_next_epoch = epoch_u32
           .checked_add(1)
-          .and_then(|next_epoch| Self::epoch_from_u32(next_epoch).ok())
-          .is_some_and(|next_epoch| {
-            Self::schedule_proposal_maturity_at(next_epoch, touch.domain, touch.item_id).is_ok()
-          });
+          .and_then(|next_epoch| Self::epoch_from_u32(next_epoch).ok());
+        let rescheduled = natural_next_epoch
+          .and_then(|natural| {
+            Self::reserve_forward(epoch, natural, touch.domain, touch.item_id)
+          })
+          .is_some();
         Self::deposit_event(Event::ProposalAutoFinalizationDeferred {
           domain: touch.domain,
           item_id: touch.item_id,
@@ -638,6 +708,7 @@ impl<T: Config> Pallet<T> {
       }
     }
     T::WeightInfo::service_maturing_proposals(processed_entries)
+      .saturating_add(T::DbWeight::get().reads(scan_epochs.into()))
   }
 
   pub(crate) fn service_pending_enactments(current_epoch: T::Epoch) -> Weight {

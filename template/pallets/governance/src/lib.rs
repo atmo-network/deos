@@ -780,6 +780,11 @@ pub mod pallet {
     /// Maximum proposals one author may keep active in one domain.
     #[pallet::constant]
     type MaxActiveProposalsPerAuthor: Get<u32>;
+    /// Bounded forward window used when a live proposal has to move its maturity
+    /// reservation to a later epoch. Kept separate from the epoch catch-up window so the
+    /// reservation search and the cleanup traversal are bounded independently.
+    #[pallet::constant]
+    type MaxMaturityReservationWindow: Get<u32>;
     #[pallet::constant]
     type MaxMaturingProposalsPerEpoch: Get<u32>;
     #[pallet::constant]
@@ -1716,6 +1721,13 @@ pub mod pallet {
       authorization_epoch: T::Epoch,
       pass_weight: U256,
       total_protection_supply: U256,
+    },
+    /// Urgency was authorized but the accelerated deadline could not be reserved. The ordinary
+    /// ballot cutoff and the ordinary auto-finalization epoch remain in force.
+    ProposalUrgentAccelerationRefused {
+      domain: T::DomainId,
+      item_id: T::WinningVoteItemId,
+      authorization_epoch: T::Epoch,
     },
     ProposalAutoFinalizationDeferred {
       domain: T::DomainId,

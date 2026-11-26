@@ -876,8 +876,13 @@ impl<T: Config> Pallet<T> {
     authorization_epoch: T::Epoch,
     urgent_authorization: UrgentAuthorization,
   ) {
+    // The urgent ballot track opens as soon as urgency is authorized, so votes already cast
+    // against the shorter window stay valid. Acceleration is a separate promise: it takes
+    // effect only when the accelerated epoch is actually reserved. A refused reservation keeps
+    // the ordinary maturity reservation and the ordinary finalization epoch in force, and says
+    // so, instead of silently dropping the acceleration.
     ProposalUrgentAuthorizedAt::<T>::insert(domain, item_id, authorization_epoch);
-    Self::schedule_urgent_maturity(domain, item_id, authorization_epoch);
+    let accelerated = Self::schedule_urgent_maturity(domain, item_id, authorization_epoch);
     Self::deposit_event(Event::ProposalUrgentAuthorized {
       domain,
       item_id,
@@ -885,6 +890,13 @@ impl<T: Config> Pallet<T> {
       pass_weight: urgent_authorization.pass_weight,
       total_protection_supply: urgent_authorization.total_protection_supply,
     });
+    if !accelerated {
+      Self::deposit_event(Event::ProposalUrgentAccelerationRefused {
+        domain,
+        item_id,
+        authorization_epoch,
+      });
+    }
   }
 
   /// The urgent primary window closes before the ordinary maturity, so the proposal owns a second
@@ -895,25 +907,28 @@ impl<T: Config> Pallet<T> {
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
     authorization_epoch: T::Epoch,
-  ) {
+  ) -> bool {
     let Some(proposal) = ActiveProposals::<T>::get(domain, item_id) else {
-      return;
+      return false;
     };
     let Ok(ordinary_close) = Self::proposal_ordinary_primary_close_epoch(proposal.submitted_epoch)
     else {
-      return;
+      return false;
     };
     let Ok(urgent_close) = Self::proposal_urgent_primary_close_epoch(authorization_epoch) else {
-      return;
+      return false;
     };
     // An epoch already served would never be revisited, so schedule no earlier than the next epoch.
     let Ok(next_epoch) = Self::add_epochs(authorization_epoch, 1u32.into()) else {
-      return;
+      return false;
     };
     let service_epoch = urgent_close.max(next_epoch);
     if service_epoch < ordinary_close {
-      let _ = Self::schedule_proposal_maturity_at(service_epoch, domain, item_id);
+      // Reserve the urgent epoch first and move the reservation, so exactly one paid maturity
+      // visit remains and a full target leaves the ordinary deadline in force.
+      return Self::move_proposal_maturity(ordinary_close, service_epoch, domain, item_id).is_ok();
     }
+    false
   }
 
   pub(crate) fn proposal_has_any_votes(

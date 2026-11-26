@@ -1377,14 +1377,22 @@ fn admin_can_requeue_unscheduled_auto_finalization_recovery() {
         .iter()
         .all(|entry| entry.item_id != 102)
     );
+    // The natural epoch is full, so the continuation takes the bounded forward window and the
+    // promised deadline survives instead of being dropped. The reservation now sits at epoch 5.
     System::assert_last_event(RuntimeEvent::Governance(
       Event::ProposalAutoFinalizationDeferred {
         domain: 7,
         item_id: 102,
         epoch: 3,
-        rescheduled: false,
+        rescheduled: true,
       },
     ));
+    assert!(
+      Governance::proposal_maturity_bucket(5)
+        .iter()
+        .any(|entry| entry.item_id == 102),
+      "the continuation keeps a live reservation"
+    );
     System::set_block_number(4);
     service_governance_through(4);
     assert!(ActiveProposals::<Test>::contains_key(7, 102));
@@ -3737,7 +3745,17 @@ fn full_urgent_close_bucket_leaves_the_vote_and_ordinary_maturity_intact() {
       100,
       ProposalVoteKind::Pass
     ));
+    // The urgent ballot track opens, so the vote that authorised urgency stands, but the
+    // accelerated epoch could not be reserved. Finalization therefore stays on the ordinary
+    // reservation, which is preserved, and the refusal is reported rather than dropped.
     assert_eq!(ProposalUrgentAuthorizedAt::<Test>::get(42, 100), Some(1));
+    System::assert_has_event(RuntimeEvent::Governance(
+      Event::ProposalUrgentAccelerationRefused {
+        domain: 42,
+        item_id: 100,
+        authorization_epoch: 1,
+      },
+    ));
     assert!(
       Governance::proposal_maturity_bucket(2)
         .iter()
@@ -3834,8 +3852,15 @@ fn urgent_close_after_the_ordinary_close_adds_no_maturity_touch() {
       100,
       ProposalVoteKind::Pass
     ));
-    let timing = Governance::proposal_timing(42, 100).expect("active timing");
-    assert!(timing.effective_primary_close_epoch > timing.ordinary_primary_close_epoch);
+    // The urgent close falls after the ordinary close, so no accelerated reservation is made.
+    // The ordinary touch remains the only one and the refusal is reported.
+    System::assert_has_event(RuntimeEvent::Governance(
+      Event::ProposalUrgentAccelerationRefused {
+        domain: 42,
+        item_id: 100,
+        authorization_epoch: 1,
+      },
+    ));
     assert_eq!(
       maturity_bucket_entries(),
       1,
@@ -5728,5 +5753,140 @@ fn core_resolution_invoice_reduce_wins_on_equal_weight_last_wins() {
   assert_eq!(
     result,
     CoreResolutionOutcome::Passing(crate::ProposalPrimaryTrackOption::Reduce)
+  );
+}
+
+/// Contract: a maturity reservation moves atomically, so one proposal never owns two paid
+/// visits, and a full target leaves the existing reservation in force.
+#[test]
+fn maturity_reservation_moves_atomically_and_survives_a_full_target() {
+  fn bucket(epoch: u64) -> Vec<(u32, u32)> {
+    crate::ProposalMaturityBuckets::<Test>::get(epoch)
+      .into_iter()
+      .map(|entry| (entry.domain, entry.item_id))
+      .collect()
+  }
+  fn seed(epoch: u64, items: &[(u32, u32)]) {
+    let seeded: BoundedVec<
+      crate::MaturingProposalTouch<DomainId, u32>,
+      <Test as crate::Config>::MaxMaturingProposalsPerEpoch,
+    > = BoundedVec::truncate_from(
+      items
+        .iter()
+        .map(|(domain, item_id)| crate::MaturingProposalTouch {
+          domain: *domain,
+          item_id: *item_id,
+        })
+        .collect::<Vec<_>>(),
+    );
+    crate::ProposalMaturityBuckets::<Test>::insert(epoch, seeded);
+  }
+  let capacity_u32: u32 = <Test as crate::Config>::MaxMaturingProposalsPerEpoch::get();
+  new_test_ext().execute_with(|| {
+    seed(10, &[(7, 1)]);
+    assert_ok!(Governance::move_proposal_maturity(10, 5, 7, 1));
+    assert_eq!(bucket(5), vec![(7, 1)]);
+    assert!(bucket(10).is_empty(), "the old reservation must not survive");
+
+    let filler: Vec<(u32, u32)> = (0..capacity_u32).map(|n| (9, n + 1)).collect();
+    seed(5, &filler);
+    seed(10, &[(7, 1)]);
+    assert!(Governance::move_proposal_maturity(10, 5, 7, 1).is_err());
+    assert_eq!(bucket(10), vec![(7, 1)], "the live deadline is preserved");
+    assert_eq!(bucket(5), filler, "a refused move leaves the target untouched");
+    assert_eq!(bucket(5).len() as u32, capacity_u32, "per-epoch bound holds");
+  });
+}
+
+/// Contract: a competing reservation beyond the per-epoch bound is refused, not silently merged.
+#[test]
+fn third_reservation_for_one_epoch_is_refused() {
+  let capacity_u32: u32 = <Test as crate::Config>::MaxMaturingProposalsPerEpoch::get();
+  new_test_ext().execute_with(|| {
+    for item in 1..=capacity_u32 {
+      assert_ok!(Governance::move_proposal_maturity(99, 5, 7, item));
+    }
+    assert_eq!(
+      Governance::proposal_maturity_bucket(5).len() as u32,
+      capacity_u32
+    );
+    assert!(
+      Governance::move_proposal_maturity(99, 5, 7, capacity_u32 + 1).is_err(),
+      "the per-epoch bound refuses the extra reservation"
+    );
+  });
+}
+
+/// Contract: a continuation that cannot use its natural epoch lands on the first later epoch
+/// inside the bounded window, so a live proposal keeps a pending deadline.
+#[test]
+fn continuation_reserves_the_first_epoch_with_room_inside_the_bounded_window() {
+  let capacity_u32: u32 = <Test as crate::Config>::MaxMaturingProposalsPerEpoch::get();
+  new_test_ext().execute_with(|| {
+    let filler: BoundedVec<
+      crate::MaturingProposalTouch<DomainId, u32>,
+      <Test as crate::Config>::MaxMaturingProposalsPerEpoch,
+    > = BoundedVec::truncate_from(
+      (0..capacity_u32)
+        .map(|n| crate::MaturingProposalTouch { domain: 9, item_id: n + 1 })
+        .collect::<Vec<_>>(),
+    );
+    crate::ProposalMaturityBuckets::<Test>::insert(4u64, filler.clone());
+    crate::ProposalMaturityBuckets::<Test>::insert(5u64, filler);
+    let reserved = Governance::reserve_forward(99, 4, 7, 1);
+    assert_eq!(reserved, Some(6), "the first epoch with room is reserved");
+    assert!(
+      Governance::proposal_maturity_bucket(6)
+        .iter()
+        .any(|entry| entry.domain == 7 && entry.item_id == 1)
+    );
+  });
+}
+
+/// Characterisation: while cleanup is backlogged the maturity phase waits behind it, so the
+/// ordinary deadline-to-finalization delay grows with the backlog depth. This is the coupling
+/// the separate maturation budget has to remove.
+#[test]
+fn cleanup_backlog_delays_ordinary_finalization_from_dispatch_to_hook() {
+  fn finalization_block(backlog_epochs: u64) -> u64 {
+    new_test_ext().execute_with(|| {
+      for offset in 1..=backlog_epochs {
+        let entries: BoundedVec<
+          crate::FinalizedProposalTouch<DomainId, u32>,
+          <Test as crate::Config>::MaxFinalizedProposalOutcomesPerEpoch,
+        > = BoundedVec::truncate_from(
+          (0..8)
+            .map(|n| crate::FinalizedProposalTouch { domain: 9, item_id: offset as u32 * 100 + n })
+            .collect::<Vec<_>>(),
+        );
+        crate::FinalizedProposalOutcomeExpiryBuckets::<Test>::insert(offset, entries);
+      }
+      assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+      assert_ok!(Governance::cast_vote(
+        RuntimeOrigin::signed(10),
+        7,
+        100,
+        ProposalVoteKind::Aye
+      ));
+      let deadline = Governance::proposal_timing(7, 100)
+        .expect("active timing")
+        .ordinary_primary_close_epoch;
+      for block in 1..=40u64 {
+        System::set_block_number(block);
+        Governance::on_initialize(block);
+        if Governance::finalized_proposal_outcome(7, 100).is_some() {
+          return block.saturating_sub(deadline);
+        }
+      }
+      u64::MAX
+    })
+  }
+  let shallow = finalization_block(1);
+  let deep = finalization_block(4);
+  println!("BACKLOG shallow={shallow} deep={deep}");
+  assert!(shallow < u64::MAX && deep < u64::MAX, "both finalize");
+  assert!(
+    deep > shallow,
+    "the cleanup backlog delays finalization: shallow={shallow} deep={deep}"
   );
 }
