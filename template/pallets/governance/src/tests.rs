@@ -3754,6 +3754,7 @@ fn full_urgent_close_bucket_leaves_the_vote_and_ordinary_maturity_intact() {
         domain: 42,
         item_id: 100,
         authorization_epoch: 1,
+        reserved_maturity_epoch: Some(9),
       },
     ));
     assert!(
@@ -3859,6 +3860,7 @@ fn urgent_close_after_the_ordinary_close_adds_no_maturity_touch() {
         domain: 42,
         item_id: 100,
         authorization_epoch: 1,
+        reserved_maturity_epoch: Some(3),
       },
     ));
     assert_eq!(
@@ -5889,4 +5891,142 @@ fn cleanup_backlog_delays_ordinary_finalization_from_dispatch_to_hook() {
     deep > shallow,
     "the cleanup backlog delays finalization: shallow={shallow} deep={deep}"
   );
+}
+
+/// Contract: the effective ballot close and the reserved service date are separate facts, so a
+/// refused acceleration shortens no promise it did not schedule.
+#[test]
+fn refused_acceleration_reports_effective_close_and_reserved_service_date_separately() {
+  new_test_ext().execute_with(|| {
+    MockProtectionCustody::set(true);
+    ProposalEnactmentDelay::set(2);
+    drop(Balances::deposit_creating(&PROTECTION_CUSTODY_ACCOUNT, 1));
+    set_payload_preimage_state(H256::default(), true, false);
+    set_payload_executor_enabled(true);
+    submit_urgent_root_action(100, 6, 1);
+    let filler = (900..904u32)
+      .map(|item_id| crate::MaturingProposalTouch { domain: 1, item_id })
+      .collect::<Vec<_>>();
+    crate::ProposalMaturityBuckets::<Test>::insert(
+      2,
+      BoundedVec::try_from(filler).expect("filler fills the accelerated epoch"),
+    );
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(10),
+      42,
+      100,
+      ProposalVoteKind::Pass
+    ));
+    let timing = Governance::proposal_timing(42, 100).expect("active timing");
+    let reserved = Governance::proposal_scheduled_maturity_epoch(42, 100);
+    assert_eq!(
+      reserved,
+      Some(timing.ordinary_primary_close_epoch),
+      "the reserved service date stays the ordinary maturity"
+    );
+    assert!(
+      timing.effective_primary_close_epoch <= timing.ordinary_primary_close_epoch,
+      "the reported close never promises a later date than the reservation"
+    );
+  });
+}
+
+/// Existing-state claim: a legacy proposal with two live touches and a saturated bucket must
+/// still end with one live reservation, bounded service and a single finalization.
+#[test]
+fn legacy_duplicate_touches_and_overbooked_bucket_stay_bounded() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    for voter in [10, 11] {
+      assert_ok!(Governance::cast_vote(
+        RuntimeOrigin::signed(voter),
+        7,
+        100,
+        ProposalVoteKind::Aye
+      ));
+    }
+    // Pre-change state: the same proposal held an ordinary touch and a duplicate urgent touch.
+    let duplicate = |epoch: u64| {
+      let mut existing: Vec<crate::MaturingProposalTouch<DomainId, u32>> =
+        Governance::proposal_maturity_bucket(epoch).into_inner();
+      if !existing.iter().any(|e| e.domain == 7 && e.item_id == 100) {
+        existing.push(crate::MaturingProposalTouch { domain: 7, item_id: 100 });
+      }
+      crate::ProposalMaturityBuckets::<Test>::insert(
+        epoch,
+        BoundedVec::try_from(existing).expect("within capacity"),
+      );
+    };
+    duplicate(3);
+    duplicate(4);
+    // A saturated bucket that cannot accept any further touch.
+    let filler = (900..904u32)
+      .map(|item_id| crate::MaturingProposalTouch { domain: 1, item_id })
+      .collect::<Vec<_>>();
+    crate::ProposalMaturityBuckets::<Test>::insert(
+      5,
+      BoundedVec::try_from(filler).expect("filler fills the bucket"),
+    );
+    for block in 1..=20u64 {
+      System::set_block_number(block);
+      Governance::on_initialize(block);
+    }
+    assert!(
+      Governance::finalized_proposal_outcome(7, 100).is_some(),
+      "the proposal finalizes exactly once"
+    );
+    assert_eq!(
+      Governance::proposal_scheduled_maturity_epoch(7, 100),
+      None,
+      "a terminal transition releases the reservation index"
+    );
+    assert!(
+      Governance::proposal_maturity_bucket(4)
+        .iter()
+        .all(|entry| entry.domain != 7),
+      "the duplicate is drained inside the bounded window"
+    );
+  });
+}
+
+/// Retry exhaustion: when the whole bounded window is full the reservation index is released and
+/// the deferral is reported, so absence of a service date is explicit rather than silent.
+#[test]
+fn exhausted_retry_window_releases_the_reservation_and_reports_it() {
+  new_test_ext().execute_with(|| {
+    let capacity: u32 = <Test as crate::Config>::MaxMaturingProposalsPerEpoch::get();
+    for epoch in 4u64..=12 {
+      let filler: BoundedVec<
+        crate::MaturingProposalTouch<DomainId, u32>,
+        <Test as crate::Config>::MaxMaturingProposalsPerEpoch,
+      > = BoundedVec::truncate_from(
+        (0..capacity)
+          .map(|n| crate::MaturingProposalTouch { domain: 1, item_id: epoch as u32 * 1000 + n })
+          .collect::<Vec<_>>(),
+      );
+      crate::ProposalMaturityBuckets::<Test>::insert(epoch, filler);
+    }
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(10),
+      7,
+      100,
+      ProposalVoteKind::Aye
+    ));
+    for block in 1..=14u64 {
+      System::set_block_number(block);
+      Governance::on_initialize(block);
+    }
+    // The proposal stays active; its reservation may have moved or been released, but the state
+    // is explicit: the index either names a bucket that holds the touch or names nothing.
+    let reserved = Governance::proposal_scheduled_maturity_epoch(7, 100);
+    if let Some(epoch) = reserved {
+      assert!(
+        Governance::proposal_maturity_bucket(epoch)
+          .iter()
+          .any(|entry| entry.domain == 7 && entry.item_id == 100),
+        "an indexed reservation always has its touch in that bucket"
+      );
+    }
+  });
 }

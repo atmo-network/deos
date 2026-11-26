@@ -81,7 +81,6 @@ run_framework_checks() {
     run_script_step "Runtime output self-test" "03-build-runtime.sh" --self-test
     run_script_step "Corrected-node build contract self-test" "build-corrected-node.sh" --self-test
     run_script_step "Chain spec producer self-test" "04-generate-chain-spec.sh" --self-test
-    run_script_step "Independent PVF wrapper self-test" "pvf-assurance.sh" --self-test
     run_shell_step "Simulator tests" "" "node '$PROJECT_ROOT/simulators/tmctol/tests.js'"
     # Actual guest artifact generation/export are separate, explicit operations.
     SKIP_WASM_BUILD=1 run_script_step "Rust workspace CI" "ci-local.sh"
@@ -118,14 +117,6 @@ run_framework_checks() {
     done
     run_shell_step "Selected Assets vendor regressions" "${DEOS_TEST_TIMEOUT_MINUTES:-15}" \
         "cd '$TEMPLATE_DIR/vendor/pallet-assets' && SKIP_WASM_BUILD=1 cargo test --locked --release"
-    local check
-    for check in clippy tests docs check; do
-        SKIP_WASM_BUILD=1 run_script_step "Canonical PVF host $check" "ci-local.sh" \
-            --only "$check" --package deos-pvf-validation \
-            --manifest-path "$TEMPLATE_DIR/tools/pvf-validation/Cargo.toml"
-    done
-    run_shell_step "Canonical PVF host formatting" "" \
-        "cd '$TEMPLATE_DIR/tools/pvf-validation' && cargo fmt -- --check"
 }
 
 run_wiki_checks() {
@@ -175,21 +166,10 @@ self_test() (
     run_framework_checks
     [[ "${routed[0]}" == "setup-environment.sh framework" ]] || return 1
     [[ "${routed[*]} ${shell_steps[*]}" != *web-client* && "${shell_steps[*]}" != *npm* && "${routed[*]} ${shell_steps[*]}" != *wiki/* ]] || return 1
-    local check count command
-    for check in root clippy tests docs check; do
-        if [[ "$check" == root ]]; then
-            command="ci-local.sh "
-        else
-            command="ci-local.sh --only $check --package deos-pvf-validation --manifest-path $TEMPLATE_DIR/tools/pvf-validation/Cargo.toml"
-        fi
-        count=0
-        local item
-        for item in "${routed[@]}"; do
-            if [[ "$item" == "$command" ]]; then count=$((count + 1)); fi
-        done
-        [[ "$count" == 1 ]] || { log_error "Missing or duplicate canonical host route: $check"; return 1; }
-    done
-    [[ "${shell_steps[*]}" == *"cd '$TEMPLATE_DIR/tools/pvf-validation' && cargo fmt -- --check"* ]] || return 1
+    # Source-only profile ships no PVF host workspace, so no host route is expected.
+    [[ " ${routed[*]} ${shell_steps[*]} " != *pvf-validation* ]] || {
+        log_error "Source-only profile must not route the absent PVF host"; return 1;
+    }
     local reconciliation=0 item
     for item in "${routed[@]}"; do
         if [[ "$item" == "ci-local.sh --only tests --package deos-runtime --features try-runtime" ]]; then

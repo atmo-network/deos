@@ -31,10 +31,10 @@ walk('');
 const paths = new Set(files.map(file => file.path));
 for (const path of ['LICENSE', 'README.md', 'CHANGELOG.md', 'docs/deos/framework-distribution.en.md',
   '.node-version', 'template/Cargo.toml', 'template/Cargo.lock', 'template/rust-toolchain.toml',
-  'template/tools/pvf-validation/Cargo.lock', 'template/vendor/pallet-assets/LICENSE-APACHE',
+  'template/vendor/pallet-assets/LICENSE-APACHE',
   'template/vendor/str0m-openssl/LICENSE-MIT.txt',
   'notices/README.md', 'notices/SHA256SUMS', 'notices/mit-23f18e03dc49.txt', 'notices/unicode-68f5b9f5ea36.txt',
   'notices/unicode-f367c1b8e1aa.txt',
-  'scripts/validate-local.sh', 'scripts/export-papi-metadata.sh', 'scripts/pvf-assurance.sh',
+  'scripts/validate-local.sh', 'scripts/export-papi-metadata.sh',
   'simulators/tmctol/tests.js']) assert.ok(paths.has(path), `Missing release input: ${path}`);
 console.log(JSON.stringify({ schema: 1, version, profile: 'framework-source', source: { commit, tree }, files }, null, 2));

@@ -339,7 +339,21 @@ impl<T: Config> Pallet<T> {
           .map_err(|_| Error::<T>::ProposalMaturityBucketFull)?;
       }
       Ok(())
-    })
+    })?;
+    ProposalMaturityReservedAt::<T>::insert(domain, item_id, maturity_epoch);
+    Ok(())
+  }
+
+  /// Release the reservation index when the touch it points at has been consumed and no
+  /// continuation was reserved for that proposal.
+  pub(crate) fn release_reservation_if_at(
+    epoch: T::Epoch,
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+  ) {
+    if ProposalMaturityReservedAt::<T>::get(domain, item_id) == Some(epoch) {
+      ProposalMaturityReservedAt::<T>::remove(domain, item_id);
+    }
   }
 
   /// Move a live maturity reservation to a new epoch, or leave it exactly where it is.
@@ -637,16 +651,19 @@ impl<T: Config> Pallet<T> {
       for touch in bucket {
         if !ActiveProposals::<T>::contains_key(touch.domain, touch.item_id) {
           ProposalConfirmStartedAt::<T>::remove(touch.domain, touch.item_id);
+          Self::release_reservation_if_at(epoch, touch.domain, touch.item_id);
           continue;
         }
         if confirm_period == 0 {
           if Self::resolve_active_proposal_from_votes(touch.domain, touch.item_id).is_ok() {
+            Self::release_reservation_if_at(epoch, touch.domain, touch.item_id);
             continue;
           }
         } else if ProposalConfirmStartedAt::<T>::contains_key(touch.domain, touch.item_id) {
           // Confirm-end: proposal sustained approval for the full confirm period
           ProposalConfirmStartedAt::<T>::remove(touch.domain, touch.item_id);
           if Self::resolve_active_proposal_from_votes(touch.domain, touch.item_id).is_ok() {
+            Self::release_reservation_if_at(epoch, touch.domain, touch.item_id);
             continue;
           }
         } else {
@@ -665,6 +682,7 @@ impl<T: Config> Pallet<T> {
               });
               if let Some(confirm_end_epoch) = reserved {
                 ProposalConfirmStartedAt::<T>::insert(touch.domain, touch.item_id, epoch);
+                Self::release_reservation_if_at(epoch, touch.domain, touch.item_id);
                 Self::deposit_event(Event::ProposalConfirmStarted {
                   domain: touch.domain,
                   item_id: touch.item_id,
@@ -676,11 +694,13 @@ impl<T: Config> Pallet<T> {
             }
             Some(ProposalResolutionState::VetoPassing { .. }) => {
               if Self::resolve_active_proposal_from_votes(touch.domain, touch.item_id).is_ok() {
+                Self::release_reservation_if_at(epoch, touch.domain, touch.item_id);
                 continue;
               }
             }
             _ => {
               if Self::resolve_active_proposal_from_votes(touch.domain, touch.item_id).is_ok() {
+                Self::release_reservation_if_at(epoch, touch.domain, touch.item_id);
                 continue;
               }
             }
@@ -699,6 +719,7 @@ impl<T: Config> Pallet<T> {
             Self::reserve_forward(epoch, natural, touch.domain, touch.item_id)
           })
           .is_some();
+        Self::release_reservation_if_at(epoch, touch.domain, touch.item_id);
         Self::deposit_event(Event::ProposalAutoFinalizationDeferred {
           domain: touch.domain,
           item_id: touch.item_id,

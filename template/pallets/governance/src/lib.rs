@@ -1639,6 +1639,24 @@ pub mod pallet {
     ValueQuery,
   >;
 
+  /// The epoch whose maturity bucket currently holds this proposal's live reservation.
+  ///
+  /// One proposal owns at most one live reservation. The index is released when the touch is
+  /// consumed, when a terminal transition ends the proposal, and when no continuation inside
+  /// the bounded reservation window could be reserved, so an absent entry means the proposal
+  /// has no scheduled service date rather than a silently dropped deadline.
+  #[pallet::storage]
+  #[pallet::getter(fn proposal_scheduled_maturity_epoch)]
+  pub type ProposalMaturityReservedAt<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    T::DomainId,
+    Blake2_128Concat,
+    T::WinningVoteItemId,
+    T::Epoch,
+    OptionQuery,
+  >;
+
   #[pallet::storage]
   #[pallet::getter(fn last_processed_epoch)]
   pub type LastProcessedEpoch<T: Config> = StorageValue<_, T::Epoch, ValueQuery>;
@@ -1728,6 +1746,7 @@ pub mod pallet {
       domain: T::DomainId,
       item_id: T::WinningVoteItemId,
       authorization_epoch: T::Epoch,
+      reserved_maturity_epoch: Option<T::Epoch>,
     },
     ProposalAutoFinalizationDeferred {
       domain: T::DomainId,

@@ -79,6 +79,7 @@ impl<T: Config> Pallet<T> {
     ActiveProposals::<T>::remove(domain, item_id);
     ProposalConfirmStartedAt::<T>::remove(domain, item_id);
     ProposalUrgentAuthorizedAt::<T>::remove(domain, item_id);
+    ProposalMaturityReservedAt::<T>::remove(domain, item_id);
     if remove_pending_enactment {
       ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
     }
@@ -895,6 +896,7 @@ impl<T: Config> Pallet<T> {
         domain,
         item_id,
         authorization_epoch,
+        reserved_maturity_epoch: ProposalMaturityReservedAt::<T>::get(domain, item_id),
       });
     }
   }

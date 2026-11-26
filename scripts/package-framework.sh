@@ -54,12 +54,12 @@ main() {
         .node-version .npm-version .gitignore LICENSE README.md CHANGELOG.md notices
         docs/README.md docs/deos
         template/README.md template/Cargo.toml template/Cargo.lock template/rust-toolchain.toml template/rustfmt.toml
-        template/primitives template/pallets template/runtime template/vendor template/tools simulators
+        template/primitives template/pallets template/runtime template/vendor template/tools/README.md simulators
         scripts/README.md scripts/_common.sh scripts/inputs scripts/01-download-binaries.sh
         scripts/02-install-tools.sh scripts/03-build-runtime.sh scripts/04-generate-chain-spec.sh
         scripts/audit-asset-conversion-boundaries.sh scripts/build-corrected-node.sh scripts/build-corrected-node.mjs
         scripts/ci-local.sh scripts/export-papi-metadata.sh scripts/package-framework.sh scripts/framework-contents.mjs
-        scripts/pvf-assurance.sh scripts/setup-environment.sh scripts/validate-local.sh
+        scripts/setup-environment.sh scripts/validate-local.sh
     )
     mkdir -- "$OUTPUT"
     OUTPUT="$(cd -- "$OUTPUT" && pwd -P)"
